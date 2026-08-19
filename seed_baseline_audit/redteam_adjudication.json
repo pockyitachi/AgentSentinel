@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "scope": "traj_logs/seed_baseline only",
+  "trajectory_denominator_nonempty": 116,
+  "source_ledger": "propagation_cases.jsonl",
+  "classification_rule": "direct contradiction + actual prompt exposure + explicit target uptake; STRICT_CONFIRMED additionally excludes a current GUI state that independently reinforces the false premise",
+  "counts_for_20_case_ledger": {
+    "STRICT_CONFIRMED": 5,
+    "CONFIRMED_WITH_STATE_CONFOUND": 8,
+    "PROVENANCE_ERROR_ONLY": 1,
+    "SELF_CORRECTED": 2,
+    "CANDIDATE": 4
+  },
+  "labels": {
+    "SBP-001": "CONFIRMED_WITH_STATE_CONFOUND",
+    "SBP-002": "CONFIRMED_WITH_STATE_CONFOUND",
+    "SBP-003": "CANDIDATE",
+    "SBP-004": "CONFIRMED_WITH_STATE_CONFOUND",
+    "SBP-005": "STRICT_CONFIRMED",
+    "SBP-006": "PROVENANCE_ERROR_ONLY",
+    "SBP-007": "CONFIRMED_WITH_STATE_CONFOUND",
+    "SBP-008": "CANDIDATE",
+    "SBP-009": "CONFIRMED_WITH_STATE_CONFOUND",
+    "SBP-010": "CANDIDATE",
+    "SBP-011": "CONFIRMED_WITH_STATE_CONFOUND",
+    "SBP-012": "STRICT_CONFIRMED",
+    "SBP-013": "CONFIRMED_WITH_STATE_CONFOUND",
+    "SBP-014": "STRICT_CONFIRMED",
+    "SBP-015": "CONFIRMED_WITH_STATE_CONFOUND",
+    "SBP-016": "STRICT_CONFIRMED",
+    "SBP-017": "STRICT_CONFIRMED",
+    "SBP-018": "SELF_CORRECTED",
+    "SBP-019": "SELF_CORRECTED",
+    "SBP-020": "CANDIDATE"
+  },
+  "strict_fixed_corpus_lower_bound": {
+    "unique_tasks": 5,
+    "denominator": 116,
+    "fraction": 0.04310344827586207
+  },
+  "probability_pilot_additions": {
+    "MattermostProjectStatusReportTask::s45->s46": "CONFIRMED_WITH_STATE_CONFOUND",
+    "CheckSetMeetTimeTask::s22->s23": "CONFIRMED_WITH_STATE_CONFOUND"
+  },
+  "strict_plus_state_confound_deduplicated": {
+    "event_chains": 15,
+    "unique_tasks": 14,
+    "denominator": 116,
+    "fraction": 0.1206896551724138,
+    "warning": "This wider fixed-corpus lower bound does not isolate history text from current GUI state."
+  }
+}

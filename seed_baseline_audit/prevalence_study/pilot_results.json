@@ -1,0 +1,120 @@
+{
+  "schema_version": "1.0",
+  "scope": {
+    "run": "seed_baseline only",
+    "pilot_unit": "immediate pair P_(t-1) -> decision_t",
+    "reviewed_pairs": 50,
+    "selected_tasks": 25,
+    "single_reviewer": true,
+    "publication_ready": false,
+    "stopping_rule": "All 50 probability-sampled immediate pairs were reviewed once; uncertain evidence was labeled UNVERIFIABLE rather than forced negative.",
+    "critical_limitation": "A negative immediate-pair label does not rule out reliance on an older P_i. The recommended primary unit is target decision turn t with all P_i, i<t, visible to the annotator."
+  },
+  "pilot_counts": {
+    "scanner_domains": {
+      "hit": 18,
+      "non_hit": 32
+    },
+    "categories": {
+      "no_invalid_source": 35,
+      "propagation": 2,
+      "action_failure_control": 6,
+      "invalid_rejected_or_self_corrected": 3,
+      "unverifiable": 4
+    },
+    "confirmed_invalid_source_total": 5,
+    "confirmed_invalid_breakdown": {
+      "harmfully_propagated": 2,
+      "rejected_or_self_corrected_next": 3
+    },
+    "scanner_by_category": [
+      {
+        "scanner_domain": "hit",
+        "category": "action_failure_control",
+        "n": 5
+      },
+      {
+        "scanner_domain": "hit",
+        "category": "invalid_rejected_or_self_corrected",
+        "n": 2
+      },
+      {
+        "scanner_domain": "hit",
+        "category": "no_invalid_source",
+        "n": 9
+      },
+      {
+        "scanner_domain": "hit",
+        "category": "propagation",
+        "n": 1
+      },
+      {
+        "scanner_domain": "hit",
+        "category": "unverifiable",
+        "n": 1
+      },
+      {
+        "scanner_domain": "non_hit",
+        "category": "action_failure_control",
+        "n": 1
+      },
+      {
+        "scanner_domain": "non_hit",
+        "category": "invalid_rejected_or_self_corrected",
+        "n": 1
+      },
+      {
+        "scanner_domain": "non_hit",
+        "category": "no_invalid_source",
+        "n": 26
+      },
+      {
+        "scanner_domain": "non_hit",
+        "category": "propagation",
+        "n": 1
+      },
+      {
+        "scanner_domain": "non_hit",
+        "category": "unverifiable",
+        "n": 3
+      }
+    ]
+  },
+  "weighted_pilot_descriptives": {
+    "warning": "Feasibility-only narrow immediate-pair descriptives; not an estimate of all-history decision-turn propagation and no formal CI is reported.",
+    "sum_design_weights": 3384.5,
+    "kish_effective_n": 13.154115625843877,
+    "horvitz_thompson_immediate_propagation_fraction": 0.03977445900640049,
+    "hajek_immediate_propagation_fraction": 0.038558132663613534,
+    "horvitz_thompson_invalid_source_fraction": 0.051737275220969214,
+    "hajek_invalid_source_fraction": 0.05015511892450879,
+    "why_no_ci": "The pilot samples mostly one pair per task x scanner domain, so within-domain second-stage variance is not estimable; n_eff is also very small because weights vary sharply."
+  },
+  "legacy_ledger_plus_pilot_lower_bounds": {
+    "interpretation": "Deterministic observed lower bounds computed only from output/manual_review.json's legacy six confirmed cases plus this 50-pair pilot. They are not confidence intervals and are not the final total for any broader/newer case ledger; synchronize and deduplicate that ledger before publication.",
+    "decision_turns_relying_on_an_invalid_history_claim": {
+      "confirmed": 23,
+      "population": 3281,
+      "lower_bound_fraction": 0.007010057909174032
+    },
+    "immediate_source_target_pairs": {
+      "confirmed": 8,
+      "population": 3281,
+      "lower_bound_fraction": 0.0024382810118866198
+    },
+    "all_history_source_target_exposures": {
+      "confirmed": 23,
+      "population": 65808,
+      "lower_bound_fraction": 0.00034950158035497203
+    },
+    "tasks_with_at_least_one_confirmed_event": {
+      "confirmed": 7,
+      "population": 116,
+      "lower_bound_fraction": 0.0603448275862069
+    },
+    "confirmed_immediate_pairs_by_scanner_domain": {
+      "non_hit": 7,
+      "hit": 1
+    }
+  }
+}

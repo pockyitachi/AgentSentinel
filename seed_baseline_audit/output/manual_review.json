@@ -1,0 +1,176 @@
+{
+  "scope": {
+    "run_group": "seed_baseline",
+    "verifier_or_reflection_used": false,
+    "review_method": "purposive review of high-confidence scanner candidates",
+    "prevalence_warning": "This review establishes existence and yields replay cases; it is not a random sample and cannot estimate natural prevalence."
+  },
+  "label_definition": {
+    "confirmed_misleading": "The source pre-step contains a directly refuted claim, and a later prediction explicitly reuses that claim in an unnecessary, wrong, or premature GUI decision. This is observed propagation, not a causal estimate.",
+    "invalid_but_recovered": "A refuted pre-step is exposed, but a later observation causes the agent to reject or correct it before the terminal behavior.",
+    "offtrack_history_pollution": "The trajectory contains invented or mutually inconsistent task facts, but no single stable claim-to-decision propagation chain is clean enough for the primary label.",
+    "action_failure_control": "The selected action has no intended effect and the next prediction recognizes that fact; no false completed-state claim is required."
+  },
+  "cases": [
+    {
+      "task": "CheckConferenceAndSendSmsTask1",
+      "source_step": 10,
+      "target_steps": [11, 12],
+      "primary_type": "FACT_ERROR",
+      "label": "CONFIRMED_MISLEADING",
+      "source_claim": "The correct dates are 05/20/2025 and 05/27/2025.",
+      "direct_evidence": "S3 displays Conference in Paris as October 11 through October 15.",
+      "downstream_use": "P11 calls the entered values the correct dates and sends them; P12 repeats the same dates as completed work.",
+      "result": "score=0; SMS with the correct dates was not found",
+      "traj_path": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceAndSendSmsTask1/traj.json",
+      "evidence_paths": [
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceAndSendSmsTask1/screenshots/CheckConferenceAndSendSmsTask1-0-3.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceAndSendSmsTask1/screenshots/CheckConferenceAndSendSmsTask1-0-12.png"
+      ]
+    },
+    {
+      "task": "CheckSetMeetTimeTask",
+      "source_step": 6,
+      "target_steps": [7, 8, 9],
+      "primary_type": "FACT_ERROR",
+      "label": "CONFIRMED_MISLEADING",
+      "source_claim": "The email said November 1, 10:00-11:00 AM.",
+      "direct_evidence": "S3 email says November 15 at 3 PM.",
+      "downstream_use": "P7 accepts November 1 as the target day, and P8-P9 enter the event-creation flow for that wrong date; the trajectory continues to drift across several dates and times.",
+      "result": "score=0; incorrect calendar event",
+      "traj_path": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckSetMeetTimeTask/traj.json",
+      "evidence_paths": [
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckSetMeetTimeTask/screenshots/CheckSetMeetTimeTask-0-3.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckSetMeetTimeTask/screenshots/CheckSetMeetTimeTask-0-29.png"
+      ]
+    },
+    {
+      "task": "ScheduleLunchViaSmsTask",
+      "source_step": 16,
+      "target_steps": [17, 18],
+      "primary_type": "FACT_ERROR_AND_RUBRIC_VIOLATION",
+      "label": "CONFIRMED_MISLEADING",
+      "source_claim": "The user did not specify a time, so the title can be saved without changing the default time.",
+      "direct_evidence": "S4 invitation states tomorrow at 11 AM for about one hour; S16 shows the form still at its 1 PM default.",
+      "downstream_use": "P17 saves without checking the time; P18 treats the 1 PM event as completion.",
+      "result": "score=0; required October 17 11:00-12:00 event not found",
+      "traj_path": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleLunchViaSmsTask/traj.json",
+      "evidence_paths": [
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleLunchViaSmsTask/screenshots/ScheduleLunchViaSmsTask-0-4.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleLunchViaSmsTask/screenshots/ScheduleLunchViaSmsTask-0-16.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleLunchViaSmsTask/screenshots/ScheduleLunchViaSmsTask-0-18.png"
+      ]
+    },
+    {
+      "task": "CheckInterviewTimesTask",
+      "source_step": 20,
+      "target_steps": [21, 22, 23, 24, 25, 26, 27, 28],
+      "primary_type": "FACT_ERROR",
+      "label": "CONFIRMED_MISLEADING",
+      "source_claim": "The first interview is TechNova Solutions on November 5, 10:00-11:00.",
+      "direct_evidence": "The three source emails instead show Amazon on November 20 at 3 PM for 90 minutes, Google on November 12 at 2-3 PM, and Meta on November 3 at 5:30 PM for 45 minutes.",
+      "downstream_use": "The agent enters TechNova and continues configuring and saving the invented event.",
+      "result": "score=0; calendar events are incorrect",
+      "traj_path": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckInterviewTimesTask/traj.json",
+      "evidence_paths": [
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckInterviewTimesTask/screenshots/CheckInterviewTimesTask-0-3.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckInterviewTimesTask/screenshots/CheckInterviewTimesTask-0-6.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckInterviewTimesTask/screenshots/CheckInterviewTimesTask-0-12.png"
+      ]
+    },
+    {
+      "task": "MastodonAdjustTootsTask",
+      "source_step": 32,
+      "target_steps": [33, 34],
+      "primary_type": "GUI_INTERPRETATION_ERROR",
+      "label": "CONFIRMED_MISLEADING",
+      "source_claim": "The blue star represents bookmark state, and the post is still bookmarked.",
+      "direct_evidence": "The star is the favorite control. At S33 the overflow option is Bookmark, which means the post is currently not bookmarked.",
+      "downstream_use": "P33 says clicking Bookmark will remove the bookmark and clicks it, thereby adding the bookmark again; P34 then claims it was removed.",
+      "result": "score=0; two expected status IDs remain bookmarked",
+      "traj_path": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/MastodonAdjustTootsTask/traj.json",
+      "evidence_paths": [
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/MastodonAdjustTootsTask/screenshots/MastodonAdjustTootsTask-0-24.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/MastodonAdjustTootsTask/screenshots/MastodonAdjustTootsTask-0-33.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/MastodonAdjustTootsTask/screenshots/MastodonAdjustTootsTask-0-34.png"
+      ]
+    },
+    {
+      "task": "CheckConferenceLocationTask",
+      "source_step": 10,
+      "target_steps": [11, 18, 19, 20],
+      "primary_type": "FACT_ERROR_AND_OFFTRACK",
+      "label": "CONFIRMED_MISLEADING",
+      "source_claim": "The hotel address obtained from the email is 100 Main St, Cambridge, MA 02142.",
+      "direct_evidence": "S6 email only identifies Harvard Square Hotel; the address was not in that email. The task truth is 110 Mt Auburn St.",
+      "downstream_use": "P11 selects 100 Main St; P18 again attributes it to the email; the final route is computed for the wrong destination. The required SMS milestone is also skipped.",
+      "result": "score=0; required SMS was not found, and the route used the wrong destination",
+      "traj_path": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceLocationTask/traj.json",
+      "evidence_paths": [
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceLocationTask/screenshots/CheckConferenceLocationTask-0-6.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceLocationTask/screenshots/CheckConferenceLocationTask-0-20.png"
+      ]
+    },
+    {
+      "task": "CheckCartPriceTask",
+      "source_step": 15,
+      "target_steps": [39, 45],
+      "primary_type": "LONG_HORIZON_FACT_DRIFT",
+      "label": "OFFTRACK_HISTORY_POLLUTION",
+      "source_claim": "The cart contains a laptop/MacBook; its remembered price changes repeatedly across the trajectory.",
+      "direct_evidence": "Visible high-price items are iPhone 8999, sofa 2888, and smart watch 1299, totaling 13186; no stable screenshot evidence supports the invented laptop.",
+      "downstream_use": "The final prediction invents a gaming laptop at 3299 and includes it in the top three, but that exact price is not stably propagated from one earlier step.",
+      "result": "score=0; answer 15186, expected 13186",
+      "traj_path": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckCartPriceTask/traj.json",
+      "evidence_paths": [
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckCartPriceTask/screenshots/CheckCartPriceTask-0-12.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckCartPriceTask/screenshots/CheckCartPriceTask-0-13.png"
+      ]
+    },
+    {
+      "task": "SumFileLinesTask",
+      "source_step": 24,
+      "target_steps": [44, 45, 46],
+      "primary_type": "FABRICATED_COMPLETION_STATE",
+      "label": "OFFTRACK_HISTORY_POLLUTION",
+      "source_claim": "A text file had previously been opened and its content/line count was observed.",
+      "direct_evidence": "The screenshots remain on the ZIP listing of file_1.txt through file_9.txt; no trajectory action successfully opens text content.",
+      "downstream_use": "Later predictions repeatedly say 'when I opened it before' and invent mutually inconsistent file contents.",
+      "result": "score=0; no valid final answer within 50 steps",
+      "traj_path": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/SumFileLinesTask/traj.json",
+      "evidence_paths": [
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/SumFileLinesTask/screenshots/SumFileLinesTask-0-11.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/SumFileLinesTask/screenshots/SumFileLinesTask-0-33.png"
+      ]
+    },
+    {
+      "task": "ScheduleCoffeeTimeViaSmsTask",
+      "source_step": 8,
+      "target_steps": [9, 10, 15],
+      "primary_type": "FACT_ERROR",
+      "label": "INVALID_BUT_RECOVERED",
+      "source_claim": "The coffee invitation is October 20 at 3:00-3:30 PM.",
+      "direct_evidence": "The SMS says October 20 at 9:10 AM for about one hour; the calendar shows a 9-11 AM conflict.",
+      "downstream_use": "P9 briefly reuses the wrong 3 PM premise, but P10 sees the SMS again, corrects to 9:10 AM, and the task succeeds.",
+      "result": "score=1",
+      "traj_path": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleCoffeeTimeViaSmsTask/traj.json",
+      "evidence_paths": [
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleCoffeeTimeViaSmsTask/screenshots/ScheduleCoffeeTimeViaSmsTask-0-5.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleCoffeeTimeViaSmsTask/screenshots/ScheduleCoffeeTimeViaSmsTask-0-8.png",
+        "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleCoffeeTimeViaSmsTask/screenshots/ScheduleCoffeeTimeViaSmsTask-0-10.png"
+      ]
+    }
+  ],
+  "action_failure_controls": [
+    "SetAlarmTask",
+    "CheckEventTimeTask",
+    "AdjustFontIconMaximumTask"
+  ],
+  "recommended_replay_points": [
+    {"task": "CheckConferenceAndSendSmsTask1", "source_step": 10, "target_step": 11},
+    {"task": "ScheduleLunchViaSmsTask", "source_step": 16, "target_step": 17},
+    {"task": "MastodonAdjustTootsTask", "source_step": 32, "target_step": 33},
+    {"task": "CheckSetMeetTimeTask", "source_step": 6, "target_step": 7},
+    {"task": "CheckInterviewTimesTask", "source_step": 20, "target_step": 21}
+  ]
+}

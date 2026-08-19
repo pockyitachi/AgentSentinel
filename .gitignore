@@ -1,0 +1,30 @@
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Credentials and machine-local configuration
+**/.env
+**/.env.*
+!**/.env.example
+*.local
+
+# Runtime collection data is immutable research data, not source code.
+mobileworld_audit_data/
+
+# Recoverable local copy of the original nested upstream checkout used during
+# the one-time subtree import. It is intentionally never published.
+.local_upstream/
+

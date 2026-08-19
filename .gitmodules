@@ -1,0 +1,9 @@
+[submodule "MobileWorld/resources/mall"]
+	path = MobileWorld/resources/mall
+	url = https://github.com/qykong/mall_fork.git
+[submodule "MobileWorld/resources/mail"]
+	path = MobileWorld/resources/mail
+	url = https://github.com/nrgao/mail_fork.git
+[submodule "MobileWorld/resources/mastodon-android"]
+	path = MobileWorld/resources/mastodon-android
+	url = https://github.com/patdooog/mastodon-android.git

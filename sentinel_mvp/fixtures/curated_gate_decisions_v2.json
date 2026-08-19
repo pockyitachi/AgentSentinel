@@ -1,0 +1,134 @@
+{
+  "schema_version": "sentinel-curated-gate-decisions/v2",
+  "scope": {
+    "run_group": "seed_baseline",
+    "decision_source": "manual screenshot-grounded audit",
+    "deployment_prediction": false,
+    "annotation_method": "single-pass curated replay labels with code-level red-team review",
+    "review_status": "not an inter-annotator prevalence dataset",
+    "created_at": "2026-08-15",
+    "purpose": "Exercise history filtering and replay plumbing before an automatic verifier is connected."
+  },
+  "decisions": [
+    {
+      "fixture_id": "check_conference_and_send_sms_s10_to_s11",
+      "forbidden_texts": ["05/20/2025", "05/27/2025"],
+      "targets": [
+        {
+          "claim_id": "sms_wrong_dates_s10",
+          "record_step": 10,
+          "edit_scope": "WHOLE_RECORD",
+          "anchor_text": "the arrival and departure dates for Paris, which are 05/20/2025 and 05/27/2025",
+          "epistemic_status": "REFUTED",
+          "operation": "REPLACE",
+          "evidence_refs": [
+            "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceAndSendSmsTask1/screenshots/CheckConferenceAndSendSmsTask1-0-3.png"
+          ],
+          "correction": "Calendar evidence S3 establishes that the Paris event runs from October 11 through October 15. Replace the drafted values; the year is not established by S3 and must be verified from available task context before sending the required MM/DD/YYYY pair."
+        }
+      ]
+    },
+    {
+      "fixture_id": "schedule_lunch_via_sms_s16_to_s17",
+      "forbidden_texts": ["the user didn't specify the time", "default is 1:00 PM"],
+      "targets": [
+        {
+          "claim_id": "lunch_time_unspecified_s16",
+          "record_step": 16,
+          "edit_scope": "SPAN",
+          "anchor_text": "the user didn't specify the time, but wait, the default is 1:00 PM, but actually, do I need to check?",
+          "epistemic_status": "REFUTED",
+          "operation": "REPLACE",
+          "evidence_refs": [
+            "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleLunchViaSmsTask/screenshots/ScheduleLunchViaSmsTask-0-4.png"
+          ],
+          "correction": "Do not use the calendar default. The invitation specifies 11:00 AM for about one hour, so the event must run from 11:00 AM to 12:00 PM."
+        }
+      ]
+    },
+    {
+      "fixture_id": "mastodon_adjust_toots_s32_to_s33",
+      "forbidden_texts": ["still in bookmarks", "it's still bookmarked", "never unbookmarked it"],
+      "targets": [
+        {
+          "claim_id": "stale_bookmark_branch_s14",
+          "record_step": 14,
+          "edit_scope": "WHOLE_RECORD",
+          "anchor_text": "the post is still in bookmarks?",
+          "epistemic_status": "UNVERIFIABLE",
+          "operation": "ARCHIVE",
+          "evidence_refs": [],
+          "rationale": "curated as an inactive, repetitive bookmark-recovery branch at target step 33"
+        },
+        {
+          "claim_id": "stale_bookmark_branch_s20",
+          "record_step": 20,
+          "edit_scope": "WHOLE_RECORD",
+          "anchor_text": "the Border Collie post is still in bookmarks?",
+          "epistemic_status": "UNVERIFIABLE",
+          "operation": "ARCHIVE",
+          "evidence_refs": [],
+          "rationale": "curated as an inactive, repetitive bookmark-recovery branch at target step 33"
+        },
+        {
+          "claim_id": "stale_bookmark_branch_s27",
+          "record_step": 27,
+          "edit_scope": "WHOLE_RECORD",
+          "anchor_text": "this post is still in bookmarks",
+          "epistemic_status": "UNVERIFIABLE",
+          "operation": "ARCHIVE",
+          "evidence_refs": [],
+          "rationale": "curated as an inactive, repetitive bookmark-recovery branch at target step 33"
+        },
+        {
+          "claim_id": "bookmark_state_s32",
+          "record_step": 32,
+          "edit_scope": "WHOLE_RECORD",
+          "anchor_text": "that's why the post is still in bookmarks: I never unbookmarked it",
+          "epistemic_status": "REFUTED",
+          "operation": "REPLACE",
+          "evidence_refs": [
+            "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/MastodonAdjustTootsTask/screenshots/MastodonAdjustTootsTask-0-33.png"
+          ],
+          "correction": "The current overflow menu says 'Bookmark', which indicates that this post is presently not bookmarked. Clicking that menu item would add a bookmark; do not use it as a removal action."
+        }
+      ]
+    },
+    {
+      "fixture_id": "check_set_meet_time_s6_to_s7",
+      "forbidden_texts": ["Nov 1st", "November 1st"],
+      "targets": [
+        {
+          "claim_id": "meeting_datetime_s6",
+          "record_step": 6,
+          "edit_scope": "WHOLE_RECORD",
+          "anchor_text": "the email said \"Saturday, Nov 1st, 10:00 AM to 11:00 AM\"",
+          "epistemic_status": "REFUTED",
+          "operation": "REPLACE",
+          "evidence_refs": [
+            "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckSetMeetTimeTask/screenshots/CheckSetMeetTimeTask-0-3.png"
+          ],
+          "correction": "Use the preserved email fact: Board Meeting is on November 15 at 3:00 PM. Recover from the calendar page and create a one-hour event."
+        }
+      ]
+    },
+    {
+      "fixture_id": "check_interview_times_s20_to_s21",
+      "forbidden_texts": ["TechNova"],
+      "targets": [
+        {
+          "claim_id": "first_interview_company_s20",
+          "record_step": 20,
+          "edit_scope": "WHOLE_RECORD",
+          "anchor_text": "The first interview was with TechNova Solutions",
+          "epistemic_status": "REFUTED",
+          "operation": "REPLACE",
+          "evidence_refs": [
+            "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckInterviewTimesTask/screenshots/CheckInterviewTimesTask-0-3.png"
+          ],
+          "correction": "Use the preserved source email: the first interview is with Amazon on November 20, 2025 at 3:00 PM for 90 minutes. Clear the invented title before continuing."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "source_scope": {
+    "run": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline",
+    "other_runs_read": false,
+    "nonempty_tasks": 116,
+    "immediate_pairs": 3281,
+    "all_history_exposures": 65808,
+    "scanner_hit_definition": "At least one candidates.csv row derived from the same seed_baseline has candidate_target_step equal to source step i."
+  },
+  "recommended_primary_estimand": "Among the 3,281 decision turns t with non-empty text history, the proportion in which P_t explicitly relies on any invalid active-history claim P_i, i<t, in a harmful or off-rubric way.",
+  "pilot_estimand": "Narrow feasibility outcome for the immediate P_(t-1) -> decision_t pair only. It cannot estimate all-history propagation because it misses long-range reuse.",
+  "secondary_estimands": [
+    "Prevalence of INVALID source pre-steps among eligible source records.",
+    "Task-level incidence of at least one confirmed propagation event.",
+    "Scanner sensitivity and specificity after probability-sample adjudication."
+  ],
+  "sampling": {
+    "seed": 20260815,
+    "stage_1": "SRSWOR of tasks within result_status x trajectory-length strata.",
+    "tasks_per_stratum_target": 4,
+    "stage_2": "Within each selected task, SRSWOR of one scanner hit and one non-hit when both exist; otherwise two from the sole domain (or all if fewer).",
+    "weight": "1 / (task sampling fraction * within-task-domain pair sampling fraction)",
+    "selected_tasks": 25,
+    "sampled_pairs": 50,
+    "sample_domain_counts": {
+      "hit": 18,
+      "non_hit": 32
+    }
+  },
+  "population_task_strata": {
+    "failure__long_35_50": 46,
+    "failure__medium_16_34": 16,
+    "failure__short_02_15": 7,
+    "missing__short_02_15": 1,
+    "success__long_35_50": 4,
+    "success__medium_16_34": 13,
+    "success__short_02_15": 29
+  },
+  "population_pair_strata": [
+    {
+      "result_status": "failure",
+      "length_stratum": "long_35_50",
+      "scanner_domain": "hit",
+      "pairs": 647
+    },
+    {
+      "result_status": "failure",
+      "length_stratum": "long_35_50",
+      "scanner_domain": "non_hit",
+      "pairs": 1521
+    },
+    {
+      "result_status": "failure",
+      "length_stratum": "medium_16_34",
+      "scanner_domain": "hit",
+      "pairs": 104
+    },
+    {
+      "result_status": "failure",
+      "length_stratum": "medium_16_34",
+      "scanner_domain": "non_hit",
+      "pairs": 275
+    },
+    {
+      "result_status": "failure",
+      "length_stratum": "short_02_15",
+      "scanner_domain": "hit",
+      "pairs": 6
+    },
+    {
+      "result_status": "failure",
+      "length_stratum": "short_02_15",
+      "scanner_domain": "non_hit",
+      "pairs": 50
+    },
+    {
+      "result_status": "missing",
+      "length_stratum": "short_02_15",
+      "scanner_domain": "non_hit",
+      "pairs": 5
+    },
+    {
+      "result_status": "success",
+      "length_stratum": "long_35_50",
+      "scanner_domain": "hit",
+      "pairs": 65
+    },
+    {
+      "result_status": "success",
+      "length_stratum": "long_35_50",
+      "scanner_domain": "non_hit",
+      "pairs": 102
+    },
+    {
+      "result_status": "success",
+      "length_stratum": "medium_16_34",
+      "scanner_domain": "hit",
+      "pairs": 35
+    },
+    {
+      "result_status": "success",
+      "length_stratum": "medium_16_34",
+      "scanner_domain": "non_hit",
+      "pairs": 238
+    },
+    {
+      "result_status": "success",
+      "length_stratum": "short_02_15",
+      "scanner_domain": "hit",
+      "pairs": 24
+    },
+    {
+      "result_status": "success",
+      "length_stratum": "short_02_15",
+      "scanner_domain": "non_hit",
+      "pairs": 209
+    }
+  ],
+  "analysis_warning": "Scanner hit is an allocation variable, never a ground-truth label. The 50-pair pilot is immediate-history feasibility work only. A target-turn label must inspect all prior P_i; do not report the narrow pilot as overall pre-step propagation prevalence."
+}

@@ -1,0 +1,64 @@
+{
+  "scope": {
+    "input": "/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline",
+    "formal_task_directories": 117,
+    "nonempty_trajectories": 116,
+    "excluded_backup_rule": "directory name contains _backup_",
+    "other_run_groups_read": false,
+    "verifier_or_reflection_data_read": false,
+    "model_identity": "doubao-seed-2-0-pro-260215",
+    "model_identity_source": "QR-MW/report.md run configuration; traj.json does not itself store model_name"
+  },
+  "outcomes": {
+    "success": 46,
+    "failure": 69,
+    "missing": 2
+  },
+  "total_steps": 3397,
+  "history_exposure_denominators": {
+    "eligible_source_presteps_with_later_decision": 3281,
+    "immediate_prestep_decision_pairs": 3281,
+    "all_history_exposure_pairs": 65808,
+    "lag_ge_4_evidence_evicted_exposure_pairs": 56319,
+    "decision_turns_with_at_least_one_evidence_evicted_pre_step": 2938,
+    "seed_history_policy": "all prior assistant responses retained; latest 3 image observations retained"
+  },
+  "step_distribution": {
+    "min": 2.0,
+    "median": 27.0,
+    "p75": 50.0,
+    "p90": 50.0,
+    "max": 50.0,
+    "tasks_at_50_steps": 35
+  },
+  "candidate_rows": 1533,
+  "tasks_with_any_candidate": 95,
+  "candidate_type_counts": {
+    "FAILED_TRANSITION_ACK": 114,
+    "LATER_FAILURE_ACK": 85,
+    "LATER_SELF_CORRECTION": 447,
+    "LOOP_LANGUAGE": 76,
+    "NEAR_DUPLICATE_REASONING": 2,
+    "REPEATED_ACTION": 545,
+    "SELF_CORRECTION_EVIDENCE": 447,
+    "STATIC_REPEATED_ACTION": 76,
+    "UNSUCCESSFUL_TERMINAL_COMPLETION": 32
+  },
+  "candidate_task_counts": {
+    "FAILED_TRANSITION_ACK": 45,
+    "LATER_FAILURE_ACK": 35,
+    "LATER_SELF_CORRECTION": 78,
+    "LOOP_LANGUAGE": 25,
+    "NEAR_DUPLICATE_REASONING": 2,
+    "REPEATED_ACTION": 70,
+    "SELF_CORRECTION_EVIDENCE": 78,
+    "STATIC_REPEATED_ACTION": 27,
+    "UNSUCCESSFUL_TERMINAL_COMPLETION": 32
+  },
+  "thresholds": {
+    "repeated_action": "same quantized action seen >=2 times in prior 8 steps",
+    "near_duplicate_reasoning": "max token Jaccard >=0.78 over prior 5 steps",
+    "visually_static": "MAD<=0.0035, changed_fraction<=0.012, dHash distance<=2"
+  },
+  "interpretation_warning": "Candidate counts are retrieval statistics, not prevalence estimates. Human screenshot-grounded review is required before assigning supported, refuted, invalidated, off-track, or misleading labels."
+}
