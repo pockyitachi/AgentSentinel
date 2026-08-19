@@ -14,6 +14,13 @@ AgentSentinel repository. They do not change the upstream MobileWorld project
 unless a future maintainer deliberately creates a separate upstream
 contribution.
 
+The exact upstream snapshot includes public, test-environment key fixtures such
+as the Android emulator ADB key and a local reverse-proxy TLS key. They already
+exist in the cited public upstream commit, are retained to keep the imported
+tree reproducible, and must never be reused as production credentials. Real API
+keys and machine-local `.env` files remain excluded by the repository root
+`.gitignore`.
+
 The snapshot references these upstream resource submodules:
 
 | Path | Repository | Pinned commit |
@@ -21,4 +28,3 @@ The snapshot references these upstream resource submodules:
 | `MobileWorld/resources/mail` | `https://github.com/nrgao/mail_fork.git` | `545355b4feab53893c30ea968036d6800a4006a0` |
 | `MobileWorld/resources/mall` | `https://github.com/qykong/mall_fork.git` | `a2f25aaf3907946ebc8a093bfab1f4c974675eff` |
 | `MobileWorld/resources/mastodon-android` | `https://github.com/patdooog/mastodon-android.git` | `9a28bb3f1c4bcea90cf6facd1efb657198e9ac84` |
-
