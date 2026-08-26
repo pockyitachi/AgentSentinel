@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "normalized_action.schema.json",
+  "title": "G1 production-normalized action artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "curated", "deployment_prediction", "normalized_action", "normalized_action_sha256"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.production-normalized-action/v1"},
+    "record_type": {"const": "causal_replay_production_normalized_action"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "normalized_action": {"type": "object"},
+    "normalized_action_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

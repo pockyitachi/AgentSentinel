@@ -1,0 +1,675 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "transformation_plan.schema.json",
+  "title": "G1.6 curated history transformation plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "plan_id",
+    "curated",
+    "deployment_prediction",
+    "curation_phase",
+    "unit_ref",
+    "curation_input_manifest_ref",
+    "evidence_refs",
+    "tokenizer_binding",
+    "focal_target_set",
+    "focal_target_set_sha256",
+    "oracle_target_set",
+    "oracle_target_set_sha256",
+    "corrections",
+    "protected_spans",
+    "delimiter_repairs",
+    "sham_benign_edit",
+    "applicable_arms",
+    "invariants"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-transformation-plan/v1"},
+    "record_type": {"const": "causal_replay_transformation_plan"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "plan_id": {"type": "string", "pattern": "^g1transform-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "curation_phase": {"const": "G1_6_FROZEN"},
+    "unit_ref": {"$ref": "#/$defs/immutableUnitRef"},
+    "curation_input_manifest_ref": {"$ref": "#/$defs/curationInputRef"},
+    "evidence_refs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/transformationEvidenceRef"},
+      "contains": {
+        "type": "object",
+        "required": ["evidence_role"],
+        "properties": {"evidence_role": {"const": "source_history"}}
+      },
+      "minContains": 1
+    },
+    "tokenizer_binding": {"$ref": "#/$defs/tokenizerBinding"},
+    "focal_target_set": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "allOf": [
+          {"$ref": "#/$defs/targetLocator"},
+          {
+            "properties": {
+              "source_candidate_ids": {"minItems": 1}
+            }
+          }
+        ]
+      }
+    },
+    "focal_target_set_sha256": {"$ref": "#/$defs/sha256"},
+    "oracle_target_set": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/targetLocator"}
+    },
+    "oracle_target_set_sha256": {"$ref": "#/$defs/sha256"},
+    "corrections": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/correction"}
+    },
+    "protected_spans": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/protectedSpan"}
+    },
+    "delimiter_repairs": {"$ref": "#/$defs/delimiterRepairs"},
+    "sham_benign_edit": {"$ref": "#/$defs/shamEdit"},
+    "applicable_arms": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]
+      }
+    },
+    "invariants": {"$ref": "#/$defs/invariants"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"unit_ref": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}}}
+      },
+      "then": {
+        "properties": {
+          "oracle_target_set": {"minItems": 1},
+          "corrections": {"minItems": 1},
+          "applicable_arms": {
+            "const": [
+              "ORIGINAL",
+              "MASK",
+              "MASK_CORRECTION",
+              "ORACLE_CLEAN",
+              "SHAM_BENIGN_EDIT"
+            ]
+          },
+          "invariants": {
+            "properties": {
+              "oracle_is_focal_superset": {"const": true},
+              "mask_targets_equal_focal": {"const": true},
+              "mask_correction_targets_equal_focal": {"const": true},
+              "oracle_targets_equal_oracle_set": {"const": true},
+              "only_original_and_sham_applicable": {"const": "NOT_APPLICABLE"}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "oracle_target_set": {"maxItems": 0},
+          "corrections": {"maxItems": 0},
+          "applicable_arms": {"const": ["ORIGINAL", "SHAM_BENIGN_EDIT"]},
+          "delimiter_repairs": {
+            "properties": {
+              "MASK": {"maxItems": 0},
+              "MASK_CORRECTION": {"maxItems": 0},
+              "ORACLE_CLEAN": {"maxItems": 0}
+            }
+          },
+          "invariants": {
+            "properties": {
+              "oracle_is_focal_superset": {"const": "NOT_APPLICABLE"},
+              "mask_targets_equal_focal": {"const": "NOT_APPLICABLE"},
+              "mask_correction_targets_equal_focal": {"const": "NOT_APPLICABLE"},
+              "oracle_targets_equal_oracle_set": {"const": "NOT_APPLICABLE"},
+              "only_original_and_sham_applicable": {"const": true}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"unit_ref": {"properties": {"history_family": {"const": "RAW_REPLAY"}}}}
+      },
+      "then": {
+        "properties": {
+          "focal_target_set": {
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/targetLocator"},
+                {
+                  "properties": {
+                    "record_binding": {
+                      "properties": {
+                        "representation_record_class": {"const": "MAI_RAW_ASSISTANT_MESSAGE"}
+                      }
+                    },
+                    "edit_span": {
+                      "properties": {
+                        "span_origin": {"const": "INDEPENDENT_G1_6_CURATION"}
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "protected_spans": {
+            "minItems": 1,
+            "contains": {"properties": {"segment_kind": {"const": "TOOL_CALL"}}},
+            "minContains": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "focal_target_set": {
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/targetLocator"},
+                {
+                  "properties": {
+                    "record_binding": {
+                      "properties": {
+                        "representation_record_class": {"const": "QWEN_FLAT_PROGRESS_STEP"}
+                      }
+                    },
+                    "edit_span": {
+                      "properties": {
+                        "span_origin": {"const": "FROZEN_G1_1_EXACT_EXPOSURE"}
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "schema_version"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "schema_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "curationInputRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {"const": "mobileworld.g1.curation-input-manifest/v1"}
+          }
+        }
+      ]
+    },
+    "utf8TextRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {"const": "mobileworld.g1.utf8-text/v1"}
+          }
+        }
+      ]
+    },
+    "transformationEvidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref_id",
+        "evidence_role",
+        "relative_path",
+        "sha256",
+        "byte_count",
+        "artifact_schema_version",
+        "projection_path",
+        "event_id",
+        "event_seq",
+        "observed_step"
+      ],
+      "properties": {
+        "ref_id": {"type": "string", "pattern": "^g1evidence-[0-9a-f]{24}$"},
+        "evidence_role": {
+          "enum": [
+            "source_history",
+            "source_pre",
+            "target_pre",
+            "task_instruction",
+            "tool_response",
+            "ask_user_response"
+          ]
+        },
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "artifact_schema_version": {"const": "mobileworld.g1.curation-evidence/v1"},
+        "projection_path": {"enum": ["task.instruction", "payload.observation.screenshot.pixel_blob", "payload.request_view.messages", "payload.execution_result.agent_visible_tool_result", "payload.execution_result.ask_user_response"]},
+        "event_id": {"type": ["string", "null"]},
+        "event_seq": {"type": ["integer", "null"], "minimum": 0},
+        "observed_step": {"type": "integer", "minimum": 0}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"evidence_role": {"const": "task_instruction"}}},
+          "then": {
+            "properties": {
+              "event_id": {"type": "null"},
+              "event_seq": {"type": "null"},
+              "observed_step": {"const": 0},
+              "projection_path": {"const": "task.instruction"}
+            }
+          },
+          "else": {
+            "properties": {
+              "event_id": {"type": "string", "minLength": 1},
+              "event_seq": {"type": "integer", "minimum": 0}
+            }
+          }
+        },
+        {"if": {"properties": {"evidence_role": {"const": "source_history"}}}, "then": {"properties": {"projection_path": {"const": "payload.request_view.messages"}}}},
+        {"if": {"properties": {"evidence_role": {"enum": ["source_pre", "target_pre"]}}}, "then": {"properties": {"projection_path": {"const": "payload.observation.screenshot.pixel_blob"}}}},
+        {"if": {"properties": {"evidence_role": {"const": "tool_response"}}}, "then": {"properties": {"projection_path": {"const": "payload.execution_result.agent_visible_tool_result"}}}},
+        {"if": {"properties": {"evidence_role": {"const": "ask_user_response"}}}, "then": {"properties": {"projection_path": {"const": "payload.execution_result.ask_user_response"}}}}
+      ]
+    },
+    "immutableUnitRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit_kind",
+        "unit_id",
+        "unit_record_sha256",
+        "source_registry_manifest_sha256",
+        "frozen_capsule_sha256",
+        "request_view_sha256",
+        "current_gui_sha256",
+        "task_instruction_sha256",
+        "task_parameters_sha256",
+        "request_cutoff_event_id",
+        "request_cutoff_event_seq",
+        "target_step",
+        "model_id",
+        "history_family"
+      ],
+      "properties": {
+        "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+        "unit_id": {"type": "string", "pattern": "^(g1case|g1control)-[0-9a-f]{24}$"},
+        "unit_record_sha256": {"$ref": "#/$defs/sha256"},
+        "source_registry_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "frozen_capsule_sha256": {"$ref": "#/$defs/sha256"},
+        "request_view_sha256": {"$ref": "#/$defs/sha256"},
+        "current_gui_sha256": {"$ref": "#/$defs/sha256"},
+        "task_instruction_sha256": {"$ref": "#/$defs/sha256"},
+        "task_parameters_sha256": {"$ref": "#/$defs/sha256"},
+        "request_cutoff_event_id": {"type": "string", "minLength": 1},
+        "request_cutoff_event_seq": {"type": "integer", "minimum": 1},
+        "target_step": {"type": "integer", "minimum": 1},
+        "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+        "history_family": {"enum": ["FLAT_PROGRESS", "RAW_REPLAY"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}},
+          "then": {"properties": {"unit_id": {"pattern": "^g1case-[0-9a-f]{24}$"}}},
+          "else": {"properties": {"unit_id": {"pattern": "^g1control-[0-9a-f]{24}$"}}}
+        },
+        {
+          "if": {"properties": {"model_id": {"const": "qwen3vl_8b"}}},
+          "then": {"properties": {"history_family": {"const": "FLAT_PROGRESS"}}},
+          "else": {"properties": {"history_family": {"const": "RAW_REPLAY"}}}
+        }
+      ]
+    },
+    "tokenizerBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_config_manifest_sha256",
+        "model_id",
+        "tokenizer_revision",
+        "tokenizer_artifact_set_sha256",
+        "counting_call",
+        "add_special_tokens"
+      ],
+      "properties": {
+        "model_config_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+        "tokenizer_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tokenizer_artifact_set_sha256": {"$ref": "#/$defs/sha256"},
+        "counting_call": {"const": "tokenizer.encode(text, add_special_tokens=False)"},
+        "add_special_tokens": {"const": false}
+      }
+    },
+    "recordBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_identity_sha256",
+        "request_path",
+        "message_index",
+        "content_item_index",
+        "message_role",
+        "content_item_kind",
+        "representation_record_class",
+        "record_sha256",
+        "record_codepoint_count",
+        "record_utf8_byte_count",
+        "history_depth",
+        "semantic_record"
+      ],
+      "properties": {
+        "record_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "request_path": {"type": "string", "minLength": 1},
+        "message_index": {"type": "integer", "minimum": 0},
+        "content_item_index": {"type": ["integer", "null"], "minimum": 0},
+        "message_role": {"enum": ["system", "user", "assistant", "tool"]},
+        "content_item_kind": {"enum": ["TEXT", "SCALAR_TEXT"]},
+        "representation_record_class": {
+          "enum": ["QWEN_FLAT_PROGRESS_STEP", "MAI_RAW_ASSISTANT_MESSAGE"]
+        },
+        "record_sha256": {"$ref": "#/$defs/sha256"},
+        "record_codepoint_count": {"type": "integer", "minimum": 1},
+        "record_utf8_byte_count": {"type": "integer", "minimum": 1},
+        "history_depth": {"type": "integer", "minimum": 1},
+        "semantic_record": {"$ref": "#/$defs/spanCoordinates"}
+      }
+    },
+    "spanCoordinates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "char_start",
+        "char_end",
+        "utf8_byte_start",
+        "utf8_byte_end",
+        "span_sha256"
+      ],
+      "properties": {
+        "char_start": {"type": "integer", "minimum": 0},
+        "char_end": {"type": "integer", "minimum": 1},
+        "utf8_byte_start": {"type": "integer", "minimum": 0},
+        "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "editSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "span_origin",
+        "char_start",
+        "char_end",
+        "utf8_byte_start",
+        "utf8_byte_end",
+        "span_sha256"
+      ],
+      "properties": {
+        "span_origin": {
+          "enum": ["FROZEN_G1_1_EXACT_EXPOSURE", "INDEPENDENT_G1_6_CURATION"]
+        },
+        "char_start": {"type": "integer", "minimum": 0},
+        "char_end": {"type": "integer", "minimum": 1},
+        "utf8_byte_start": {"type": "integer", "minimum": 0},
+        "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "targetLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "target_id", "source_candidate_ids", "record_binding", "edit_span"],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 0},
+        "target_id": {"type": "string", "pattern": "^g1span-[0-9a-f]{24}$"},
+        "source_candidate_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "record_binding": {"$ref": "#/$defs/recordBinding"},
+        "edit_span": {"$ref": "#/$defs/editSpan"}
+      }
+    },
+    "correction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_id",
+        "insertion_position",
+        "correction_utf8_ref",
+        "token_count",
+        "utf8_byte_count",
+        "codepoint_count",
+        "evidence_ref_ids",
+        "minimality_rule"
+      ],
+      "properties": {
+        "target_id": {"type": "string", "pattern": "^g1span-[0-9a-f]{24}$"},
+        "insertion_position": {"const": "DELETED_SPAN_START"},
+        "correction_utf8_ref": {"$ref": "#/$defs/utf8TextRef"},
+        "token_count": {"type": "integer", "minimum": 1},
+        "utf8_byte_count": {"type": "integer", "minimum": 1},
+        "codepoint_count": {"type": "integer", "minimum": 1},
+        "evidence_ref_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "minimality_rule": {
+          "const": "MIN_TOKENS_THEN_UTF8_BYTES_THEN_CODEPOINTS_THEN_LEXICOGRAPHIC_UTF8"
+        }
+      }
+    },
+    "protectedSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["segment_kind", "record_identity_sha256", "request_path", "span"],
+      "properties": {
+        "segment_kind": {"enum": ["TOOL_CALL", "NON_TARGET_HISTORY"]},
+        "record_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "request_path": {"type": "string", "minLength": 1},
+        "span": {"$ref": "#/$defs/spanCoordinates"}
+      }
+    },
+    "repair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repair_id",
+        "record_identity_sha256",
+        "operation",
+        "deleted_syntax_span",
+        "semantic_content_added"
+      ],
+      "properties": {
+        "repair_id": {"type": "string", "pattern": "^g1repair-[0-9a-f]{24}$"},
+        "record_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "operation": {
+          "enum": ["DELETE_EMPTY_DELIMITER", "DELETE_ORPHAN_SEPARATOR"],
+          "description": "DELETE_EMPTY_DELIMITER is limited to an adjacent exact thinking tag; DELETE_ORPHAN_SEPARATOR is limited to an adjacent Thought:/Step N: marker or semicolon. The validator rehydrates and matches the full span."
+        },
+        "deleted_syntax_span": {
+          "$ref": "#/$defs/spanCoordinates",
+          "description": "Exact source syntax span adjacent to an arm-selected target with at most whitespace between them."
+        },
+        "semantic_content_added": {"const": false}
+      }
+    },
+    "delimiterRepairs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"],
+      "properties": {
+        "MASK": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/repair"}},
+        "MASK_CORRECTION": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/repair"}},
+        "ORACLE_CLEAN": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/repair"}},
+        "SHAM_BENIGN_EDIT": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/repair"}}
+      }
+    },
+    "locationBucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "message_role",
+        "content_item_kind",
+        "representation_record_class",
+        "relative_third"
+      ],
+      "properties": {
+        "message_role": {"enum": ["system", "user", "assistant", "tool"]},
+        "content_item_kind": {"enum": ["TEXT", "SCALAR_TEXT"]},
+        "representation_record_class": {
+          "enum": ["QWEN_FLAT_PROGRESS_STEP", "MAI_RAW_ASSISTANT_MESSAGE"]
+        },
+        "relative_third": {"enum": ["LEADING", "MIDDLE", "TRAILING"]}
+      }
+    },
+    "shamLocationMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "focal_bucket",
+        "benign_bucket",
+        "same_message_role",
+        "same_content_item_kind",
+        "same_representation_record_class",
+        "same_relative_third",
+        "same_request_record",
+        "focal_history_depth",
+        "benign_history_depth",
+        "history_depth_difference",
+        "same_record_unavailable_reviewed"
+      ],
+      "properties": {
+        "focal_bucket": {"$ref": "#/$defs/locationBucket"},
+        "benign_bucket": {"$ref": "#/$defs/locationBucket"},
+        "same_message_role": {"const": true},
+        "same_content_item_kind": {"const": true},
+        "same_representation_record_class": {"const": true},
+        "same_relative_third": {"const": true},
+        "same_request_record": {"type": "boolean"},
+        "focal_history_depth": {"type": "integer", "minimum": 1},
+        "benign_history_depth": {"type": "integer", "minimum": 1},
+        "history_depth_difference": {"type": "integer", "minimum": 0, "maximum": 1},
+        "same_record_unavailable_reviewed": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"same_request_record": {"const": true}}},
+          "then": {
+            "properties": {
+              "history_depth_difference": {"const": 0},
+              "same_record_unavailable_reviewed": {"const": false}
+            }
+          },
+          "else": {
+            "properties": {"same_record_unavailable_reviewed": {"const": true}}
+          }
+        }
+      ]
+    },
+    "shamEdit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "benign_target",
+        "matched_focal_target_id",
+        "focal_token_count",
+        "benign_token_count",
+        "absolute_token_difference",
+        "token_match_rule",
+        "token_match_passed",
+        "location_match",
+        "semantic_checks"
+      ],
+      "properties": {
+        "operation": {"const": "DELETE"},
+        "benign_target": {"$ref": "#/$defs/targetLocator"},
+        "matched_focal_target_id": {
+          "type": "string",
+          "pattern": "^g1span-[0-9a-f]{24}$"
+        },
+        "focal_token_count": {"type": "integer", "minimum": 1},
+        "benign_token_count": {"type": "integer", "minimum": 1},
+        "absolute_token_difference": {"type": "integer", "minimum": 0},
+        "token_match_rule": {"const": "RATIO_80_TO_125_PERCENT_OR_ABSOLUTE_DIFFERENCE_AT_MOST_4"},
+        "token_match_passed": {"const": true},
+        "location_match": {"$ref": "#/$defs/shamLocationMatch"},
+        "semantic_checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "no_entailment",
+            "no_contradiction",
+            "no_lexical_alias",
+            "not_task_hard_requirement",
+            "no_accepted_action_discriminant"
+          ],
+          "properties": {
+            "no_entailment": {"const": true},
+            "no_contradiction": {"const": true},
+            "no_lexical_alias": {"const": true},
+            "not_task_hard_requirement": {"const": true},
+            "no_accepted_action_discriminant": {"const": true}
+          }
+        }
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targets_ordered_unique_nonoverlapping",
+        "oracle_is_focal_superset",
+        "mask_targets_equal_focal",
+        "mask_correction_targets_equal_focal",
+        "oracle_targets_equal_oracle_set",
+        "sham_nonoverlapping_with_misleading_targets",
+        "protected_spans_untouched",
+        "future_evidence_leakage_zero",
+        "only_original_and_sham_applicable"
+      ],
+      "properties": {
+        "targets_ordered_unique_nonoverlapping": {"const": true},
+        "oracle_is_focal_superset": {"enum": [true, "NOT_APPLICABLE"]},
+        "mask_targets_equal_focal": {"enum": [true, "NOT_APPLICABLE"]},
+        "mask_correction_targets_equal_focal": {"enum": [true, "NOT_APPLICABLE"]},
+        "oracle_targets_equal_oracle_set": {"enum": [true, "NOT_APPLICABLE"]},
+        "sham_nonoverlapping_with_misleading_targets": {"const": true},
+        "protected_spans_untouched": {"const": true},
+        "future_evidence_leakage_zero": {"const": true},
+        "only_original_and_sham_applicable": {"enum": [true, "NOT_APPLICABLE"]}
+      }
+    }
+  }
+}

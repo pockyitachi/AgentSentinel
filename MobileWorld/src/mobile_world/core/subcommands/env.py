@@ -7,13 +7,13 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from dotenv import dotenv_values
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-from dotenv import dotenv_values
 from mobile_world.core.api.env import (
     DEFAULT_IMAGE,
     DEFAULT_NAME_PREFIX,
@@ -31,6 +31,10 @@ from mobile_world.core.api.env import (
     resolve_container_name,
     restart_server_in_container,
     wait_for_container_ready,
+)
+from mobile_world.runtime.user_agent_config import (
+    UserAgentConfigurationError,
+    validate_user_agent_env_file,
 )
 from mobile_world.runtime.utils.docker import (
     build_run_command,
@@ -350,7 +354,11 @@ def _launch_containers(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     port_sets = find_available_ports(
-        args.backend_start_port, args.viewer_start_port, args.vnc_start_port, args.adb_start_port, count
+        args.backend_start_port,
+        args.viewer_start_port,
+        args.vnc_start_port,
+        args.adb_start_port,
+        count,
     )
 
     if len(port_sets) < count:
@@ -406,16 +414,7 @@ def _launch_containers(args: argparse.Namespace) -> None:
     env_file_path = None
     default_env_path = current_path / ".env"
 
-    if default_env_path.exists():
-        env_file_path = default_env_path
-        console.print(
-            Panel(
-                f"[green]Found .env file[/green]\n[cyan]Mounting:[/cyan] {env_file_path} → /app/service/.env",
-                title="[green]📄 Environment File[/green]",
-                border_style="green",
-            )
-        )
-    elif args.env_file:
+    if args.env_file:
         env_file_path = Path(args.env_file)
         if not env_file_path.exists():
             console.print(
@@ -442,12 +441,33 @@ def _launch_containers(args: argparse.Namespace) -> None:
                 border_style="green",
             )
         )
+    elif default_env_path.exists():
+        env_file_path = default_env_path
+        console.print(
+            Panel(
+                f"[green]Found .env file[/green]\n[cyan]Mounting:[/cyan] {env_file_path} → /app/service/.env",
+                title="[green]📄 Environment File[/green]",
+                border_style="green",
+            )
+        )
     else:
         console.print(
             Panel(
                 "[red]No .env file found in current directory and --env-file not specified[/red]\n"
                 "[yellow]Please provide --env-file argument with path to .env file[/yellow]",
                 title="[red]✗ Error[/red]",
+                border_style="red",
+            )
+        )
+        sys.exit(1)
+
+    try:
+        validate_user_agent_env_file(env_file_path)
+    except UserAgentConfigurationError as exc:
+        console.print(
+            Panel(
+                f"[red]{exc}[/red]",
+                title="[red]✗ Simulated-user preflight failed[/red]",
                 border_style="red",
             )
         )
@@ -1074,7 +1094,9 @@ def _check_env_file() -> tuple[bool, str, str | None]:
             mcp_keys_missing.append(key)
 
     if mcp_keys_placeholder:
-        warnings.append(f"{', '.join(mcp_keys_placeholder)}: placeholder value (required for MCP tasks)")
+        warnings.append(
+            f"{', '.join(mcp_keys_placeholder)}: placeholder value (required for MCP tasks)"
+        )
     if mcp_keys_missing:
         warnings.append(f"{', '.join(mcp_keys_missing)}: not set (required for MCP tasks)")
 

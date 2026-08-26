@@ -1,0 +1,176 @@
+{
+  "record_type": "causal_replay_registry_publication_lock",
+  "schema_version": "mobileworld.g1.causal-replay-registry-lock/v1",
+  "protocol_version": "mobileworld.g1.causal-replay/protocol-v1",
+  "issue": "ALE-319",
+  "story": "G1.1",
+  "registry_phase": "PRE_GOLD_G1_1",
+  "curated": true,
+  "deployment_prediction": false,
+  "phase_decision": {
+    "decision_id": "D-021",
+    "relative_path": "mobileworld_audit_handoff/DECISION_LOG.md",
+    "sha256": "129704e5cc657512df93660b272e557fae4f0acd082c6e9f8aff52b80cb0d07d"
+  },
+  "external_registry": {
+    "formal_publication": true,
+    "write_once": true,
+    "registry_id": "sha256:dd3dad4f94c66dce6999d3cc2743cd75c37688788754e95b27531cfd00d733f4",
+    "absolute_root": "/shared/linqiang/mobileworld_causal_replay_data/g1_1/registry/sha256/dd3dad4f94c66dce6999d3cc2743cd75c37688788754e95b27531cfd00d733f4",
+    "content_address": {
+      "algorithm": "sha256",
+      "subject_relative_path": "registry_manifest.json",
+      "sha256": "dd3dad4f94c66dce6999d3cc2743cd75c37688788754e95b27531cfd00d733f4",
+      "byte_count": 9911
+    },
+    "file_count": 6,
+    "total_byte_count": 3103332,
+    "directory_mode": "0555",
+    "file_mode": "0444",
+    "owner": "linqiang",
+    "group": "linqiang",
+    "uid": 1035,
+    "gid": 1035,
+    "regular_files_only": true,
+    "symlink_count": 0,
+    "subdirectory_count": 0,
+    "files": {
+      "arm_catalog.json": {
+        "sha256": "8d40c78f8683169c738ab78aa596c1f67b0ee1b31aa35448a758749d2f8ab73c",
+        "byte_count": 3540
+      },
+      "case_registry.pre_gold.jsonl": {
+        "sha256": "bf6e5a5ae54b244b088c22322dd6613f44b706ec4ff258d439c08c86f9454146",
+        "byte_count": 1519929
+      },
+      "clean_control_pool.jsonl": {
+        "sha256": "afec3485a5d211562561ec166439e1c02f2962b98b71573485d1c709cbdb0c98",
+        "byte_count": 741061
+      },
+      "dry_validation.json": {
+        "sha256": "4b7079a0d5ddd61cfe213f83b6f6ea78a2dfe76faeb1b0966272fc41b4a457a5",
+        "byte_count": 1761
+      },
+      "registry_manifest.json": {
+        "sha256": "dd3dad4f94c66dce6999d3cc2743cd75c37688788754e95b27531cfd00d733f4",
+        "byte_count": 9911
+      },
+      "selection_ledger.jsonl": {
+        "sha256": "9ab1c6d1c54830d6f5e195cac8ebbbddd6af5e42132909fefd349cae4de03e2d",
+        "byte_count": 827130
+      }
+    }
+  },
+  "output_file_set": {
+    "algorithm": "sha256(canonical_json_bytes({filename: sha256(file_bytes) for all 6 emitted files}, newline=true))",
+    "aggregate_sha256": "dbec86f012b1cb9a11f94123cb302a62ffc6a04a33422121d190f28edf793bc6"
+  },
+  "registry_contract": {
+    "source_config": {
+      "relative_path": "mobileworld_audit_handoff/g1/source_registry_inputs.v1.json",
+      "sha256": "c8235705c575e134c11bc00896f31ec95243af4ffd2ffd47a3e6ecf64ce5cb59",
+      "byte_count": 6578
+    },
+    "contract_file_count": 25,
+    "aggregate_sha256": "f1e23239896eb7f6487e337ec391df73d19c84fababecae996c0a2e752f156d8",
+    "frozen_files": {
+      "MobileWorld/scripts/build_g1_causal_replay_registry.py": {
+        "sha256": "5aecb1384b7dfcb10ef9a529ea93c6d054cce3e47fa35b7d28aa47176ab39b16",
+        "byte_count": 211
+      },
+      "MobileWorld/src/mobile_world/offline/causal_replay_registry.py": {
+        "sha256": "e403941f817e842c5da528fbb74b6f357fa53984223d7af94d2a6c57db28dfdf",
+        "byte_count": 249343
+      },
+      "MobileWorld/tests/offline/test_causal_replay_registry.py": {
+        "sha256": "be50b1449694eec9d66ee93de53ab407f11cef7607993b4e204d89378f70fd0c",
+        "byte_count": 88248
+      },
+      "mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md": {
+        "sha256": "07fd0b64ea68f514e5369033a5f0b2f0c191c95fdb1cfef1b7e6ad4d81badd26",
+        "byte_count": 24003
+      },
+      "mobileworld_audit_handoff/G1_LOCKED_ANALYSIS_PLAN_V1.md": {
+        "sha256": "ecb98d1dfc1d28e496d9d7320054ee19cc222df5b9d7ee00105073dfc786e79b",
+        "byte_count": 16846
+      },
+      "mobileworld_audit_handoff/g1/model_config_manifest.v1.json": {
+        "sha256": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f",
+        "byte_count": 29618
+      }
+    }
+  },
+  "counts": {
+    "strict_mhr_case_count": 152,
+    "strict_mhr_task_count": 42,
+    "clean_control_selected_count": 38,
+    "clean_control_reserve_count": 38,
+    "ledger_count": 674,
+    "included_count": 0,
+    "treatment_response_count": 0,
+    "per_source": {
+      "mai": {
+        "strict_mhr_case_count": 13,
+        "strict_mhr_task_count": 7,
+        "clean_control_pool_count": 23,
+        "clean_control_selected_count": 8,
+        "clean_control_selected_task_count": 7,
+        "ledger_count": 240,
+        "included_count": 0
+      },
+      "qwen": {
+        "strict_mhr_case_count": 139,
+        "strict_mhr_task_count": 35,
+        "clean_control_pool_count": 53,
+        "clean_control_selected_count": 30,
+        "clean_control_selected_task_count": 30,
+        "ledger_count": 434,
+        "included_count": 0
+      }
+    }
+  },
+  "case_state_policy": {
+    "source_registry_state": "CANDIDATE_FROZEN",
+    "append_only_admission_states": [
+      "INCLUDED",
+      "EXCLUDED"
+    ],
+    "g1_6_required_before_inclusion": true,
+    "g1_6_rewrites_source_records": false,
+    "included_count": 0
+  },
+  "readiness": {
+    "curation_and_admission_sealed": false,
+    "admission_ready": false,
+    "execution_ready": false,
+    "run_ready": false,
+    "treatment_response_generation_allowed": false
+  },
+  "validation": {
+    "valid": true,
+    "dry_validation_check_count": 25,
+    "all_dry_validation_checks_true": true,
+    "double_build_byte_identical": true,
+    "published_bytes_match_frozen_snapshot": true,
+    "source_rebuild_byte_identical": true,
+    "exact_root_file_set": true,
+    "unresolved_source_ref_count": 0,
+    "unresolved_capsule_ref_count": 0,
+    "pre_gold_future_leakage_case_count": 0,
+    "pre_gold_future_leakage_control_count": 0,
+    "obsolete_model_manifest_sha256_match_count": 0
+  },
+  "safety": {
+    "gold_materialized": false,
+    "included_count": 0,
+    "treatment_response_count": 0,
+    "execution_performed": false,
+    "run_performed": false,
+    "provider_invoked": false,
+    "generated_action_executed": false,
+    "gpu_used": false,
+    "collector_or_raw_data_mutated": false,
+    "g1_2_or_later_executed": false,
+    "future_gpu_model_service_or_replay_requires_owner_approval": true
+  }
+}

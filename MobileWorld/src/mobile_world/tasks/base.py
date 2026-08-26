@@ -112,9 +112,13 @@ class BaseTask(abc.ABC):
 
     def initialize_task(self, controller: AndroidController) -> bool | None:
         """Initializes the task."""
+        was_initialized = self.initialized
+        # A registry task is a long-lived singleton.  Never let a failed new
+        # episode inherit the successful initialization state of an old one.
+        self.initialized = False
         self.reset_task_state()
         self.current_date = self._compute_current_date()  # refresh per episode (singleton reuse)
-        if self.initialized:
+        if was_initialized:
             logger.warning(f"{self.name} initialized before. Initializing again.")
 
         if self.snapshot_tag is not None:

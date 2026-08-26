@@ -1,20 +1,27 @@
-# Sentinel：GUI Agent 运行时 Pre-step 误导监控与 Rubric 航向校验
+# Sentinel：基于 GUI 证据的调用前 Active-History 重建与 Rubric 路径治理
 
-> 版本：2026-08-13，补充现有系统表、I/O 契约与端到端示例  
+> 版本：2026-08-22，重排核心机制、更新正式自然轨迹证据与相关工作边界
 > 研究范围：**当前 GUI 任务、当前单条执行轨迹中的 pre-steps**
+>
+> 状态说明（2026-08-26）：本文保留 2026-08-22 的研究提案快照；第 7 节的
+> MAI/Qwen 与 GELab 执行状态已被后续六模型最终审核和 ALE-319/G1.1 冻结结果取代。
+> 当前结果以 `MobileWorld/docs/misleading_history_audit_report.md`、
+> `mobileworld_audit_handoff/STATUS.md` 和 G1 协议/锁文件为准。
 
 ## 摘要
 
 当前 GUI agent 通常会把先前动作、模型自评、执行器结果、观察和任务进展等 **pre-steps** 重新注入下一次模型调用。这些历史是 agent 判断“我在哪里、已经做了什么、下一步该做什么”的主要依据，却也可能形成运行时误导：记录可能错误或已经失效；即使每条记录都是真的，一段偏航轨迹也可能持续强化错误方向，使 agent 在下一步继续沿用与任务无关的历史。
 
-本文聚焦这一**单任务、单轨迹、下一步决策前**的问题，而不是跨任务检索的 experience、外部知识或长期记忆。我们提出 **Sentinel**：一个插在 GUI agent 与执行环境之间的 task-local plugin/middleware。任务开始前，Sentinel 根据任务指令生成一份允许多条合法路径、可随证据更新的 milestone rubric；运行中，它在每次下一步决策前执行两个正交检查：
+本文聚焦这一**单任务、单轨迹、下一步决策前**的问题，而不是跨任务检索的 experience、外部知识或长期记忆。我们提出 **Sentinel**：一个位于宿主完成 model-request 组装之后、实际 provider/model invocation 之前的 task-local history gate。每次调用前，Sentinel 将宿主原始 request、完整轨迹及其证据保存在 lossless sidecar，并以 screenshot、UI tree、action、executor result 和时间对齐 provenance 为依据，把宿主原生 pre-steps 重建为本次调用实际可见、协议合法且可审计的 `active_history`。Sentinel 不修改 backbone 权重，也不替 agent 选择下一动作。
 
-1. **History misleadingness**：pre-step 中的结果、状态或进展 claim 是否被证据反驳、已经失效，因而会给当前一步错误依据；
-2. **Rubric trajectory alignment**：当前 GUI 状态和累积轨迹是否仍位于至少一条可完成任务的 rubric 路径上，以及哪些真实 pre-steps 已属于失活分支、不再值得当前一步继续参考。
+这一重建由两个正交且可分别弃权的判定轴控制：
 
-Sentinel 不替 agent 选择具体动作，也不修改模型权重。它是下一次模型调用之前的 **history gate**：先保留完整原始轨迹到 sidecar，再把宿主 pre-steps 转换成只含“仍可信且与当前任务相关”内容的 `active_history`。被证据反驳的记录从 active prompt 中删除或替换为经过验证的最小事实；真实但属于失活分支的记录从 active prompt 中移出、仅保留在审计日志。随后 Sentinel 把 `task + active_history + compact rubric state + current GUI` 交给原 agent。系统允许 `unknown` 和弃权，无法可靠判断的记录默认不删除。
+1. **Evidence-grounded history validity**：历史 claim 在其声称的时间点是否受证据支持，以及它现在是否仍可作为当前状态或当前进展使用；
+2. **Rubric-grounded task-path relevance**：一条真实记录是否仍属于至少一条可行完成路径，还是已经落入失活或偏航分支。
 
-本文的贡献是：**(1) 问题与测量**——将单轨迹 pre-steps 的运行时风险表示为 `history misleadingness × trajectory alignment` 双轴；**(2) 机制**——实现同时检查历史可靠性和任务走向、并在模型调用前生成 clean active history 的 GUI runtime middleware；**(3) 因果评测**——在相同 GUI 状态下分别构造错误历史、真实但无关的偏航历史和干净历史，测量它们对下一步决策及任务成功率的影响，并分解错误记录过滤、偏航分支过滤与 rubric 状态的作用。
+被证据反驳或当前已失效的内容通过 `DROP/REPLACE` 处理；真实但属于失活分支的内容通过 `ARCHIVE` 移出 active prompt；证据不足时采用 `KEEP_UNCERTAIN`。Sentinel 的主要部署产物是 `active_history` 及由它组装出的下一次 model request。面向 agent 的 compact rubric-state block 是可选辅助输出，并在实验中与 history reconstruction 的作用分开评估。
+
+本文计划的主要贡献不是首次发现历史可能误导 agent、首次压缩运行时历史或首次使用 trajectory rubric，而是：**(1) 机制**——基于 GUI/执行证据，在 provider call 之前重建宿主原生 `active_history`；**(2) 双轴治理语义**——独立区分错误/失效历史与真实但路径失活的历史，并分别授权 `DROP/REPLACE` 与 `ARCHIVE`；**(3) 测量与因果评测**——记录实际 provider request 的 exposure/provenance，并在冻结 GUI 状态及其他 request 条件后，仅改变 history view 来测量下一步行为差异。
 
 ---
 
@@ -52,18 +59,21 @@ Sentinel 不替 agent 选择具体动作，也不修改模型权重。它是下�
 - 历史属于哪条任务路径、对剩余任务是否仍相关；
 - 当前 GUI 是否仍能由至少一条合法完成路径解释。
 
-### 1.3 调研口径与可守住的空白
+### 1.3 调研口径与可守住的组合性空白
 
-截至 2026-08-04，我们的内部调研整理了 **26 个合并审计条目（表格行）**；每行可能合并同一家族的多个版本，因此不能称为“26 个独立系统”或“26 个具体版本”。其中大部分条目检查了实现或 prompt 编排源码，少数仅依据论文/官方文档；精确的来源分母要在逐行 ledger 补齐后再报告。我们还审计了 MobileWorld 固定快照 `0dcd098` 中的 9 个注册 adapter。两组存在家族重叠，不能相加称为“35 个独立系统”。完整数字须在发布带 `family_id`、具体版本、source type、commit/date 和代码定位的冻结 ledger 后才能作为论文证据。
+截至 2026-08-04，我们的冻结实现审计整理了 **26 个合并审计条目（表格行）**；每行可能合并同一家族的多个版本，因此不能称为“26 个独立系统”或“26 个具体版本”。其中大部分条目检查了实现或 prompt 编排源码，少数仅依据论文/官方文档；精确的来源分母要在逐行 ledger 补齐后再报告。我们还审计了 MobileWorld 固定快照 `0dcd098` 中的 9 个注册 adapter。两组存在家族重叠，不能相加称为“35 个独立系统”。完整数字须在发布带 `family_id`、具体版本、source type、commit/date 和代码定位的冻结 ledger 后才能作为论文证据。
+
+直接相关文献检索已更新至 2026-08-22。现有工作已经分别覆盖 misleading-history robustness、运行时 trajectory selection/compression、task/execution-state tracking、procedure deviation monitoring 和 stale-memory repair，因此这些单点均不作为本文的首创主张。特别是 [When History Lies](https://arxiv.org/abs/2608.06057) 已直接研究非 GUI tool agent 中 misleading history 对下一决策的影响，并以 Oracle-guided on-policy distillation 训练 student 在污染历史仍完整可见时保持稳健。
 
 这些实现采用原始对话回放、逐步结论、滚动摘要和折叠记忆等不同形式保存轨迹。现有 GUI agent 也并非完全不检查历史：Browser-Use 会验证上一目标，Mobile-Agent 与 StepReflect 类方法检查最近 UI transition，Agent-S 会反思近期轨迹，TSR 会持续维护任务状态。
 
-本文不主张“没有系统回看历史”。可检验的研究空白是：在限定的公开系统审计范围内，我们尚未发现一个方法同时：
+本文不主张“没有系统回看历史”。可检验的研究空白是：在限定的公开系统与文献范围内，我们尚未发现一个方法同时：
 
-1. 以多源 GUI 证据判断当前任务内原生 pre-steps 是否正在误导下一步；
-2. 用独立、可更新的 milestone rubric 判断整条轨迹是否仍位于可行任务路径；
-3. 区分“错误历史”和“真实但偏航的历史”；
-4. 在下一次模型调用前，分别通过 `DROP/REPLACE` 处理错误记录，通过 `ARCHIVE` 处理真实但偏航的记录，生成可追溯的 clean active history。
+1. 拦截当前 GUI episode 中确实将进入下一次 provider request 的宿主原生 pre-steps；
+2. 以带时间和来源的 GUI/执行证据维护 claim/span 级事实状态与当前有效性；
+3. 用独立、可更新且允许多条合法路径的 rubric 判断真实记录的 task-path relevance；
+4. 分别以 `DROP/REPLACE` 治理错误或失效内容，以 `ARCHIVE` 治理真实但失活的分支，并允许两个轴独立弃权；
+5. 保留 lossless raw sidecar，同时生成协议合法、可追溯且实际送入下一次调用的 `active_history`。
 
 Sentinel 针对的是这一组合，而不是任何单个组件的绝对首创。
 
@@ -73,27 +83,26 @@ Sentinel 针对的是这一组合，而不是任何单个组件的绝对首创�
 
 表中不使用含混的“有/无历史核验”，而是分别记录：pre-step 的表示与窗口、写入时点、可用证据、已有检查的范围，以及 Sentinel 需要拦截的位置。这里的“未见记录级审计”特指：在冻结版本的默认路径中，未见一个独立、结构化、可持久化的机制，对任意旧记录维护证据状态，并据此为下一次 model call 构造过滤后的 active history；它不表示该 agent 完全不看当前截图、执行错误或近期轨迹。
 
-### 1.5 `seed_baseline` 的初步自然轨迹证据
+### 1.5 正式自然轨迹证据：MAI-UI 与 Qwen3-VL
 
-为先验证问题本身是否真实存在，我们只分析 MobileWorld `seed_baseline`，不混入 pilot、verifier、retry 或其他 agent 条件。该快照包含 116 条非空 Seed-2.0-Pro 轨迹、3,397 steps 和 3,281 个带历史的 decision turns。受审 Seed adapter 保留全部旧 assistant 文字，但默认只保留最近 3 张 image observations；65,808 个 all-history source→target exposures 中，56,319 个（85.58%）发生在 source 前/后视觉证据均已离开 prompt 之后。该比例是风险暴露面，不是错误率。
+我们已在两套相互独立的 MobileWorld GUI-117 curated datasets 上完成正式观测性审核，并对每个模型保持独立分母和独立结论。**Misleading History Reuse（MHR）**要求错误或过时的 step-level history entry 确实进入后续 actor prompt，而且后续 prediction 明确引用、复述或依赖它；**MHR with Observed Harm（MHR-OH）**进一步要求同一审核链伴随可见的局部错误、重复、不必要动作、提前终止或继续偏航。`MHR-OH` 是 `MHR` 的子集，但 “observed harm” 不表示历史复用已被证明是唯一原因。
 
-我们把自然案例按四项条件红队：旧 claim 有直接反证、source 确实进入 target request、target 明确采用该 premise、关键 target 没有一个已经写错的当前 GUI 可以独立解释该采用。按这一最严格口径，固定语料中确认 **5/116 条轨迹（4.31% 的已观察下界）**存在 invalid-history uptake。典型链包括：已读出的 invoice 与客户邮箱后来被反复称为不存在；May 4 的 `All Hands` 冲突在 19 步后被翻转为“无冲突”并进入 HR 邮件流程；以及当前菜单已经显示 `Bookmark`，agent 仍沿用旧 premise 把它误当成 remove 操作。这是固定语料中的 minimum known count，不是模型总体 prevalence，也不是 history-only 因果效应。
+- **MAI-UI-8B：**117/117 task evidence coverage 完整；**7/117（5.98%）**tasks 出现 MHR，**7/117（5.98%）**出现 MHR-OH。共确认 13 个 MHR reuse instances，13 个均伴随 observed harm。117 条轨迹共有 4,156 个 actor prompts 和 91,607 次 history-entry appearances；13 条已确认错误 entries 后续累计出现 309 次。
+- **Qwen3-VL-8B：**117/117 task evidence coverage 完整；**35/117（29.91%）**tasks 出现 MHR，**32/117（27.35%）**出现 MHR-OH。共确认 139 个 MHR reuse instances，其中 131 个伴随 observed harm。117 条轨迹共有 3,017 个 actor prompts 和 58,677 次 history-entry appearances；138 条去重后的已确认错误 entries 后续累计出现 2,495 次。
 
-另有 8 个定向案例和概率 pilot 新发现的 1 个 task 满足直接反证、prompt 暴露和 target uptake，但 source action 已把错误日期、金额、实体或 report 写进当前 GUI。合并去重后，宽口径共确认 15 条传播链、涉及 14/116 个 tasks；这些只能报告为 `confirmed propagation with state confound`，不能用来隔离历史文字的独立作用。
+两份数据均独立满足冻结审核规则的 `STRONG_OBSERVATIONAL` 门槛，且 `causal_claim_supported=false`。MAI-UI 使用 raw replay，Qwen3-VL 使用 flat task-progress，两者不能据此做模型优劣或 history-format 因果比较。prompt appearance 也不自动等于 reuse 或 harm。完整定义、分母、实例和截图证据见 [`MobileWorld/docs/misleading_history_audit_report.md`](MobileWorld/docs/misleading_history_audit_report.md)。
 
-按原实验报告的 headline 记账口径，117 个任务由 48 个“成功或无结果”（46 个 `score=1` 加 2 个 `no_result`）与 69 个 `score=0` 失败组成。上述 14 个 task 全部属于这 69 个失败，因此当前可以报告：**14/69（20.29%）的失败轨迹至少出现一次经人工确认的 invalid pre-step uptake**。其中 5/69（7.25%）在关键 target 没有错误 current-GUI state 的强化，另外 9/69（13.04%）存在 state confound。`14/69` 是固定语料中已确认的观测下界，不表示这些失败已经被证明是由 pre-step 文本因果造成的。
-
-我们还完成了一个 50 个 immediate pairs、25 个 tasks 的单标注概率 pilot：2 个 propagation、3 个 invalid-but-rejected/corrected、6 个 action-failure controls、35 个 no-invalid-source、4 个 unverifiable；两个 propagation 中有一个来自 scanner non-hit。该 pilot 只用于证明随机样本中也能找到现象、校准标签和设计正式样本，不能作为 all-history prevalence。正式研究将以 target decision turn 为单位，检查全部 `P_i, i<t`，抽样 500–600 turns、70–90 task clusters，并对至少 20% 做双人复标。
-
-完整证据链、prompt request 行证、红队裁决与抽样设计见 [problem solidification report](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/problem_solidification_report.md>)。只有在冻结 GUI state、system prompt 和其他 messages 后，仅改变目标 history span 的配对 replay 中，本文才主张 pre-step 的因果影响。
+早期 Seed `5/116` strict lower bound 和 `14/69` broad signal 仅保留为历史 pilot，不再作为当前 headline。只有在冻结 task、GUI/backend state、system/tools、model、decoding、images 和其他 messages 后，仅改变目标 history span 的配对 replay 中，本文才主张 pre-step 的因果影响。
 
 ---
 
-## 2. 双轴问题定义
+## 2. Active-History Reconstruction 的双轴判定语义
 
 Sentinel 在 prompt 外维护证据账本 $E_{\le t}$，保存可取得的 pre/post screenshot、UI/无障碍树、动作、executor/tool result、时间戳和实际发送给 agent 的历史。每条记录被解析成带来源和时间语义的 claims。
 
-### 2.1 轴一：History misleadingness
+双轴 verdict 不是 Sentinel 的最终产物；它们是允许或拒绝对每条宿主历史记录执行 history transformation 的授权依据。
+
+### 2.1 轴一：Evidence-grounded History Validity
 
 对 pre-step 中每个事实性、结果性或任务进展 claim，Sentinel 分别判断：
 
@@ -114,9 +123,9 @@ current_validity ∈ {active, invalidated, unknown, n/a}
 
 只有 claim 已被 `refuted`，或已经 `invalidated` 却仍作为当前任务进展暴露给 agent 时，Sentinel 才将其标为高 misleading risk。证据不足时输出 `unverifiable/unknown`，不能自动 `DROP/REPLACE`。
 
-### 2.2 轴二：Rubric trajectory alignment
+### 2.2 轴二：Rubric-grounded Task-path Relevance
 
-任务开始前，Sentinel 根据任务指令生成一个**可版本化的 AND–OR milestone graph**，而不是一条固定动作序列：
+Rubric 在这里服务于 history relevance 判定，而不是生成计划、选择动作或为事实 claim 提供真值证据。任务开始前，Sentinel 根据任务指令生成一个**可版本化的 AND–OR milestone graph**，而不是一条固定动作序列：
 
 ```text
 Rubric = {
@@ -185,7 +194,7 @@ milestone_status ∈ {pending, in_progress, satisfied, violated, unknown}
 trajectory_alignment ∈ {on_track, deviating, off_track, unknown}
 ```
 
-### 2.3 两个轴为什么不能合并
+### 2.3 为什么 Active-History Reconstruction 需要两个独立轴
 
 这张表不是四种 pre-step 数据格式，也不是四个错误等级。它是一个 **2×2 判断表**：横向问“当前任务方向对不对”，纵向问“当前仍会影响决策的历史依据可靠吗”。两问互不替代。
 
@@ -204,11 +213,11 @@ Rubric 只能判断轨迹相关性和任务方向，不能单独把历史事实�
 
 ---
 
-## 3. Sentinel：Task-local Runtime Middleware
+## 3. Sentinel：Evidence-Grounded Pre-call Active-History Reconstruction
 
 ### 3.1 插件架构
 
-Sentinel 位于宿主组装历史和下一次模型调用之间。它不修改 sidecar 中的原始轨迹，而是为本次调用生成一个派生的 active-history view：
+Sentinel 的拦截边界位于 host request assembly 之后、provider/model call 之前。它不修改 sidecar 中的原始轨迹，而是为本次调用生成一个派生的 active-history view：
 
 ```text
 host raw pre-steps ──→ extractor / claim parser ──→ evidence + rubric audit
@@ -216,7 +225,7 @@ host raw pre-steps ──→ extractor / claim parser ──→ evidence + rubri
         └────────────→ sidecar raw log                ↓
                                       history gate: KEEP / DROP / REPLACE / ARCHIVE
                                                     ↓
-                                             clean active_history
+                                      evidence-governed active_history
                                                     ↓
 task + active_history + compact rubric state + current GUI
                                                     ↓
@@ -297,7 +306,8 @@ task_relevance ∈ {high, low, unknown}
 Sentinel 有两个调用时点。任务开始时，它从 instruction 生成 rubric v0；每一步运行时，它拦截宿主**即将发送给模型**的 request，生成一个新的 request。核心关系是：
 
 ```text
-ModelRequest_t = HostSystemAndTools + Task + ActiveHistory_t + RubricState_t + CurrentGUI_t
+ModelRequest_t = HostSystemAndTools + Task + ActiveHistory_t + CurrentGUI_t
+                 [+ OptionalRubricState_t]
 
 ActiveHistory_t =
   KEEP(records)
@@ -307,7 +317,7 @@ ActiveHistory_t =
   - ARCHIVE(true but inactive-branch records)
 ```
 
-因此，Sentinel 的主要部署产物不是一段“建议下一步点击哪里”的文字，而是 **`active_history` 和由它组装出的下一次 model request**。宿主原有 system policy、tool schema 和采样参数原样保留；完整原始历史仍在 sidecar 中，便于审计和回放；被 `DROP/ARCHIVE` 的内容不再出现在给 agent 的 active prompt 中。上式描述完整部署条件；消融实验可以隐藏 `RubricState`，但不能偷偷恢复已过滤的原始历史。
+因此，Sentinel 的主要部署产物不是一段“建议下一步点击哪里”的文字，而是 **`active_history` 和由它组装出的下一次 model request**。宿主原有 system policy、tool schema 和采样参数原样保留；完整原始历史仍在 sidecar 中，便于审计和回放；被 `DROP/ARCHIVE` 的内容不再出现在给 agent 的 active prompt 中。内部 rubric 始终可以参与 path-relevance 判定，但面向 agent 的 rubric-state block 是可选通道；消融实验可以隐藏它，却不能偷偷恢复已过滤的原始历史。
 
 #### 3.4.1 与实现字段一一对应的调用流程
 
@@ -355,7 +365,11 @@ def intercept_next_model_call(host_request, episode):
         request_envelope=request_envelope,
         task=episode.task_instruction,
         active_history=active_history,
-        rubric_state=rubric_state.for_agent(),
+        rubric_state=(
+            rubric_state.for_agent()
+            if episode.config.expose_rubric_state
+            else None
+        ),
         current_gui=episode.current_gui,
     )
 
@@ -380,13 +394,16 @@ def intercept_next_model_call(host_request, episode):
 | `active_history` | 过滤后仍允许进入下一轮的历史 view | 是 |
 | `model_request` | `host system/tools + task + active_history + rubric state + current GUI` | 是；这才是 Sentinel 交给模型的最终产物 |
 
-**当前状态。** 工作区存在一个实验性 `sentinel_mvp` 接口草稿，用来探索 claim span、
-evidence 和 gate operation 的序列化方式；它不属于本阶段的实证结论。当前 replay
-fixture 仍有语义级过滤、完整 request envelope、因果时序和 oracle 边界需要修正，
-不能据此声称“无效 pre-step 已经可靠地不再进入真实下一轮请求”。本阶段只完成
-`seed_baseline` 的自然案例审计、prompt 暴露核验和概率抽样 pilot；实现工作在完成
-all-history 标注与冻结状态 replay 设计后再继续。下面的接口与伪代码是待验证设计契约，
-不是已经达到的系统能力。
+**当前状态。** 默认关闭、零干预、event-sourced、lossless、label-free 的 MobileWorld
+collector 已用于 MAI-UI-8B 与 Qwen3-VL-8B 两套 GUI-117 正式观测性审核；两套数据均有
+117/117 task evidence coverage，并已冻结 MHR/MHR-OH 结果。该 collector 记录 exact
+semantic application-layer provider SDK arguments 与 `S_t → I_t → P_t → A_t → R_t → S_{t+1}`，
+但不在 raw events 中写入 history verdict、rubric 或 gate operation。
+
+在线 claim verifier、rubric generator/tracker 和真实 provider call 前的
+`KEEP/DROP/REPLACE/ARCHIVE/KEEP_UNCERTAIN` transformation 尚未实现或验证。工作区中的
+实验性 `sentinel_mvp` 接口草稿只用于探索序列化方式，不能据此声称无效 pre-step 已经
+可靠地不再进入真实下一轮请求。下面的接口与伪代码仍是待实现、待验证的设计契约。
 
 #### 3.4.2 运行时输入
 
@@ -568,7 +585,7 @@ Gate operation: DROP/REPLACE R5 + ARCHIVE the inactive branch.
 Active prompt: only verified, still-relevant history and current rubric state remain.
 ```
 
-这个 trajectory 展示了 Sentinel 的边界：它没有规定“下一步必须点击哪个坐标”，而是在 model call 前删除/替换错误依据、移出偏航历史，再把 clean active history、rubric state 和当前 GUI 交还给原 agent 决策。
+这个 trajectory 展示了 Sentinel 的边界：它没有规定“下一步必须点击哪个坐标”，而是在 model call 前删除/替换错误依据、移出偏航历史，再把 evidence-governed active history、可选 rubric state 和当前 GUI 交还给原 agent 决策。
 
 ---
 
@@ -576,17 +593,17 @@ Active prompt: only verified, still-relevant history and current rubric state re
 
 ### 4.1 研究问题
 
-- **RQ1：Pre-step harm**——在 GUI 状态相同的情况下，仅改变 pre-step 内容或当前相关性，会不会改变下一步动作并损害任务成功？
-- **RQ2：History gate**——Sentinel 能否识别已被反驳、已失效或错误声称任务进展的 pre-steps，并在允许弃权的前提下安全 `DROP/REPLACE`？
-- **RQ3：Rubric-guided filtering**——动态 milestone rubric 能否识别真实但偏航的轨迹，将失活分支从 active prompt 中 `ARCHIVE`，并减少历史自强化？
-- **RQ4：Joint value**——事实过滤与 rubric 路径过滤是否互补，联合 clean-history gate 是否优于任一单轴？
-- **RQ5：Plugin generality**——同一双轴协议能否通过显式适配层覆盖不同 GUI 历史表示？
+- **RQ1：Native exposure and GUI-specific causal harm**——哪些宿主原生 pre-steps 确实重新进入下一次 provider request；在冻结 GUI state、system/tools、current observation、model 和 decoding 后，仅修正这些 history spans 是否会改变下一步行为？
+- **RQ2：Pre-call history reconstruction**——基于 GUI/执行证据的 gate 能否在允许弃权的条件下安全重建 `active_history`，并降低错误历史的采用？
+- **RQ3：Rubric-grounded relevance**——独立的多路径 rubric 能否识别真实但属于失活分支的记录，并安全授权 `ARCHIVE`？
+- **RQ4：Joint value**——事实过滤与 rubric 路径过滤是否互补，联合 active-history gate 是否优于任一单轴？
+- **RQ5：Request-level portability**——同一治理协议能否通过显式 extractor/renderer 覆盖不同宿主，同时保持最终 request 的协议合法性？
 
 ### 4.2 贡献定位
 
-1. **问题与测量**：将当前任务内 pre-steps 的运行时风险操作化为 `history misleadingness × rubric trajectory alignment`，区分错误/失效历史、真实但偏航历史及两者共存；
-2. **机制**：实现允许弃权的 task-local history gate，以多源 GUI 证据决定 `KEEP/DROP/REPLACE`，以多路径 rubric 决定是否 `ARCHIVE` 真实偏航记录，并为下一次调用构造可追溯的 `active_history`；
-3. **因果评测**：在状态一致的 GUI 分支中，分别评估 invalid-record filtering、inactive-branch filtering、联合 clean-history gate 和 oracle 上界，同时报告误删、错误替换、下一步行为、任务成功率和运行成本。
+1. **主要机制**：提出并将实现 GUI-evidence-grounded pre-call active-history reconstruction，在不修改 backbone 或选择动作的前提下，治理下一次 provider request 实际可依赖的宿主原生历史；
+2. **治理语义**：事实/时态有效性与任务路径相关性独立判定、独立弃权，并分别映射到 `KEEP/DROP/REPLACE/KEEP_UNCERTAIN` 与 `ARCHIVE`；
+3. **测量与评测**：记录 exact-request exposure/provenance，并在状态一致的 GUI 分支中实施 history-only causal intervention，同时报告误删、错误替换、下一步行为、任务成功率和运行成本。
 
 ---
 
@@ -598,13 +615,13 @@ Active prompt: only verified, still-relevant history and current rubric state re
 
 ### 5.2 直接近邻
 
-- [When History Lies](https://arxiv.org/abs/2608.06057) 通过 Original/Polluted/Oracle State 配对视图研究非 GUI 工具调用中的历史诱导决策翻转，是因果设计近邻，但不处理视觉轨迹或部署期航向 monitor；
-- [GUI-RobustEval](https://arxiv.org/abs/2605.29447) 测量 GUI agent 在错误策略前缀后的恢复，但环境状态和历史同时变化，不能单独识别 pre-step 文本的影响；
-- [StepReflect](https://arxiv.org/abs/2608.05587) 用前后截图验证最近一次 UI transition 是否符合宿主给出的 expectation，但明确不判断 expectation 本身是否正确，也不检查任意旧 pre-step 或整条任务路径；
-- [TSR](https://arxiv.org/abs/2607.00502) 持续维护结构化任务状态，但不诊断累积 pre-steps 是否正在误导下一步，也不分别处理错误历史和真实偏航历史；
-- [HalluClear](https://arxiv.org/abs/2604.17284) 与 MIRAGE-Bench 主要诊断当前输出中的 hallucination 或不忠实，而不是宿主历史和任务航向的双轴运行时反馈。
+- [When History Lies](https://arxiv.org/abs/2608.06057) 通过 Original/Polluted/Oracle State 配对视图研究非 GUI tool agent 中的历史诱导决策翻转，并以 Oracle-guided on-policy distillation 训练 student 在污染历史仍完整可见时保持稳健。Sentinel 不训练 policy，而是在每次调用前显式治理 history 本身；
+- [PABU](https://arxiv.org/abs/2602.09138)、[AgentDiet](https://arxiv.org/abs/2509.23586) 与 [MementoGUI](https://arxiv.org/abs/2605.18652) 选择、压缩或删除 trajectory，主要优化相关性、效率或 learned memory control；它们不以 GUI provenance 判定任意旧 claim 的事实/时态有效性，也不区分 `DROP/REPLACE` 与 `ARCHIVE`；
+- [TSR](https://arxiv.org/abs/2607.00502)、[Ledger](https://arxiv.org/abs/2608.00808) 与 [SkillSentry](https://arxiv.org/abs/2608.09253) 维护结构化 task/execution state 或监控 procedure/action deviation，主要追加状态、告警或约束动作，而不是重建宿主原生 pre-call history；
+- [STALE/CUPMem](https://arxiv.org/abs/2605.06527)、[StateAuditor](https://arxiv.org/abs/2608.01619) 与 [MemTX](https://arxiv.org/abs/2607.23929) 处理 stale 或带 provenance 的长期记忆，但作用域不是当前 GUI episode 中即将进入下一 request 的原生 execution history；
+- [GUI-RobustEval](https://arxiv.org/abs/2605.29447) 测量 GUI agent 在错误策略前缀后的恢复，但环境状态和历史同时变化，不能单独识别 pre-step 文本的影响；[StepReflect](https://arxiv.org/abs/2608.05587) 验证最近一次 UI transition，而不是任意旧 pre-step 或整条任务路径。
 
-本文的新颖性限定为上述组合，不声称“首次使用 rubric”“首次做 GUI reflection”或“首次发现历史会误导 agent”。
+因此本文的新颖性主张限定为：在 task-local GUI execution 中，将 evidence-grounded claim validity 与 independently rubric-grounded path relevance 共同用于实际 pre-call history reconstruction。本文不声称“首次发现 history can lie”“首次在 runtime 选择或删除 trajectory”“首次使用 rubric/task-state tracker”或“首次做 GUI reflection”。
 
 ---
 
@@ -641,8 +658,8 @@ MobileWorld 需要 Linux/WSL2、KVM 和 privileged Docker；主跑使用远程 L
 - **M2 Dynamic status**：实时更新 milestone/frontier，但不处理历史；
 - **M3 Alignment-only Filter**：rubric 只在内部判定路径；将 inactive-branch records `ARCHIVE`，不给 agent 显示额外 frontier block；
 - **M4 History-only Filter**：不提供 rubric state/path filtering，只对被证据反驳或失效的 records 执行 `DROP/REPLACE`；
-- **M5 Joint Clean History**：M3 与 M4 的双轴联合过滤；给 agent 匹配长度的中性状态块；
-- **M6 Joint + Rubric State**：在 M5 的 clean history 上再显示已满足/未完成要求、viable paths 和 frontier，但不输出具体 GUI action；
+- **M5 Joint Active-History Gate**：M3 与 M4 的双轴联合过滤；给 agent 匹配长度的中性状态块；
+- **M6 Joint + Rubric State**：在 M5 的 governed active history 上再显示已满足/未完成要求、viable paths 和 frontier，但不输出具体 GUI action；
 - **M7 Oracle**：人工多路径 rubric、金标 frontier 与金标历史处理，用作上界。
 
 所有在线条件尽可能匹配 verifier 调用数、提示长度和墙钟延迟；M0 保持真正的 no-monitor baseline。Shadow 检测默认对 sidecar 日志离线重放，不改变 agent 时序。
@@ -716,43 +733,48 @@ MVP 不跑完整笛卡尔积，只完成能够回答核心问题的比较：
 
 ---
 
-## 7. 四周最小可行研究（先坐实问题，再实现插件）
+## 7. 已完成基础与下一阶段研究闸门
 
-### Week 1：All-history 自然发生率
+### G0：Exact-request collection 与自然轨迹审核——已完成 MAI/Qwen
 
-- 冻结 `seed_baseline` 语料、时序定义、claim codebook 和 state-confound 字段；
-- 以 target decision turn 为单位构造 500–600 条概率样本，每条展开全部 `P_i, i<t`；
-- 至少 20% 双人独立复标，并对全部 positive/uncertain 双标；
-- 分开报告 strict propagation、state-confounded propagation、self-correction 和 action-failure control。
+- 已实现默认关闭、零干预、event-sourced、lossless、label-free 的 MobileWorld collector；
+- 已完成 MAI-UI-8B 与 Qwen3-VL-8B 两套独立 GUI-117 curated datasets 及 117/117 evidence coverage 的正式审核；
+- 已冻结 MHR、MHR-OH、task、reuse-instance、prompt-persistence 和 lag 定义；
+- 已将不同 history representations 分开报告，不做模型排名或因果归因。
 
-**G0：**样本、权重和 prompt-exposure provenance 可完全复现；主要标签一致性达到预注册门槛；报告带 task-cluster CI 的 prevalence，而不是 candidate yield。若严格 positive 只剩不可复核个案，则停止通用问题主张。
+**结果边界：**两套数据均达到 `STRONG_OBSERVATIONAL`，但 `causal_claim_supported=false`。这一阶段证明 host-native misleading history 会被重新暴露、明确复用并伴随可见局部 harm；它不证明删除或纠正历史会提高 SR。
 
-### Week 2：冻结 GUI 状态的 history 因果 replay
+### Representation extension：GELab rolling summary——进行中
 
-- 先复现 5 个低 state-confound 自然 decision points；
-- 冻结 task、GUI state、system/tools 和其他 messages，只比较 `Original / Mask / Mask+Correction / Oracle-clean`；
-- 验证状态 hash、request envelope、图片和随机参数一致，再扩展到 30–50 个 branch points；
-- 先测 next-action/rubric alignment，再决定是否值得跑完整 task completion。
+- 用 GELab-Zero-4B 在同一 GUI-117 任务集采集 rolling-summary history representation；
+- 保留模型生成 summary 的来源与时点，不把 pre-execution summary 当作 post-state-validated evidence；
+- 完成后复用完全相同的 MHR/MHR-OH 定义和独立报告口径。
 
-**G1：**至少一个预注册的 history intervention 在状态一致条件下稳定改变下一动作，并且方向与人工 gold 一致。若 `Mask/Correction` 与 `Original` 没有可重复差异，则不直接进入 middleware 论文主张，保留测量/恢复分析。
+### G1：冻结 GUI 状态的 history-only 因果 replay——下一核心闸门
 
-### Week 3：Shadow Sentinel（不改变 actor prompt）
+- 从正式审核案例预注册可复现的 natural decision points；
+- 冻结 task、GUI/backend state、system/tools、model、decoding、images 和其他 messages；
+- 只比较 `Original / Mask / Mask+Correction / Oracle-clean` history views；
+- 先测 next-action change，再决定是否扩展到完整 task completion。
 
-- 只在 Seed 主宿主接入 model-call interceptor 和 sidecar evidence ledger；
-- 实现 claim extraction、证据状态与 abstention，但不向 actor 注入 correction；
-- 在冻结的 dev/calibration/test 上测 claim coverage、false-refute 和 latency；
-- rubric 只生成 instruction-grounded AND–OR 结构并做 shadow status tracking。
+**通过条件：**至少一个预注册 intervention 在状态一致条件下稳定改变下一动作，并且方向与人工 gold 一致。若 `Mask/Correction` 与 `Original` 没有可重复差异，则保留 observational measurement 贡献，不进入 runtime-gate 因果主张。
 
-**G2：**部署期证据可裁决率、false-refute、rubric invented-requirement 和合法替代路径 false-deviation 均通过预注册门槛；否则继续 shadow，不启用 DROP/REPLACE/ARCHIVE。
+### G2：Shadow Sentinel——尚未开始
 
-### Week 4：受限 history gate 与 rubric 增量
+- 实现 claim extraction、证据状态、独立 abstention 和 instruction-grounded AND–OR rubric tracking；
+- 只计算 verdict，不改变 actor prompt；
+- 测 claim coverage、false-refute、rubric invented-requirement、合法替代路径 false-deviation 和 latency。
 
-- 仅对 direct-evidence、低风险 claim 开启 `KEEP/DROP/REPLACE/KEEP_UNCERTAIN`；
-- `ARCHIVE/LOW_RELEVANCE` 先保持 annotation-only，不破坏宿主私有历史；
-- 用 2×2 factorial 分开 history correction 与 rubric relevance 的贡献；
-- 第二宿主只做接口可移植性 sanity check，不宣称九宿主零适配。
+**通过条件：**证据可裁决率与安全指标达到预注册门槛；否则继续 shadow，不启用 `DROP/REPLACE/ARCHIVE`。
 
-**G3：**false-drop、错误 replacement 和 clean-task regression 低于预注册风险阈值；history-only correction、rubric-only guidance 与 joint 条件能被分别识别。样本不足时只报告 pilot 区间，不宣称安全界或 5pp 效应已被正式证明。
+### G3：受限 pre-call active-history reconstruction——尚未开始
+
+- 先对 direct-evidence、低风险 claim 开启 `KEEP/DROP/REPLACE/KEEP_UNCERTAIN`；
+- `ARCHIVE` 可先保持 annotation-only，再由 rubric calibration 决定是否启用；
+- 用 2×2 factorial 分开 history correction 与 rubric path relevance 的贡献；
+- 第二宿主只做显式 extractor/renderer 的可移植性 sanity check，不宣称九宿主零适配。
+
+**通过条件：**false-drop、错误 replacement、false-archive 和 clean-task regression 低于预注册风险阈值；history-only、rubric-only 与 joint 条件能被分别识别。样本不足时只报告 pilot 区间。
 
 ---
 
@@ -777,7 +799,7 @@ ICLR 2027 摘要截止 2026-09-18 AoE，全文截止 2026-09-25 AoE。9/10 前�
 
 ### 一句话版本
 
-> Sentinel 是一个位于 GUI agent 下一次 model call 之前的 history gate：它用 GUI/执行证据 `DROP/REPLACE` 错误或失效的 pre-steps，用动态 milestone rubric `ARCHIVE` 真实但属于偏航分支的 pre-steps，再把 `task + clean active history + compact rubric state + current GUI` 交给原 agent 自行决定下一步动作。
+> Sentinel 治理的是哪些历史可以继续成为下一次 GUI 决策的前提：它在 provider call 之前，以 GUI/执行证据核验宿主原生 pre-steps 的事实与时态有效性，并以独立的多路径 rubric 判断其 task-path relevance，据此执行 `KEEP/DROP/REPLACE/ARCHIVE/KEEP_UNCERTAIN`，生成协议合法、可追溯的 `active_history`，再由原 agent 根据当前 GUI 自行选择动作。
 
 ### 明确不使用的表述
 
@@ -787,6 +809,10 @@ ICLR 2027 摘要截止 2026-09-18 AoE，全文截止 2026-09-25 AoE。9/10 前�
 - “搜索框或商品页是所有购物任务的唯一合法路径”；
 - “偏航历史必然是假历史”；
 - “没有已有 GUI agent 回看历史”；
+- “首次发现 misleading history 会影响 agent”；
+- “首次在 runtime 选择、压缩或删除 trajectory”；
+- “首次使用 rubric、task-state tracker 或 procedure monitor”；
+- “`active_history` 中的所有内容都已被证明为真”；
 - “一次接入即可零适配覆盖九宿主”；
 - “运行时风险分数本身已经证明某条历史造成失败”。
 
@@ -862,11 +888,11 @@ ICLR 2027 摘要截止 2026-09-18 AoE，全文截止 2026-09-25 AoE。9/10 前�
 | `ui_venus_agent` | 当前 1 张图 + 旧 thought/action；该 commit 默认 `history_length=0`，其 Python `[-0:]` 切片实际保留全量文字，可能是切片语义副作用而非有意设计 | thought/action 是模型文本；`status=success/failed` 主要反映生成/解析流程，不是动作效果真值 | Prompt 提醒历史可能不可靠，未见独立 verifier/repairer | history slice/formatter；先固定并测试真实窗口语义 |
 | `gelab_agent` | 一句累积 rolling summary，几乎不留原始消息；当前图 | summary 随模型响应生成，是聚合的自管任务状态 | 未见独立效果核验；summary 是单点聚合风险 | summary state；以 summary span 为 provenance，从 sidecar 恢复原步证据 |
 | `planner_executor` | 类似 `general_e2e` 的 planning/execution 对话回放，近期图约 3 张 | 混合 planner 回复、post observation、tool/user result | 未见独立记录级 verifier/repairer | planner/executor messages 分源；计划不能当完成事件 |
-| `memgui` | 当前图 + 三块自管文本；folding directive 会破坏性压缩/替换旧内容 | folding 通常在下一轮、已看到新截图后生成；仍是模型聚合记忆 | 未见独立旧记录效果核验，错误折叠可能持久化 | 折叠前保存来源 span；从 sidecar 生成 clean active view，不尝试反向展开或覆写私有折叠状态 |
+| `memgui` | 当前图 + 三块自管文本；folding directive 会破坏性压缩/替换旧内容 | folding 通常在下一轮、已看到新截图后生成；仍是模型聚合记忆 | 未见独立旧记录效果核验，错误折叠可能持久化 | 折叠前保存来源 span；从 sidecar 生成 governed active view，不尝试反向展开或覆写私有折叠状态 |
 
 ### B.1 表格给出的总体结论
 
-这些系统并不是“所有历史都只含动作前自述”，也不是“从不回看历史”。Pre-steps 实际混合了意图、后验自评、执行器结果、错误和观察；已有系统可以验证最近 transition 或反思近期轨迹。**仅在附录 A 的 26 个合并审计条目与附录 B 的 9 个 adapters 这一冻结样本中**，我们尚未发现一个同时完成以下工作的统一机制：把当前任务内任意旧 pre-step 拆成有来源的时态 claims，维护持久证据状态，用独立 task rubric 区分“事实错误”和“真实但偏航”，再在下一次 model call 前分别 `DROP/REPLACE` 错误内容、`ARCHIVE` 失活分支并生成 clean active history。
+这些系统并不是“所有历史都只含动作前自述”，也不是“从不回看历史”。Pre-steps 实际混合了意图、后验自评、执行器结果、错误和观察；已有系统可以验证最近 transition 或反思近期轨迹。**仅在附录 A 的 26 个合并审计条目与附录 B 的 9 个 adapters 这一冻结样本中**，我们尚未发现一个同时完成以下工作的统一机制：把当前任务内任意旧 pre-step 拆成有来源的时态 claims，维护持久证据状态，用独立 task rubric 区分“事实错误”和“真实但偏航”，再在下一次 model call 前分别 `DROP/REPLACE` 错误内容、`ARCHIVE` 失活分支并生成 evidence-governed active history。
 
 关键一手锚点：
 

@@ -33,6 +33,12 @@ from mobile_world.runtime.utils.models import (
 SCALE = 1000
 
 
+def _extract_tag_content(tag_name: str, text: str) -> str | None:
+    """Extract a UI-Venus response field without changing its inner text."""
+    match = re.search(rf"<{tag_name}>(.*?)</{tag_name}>", text, re.DOTALL)
+    return match.group(1).strip() if match else None
+
+
 def parse_coordinates(coord_str: str) -> tuple[float | None, float | None]:
     """Parse coordinate string like '(x, y)' into a tuple of floats."""
     if not coord_str:
@@ -59,8 +65,13 @@ def _split_parameters(params_str: str) -> list[str]:
     quote_char = None
     bracket_level = 0
 
+    escaped = False
     for char in params_str:
-        if char in ['"', "'"] and not in_quotes:
+        if escaped:
+            escaped = False
+        elif char == "\\" and in_quotes:
+            escaped = True
+        elif char in ['"', "'"] and not in_quotes:
             in_quotes = True
             quote_char = char
         elif char == quote_char and in_quotes:
@@ -84,6 +95,14 @@ def _split_parameters(params_str: str) -> list[str]:
     return param_parts
 
 
+def _strip_matching_quotes(value: str) -> str:
+    """Remove one matching quote pair, as the official UI-Venus parser does."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+
 def parse_answer(action_str: str) -> tuple[str, dict]:
     """Parse a Venus-style action string like 'Click(box=(x, y))' into (action_name, params)."""
     pattern = r"^(\w+)\((.*)\)$"
@@ -101,8 +120,7 @@ def parse_answer(action_str: str) -> tuple[str, dict]:
             for pair in param_pairs:
                 if "=" in pair:
                     key, value = pair.split("=", 1)
-                    value = value.strip("'").strip()
-                    params[key.strip()] = value
+                    params[key.strip()] = _strip_matching_quotes(value)
                 else:
                     params[pair.strip()] = None
         except Exception as e:
@@ -202,6 +220,12 @@ def convert_venus_action_to_json_action(
         return {"action_type": NAVIGATE_HOME}
     elif action_name == "PressEnter":
         return {"action_type": KEYBOARD_ENTER}
+    elif action_name == "PressRecent":
+        # UI-Venus exposes this action, but MobileWorld's JSONAction contract has
+        # no recent-apps action.  Preserve the raw prediction and terminate this
+        # decision factually as UNKNOWN instead of raising after a successful parse
+        # and turning a model action into a task/runtime crash.
+        return {"action_type": UNKNOWN, "text": "Unsupported UI-Venus action: PressRecent"}
     elif action_name == "CallUser":
         return {"action_type": ANSWER, "text": action_params.get("content", "")}
     elif action_name == "Drag":
@@ -290,7 +314,13 @@ class VenusNaviAgent(BaseAgent):
         if len(self.history) == 0:
             history_str = ""
         else:
-            recent_history = self.history[-self.history_length :]
+            # The official UI-Venus 1.5 framework accumulates all prior action
+            # descriptions.  Preserve MobileWorld's established convention that
+            # ``history_length=0`` means unbounded history; spell it out instead of
+            # depending on the surprising ``history[-0:]`` slice behavior.
+            recent_history = (
+                self.history if self.history_length == 0 else self.history[-self.history_length :]
+            )
             history_entries = [
                 f"Step {i}: <think>{step.think}</think><action>{step.action}</action>"
                 for i, step in enumerate(recent_history)
@@ -355,21 +385,12 @@ class VenusNaviAgent(BaseAgent):
         logger.info(f"Goal: {self.instruction}")
         logger.info(f"Response: {repr(generated_text)}")
 
-        # Parse think/action/conclusion tags
-        try:
-            think_text = generated_text.split("<think>")[1].split("</think>")[0].strip("\n")
-        except (IndexError, ValueError):
-            think_text = ""
-        try:
-            answer_text = generated_text.split("<action>")[1].split("</action>")[0].strip("\n")
-        except (IndexError, ValueError):
-            answer_text = ""
-        try:
-            conclusion_text = (
-                generated_text.split("<conclusion>")[1].split("</conclusion>")[0].strip("\n")
-            )
-        except (IndexError, ValueError):
-            conclusion_text = ""
+        # Match the official UI-Venus 1.5 response contract.  The trained format
+        # uses tags, while its reference parser deliberately accepts a bare action
+        # as a fallback.
+        think_text = _extract_tag_content("think", generated_text) or ""
+        answer_text = _extract_tag_content("action", generated_text) or generated_text.strip()
+        conclusion_text = _extract_tag_content("conclusion", generated_text) or ""
 
         # Parse the action
         try:

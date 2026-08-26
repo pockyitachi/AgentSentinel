@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "curation_evidence.schema.json",
+  "title": "G1.6 mechanically reconstructed model-visible curator evidence projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "curated", "deployment_prediction", "ref_id", "evidence_role", "source_event_id", "source_event_seq", "source_event_type", "observed_step", "projection_path", "projection", "projection_sha256", "visibility_proof"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.curation-evidence/v1"},
+    "record_type": {"const": "causal_replay_curation_evidence"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "ref_id": {"type": "string", "pattern": "^g1evidence-[0-9a-f]{24}$"},
+    "evidence_role": {"enum": ["source_history", "source_pre", "target_pre", "task_instruction", "tool_response", "ask_user_response"]},
+    "source_event_id": {"type": ["string", "null"]},
+    "source_event_seq": {"type": ["integer", "null"], "minimum": 0},
+    "source_event_type": {"type": ["string", "null"]},
+    "observed_step": {"type": "integer", "minimum": 0},
+    "projection_path": {"enum": ["task.instruction", "payload.observation.screenshot.pixel_blob", "payload.request_view.messages", "payload.execution_result.agent_visible_tool_result", "payload.execution_result.ask_user_response"]},
+    "projection": {},
+    "projection_sha256": {"$ref": "#/$defs/sha256"},
+    "visibility_proof": {"$ref": "#/$defs/visibilityProof"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"evidence_role": {"const": "task_instruction"}}},
+      "then": {"properties": {"source_event_id": {"type": "null"}, "source_event_seq": {"type": "null"}, "source_event_type": {"type": "null"}, "observed_step": {"const": 0}, "projection_path": {"const": "task.instruction"}, "projection": {"type": "string", "minLength": 1}}},
+      "else": {"properties": {"source_event_id": {"type": "string", "minLength": 1}, "source_event_seq": {"type": "integer", "minimum": 0}, "source_event_type": {"type": "string", "minLength": 1}}}
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "visibilityProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["visibility_contract", "model_visible_at_or_before_request", "target_request_event_id", "target_request_event_seq", "request_locator"],
+      "properties": {
+        "visibility_contract": {"const": "model-visible-request-projection/v1"},
+        "model_visible_at_or_before_request": {"const": true},
+        "target_request_event_id": {"type": "string", "minLength": 1},
+        "target_request_event_seq": {"type": "integer", "minimum": 1},
+        "request_locator": {"$ref": "#/$defs/requestLocator"}
+      }
+    },
+    "requestLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locator_kind", "message_index", "content_item_index", "field_path", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "span_sha256"],
+      "properties": {
+        "locator_kind": {"enum": ["FULL_MESSAGES", "TEXT_SPAN", "IMAGE_CONTENT_BLOB"]},
+        "message_index": {"type": ["integer", "null"], "minimum": 0},
+        "content_item_index": {"type": ["integer", "null"], "minimum": 0},
+        "field_path": {"enum": ["messages", "content", "content.text", "content.image_url.url.$externalized_data_url.content_blob"]},
+        "char_start": {"type": ["integer", "null"], "minimum": 0},
+        "char_end": {"type": ["integer", "null"], "minimum": 1},
+        "utf8_byte_start": {"type": ["integer", "null"], "minimum": 0},
+        "utf8_byte_end": {"type": ["integer", "null"], "minimum": 1},
+        "span_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+      },
+      "oneOf": [
+        {"properties": {"locator_kind": {"const": "FULL_MESSAGES"}, "message_index": {"type": "null"}, "content_item_index": {"type": "null"}, "field_path": {"const": "messages"}, "char_start": {"type": "null"}, "char_end": {"type": "null"}, "utf8_byte_start": {"type": "null"}, "utf8_byte_end": {"type": "null"}, "span_sha256": {"type": "null"}}},
+        {"properties": {"locator_kind": {"const": "TEXT_SPAN"}, "message_index": {"type": "integer", "minimum": 0}, "field_path": {"enum": ["content", "content.text"]}, "char_start": {"type": "integer", "minimum": 0}, "char_end": {"type": "integer", "minimum": 1}, "utf8_byte_start": {"type": "integer", "minimum": 0}, "utf8_byte_end": {"type": "integer", "minimum": 1}, "span_sha256": {"$ref": "#/$defs/sha256"}}},
+        {"properties": {"locator_kind": {"const": "IMAGE_CONTENT_BLOB"}, "message_index": {"type": "integer", "minimum": 0}, "content_item_index": {"type": "integer", "minimum": 0}, "field_path": {"const": "content.image_url.url.$externalized_data_url.content_blob"}, "char_start": {"type": "null"}, "char_end": {"type": "null"}, "utf8_byte_start": {"type": "null"}, "utf8_byte_end": {"type": "null"}, "span_sha256": {"type": "null"}}}
+      ]
+    }
+  }
+}

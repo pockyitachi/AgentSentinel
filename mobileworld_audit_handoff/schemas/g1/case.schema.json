@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "case.schema.json",
+  "title": "G1.1 immutable pre-gold causal replay case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "case_id", "case_status", "case_kind", "curated", "deployment_prediction", "source_key", "study_role", "model_id", "model_config_manifest_sha256", "model_config_record_sha256", "history_family", "task", "decision", "frozen_capsule", "target_histories", "eligibility_only_refs", "action_gold_refs", "transformation_refs", "arm_eligibility"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-case/v1"},
+    "record_type": {"const": "causal_replay_case"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "case_id": {"type": "string", "pattern": "^g1case-[0-9a-f]{24}$"},
+    "case_status": {"const": "CANDIDATE_FROZEN"},
+    "case_kind": {"const": "STRICT_MHR"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "source_key": {"type": "string", "minLength": 1},
+    "study_role": {"enum": ["PRIMARY", "REPLICATION"]},
+    "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+    "model_config_manifest_sha256": {"const": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"},
+    "model_config_record_sha256": {"$ref": "#/$defs/sha256"},
+    "history_family": {"enum": ["FLAT_PROGRESS", "RAW_REPLAY"]},
+    "task": {"$ref": "#/$defs/task"},
+    "decision": {"$ref": "#/$defs/decision"},
+    "frozen_capsule": {"$ref": "#/$defs/capsule"},
+    "target_histories": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/targetHistory"}},
+    "eligibility_only_refs": {"$ref": "#/$defs/strictEligibility"},
+    "action_gold_refs": {"$ref": "#/$defs/pendingActionGold"},
+    "transformation_refs": {"$ref": "#/$defs/pendingStrictTransformation"},
+    "arm_eligibility": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "ORIGINAL"}, "structurally_applicable": {"const": true}, "reason": {"const": "G1_6_GOLD_AND_TRANSFORMATION_PENDING"}}}]},
+        {"allOf": [{"$ref": "#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "MASK"}, "structurally_applicable": {"const": true}, "reason": {"const": "G1_6_GOLD_AND_TRANSFORMATION_PENDING"}}}]},
+        {"allOf": [{"$ref": "#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "MASK_CORRECTION"}, "structurally_applicable": {"const": true}, "reason": {"const": "G1_6_GOLD_AND_TRANSFORMATION_PENDING"}}}]},
+        {"allOf": [{"$ref": "#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "ORACLE_CLEAN"}, "structurally_applicable": {"const": true}, "reason": {"const": "G1_6_GOLD_AND_TRANSFORMATION_PENDING"}}}]},
+        {"allOf": [{"$ref": "#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "SHAM_BENIGN_EDIT"}, "structurally_applicable": {"const": true}, "reason": {"const": "G1_6_GOLD_AND_TRANSFORMATION_PENDING"}}}]}
+      ],
+      "items": false
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"model_id": {"const": "qwen3vl_8b"}}}, "then": {"properties": {"model_config_record_sha256": {"const": "5d6c5c1aa99aa13e8e153a19e6a0b1e8593cf2c32adaf8bca308fc76cea827e3"}, "study_role": {"const": "PRIMARY"}, "history_family": {"const": "FLAT_PROGRESS"}}}},
+    {"if": {"properties": {"model_id": {"const": "mai_ui_8b"}}}, "then": {"properties": {"model_config_record_sha256": {"const": "c633cc272bca6e14ae788d90417c909d515fe1f22abb9c0bf5e02da78c8d7682"}, "study_role": {"const": "REPLICATION"}, "history_family": {"const": "RAW_REPLAY"}}}},
+    {"if": {"properties": {"history_family": {"const": "RAW_REPLAY"}}}, "then": {"properties": {"target_histories": {"items": {"allOf": [{"$ref": "#/$defs/targetHistory"}, {"properties": {"representation_type": {"const": "raw_replay"}, "transform_binding": {"const": "raw_record_hash_with_g1_6_pending_edit_span"}, "edit_span_status": {"const": "G1_6_PENDING"}, "focal_edit_spans": {"maxItems": 0}}}]}}}}},
+    {"if": {"properties": {"history_family": {"const": "FLAT_PROGRESS"}}}, "then": {"properties": {"target_histories": {"items": {"allOf": [{"$ref": "#/$defs/targetHistory"}, {"properties": {"representation_type": {"const": "flat_progress"}, "transform_binding": {"const": "conclusion_span_offsets_plus_enclosing_step_span"}, "edit_span_status": {"const": "G1_1_FROZEN"}, "focal_edit_spans": {"minItems": 1, "maxItems": 1}}}]}}}}}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "contentRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count"],
+      "properties": {
+        "relative_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "sha256": {"$ref": "#/$defs/sha256"}, "byte_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "blob": {
+      "type": "object", "additionalProperties": false,
+      "required": ["algorithm", "digest", "byte_length", "media_type", "relative_path"],
+      "properties": {
+        "algorithm": {"const": "sha256"}, "digest": {"$ref": "#/$defs/sha256"}, "byte_length": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1}, "relative_path": {"type": "string", "pattern": "^blobs/sha256/[0-9a-f]{2}/[0-9a-f]{64}$"}
+      }
+    },
+    "task": {
+      "type": "object", "additionalProperties": false,
+      "required": ["catalog_index", "task_name", "task_run_id", "task_instruction_sha256", "task_parameters_sha256"],
+      "properties": {
+        "catalog_index": {"type": "integer", "minimum": 1}, "task_name": {"type": "string", "minLength": 1}, "task_run_id": {"type": "string", "minLength": 1},
+        "task_instruction_sha256": {"$ref": "#/$defs/sha256"}, "task_parameters_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "requestCutoff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["event_id", "event_seq", "monotonic_ns", "wall_time", "target_step"],
+      "properties": {
+        "event_id": {"type": "string", "minLength": 1}, "event_seq": {"type": "integer", "minimum": 0}, "monotonic_ns": {"type": "integer", "minimum": 0},
+        "wall_time": {"type": "string", "minLength": 1}, "target_step": {"type": "integer", "minimum": 1}
+      }
+    },
+    "decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target_step", "step_id", "request_event_id", "request_id", "model_call_id", "decision_event_id", "request_cutoff"],
+      "properties": {
+        "target_step": {"type": "integer", "minimum": 1}, "step_id": {"type": "string", "minLength": 1}, "request_event_id": {"type": "string", "minLength": 1},
+        "request_id": {"type": ["string", "null"]}, "model_call_id": {"type": ["string", "null"]}, "decision_event_id": {"type": "string", "minLength": 1}, "request_cutoff": {"$ref": "#/$defs/requestCutoff"}
+      }
+    },
+    "sourceLocator": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id", "source_run_id", "source_relative_run_path", "task_stream_relative_path", "task_stream_sha256"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1}, "source_run_id": {"type": "string", "minLength": 1}, "source_relative_run_path": {"type": "string", "minLength": 1},
+        "task_stream_relative_path": {"type": "string", "minLength": 1}, "task_stream_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "requestImage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["content_path", "content_blob", "original_text_blob", "width", "height", "media_type"],
+      "properties": {
+        "content_path": {"type": ["string", "null"]}, "content_blob": {"$ref": "#/$defs/blob"}, "original_text_blob": {"oneOf": [{"$ref": "#/$defs/blob"}, {"type": "null"}]},
+        "width": {"type": ["integer", "null"], "minimum": 1}, "height": {"type": ["integer", "null"], "minimum": 1}, "media_type": {"type": ["string", "null"]}
+      }
+    },
+    "backend": {
+      "type": "object", "additionalProperties": false,
+      "required": ["required", "reference", "reason"],
+      "properties": {"required": {"type": "boolean"}, "reference": {"oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]}, "reason": {"type": "string", "minLength": 1}},
+      "allOf": [
+        {"if": {"properties": {"required": {"const": true}}}, "then": {"properties": {"reference": {"$ref": "#/$defs/contentRef"}}}},
+        {"if": {"properties": {"required": {"const": false}}}, "then": {"properties": {"reference": {"type": "null"}}}}
+      ]
+    },
+    "originalAction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["parsed_action", "parsed_action_sha256"],
+      "properties": {"parsed_action": {"type": "object"}, "parsed_action_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "exactSpan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "span_sha256"],
+      "properties": {
+        "char_start": {"type": "integer", "minimum": 0}, "char_end": {"type": "integer", "minimum": 1}, "utf8_byte_start": {"type": "integer", "minimum": 0}, "utf8_byte_end": {"type": "integer", "minimum": 1}, "span_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "curationEnvelope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "span_sha256", "editable", "purpose"],
+      "properties": {
+        "char_start": {"type": "integer", "minimum": 0}, "char_end": {"type": "integer", "minimum": 1}, "utf8_byte_start": {"type": "integer", "minimum": 0}, "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"}, "editable": {"const": false}, "purpose": {"const": "NON_EDITABLE_G1_6_CURATION_ENVELOPE"}
+      }
+    },
+    "auditedExposureBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_id", "request_path", "record_identity_sha256", "container_sha256", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "span_sha256", "edit_span_status", "focal_edit_spans", "curation_envelope"],
+      "properties": {
+        "candidate_id": {"type": "string", "minLength": 1}, "request_path": {"type": "string", "minLength": 1}, "record_identity_sha256": {"$ref": "#/$defs/sha256"}, "container_sha256": {"$ref": "#/$defs/sha256"},
+        "char_start": {"type": "integer", "minimum": 0}, "char_end": {"type": "integer", "minimum": 1}, "utf8_byte_start": {"type": "integer", "minimum": 0}, "utf8_byte_end": {"type": "integer", "minimum": 1}, "span_sha256": {"$ref": "#/$defs/sha256"},
+        "edit_span_status": {"enum": ["G1_1_FROZEN", "G1_6_PENDING"]}, "focal_edit_spans": {"type": "array", "maxItems": 1, "items": {"$ref": "#/$defs/exactSpan"}}, "curation_envelope": {"oneOf": [{"$ref": "#/$defs/curationEnvelope"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {"if": {"properties": {"edit_span_status": {"const": "G1_6_PENDING"}}}, "then": {"properties": {"focal_edit_spans": {"maxItems": 0}}}},
+        {"if": {"properties": {"edit_span_status": {"const": "G1_1_FROZEN"}}}, "then": {"properties": {"focal_edit_spans": {"minItems": 1, "maxItems": 1}}}}
+      ]
+    },
+    "stepSpan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["span_start", "span_end", "span_sha256", "text"],
+      "properties": {"span_start": {"type": "integer", "minimum": 0}, "span_end": {"type": "integer", "minimum": 1}, "span_sha256": {"$ref": "#/$defs/sha256"}, "text": {"type": "string", "minLength": 1}}
+    },
+    "qwenResolvedSpan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["request_path", "record_path", "mapping_status", "message_index", "content_block_index", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "span_sha256", "container_sha256", "claim_text", "conclusion_text", "enclosing_step_span", "target_set_entry"],
+      "properties": {
+        "request_path": {"type": "string", "minLength": 1}, "record_path": {"type": "string", "minLength": 1}, "mapping_status": {"const": "exact_qwen_flat_progress"},
+        "message_index": {"type": "integer", "minimum": 0}, "content_block_index": {"type": "integer", "minimum": 0}, "char_start": {"type": "integer", "minimum": 0}, "char_end": {"type": "integer", "minimum": 1},
+        "utf8_byte_start": {"type": "integer", "minimum": 0}, "utf8_byte_end": {"type": "integer", "minimum": 1}, "span_sha256": {"$ref": "#/$defs/sha256"}, "container_sha256": {"$ref": "#/$defs/sha256"},
+        "claim_text": {"type": "string", "minLength": 1}, "conclusion_text": {"type": "string", "minLength": 1}, "enclosing_step_span": {"$ref": "#/$defs/stepSpan"}, "target_set_entry": {"$ref": "#/$defs/auditedExposureBinding"}
+      }
+    },
+    "rawResolvedSpan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["request_path", "record_path", "mapping_status", "message_index", "content_block_index", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "span_sha256", "container_sha256", "raw_request_text", "edit_span_status", "focal_edit_spans", "curation_envelope", "enclosing_step_span", "target_set_entry"],
+      "properties": {
+        "request_path": {"type": "string", "minLength": 1}, "record_path": {"type": "string", "minLength": 1}, "mapping_status": {"const": "exact_content_monotonic"},
+        "message_index": {"type": "integer", "minimum": 0}, "content_block_index": {"type": "null"}, "char_start": {"const": 0}, "char_end": {"type": "integer", "minimum": 1}, "utf8_byte_start": {"const": 0}, "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"}, "container_sha256": {"$ref": "#/$defs/sha256"}, "raw_request_text": {"type": "string", "minLength": 1}, "edit_span_status": {"const": "G1_6_PENDING"}, "focal_edit_spans": {"type": "array", "maxItems": 0},
+        "curation_envelope": {"oneOf": [{"$ref": "#/$defs/curationEnvelope"}, {"type": "null"}]}, "enclosing_step_span": {"type": "null"}, "target_set_entry": {"$ref": "#/$defs/auditedExposureBinding"}
+      }
+    },
+    "capsule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_locator", "model_config", "request_view_sha256", "sdk_arguments_snapshot_blob", "sdk_arguments_canonical_sha256", "current_gui_blob", "request_images", "backend_checkpoint", "original_action", "resolved_target_spans", "capsule_sha256"],
+      "properties": {
+        "source_locator": {"$ref": "#/$defs/sourceLocator"}, "model_config": {"$ref": "#/$defs/modelConfig"}, "request_view_sha256": {"$ref": "#/$defs/sha256"}, "sdk_arguments_snapshot_blob": {"$ref": "#/$defs/blob"}, "sdk_arguments_canonical_sha256": {"$ref": "#/$defs/sha256"}, "current_gui_blob": {"$ref": "#/$defs/blob"},
+        "request_images": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/requestImage"}}, "backend_checkpoint": {"$ref": "#/$defs/backend"}, "original_action": {"$ref": "#/$defs/originalAction"},
+        "resolved_target_spans": {"type": "array", "minItems": 1, "items": {"oneOf": [{"$ref": "#/$defs/qwenResolvedSpan"}, {"$ref": "#/$defs/rawResolvedSpan"}]}}, "capsule_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "modelConfig": {
+      "type": "object", "additionalProperties": false,
+      "required": ["manifest_sha256", "record_sha256"],
+      "properties": {
+        "manifest_sha256": {"const": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"},
+        "record_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "targetHistory": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_id", "representation_type", "provenance_confidence", "source_steps", "request_path", "source_record_sha256", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "span_sha256", "edit_span_status", "focal_edit_spans", "curation_envelope", "transform_binding"],
+      "properties": {
+        "candidate_id": {"type": "string", "minLength": 1}, "representation_type": {"enum": ["flat_progress", "raw_replay"]}, "provenance_confidence": {"enum": ["EXACT", "HIGH"]}, "source_steps": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 1}},
+        "request_path": {"type": "string", "minLength": 1}, "source_record_sha256": {"$ref": "#/$defs/sha256"}, "char_start": {"type": "integer", "minimum": 0}, "char_end": {"type": "integer", "minimum": 1}, "utf8_byte_start": {"type": "integer", "minimum": 0}, "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"}, "edit_span_status": {"enum": ["G1_1_FROZEN", "G1_6_PENDING"]}, "focal_edit_spans": {"type": "array", "maxItems": 1, "items": {"$ref": "#/$defs/exactSpan"}}, "curation_envelope": {"oneOf": [{"$ref": "#/$defs/curationEnvelope"}, {"type": "null"}]},
+        "transform_binding": {"enum": ["raw_record_hash_with_g1_6_pending_edit_span", "conclusion_span_offsets_plus_enclosing_step_span"]}
+      }
+    },
+    "boolMap": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "boolean"}},
+    "strictMember": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_id", "candidate_sha256", "history_validity", "uptake_evidence", "state_confound", "evidence_ref_ids"],
+      "properties": {"candidate_id": {"type": "string", "minLength": 1}, "candidate_sha256": {"$ref": "#/$defs/sha256"}, "history_validity": {"enum": ["REFUTED", "STALE"]}, "uptake_evidence": {"const": "EXPLICIT_USE"}, "state_confound": {"enum": ["NONE", "CURRENT_GUI_CONTRADICTS_PREMISE"]}, "evidence_ref_ids": {"type": "array", "items": {"type": "string", "minLength": 1}}}
+    },
+    "strictEligibility": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gate_version", "facts", "review_id", "review_sha256", "members"],
+      "properties": {"gate_version": {"const": "strict-mhr-exact-exposure/v1"}, "facts": {"$ref": "#/$defs/boolMap"}, "review_id": {"type": "string", "minLength": 1}, "review_sha256": {"$ref": "#/$defs/sha256"}, "members": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/strictMember"}}}
+    },
+    "pendingActionGold": {
+      "type": "object", "additionalProperties": false,
+      "required": ["accepted_next_action_set_ref", "review_ledger_ref", "curator_identity_ref", "curator_view", "allowed_evidence_roles", "forbidden_evidence_roles", "curation_phase"],
+      "properties": {
+        "accepted_next_action_set_ref": {"type": "null"}, "review_ledger_ref": {"type": "null"}, "curator_identity_ref": {"type": "null"}, "curator_view": {"const": "TASK_AND_PRE_CALL_GUI_ONLY"},
+        "allowed_evidence_roles": {"const": ["ask_user_response", "target_pre", "task_instruction", "tool_response"]}, "forbidden_evidence_roles": {"const": ["history", "later_step", "outcome", "source_action", "source_post", "source_pre", "source_prediction", "source_result", "target_action", "target_post", "target_prediction", "target_request_history", "task_ended"]}, "curation_phase": {"const": "G1_6_PENDING"}
+      }
+    },
+    "pendingStrictTransformation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["transformation_plan_ref", "review_ledger_ref", "mask_correction_ref", "oracle_clean_ref", "sham_benign_edit_ref", "curator_identity_ref", "curator_view", "audited_exposure_bindings", "focal_target_set", "focal_target_set_status", "oracle_target_set_ref", "forbidden_evidence_roles", "curation_phase"],
+      "properties": {
+        "transformation_plan_ref": {"type": "null"}, "review_ledger_ref": {"type": "null"}, "mask_correction_ref": {"type": "null"}, "oracle_clean_ref": {"type": "null"}, "sham_benign_edit_ref": {"type": "null"}, "curator_identity_ref": {"type": "null"},
+        "curator_view": {"const": "SOURCE_HISTORY_AND_PRE_CALL_GUI_NO_TARGET_DECISION"}, "audited_exposure_bindings": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/auditedExposureBinding"}}, "focal_target_set": {"const": []}, "focal_target_set_status": {"const": "G1_6_PENDING"}, "oracle_target_set_ref": {"type": "null"},
+        "forbidden_evidence_roles": {"const": ["later_step", "outcome", "target_action", "target_post", "target_prediction", "task_ended"]}, "curation_phase": {"const": "G1_6_PENDING"}
+      }
+    },
+    "armEligibility": {
+      "type": "object", "additionalProperties": false,
+      "required": ["arm_id", "structurally_applicable", "execution_ready", "reason"],
+      "properties": {"arm_id": {"enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]}, "structurally_applicable": {"type": "boolean"}, "execution_ready": {"const": false}, "reason": {"type": "string", "minLength": 1}}
+    }
+  }
+}

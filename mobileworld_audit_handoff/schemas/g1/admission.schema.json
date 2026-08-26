@@ -1,0 +1,458 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "admission.schema.json",
+  "title": "G1.6 final admission ledger record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "admission_id",
+    "curated",
+    "deployment_prediction",
+    "curation_phase",
+    "source_registry_status",
+    "unit_ref",
+    "source_registry_record_ref",
+    "admission_status",
+    "reason_codes",
+    "action_gold_bundle_ref",
+    "action_gold_review_ledger_ref",
+    "transformation_plan_ref",
+    "transformation_review_ledger_ref",
+    "review_identity_sets",
+    "cross_channel_reviewer_identities_disjoint",
+    "applicable_arms",
+    "arm_plan_refs",
+    "validation_receipt_ref",
+    "curation_and_admission_sealed",
+    "admission_ready",
+    "execution_ready",
+    "treatment_response_generation_allowed",
+    "sealed_before_treatment",
+    "treatment_response_count_seen"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-admission/v1"},
+    "record_type": {"const": "causal_replay_admission"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "admission_id": {"type": "string", "pattern": "^g1admission-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "curation_phase": {"const": "G1_6_FROZEN"},
+    "source_registry_status": {"const": "CANDIDATE_FROZEN"},
+    "unit_ref": {"$ref": "#/$defs/immutableUnitRef"},
+    "source_registry_record_ref": {"$ref": "#/$defs/recordRef"},
+    "admission_status": {"enum": ["INCLUDED", "EXCLUDED"]},
+    "reason_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/exclusionReason"}
+    },
+    "action_gold_bundle_ref": {
+      "oneOf": [
+        {"$ref": "#/$defs/actionGoldRef"},
+        {"type": "null"}
+      ]
+    },
+    "action_gold_review_ledger_ref": {
+      "oneOf": [
+        {"$ref": "#/$defs/reviewLedgerRef"},
+        {"type": "null"}
+      ]
+    },
+    "transformation_plan_ref": {
+      "oneOf": [
+        {"$ref": "#/$defs/transformationPlanRef"},
+        {"type": "null"}
+      ]
+    },
+    "transformation_review_ledger_ref": {
+      "oneOf": [
+        {"$ref": "#/$defs/reviewLedgerRef"},
+        {"type": "null"}
+      ]
+    },
+    "review_identity_sets": {"$ref": "#/$defs/reviewIdentitySets"},
+    "cross_channel_reviewer_identities_disjoint": {"const": true},
+    "applicable_arms": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]
+      }
+    },
+    "arm_plan_refs": {"$ref": "#/$defs/armPlanRefs"},
+    "validation_receipt_ref": {"$ref": "#/$defs/validationReceiptRef"},
+    "curation_and_admission_sealed": {"const": true},
+    "admission_ready": {"type": "boolean"},
+    "execution_ready": {"const": false},
+    "treatment_response_generation_allowed": {"const": false},
+    "sealed_before_treatment": {"const": true},
+    "treatment_response_count_seen": {"const": 0}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "admission_status": {"const": "INCLUDED"},
+        "reason_codes": {"maxItems": 0},
+        "action_gold_bundle_ref": {"$ref": "#/$defs/actionGoldRef"},
+        "action_gold_review_ledger_ref": {"$ref": "#/$defs/reviewLedgerRef"},
+        "transformation_plan_ref": {"$ref": "#/$defs/transformationPlanRef"},
+        "transformation_review_ledger_ref": {"$ref": "#/$defs/reviewLedgerRef"},
+        "review_identity_sets": {
+          "properties": {
+            "action_gold": {"minItems": 2, "maxItems": 3},
+            "transformation": {"minItems": 2, "maxItems": 3}
+          }
+        },
+        "admission_ready": {"const": true}
+      }
+    },
+    {
+      "properties": {
+        "admission_status": {"const": "EXCLUDED"},
+        "reason_codes": {"minItems": 1},
+        "admission_ready": {"const": false}
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "unit_ref": {
+            "properties": {"unit_kind": {"const": "CLEAN_CONTROL"}}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reason_codes": {
+            "items": {
+              "not": {
+                "enum": [
+                  "PROVENANCE_BELOW_HIGH",
+                  "NOT_REFUTED_OR_STALE",
+                  "NO_EXPLICIT_UPTAKE",
+                  "NOT_STRICT_MHR"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "admission_status": {"const": "EXCLUDED"},
+          "reason_codes": {"contains": {"const": "NO_GOLD_CONSENSUS"}}
+        }
+      },
+      "then": {
+        "properties": {
+          "action_gold_bundle_ref": {"type": "null"},
+          "action_gold_review_ledger_ref": {"$ref": "#/$defs/reviewLedgerRef"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "admission_status": {"const": "EXCLUDED"},
+          "reason_codes": {
+            "contains": {
+              "enum": [
+                "NO_VALID_CORRECTION",
+                "NO_VALID_ORACLE_VIEW",
+                "NO_MATCHED_SHAM"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "transformation_plan_ref": {"type": "null"},
+          "transformation_review_ledger_ref": {"$ref": "#/$defs/reviewLedgerRef"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"unit_ref": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}}}
+      },
+      "then": {
+        "properties": {
+          "applicable_arms": {
+            "const": [
+              "ORIGINAL",
+              "MASK",
+              "MASK_CORRECTION",
+              "ORACLE_CLEAN",
+              "SHAM_BENIGN_EDIT"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "applicable_arms": {"const": ["ORIGINAL", "SHAM_BENIGN_EDIT"]},
+          "arm_plan_refs": {
+            "properties": {
+              "MASK": {"type": "null"},
+              "MASK_CORRECTION": {"type": "null"},
+              "ORACLE_CLEAN": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          {"properties": {"admission_status": {"const": "INCLUDED"}}},
+          {
+            "properties": {
+              "unit_ref": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}}
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "arm_plan_refs": {
+            "properties": {
+              "ORIGINAL": {"$ref": "#/$defs/armPlanRef"},
+              "MASK": {"$ref": "#/$defs/armPlanRef"},
+              "MASK_CORRECTION": {"$ref": "#/$defs/armPlanRef"},
+              "ORACLE_CLEAN": {"$ref": "#/$defs/armPlanRef"},
+              "SHAM_BENIGN_EDIT": {"$ref": "#/$defs/armPlanRef"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          {"properties": {"admission_status": {"const": "INCLUDED"}}},
+          {
+            "properties": {
+              "unit_ref": {"properties": {"unit_kind": {"const": "CLEAN_CONTROL"}}}
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "arm_plan_refs": {
+            "properties": {
+              "ORIGINAL": {"$ref": "#/$defs/armPlanRef"},
+              "MASK": {"type": "null"},
+              "MASK_CORRECTION": {"type": "null"},
+              "ORACLE_CLEAN": {"type": "null"},
+              "SHAM_BENIGN_EDIT": {"$ref": "#/$defs/armPlanRef"}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "exclusionReason": {
+      "enum": [
+        "SOURCE_REFERENCE_UNRESOLVED",
+        "REQUEST_HASH_MISMATCH",
+        "STATE_HASH_MISMATCH",
+        "TARGET_SPAN_UNRESOLVED",
+        "PROVENANCE_BELOW_HIGH",
+        "NOT_REFUTED_OR_STALE",
+        "NO_EXPLICIT_UPTAKE",
+        "NOT_STRICT_MHR",
+        "ORIGINAL_ACTION_UNPARSEABLE",
+        "BACKEND_CHECKPOINT_REQUIRED_BUT_MISSING",
+        "FUTURE_EVIDENCE_LEAKAGE",
+        "NO_GOLD_CONSENSUS",
+        "NO_VALID_CORRECTION",
+        "NO_VALID_ORACLE_VIEW",
+        "NO_MATCHED_SHAM",
+        "ARM_PROTOCOL_INVALID",
+        "DUPLICATE_CAPSULE"
+      ]
+    },
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "schema_version"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "schema_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "actionGoldRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {
+              "const": "mobileworld.g1.causal-replay-action-gold-bundle/v1"
+            }
+          }
+        }
+      ]
+    },
+    "reviewLedgerRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {
+              "const": "mobileworld.g1.causal-replay-curation-review-ledger/v1"
+            }
+          }
+        }
+      ]
+    },
+    "transformationPlanRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {
+              "const": "mobileworld.g1.causal-replay-transformation-plan/v1"
+            }
+          }
+        }
+      ]
+    },
+    "armPlanRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {
+              "const": "mobileworld.g1.causal-replay-arm-plan/v1"
+            }
+          }
+        }
+      ]
+    },
+    "validationReceiptRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {
+              "const": "mobileworld.g1.causal-replay-admission-validation/v1"
+            }
+          }
+        }
+      ]
+    },
+    "immutableUnitRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit_kind",
+        "unit_id",
+        "unit_record_sha256",
+        "source_registry_manifest_sha256",
+        "frozen_capsule_sha256",
+        "request_view_sha256",
+        "current_gui_sha256",
+        "task_instruction_sha256",
+        "task_parameters_sha256",
+        "request_cutoff_event_id",
+        "request_cutoff_event_seq",
+        "target_step",
+        "model_id",
+        "history_family"
+      ],
+      "properties": {
+        "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+        "unit_id": {"type": "string", "pattern": "^(g1case|g1control)-[0-9a-f]{24}$"},
+        "unit_record_sha256": {"$ref": "#/$defs/sha256"},
+        "source_registry_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "frozen_capsule_sha256": {"$ref": "#/$defs/sha256"},
+        "request_view_sha256": {"$ref": "#/$defs/sha256"},
+        "current_gui_sha256": {"$ref": "#/$defs/sha256"},
+        "task_instruction_sha256": {"$ref": "#/$defs/sha256"},
+        "task_parameters_sha256": {"$ref": "#/$defs/sha256"},
+        "request_cutoff_event_id": {"type": "string", "minLength": 1},
+        "request_cutoff_event_seq": {"type": "integer", "minimum": 1},
+        "target_step": {"type": "integer", "minimum": 1},
+        "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+        "history_family": {"enum": ["FLAT_PROGRESS", "RAW_REPLAY"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}},
+          "then": {"properties": {"unit_id": {"pattern": "^g1case-[0-9a-f]{24}$"}}},
+          "else": {"properties": {"unit_id": {"pattern": "^g1control-[0-9a-f]{24}$"}}}
+        },
+        {
+          "if": {"properties": {"model_id": {"const": "qwen3vl_8b"}}},
+          "then": {"properties": {"history_family": {"const": "FLAT_PROGRESS"}}},
+          "else": {"properties": {"history_family": {"const": "RAW_REPLAY"}}}
+        }
+      ]
+    },
+    "recordRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relative_path",
+        "file_sha256",
+        "file_byte_count",
+        "record_index",
+        "record_id",
+        "record_sha256"
+      ],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "file_sha256": {"$ref": "#/$defs/sha256"},
+        "file_byte_count": {"type": "integer", "minimum": 1},
+        "record_index": {"type": "integer", "minimum": 0},
+        "record_id": {"type": "string", "pattern": "^(g1case|g1control)-[0-9a-f]{24}$"},
+        "record_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "reviewIdentitySets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_gold", "transformation"],
+      "properties": {
+        "action_gold": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        },
+        "transformation": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "armPlanRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"],
+      "properties": {
+        "ORIGINAL": {"oneOf": [{"$ref": "#/$defs/armPlanRef"}, {"type": "null"}]},
+        "MASK": {"oneOf": [{"$ref": "#/$defs/armPlanRef"}, {"type": "null"}]},
+        "MASK_CORRECTION": {"oneOf": [{"$ref": "#/$defs/armPlanRef"}, {"type": "null"}]},
+        "ORACLE_CLEAN": {"oneOf": [{"$ref": "#/$defs/armPlanRef"}, {"type": "null"}]},
+        "SHAM_BENIGN_EDIT": {"oneOf": [{"$ref": "#/$defs/armPlanRef"}, {"type": "null"}]}
+      }
+    }
+  }
+}

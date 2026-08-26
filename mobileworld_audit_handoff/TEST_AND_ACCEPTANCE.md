@@ -290,7 +290,7 @@ Planner无需grounder的 action类型也要测试，确保不会虚构 grounder�
 - 两线程同时写相同hash；
 - 磁盘满/permission error。
 
-断言 integrity checker能报告，不静默把不完整run视为可评测。正式 `fail_open_with_incomplete_marker` 模式让原agent/env路径继续并标记不完整；严格CI模式可让测试失败。
+断言真实runtime始终让原agent/env路径继续并标记不完整，integrity checker能在运行后报告故障，不静默把不完整run视为可评测。CI使用fault-injection test断言checker拒绝这些run；不得通过runtime collector异常来中止task或smoke。
 
 ---
 

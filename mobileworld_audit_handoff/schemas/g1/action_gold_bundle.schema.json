@@ -1,0 +1,438 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "action_gold_bundle.schema.json",
+  "title": "G1.6 accepted next-action gold bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "bundle_id",
+    "curated",
+    "deployment_prediction",
+    "unit_ref",
+    "curation_input_manifest_ref",
+    "evidence_refs",
+    "production_contract",
+    "accepted_next_action_set"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-action-gold-bundle/v1"},
+    "record_type": {"const": "causal_replay_action_gold_bundle"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "bundle_id": {"type": "string", "pattern": "^g1gold-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "unit_ref": {"$ref": "#/$defs/immutableUnitRef"},
+    "curation_input_manifest_ref": {"$ref": "#/$defs/curationInputRef"},
+    "evidence_refs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/actionGoldEvidenceRef"},
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": ["evidence_role"],
+            "properties": {"evidence_role": {"const": "task_instruction"}}
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["evidence_role"],
+            "properties": {"evidence_role": {"const": "target_pre"}}
+          },
+          "minContains": 1
+        }
+      ]
+    },
+    "production_contract": {"$ref": "#/$defs/productionContract"},
+    "accepted_next_action_set": {"$ref": "#/$defs/acceptedActionSet"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "schema_version"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "schema_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "curationInputRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {"const": "mobileworld.g1.curation-input-manifest/v1"}
+          }
+        }
+      ]
+    },
+    "normalizedActionRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {"const": "mobileworld.g1.production-normalized-action/v1"}
+          }
+        }
+      ]
+    },
+    "actionGoldEvidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref_id",
+        "evidence_role",
+        "relative_path",
+        "sha256",
+        "byte_count",
+        "artifact_schema_version",
+        "projection_path",
+        "event_id",
+        "event_seq",
+        "observed_step"
+      ],
+      "properties": {
+        "ref_id": {"type": "string", "pattern": "^g1evidence-[0-9a-f]{24}$"},
+        "evidence_role": {"enum": ["ask_user_response", "target_pre", "task_instruction", "tool_response"]},
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "artifact_schema_version": {"const": "mobileworld.g1.curation-evidence/v1"},
+        "projection_path": {"enum": ["task.instruction", "payload.observation.screenshot.pixel_blob", "payload.execution_result.agent_visible_tool_result", "payload.execution_result.ask_user_response"]},
+        "event_id": {"type": ["string", "null"]},
+        "event_seq": {"type": ["integer", "null"], "minimum": 0},
+        "observed_step": {"type": "integer", "minimum": 0}
+      },
+      "oneOf": [
+        {"properties": {"evidence_role": {"const": "task_instruction"}, "event_id": {"type": "null"}, "event_seq": {"type": "null"}, "observed_step": {"const": 0}, "projection_path": {"const": "task.instruction"}}},
+        {"properties": {"evidence_role": {"const": "target_pre"}, "event_id": {"type": "string", "minLength": 1}, "event_seq": {"type": "integer", "minimum": 0}, "observed_step": {"minimum": 1}, "projection_path": {"const": "payload.observation.screenshot.pixel_blob"}}},
+        {"properties": {"evidence_role": {"const": "tool_response"}, "event_id": {"type": "string", "minLength": 1}, "event_seq": {"type": "integer", "minimum": 0}, "projection_path": {"const": "payload.execution_result.agent_visible_tool_result"}}},
+        {"properties": {"evidence_role": {"const": "ask_user_response"}, "event_id": {"type": "string", "minLength": 1}, "event_seq": {"type": "integer", "minimum": 0}, "projection_path": {"const": "payload.execution_result.ask_user_response"}}}
+      ]
+    },
+    "immutableUnitRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit_kind",
+        "unit_id",
+        "unit_record_sha256",
+        "source_registry_manifest_sha256",
+        "frozen_capsule_sha256",
+        "request_view_sha256",
+        "current_gui_sha256",
+        "task_instruction_sha256",
+        "task_parameters_sha256",
+        "request_cutoff_event_id",
+        "request_cutoff_event_seq",
+        "target_step",
+        "model_id",
+        "history_family"
+      ],
+      "properties": {
+        "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+        "unit_id": {"type": "string", "pattern": "^(g1case|g1control)-[0-9a-f]{24}$"},
+        "unit_record_sha256": {"$ref": "#/$defs/sha256"},
+        "source_registry_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "frozen_capsule_sha256": {"$ref": "#/$defs/sha256"},
+        "request_view_sha256": {"$ref": "#/$defs/sha256"},
+        "current_gui_sha256": {"$ref": "#/$defs/sha256"},
+        "task_instruction_sha256": {"$ref": "#/$defs/sha256"},
+        "task_parameters_sha256": {"$ref": "#/$defs/sha256"},
+        "request_cutoff_event_id": {"type": "string", "minLength": 1},
+        "request_cutoff_event_seq": {"type": "integer", "minimum": 1},
+        "target_step": {"type": "integer", "minimum": 1},
+        "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+        "history_family": {"enum": ["FLAT_PROGRESS", "RAW_REPLAY"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}},
+          "then": {"properties": {"unit_id": {"pattern": "^g1case-[0-9a-f]{24}$"}}},
+          "else": {"properties": {"unit_id": {"pattern": "^g1control-[0-9a-f]{24}$"}}}
+        },
+        {
+          "if": {"properties": {"model_id": {"const": "qwen3vl_8b"}}},
+          "then": {"properties": {"history_family": {"const": "FLAT_PROGRESS"}}},
+          "else": {"properties": {"history_family": {"const": "RAW_REPLAY"}}}
+        }
+      ]
+    },
+    "productionContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_config_manifest_sha256",
+        "production_parser_sha256",
+        "normalized_action_schema_sha256",
+        "predicate_language_version",
+        "refusal_classifier_sha256",
+        "scorer_sha256"
+      ],
+      "properties": {
+        "model_config_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "production_parser_sha256": {"$ref": "#/$defs/sha256"},
+        "normalized_action_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "predicate_language_version": {"const": "mobileworld.g1.accepted-action-predicate/v1"},
+        "refusal_classifier_sha256": {"$ref": "#/$defs/sha256"},
+        "scorer_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "acceptedActionSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["closed_world", "predicates"],
+      "properties": {
+        "closed_world": {"const": true},
+        "predicates": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/actionPredicate"}
+        }
+      }
+    },
+    "actionPredicate": {
+      "oneOf": [
+        {"$ref": "#/$defs/exactActionPredicate"},
+        {"$ref": "#/$defs/pointRegionPredicate"},
+        {"$ref": "#/$defs/dragRegionPredicate"},
+        {"$ref": "#/$defs/textVariantsPredicate"},
+        {"$ref": "#/$defs/directionSetPredicate"}
+      ]
+    },
+    "predicateHeader": {
+      "type": "object",
+      "required": ["predicate_id", "predicate_kind", "action_type"],
+      "properties": {
+        "predicate_id": {"type": "string", "pattern": "^g1predicate-[0-9a-f]{24}$"},
+        "predicate_kind": {
+          "enum": [
+            "EXACT_NORMALIZED_ACTION",
+            "POINT_REGION",
+            "DRAG_REGION",
+            "TEXT_VARIANTS",
+            "DIRECTION_SET"
+          ]
+        },
+        "action_type": {
+          "enum": [
+            "click",
+            "double_tap",
+            "scroll",
+            "swipe",
+            "input_text",
+            "navigate_home",
+            "navigate_back",
+            "keyboard_enter",
+            "open_app",
+            "status",
+            "wait",
+            "long_press",
+            "answer",
+            "finished",
+            "drag",
+            "ask_user",
+            "mcp"
+          ]
+        }
+      }
+    },
+    "exactActionPredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate_id", "predicate_kind", "action_type", "normalized_action_ref"],
+      "properties": {
+        "predicate_id": {"type": "string", "pattern": "^g1predicate-[0-9a-f]{24}$"},
+        "predicate_kind": {"const": "EXACT_NORMALIZED_ACTION"},
+        "action_type": {"$ref": "#/$defs/predicateHeader/properties/action_type"},
+        "normalized_action_ref": {"$ref": "#/$defs/normalizedActionRef"}
+      }
+    },
+    "point": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 0}
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "region": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["shape", "x_min", "y_min", "x_max", "y_max"],
+          "properties": {
+            "shape": {"const": "BOUNDING_BOX"},
+            "x_min": {"type": "integer", "minimum": 0},
+            "y_min": {"type": "integer", "minimum": 0},
+            "x_max": {"type": "integer", "minimum": 0},
+            "y_max": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["shape", "vertices"],
+          "properties": {
+            "shape": {"const": "POLYGON"},
+            "vertices": {
+              "type": "array",
+              "minItems": 3,
+              "items": {"$ref": "#/$defs/point"}
+            }
+          }
+        }
+      ]
+    },
+    "pointRegionPredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "predicate_id",
+        "predicate_kind",
+        "action_type",
+        "coordinate_space",
+        "regions",
+        "tolerance_px"
+      ],
+      "properties": {
+        "predicate_id": {"type": "string", "pattern": "^g1predicate-[0-9a-f]{24}$"},
+        "predicate_kind": {"const": "POINT_REGION"},
+        "action_type": {"enum": ["click", "double_tap", "long_press"]},
+        "coordinate_space": {"const": "CURRENT_GUI_PIXELS"},
+        "regions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/region"}
+        },
+        "tolerance_px": {"type": "integer", "minimum": 0}
+      }
+    },
+    "dragRegionPredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "predicate_id",
+        "predicate_kind",
+        "action_type",
+        "coordinate_space",
+        "start_regions",
+        "end_regions",
+        "allowed_directions",
+        "minimum_displacement_px",
+        "tolerance_px"
+      ],
+      "properties": {
+        "predicate_id": {"type": "string", "pattern": "^g1predicate-[0-9a-f]{24}$"},
+        "predicate_kind": {"const": "DRAG_REGION"},
+        "action_type": {"const": "drag"},
+        "coordinate_space": {"const": "CURRENT_GUI_PIXELS"},
+        "start_regions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/region"}
+        },
+        "end_regions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/region"}
+        },
+        "allowed_directions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["left", "right", "up", "down", "any"]}
+        },
+        "minimum_displacement_px": {"type": "integer", "minimum": 0},
+        "tolerance_px": {"type": "integer", "minimum": 0}
+      }
+    },
+    "textVariantsPredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "predicate_id",
+        "predicate_kind",
+        "action_type",
+        "field",
+        "unicode_normalization",
+        "case_sensitive",
+        "allowed_values"
+      ],
+      "properties": {
+        "predicate_id": {"type": "string", "pattern": "^g1predicate-[0-9a-f]{24}$"},
+        "predicate_kind": {"const": "TEXT_VARIANTS"},
+        "action_type": {
+          "enum": ["input_text", "open_app", "status", "answer", "finished", "ask_user"]
+        },
+        "field": {"enum": ["text", "app_name", "goal_status"]},
+        "unicode_normalization": {"const": "NFC"},
+        "case_sensitive": {"type": "boolean"},
+        "allowed_values": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action_type": {"enum": ["input_text", "answer", "finished", "ask_user"]}
+            },
+            "required": ["action_type"]
+          },
+          "then": {"properties": {"field": {"const": "text"}}}
+        },
+        {
+          "if": {
+            "properties": {"action_type": {"const": "open_app"}},
+            "required": ["action_type"]
+          },
+          "then": {"properties": {"field": {"const": "app_name"}}}
+        },
+        {
+          "if": {
+            "properties": {"action_type": {"const": "status"}},
+            "required": ["action_type"]
+          },
+          "then": {"properties": {"field": {"const": "goal_status"}}}
+        }
+      ]
+    },
+    "directionSetPredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate_id", "predicate_kind", "action_type", "allowed_directions"],
+      "properties": {
+        "predicate_id": {"type": "string", "pattern": "^g1predicate-[0-9a-f]{24}$"},
+        "predicate_kind": {"const": "DIRECTION_SET"},
+        "action_type": {"enum": ["scroll", "swipe"]},
+        "allowed_directions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["left", "right", "up", "down"]}
+        }
+      }
+    }
+  }
+}

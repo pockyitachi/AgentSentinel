@@ -1,0 +1,539 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "outcome.schema.json",
+  "title": "G1 next-action replay outcome",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "outcome_id",
+    "curated",
+    "deployment_prediction",
+    "run_id",
+    "unit_kind",
+    "case_id",
+    "model_id",
+    "arm_id",
+    "run_record_sha256",
+    "unit_record_sha256",
+    "admission_record_sha256",
+    "run_ready_seal_sha256",
+    "frozen_capsule_sha256",
+    "arm_plan_sha256",
+    "action_gold_bundle_sha256",
+    "model_config_manifest_sha256",
+    "parser_manifest_sha256",
+    "scorer_manifest_sha256",
+    "schedule_manifest_sha256",
+    "request_sha256",
+    "status",
+    "attempts",
+    "attempts_sha256",
+    "missing_reason",
+    "response_blob",
+    "parse_class",
+    "parser_result",
+    "parser_receipt_ref",
+    "action_blob",
+    "outcome_class",
+    "classification_contract",
+    "classification_receipt_ref"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-outcome/v1"},
+    "record_type": {"const": "causal_replay_outcome"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "outcome_id": {"type": "string", "pattern": "^g1outcome-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "run_id": {"type": "string", "pattern": "^g1run-[0-9a-f]{24}$"},
+    "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+    "case_id": {"type": "string", "pattern": "^(g1case|g1control)-[0-9a-f]{24}$"},
+    "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+    "arm_id": {
+      "enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]
+    },
+    "run_record_sha256": {"$ref": "#/$defs/sha256"},
+    "unit_record_sha256": {"$ref": "#/$defs/sha256"},
+    "admission_record_sha256": {"$ref": "#/$defs/sha256"},
+    "run_ready_seal_sha256": {"$ref": "#/$defs/sha256"},
+    "frozen_capsule_sha256": {"$ref": "#/$defs/sha256"},
+    "arm_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "action_gold_bundle_sha256": {"$ref": "#/$defs/sha256"},
+    "model_config_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "parser_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "scorer_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "schedule_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "request_sha256": {"$ref": "#/$defs/sha256"},
+    "status": {"enum": ["COMPLETED", "MISSING"]},
+    "attempts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/failedAttempt"},
+          {"$ref": "#/$defs/completedAttempt"}
+        ]
+      }
+    },
+    "attempts_sha256": {"$ref": "#/$defs/sha256"},
+    "missing_reason": {
+      "oneOf": [
+        {"const": "PROVIDER_ATTEMPTS_EXHAUSTED"},
+        {"type": "null"}
+      ]
+    },
+    "response_blob": {
+      "oneOf": [
+        {"$ref": "#/$defs/responseRef"},
+        {"type": "null"}
+      ]
+    },
+    "parse_class": {"enum": ["PARSEABLE_ACTION", "REFUSAL", "UNPARSEABLE", "MISSING"]},
+    "parser_result": {
+      "oneOf": [
+        {"$ref": "#/$defs/parserResult"},
+        {"type": "null"}
+      ]
+    },
+    "parser_receipt_ref": {
+      "oneOf": [
+        {"$ref": "#/$defs/parserReceiptRef"},
+        {"type": "null"}
+      ]
+    },
+    "action_blob": {
+      "oneOf": [
+        {"$ref": "#/$defs/actionRef"},
+        {"type": "null"}
+      ]
+    },
+    "outcome_class": {
+      "enum": ["ACCEPTABLE", "WRONG", "REFUSAL", "UNPARSEABLE", "NO_OP", "MISSING"]
+    },
+    "classification_contract": {
+      "const": "MISSING>ONE_VALID_ACTION_SCORE>ZERO_ACTION_REFUSAL>UNPARSEABLE/v1"
+    },
+    "classification_receipt_ref": {"$ref": "#/$defs/classificationReceiptRef"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}},
+      "then": {
+        "properties": {"case_id": {"pattern": "^g1case-[0-9a-f]{24}$"}}
+      },
+      "else": {
+        "properties": {
+          "case_id": {"pattern": "^g1control-[0-9a-f]{24}$"},
+          "arm_id": {"enum": ["ORIGINAL", "SHAM_BENIGN_EDIT"]}
+        }
+      }
+    },
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "MISSING"},
+            "attempts": {
+              "minItems": 3,
+              "maxItems": 3,
+              "prefixItems": [
+                {"$ref": "#/$defs/failedAttemptOneRetry"},
+                {"$ref": "#/$defs/failedAttemptTwoRetry"},
+                {"$ref": "#/$defs/failedAttemptThreeExhausted"}
+              ],
+              "items": false
+            },
+            "missing_reason": {"const": "PROVIDER_ATTEMPTS_EXHAUSTED"},
+            "response_blob": {"type": "null"},
+            "parse_class": {"const": "MISSING"},
+            "parser_result": {"type": "null"},
+            "parser_receipt_ref": {"type": "null"},
+            "action_blob": {"type": "null"},
+            "outcome_class": {"const": "MISSING"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "COMPLETED"},
+            "attempts": {"$ref": "#/$defs/completedAttemptSequence"},
+            "missing_reason": {"type": "null"},
+            "response_blob": {"$ref": "#/$defs/responseRef"},
+            "parser_receipt_ref": {"$ref": "#/$defs/parserReceiptRef"}
+          }
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "MISSING"},
+            "parse_class": {"const": "MISSING"},
+            "parser_result": {"type": "null"},
+            "action_blob": {"type": "null"},
+            "outcome_class": {"const": "MISSING"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "COMPLETED"},
+            "parse_class": {"const": "PARSEABLE_ACTION"},
+            "parser_result": {
+              "allOf": [
+                {"$ref": "#/$defs/parserResult"},
+                {
+                  "properties": {
+                    "legal_action_count": {"const": 1},
+                    "refusal_classifier_match": {"const": false},
+                    "matched_gold_predicate_ids": {"minItems": 1},
+                    "no_op_kind": {
+                      "enum": [
+                        null,
+                        "WAIT",
+                        "ZERO_DISPLACEMENT_GESTURE",
+                        "OUTSIDE_VIEWPORT_CLICK"
+                      ]
+                    },
+                    "normalized_action_sha256": {"$ref": "#/$defs/sha256"}
+                  }
+                }
+              ]
+            },
+            "action_blob": {"$ref": "#/$defs/actionRef"},
+            "outcome_class": {"const": "ACCEPTABLE"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "COMPLETED"},
+            "parse_class": {"const": "PARSEABLE_ACTION"},
+            "parser_result": {
+              "allOf": [
+                {"$ref": "#/$defs/parserResult"},
+                {
+                  "properties": {
+                    "legal_action_count": {"const": 1},
+                    "refusal_classifier_match": {"const": false},
+                    "matched_gold_predicate_ids": {"maxItems": 0},
+                    "no_op_kind": {"type": "null"},
+                    "normalized_action_sha256": {"$ref": "#/$defs/sha256"}
+                  }
+                }
+              ]
+            },
+            "action_blob": {"$ref": "#/$defs/actionRef"},
+            "outcome_class": {"const": "WRONG"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "COMPLETED"},
+            "parse_class": {"const": "PARSEABLE_ACTION"},
+            "parser_result": {
+              "allOf": [
+                {"$ref": "#/$defs/parserResult"},
+                {
+                  "properties": {
+                    "legal_action_count": {"const": 1},
+                    "refusal_classifier_match": {"const": false},
+                    "matched_gold_predicate_ids": {"maxItems": 0},
+                    "no_op_kind": {
+                      "enum": ["WAIT", "ZERO_DISPLACEMENT_GESTURE", "OUTSIDE_VIEWPORT_CLICK"]
+                    },
+                    "normalized_action_sha256": {"$ref": "#/$defs/sha256"}
+                  }
+                }
+              ]
+            },
+            "action_blob": {"$ref": "#/$defs/actionRef"},
+            "outcome_class": {"const": "NO_OP"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "COMPLETED"},
+            "parse_class": {"const": "REFUSAL"},
+            "parser_result": {
+              "allOf": [
+                {"$ref": "#/$defs/parserResult"},
+                {
+                  "properties": {
+                    "legal_action_count": {"const": 0},
+                    "refusal_classifier_match": {"const": true},
+                    "matched_gold_predicate_ids": {"maxItems": 0},
+                    "no_op_kind": {"type": "null"},
+                    "normalized_action_sha256": {"type": "null"}
+                  }
+                }
+              ]
+            },
+            "action_blob": {"type": "null"},
+            "outcome_class": {"const": "REFUSAL"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "COMPLETED"},
+            "parse_class": {"const": "UNPARSEABLE"},
+            "parser_result": {
+              "allOf": [
+                {"$ref": "#/$defs/parserResult"},
+                {
+                  "properties": {
+                    "legal_action_count": {"const": 0},
+                    "refusal_classifier_match": {"const": false},
+                    "matched_gold_predicate_ids": {"maxItems": 0},
+                    "no_op_kind": {"type": "null"},
+                    "normalized_action_sha256": {"type": "null"}
+                  }
+                }
+              ]
+            },
+            "action_blob": {"type": "null"},
+            "outcome_class": {"const": "UNPARSEABLE"}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "COMPLETED"},
+            "parse_class": {"const": "UNPARSEABLE"},
+            "parser_result": {
+              "allOf": [
+                {"$ref": "#/$defs/parserResult"},
+                {
+                  "properties": {
+                    "legal_action_count": {"minimum": 2},
+                    "matched_gold_predicate_ids": {"maxItems": 0},
+                    "no_op_kind": {"type": "null"},
+                    "normalized_action_sha256": {"type": "null"}
+                  }
+                }
+              ]
+            },
+            "action_blob": {"type": "null"},
+            "outcome_class": {"const": "UNPARSEABLE"}
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeRelativePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "schema_version"],
+      "properties": {
+        "relative_path": {"$ref": "#/$defs/safeRelativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "schema_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "responseRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {"properties": {"schema_version": {"const": "mobileworld.g1.provider-response/v1"}}}
+      ]
+    },
+    "actionRef": {
+      "description": "ContentRef to the frozen production parser's canonical UTF-8 JSONAction bytes. This is the raw mobileworld.g1.normalized-action/v1 blob, not the G1.6 production-normalized-action wrapper; its whole-byte SHA-256 is bound to parser_result.normalized_action_sha256 and the parser receipt, with byte parsing performed by the G1.7 execution validator.",
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {"properties": {"schema_version": {"const": "mobileworld.g1.normalized-action/v1"}}}
+      ]
+    },
+    "transportReceiptRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {"properties": {"schema_version": {"const": "mobileworld.g1.transport-receipt/v1"}}}
+      ]
+    },
+    "parserReceiptRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {"properties": {"schema_version": {"const": "mobileworld.g1.parser-receipt/v1"}}}
+      ]
+    },
+    "classificationReceiptRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {"properties": {"schema_version": {"const": "mobileworld.g1.outcome-classification-receipt/v1"}}}
+      ]
+    },
+    "providerError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error_class", "message_sha256"],
+      "properties": {
+        "error_class": {"enum": ["TIMEOUT", "HTTP_5XX", "CONNECTION_ERROR"]},
+        "message_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "failedAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_index",
+        "status",
+        "request_sha256",
+        "request_byte_count",
+        "transport_receipt_ref",
+        "response_blob",
+        "error",
+        "retry_decision",
+        "attempt_record_sha256"
+      ],
+      "properties": {
+        "attempt_index": {"type": "integer", "minimum": 1, "maximum": 3},
+        "status": {"const": "FAILED"},
+        "request_sha256": {"$ref": "#/$defs/sha256"},
+        "request_byte_count": {"type": "integer", "minimum": 1},
+        "transport_receipt_ref": {"$ref": "#/$defs/transportReceiptRef"},
+        "response_blob": {"type": "null"},
+        "error": {"$ref": "#/$defs/providerError"},
+        "retry_decision": {"enum": ["RETRY", "STOP_EXHAUSTED"]},
+        "attempt_record_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "completedAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_index",
+        "status",
+        "request_sha256",
+        "request_byte_count",
+        "transport_receipt_ref",
+        "response_blob",
+        "error",
+        "retry_decision",
+        "attempt_record_sha256"
+      ],
+      "properties": {
+        "attempt_index": {"type": "integer", "minimum": 1, "maximum": 3},
+        "status": {"const": "COMPLETED"},
+        "request_sha256": {"$ref": "#/$defs/sha256"},
+        "request_byte_count": {"type": "integer", "minimum": 1},
+        "transport_receipt_ref": {"$ref": "#/$defs/transportReceiptRef"},
+        "response_blob": {"$ref": "#/$defs/responseRef"},
+        "error": {"type": "null"},
+        "retry_decision": {"const": "STOP_SUCCESS"},
+        "attempt_record_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "failedAttemptOneRetry": {
+      "allOf": [
+        {"$ref": "#/$defs/failedAttempt"},
+        {"properties": {"attempt_index": {"const": 1}, "retry_decision": {"const": "RETRY"}}}
+      ]
+    },
+    "failedAttemptTwoRetry": {
+      "allOf": [
+        {"$ref": "#/$defs/failedAttempt"},
+        {"properties": {"attempt_index": {"const": 2}, "retry_decision": {"const": "RETRY"}}}
+      ]
+    },
+    "failedAttemptThreeExhausted": {
+      "allOf": [
+        {"$ref": "#/$defs/failedAttempt"},
+        {
+          "properties": {
+            "attempt_index": {"const": 3},
+            "retry_decision": {"const": "STOP_EXHAUSTED"}
+          }
+        }
+      ]
+    },
+    "completedAttemptOne": {
+      "allOf": [
+        {"$ref": "#/$defs/completedAttempt"},
+        {"properties": {"attempt_index": {"const": 1}}}
+      ]
+    },
+    "completedAttemptTwo": {
+      "allOf": [
+        {"$ref": "#/$defs/completedAttempt"},
+        {"properties": {"attempt_index": {"const": 2}}}
+      ]
+    },
+    "completedAttemptThree": {
+      "allOf": [
+        {"$ref": "#/$defs/completedAttempt"},
+        {"properties": {"attempt_index": {"const": 3}}}
+      ]
+    },
+    "completedAttemptSequence": {
+      "oneOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "prefixItems": [{"$ref": "#/$defs/completedAttemptOne"}],
+          "items": false
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {"$ref": "#/$defs/failedAttemptOneRetry"},
+            {"$ref": "#/$defs/completedAttemptTwo"}
+          ],
+          "items": false
+        },
+        {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [
+            {"$ref": "#/$defs/failedAttemptOneRetry"},
+            {"$ref": "#/$defs/failedAttemptTwoRetry"},
+            {"$ref": "#/$defs/completedAttemptThree"}
+          ],
+          "items": false
+        }
+      ]
+    },
+    "parserResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "legal_action_count",
+        "refusal_classifier_match",
+        "matched_gold_predicate_ids",
+        "no_op_kind",
+        "normalized_action_sha256"
+      ],
+      "properties": {
+        "legal_action_count": {"type": "integer", "minimum": 0},
+        "refusal_classifier_match": {"type": "boolean"},
+        "matched_gold_predicate_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^g1predicate-[0-9a-f]{24}$"}
+        },
+        "no_op_kind": {
+          "oneOf": [
+            {"enum": ["WAIT", "ZERO_DISPLACEMENT_GESTURE", "OUTSIDE_VIEWPORT_CLICK"]},
+            {"type": "null"}
+          ]
+        },
+        "normalized_action_sha256": {
+          "oneOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"}
+          ]
+        }
+      }
+    }
+  }
+}

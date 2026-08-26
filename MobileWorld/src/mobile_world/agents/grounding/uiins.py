@@ -134,21 +134,52 @@ class UIINSGroundingAgent(BaseAgent):
         logger.info(f"Description: '{self.instruction}'")
 
         max_retries = 3
+        audit_call = self._begin_grounder_model_audit_call()
 
         for attempt in range(max_retries):
+            # Preserve the original fresh kwargs/extra_body allocation for
+            # every visible retry; a provider must not mutate the next call.
+            sdk_arguments = {
+                "model": self.model_name,
+                "messages": messages,
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "frequency_penalty": 0.0,
+                "presence_penalty": 0.0,
+                "extra_body": {
+                    "repetition_penalty": 1.0,
+                },
+                "seed": 42,
+            }
+            audit_attempt = self._begin_model_audit_attempt(
+                audit_call,
+                sdk_arguments,
+                stream=False,
+            )
             try:
-                response = self.vlm.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    max_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                    frequency_penalty=0.0,
-                    presence_penalty=0.0,
-                    extra_body={
-                        "repetition_penalty": 1.0,
-                    },
-                    seed=42,
+                response = self.vlm.chat.completions.create(**sdk_arguments)
+            except Exception as e:
+                self._record_model_audit_failure(
+                    audit_attempt,
+                    e,
+                    failure_phase="provider_call",
+                    retry_planned=attempt < max_retries - 1,
                 )
+                logger.error(f"Error: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                else:
+                    error = "All retries failed for UIINS Grounding Agent"
+                    logger.error(error)
+                    logger.error(traceback.format_exc())
+                    return error, None
+                continue
+
+            # The provider attempt succeeded even if downstream coordinate
+            # parsing later raises and the existing UIINS loop retries.
+            self._record_model_audit_response(audit_attempt, response)
+
+            try:
                 prediction = response.choices[0].message.content.strip()
                 logger.info(f"Raw response from model: '{prediction}'")
 
@@ -173,6 +204,27 @@ class UIINSGroundingAgent(BaseAgent):
                     logger.error(error)
                     logger.error(traceback.format_exc())
                     return error, None
+
+    def _begin_grounder_model_audit_call(self):
+        """Lazily enter capture only for an enabled task-scoped recorder."""
+
+        try:
+            from mobile_world.runtime.audit.context import get_audit_context
+
+            context = get_audit_context()
+            if context is None or not getattr(context.recorder, "enabled", False):
+                return None
+
+            from mobile_world.runtime.audit.model_io import begin_model_call
+
+            return begin_model_call(
+                call_role="grounder",
+                component=type(self).__module__,
+                client=self.vlm,
+            )
+        except Exception:
+            # Collector setup must never prevent or replace a provider call.
+            return None
 
 
 if __name__ == "__main__":
