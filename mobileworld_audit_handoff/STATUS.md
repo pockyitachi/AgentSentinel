@@ -18,7 +18,12 @@ Last updated: 2026-08-26 (UTC)
 
 ## 2. Current stage and decision
 
-当前只做 motivation validation：先确定 wrong/stale/off-track previous-step exposure是否真实、普遍、严重，是否值得支撑 proposal。
+Epic 1 motivation validation 已完成。**ALE-320 / G1.2 已完成并通过 CPU-only 验证；
+ALE-321 / G1.3 尚未启动且未获本次授权。** G1.2 在已合并、已验证的 G1.1
+protocol/candidate registry 之上冻结了可移植 Sentinel Core / History IR / History Codec /
+Provider Codec / protocol-validator / sidecar 契约，并为六种 history family 提供
+fixture-level conformance；没有运行模型、调用 provider、使用 GPU、执行 GUI action 或实现
+自动 Sentinel。
 
 已确认的工程决策：
 
@@ -39,7 +44,7 @@ Evaluation
 
 因此，第一次错误 taxonomy即使设计不合理，只需重跑离线 evaluator，不需要重新运行昂贵的 MobileWorld任务。
 
-当前不实现 Sentinel、rubric、filter或在线LLM judge。
+当前仍不实现自动 claim extraction、verdict prediction、rubric、在线 filter 或自然轨迹干预。
 
 ## 3. Canonical notation
 
@@ -645,6 +650,16 @@ Frozen census: 152 strict-MHR pre-gold candidate cases across 42 source-distinct
 Validation: independent CPU builds are byte-identical; the formal external bytes equal the frozen snapshot; CLI readback rebuilt all artifacts from the immutable sources and returned valid=true. All 25 dry-validation checks are true, emitted schemas validate, and unresolved source references, unresolved capsule references, pre-gold future-leakage cases, pre-gold future-leakage controls, treatment responses, and obsolete-model-manifest matches are all zero. The final MobileWorld suite passed 771 tests. Publication uses exact-root validation and write-once installation; concurrent destination replacement cannot authorize cleanup of another directory or unknown child.
 Scope and safety: this completion is ALE-319 / G1.1 only. Gold materialization, admission, execution readiness, run readiness, treatment-response generation, provider invocation, generated-action execution, model service use, replay execution, and GPU use are all false. No G1.2+ implementation or execution is included, and Collector/raw data were not mutated. D-021 and the publication lock remain working-tree artifacts until committed and merged, so G1.2 and later stories remain blocked on that authoritative merge. Any future GPU model service or replay requires separate explicit owner approval.
 Owner approval required: no for this destination-specific, CPU-only G1.1 publication (the owner explicitly requested ALE-319 implementation); yes for any future GPU model service or replay.
+```
+
+```text
+Date: 2026-08-26 UTC
+ALE-320 / G1.2 completion: the CPU-only portable Sentinel contract is implemented as an offline evaluation-time transformation layer. D-022 freezes four separable layers: canonical History IR/Sentinel Core, History Codec, Provider Codec interface/registry, and the independent pre-send protocol validator with derived sidecar. The core accepts only curated plans with `deployment_prediction=false`; it performs no claim extraction, truth inference, correction generation, provider transport, replay execution, or action execution.
+Deliverables: `mobileworld_audit_handoff/G1_PORTABLE_SENTINEL_CONTRACT_V1.md`; five versioned schemas under `mobileworld_audit_handoff/schemas/g1_2/`; the pure package under `MobileWorld/src/mobile_world/offline/causal_replay/`; the conformance kit and synthetic six-family fixture set; and `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`. The six exact family IDs are `raw_replay`, `flat_progress`, `rolling_summary`, `flat_previous_actions`, `hybrid_folding`, and `structured_folding`. Every fixture codec is `FIXTURE_ONLY` with `live_ready=false`; no production live adapter is claimed. The formal package imports neither `sentinel_mvp` nor Collector/runtime code, and `NoProviderInG12` is fail-only.
+Validation: the portable-contract focused suite passed 53 tests; the full MobileWorld suite passed 824 tests; the G1.1 registry regression suite passed 40 tests. Ruff check/format, the MobileWorld pyproject mypy gate over all eight package modules, `git diff --check`, and Draft 2020-12 meta-validation for all five schemas passed. Independent code, schema/runtime, and documentation reviews returned GO with zero remaining P1/P2. Six-family extraction, Original round-trip, target-only Mask/Mask+correction/Oracle rendering, reversible mapping, raw immutability, provider-guard, typed unsupported, and explicit runtime-fallback conformance all passed. The unchanged legacy MVP baseline remains 18 tests / 11 pass / 6 fail / 1 error as documented in the migration note; its historical drift was not hidden by weakening G1.
+Frozen-boundary audit: all 25 G1.1 contract files still match source config SHA-256 `c8235705c575e134c11bc00896f31ec95243af4ffd2ffd47a3e6ecf64ce5cb59` and contract aggregate `f1e23239896eb7f6487e337ec391df73d19c84fababecae996c0a2e752f156d8`. Registry lock SHA-256 remains `1e038ffe604acf0eae2af1e45ec0e856e2f105353b0c5a1dbea0da9b15657944`; the external six-file publication remains 3,103,332 bytes with aggregate SHA-256 `dbec86f012b1cb9a11f94123cb302a62ffc6a04a33422121d190f28edf793bc6` and content address `dd3dad4f94c66dce6999d3cc2743cd75c37688788754e95b27531cfd00d733f4`.
+Scope and safety: Collector v1, raw events, `sentinel_mvp`, actor/runtime code, all G1.1 frozen contract files, and the published registry were not modified. No model/provider invocation, network replay, GPU use, GUI action, natural-task intervention, decision-capsule materialization, treatment response, or G1.3+ execution occurred. ALE-321 / G1.3 remains unstarted and requires its own authorization; any GPU/model/provider/replay/action execution also requires separate explicit owner approval.
+Owner approval required: no (this records completion of the explicitly authorized CPU-only ALE-320 implementation); yes for any GPU/model/provider/replay/action execution or G1.3+ work.
 ```
 
 ## 12. Implementation checklist

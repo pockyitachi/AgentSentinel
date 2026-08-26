@@ -1,0 +1,411 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_2/transformation_plan.schema.json",
+  "title": "G1.2 Portable Curated Transformation Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "host_id",
+    "history_family",
+    "codec_id",
+    "codec_contract_version",
+    "source_request_sha256",
+    "arm",
+    "curated",
+    "deployment_prediction",
+    "operations"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "mobileworld.g1.portable-sentinel.transformation-plan/v1"
+    },
+    "plan_id": {"type": "string", "minLength": 1},
+    "host_id": {"type": "string", "minLength": 1},
+    "history_family": {
+      "type": "string",
+      "enum": [
+        "raw_replay",
+        "flat_progress",
+        "rolling_summary",
+        "flat_previous_actions",
+        "hybrid_folding",
+        "structured_folding"
+      ]
+    },
+    "codec_id": {"type": "string", "minLength": 1},
+    "codec_contract_version": {"type": "string", "minLength": 1},
+    "source_request_sha256": {"$ref": "#/$defs/sha256"},
+    "arm": {
+      "type": "string",
+      "enum": [
+        "ORIGINAL",
+        "MASK",
+        "MASK_CORRECTION",
+        "ORACLE_CLEAN",
+        "SHAM_BENIGN_EDIT"
+      ]
+    },
+    "curated": {"type": "boolean", "const": true},
+    "deployment_prediction": {"type": "boolean", "const": false},
+    "operations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/operation"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"arm": {"const": "ORIGINAL"}},
+        "required": ["arm"]
+      },
+      "then": {"properties": {"operations": {"maxItems": 0}}}
+    },
+    {
+      "if": {
+        "properties": {"arm": {"enum": ["MASK", "ORACLE_CLEAN"]}},
+        "required": ["arm"]
+      },
+      "then": {
+        "properties": {
+          "operations": {
+            "minItems": 1,
+            "items": {
+              "oneOf": [
+                {"$ref": "#/$defs/editableDropOperation"},
+                {"$ref": "#/$defs/shellDropOperation"}
+              ]
+            },
+            "contains": {"$ref": "#/$defs/editableDropOperation"},
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"arm": {"const": "MASK_CORRECTION"}},
+        "required": ["arm"]
+      },
+      "then": {
+        "properties": {
+          "operations": {
+            "minItems": 1,
+            "items": {
+              "oneOf": [
+                {"$ref": "#/$defs/editableReplaceOperation"},
+                {"$ref": "#/$defs/shellDropOperation"}
+              ]
+            },
+            "contains": {"$ref": "#/$defs/editableReplaceOperation"},
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}},
+        "required": ["arm"]
+      },
+      "then": {
+        "properties": {
+          "operations": {
+            "minItems": 1,
+            "items": {
+              "oneOf": [
+                {"$ref": "#/$defs/benignDropOperation"},
+                {"$ref": "#/$defs/shellDropOperation"}
+              ]
+            },
+            "contains": {"$ref": "#/$defs/benignDropOperation"},
+            "minContains": 1,
+            "maxContains": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "path": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {"type": "string", "minLength": 1},
+          {"type": "integer", "minimum": 0}
+        ]
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_path",
+        "char_start",
+        "char_end",
+        "utf8_byte_start",
+        "utf8_byte_end",
+        "exact_text",
+        "span_sha256",
+        "span_role",
+        "claim_id"
+      ],
+      "properties": {
+        "container_path": {"$ref": "#/$defs/path"},
+        "char_start": {"type": "integer", "minimum": 0},
+        "char_end": {"type": "integer", "minimum": 1},
+        "utf8_byte_start": {"type": "integer", "minimum": 0},
+        "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "exact_text": {"type": "string", "minLength": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"},
+        "span_role": {
+          "type": "string",
+          "enum": [
+            "RECORD_EXTENT",
+            "EDITABLE_CLAIM",
+            "BENIGN_SHAM",
+            "PROTECTED_PROTOCOL",
+            "PROTECTED_EXTERNAL_RESULT",
+            "PROTECTED_MULTIMODAL",
+            "ELIGIBLE_PROTOCOL_SHELL"
+          ]
+        },
+        "claim_id": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^claim-[0-9a-f]{32}$"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "span_role": {"enum": ["EDITABLE_CLAIM", "BENIGN_SHAM"]}
+            },
+            "required": ["span_role"]
+          },
+          "then": {
+            "properties": {
+              "claim_id": {"type": "string", "pattern": "^claim-[0-9a-f]{32}$"}
+            }
+          },
+          "else": {"properties": {"claim_id": {"type": "null"}}}
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "sha256", "role", "event_seq"],
+      "properties": {
+        "evidence_id": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "role": {"type": "string", "minLength": 1},
+        "event_seq": {
+          "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]
+        }
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_path",
+        "insert_index",
+        "source_container_sha256",
+        "owner_region_id",
+        "host_context_path",
+        "host_context_sha256",
+        "role_path",
+        "expected_role",
+        "reference_path",
+        "reference_sha256",
+        "placement",
+        "context_kind",
+        "visible_prefix",
+        "visible_suffix"
+      ],
+      "properties": {
+        "container_path": {"$ref": "#/$defs/path"},
+        "insert_index": {"type": "integer", "minimum": 0},
+        "source_container_sha256": {"$ref": "#/$defs/sha256"},
+        "owner_region_id": {"type": "string", "pattern": "^region-[0-9a-f]{32}$"},
+        "host_context_path": {"$ref": "#/$defs/path"},
+        "host_context_sha256": {"$ref": "#/$defs/sha256"},
+        "role_path": {"$ref": "#/$defs/path"},
+        "expected_role": {"type": "string", "const": "user"},
+        "reference_path": {"$ref": "#/$defs/path"},
+        "reference_sha256": {"$ref": "#/$defs/sha256"},
+        "placement": {"type": "string", "enum": ["BEFORE", "AFTER"]},
+        "context_kind": {
+          "type": "string",
+          "enum": ["TEXT_CONTENT_BLOCK", "CHAT_MESSAGE"]
+        },
+        "visible_prefix": {"type": "string", "pattern": "SENTINEL"},
+        "visible_suffix": {"type": "string"}
+      }
+    },
+    "context": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "text"],
+          "properties": {
+            "type": {"type": "string", "const": "text"},
+            "text": {"type": "string", "pattern": "SENTINEL"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "content"],
+          "properties": {
+            "role": {"type": "string", "const": "user"},
+            "content": {"type": "string", "pattern": "SENTINEL"}
+          }
+        }
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "kind",
+        "target_record_id",
+        "target_span",
+        "replacement_text",
+        "replacement_author",
+        "evidence_refs",
+        "protocol_shell_for",
+        "correction_anchor",
+        "rendered_correction_context"
+      ],
+      "properties": {
+        "operation_id": {"type": "string", "minLength": 1},
+        "kind": {
+          "type": "string",
+          "enum": ["KEEP", "DROP", "REPLACE", "ARCHIVE", "KEEP_UNCERTAIN"]
+        },
+        "target_record_id": {
+          "type": "string",
+          "pattern": "^record-[0-9a-f]{32}$"
+        },
+        "target_span": {"$ref": "#/$defs/span"},
+        "replacement_text": {"type": ["string", "null"]},
+        "replacement_author": {"type": ["string", "null"]},
+        "evidence_refs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "protocol_shell_for": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "correction_anchor": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/anchor"}]
+        },
+        "rendered_correction_context": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/context"}]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"kind": {"const": "DROP"}},
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "replacement_text": {"type": "null"},
+              "replacement_author": {"type": "null"},
+              "correction_anchor": {"type": "null"},
+              "rendered_correction_context": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"kind": {"const": "REPLACE"}},
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "replacement_text": {"type": "string", "minLength": 1},
+              "replacement_author": {"type": "string", "const": "SENTINEL"},
+              "evidence_refs": {"minItems": 1},
+              "correction_anchor": {"$ref": "#/$defs/anchor"},
+              "rendered_correction_context": {"$ref": "#/$defs/context"}
+            }
+          }
+        }
+      ]
+    },
+    "editableDropOperation": {
+      "allOf": [
+        {"$ref": "#/$defs/operation"},
+        {
+          "properties": {
+            "kind": {"const": "DROP"},
+            "target_span": {
+              "properties": {"span_role": {"const": "EDITABLE_CLAIM"}}
+            },
+            "protocol_shell_for": {"maxItems": 0}
+          }
+        }
+      ]
+    },
+    "shellDropOperation": {
+      "allOf": [
+        {"$ref": "#/$defs/operation"},
+        {
+          "properties": {
+            "kind": {"const": "DROP"},
+            "target_span": {
+              "properties": {
+                "span_role": {"const": "ELIGIBLE_PROTOCOL_SHELL"},
+                "claim_id": {"type": "null"}
+              }
+            },
+            "protocol_shell_for": {"minItems": 1}
+          }
+        }
+      ]
+    },
+    "editableReplaceOperation": {
+      "allOf": [
+        {"$ref": "#/$defs/operation"},
+        {
+          "properties": {
+            "kind": {"const": "REPLACE"},
+            "target_span": {
+              "properties": {"span_role": {"const": "EDITABLE_CLAIM"}}
+            },
+            "protocol_shell_for": {"maxItems": 0}
+          }
+        }
+      ]
+    },
+    "benignDropOperation": {
+      "allOf": [
+        {"$ref": "#/$defs/operation"},
+        {
+          "properties": {
+            "kind": {"const": "DROP"},
+            "target_span": {
+              "properties": {"span_role": {"const": "BENIGN_SHAM"}}
+            },
+            "protocol_shell_for": {"maxItems": 0}
+          }
+        }
+      ]
+    }
+  }
+}

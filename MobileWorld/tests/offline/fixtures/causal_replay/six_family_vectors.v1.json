@@ -1,0 +1,673 @@
+{
+  "schema_version": "mobileworld.g1.portable-sentinel.conformance-vectors/v1",
+  "description": "Synthetic CPU-only vectors. They are contract fixtures, not captured G1 evidence or live codecs.",
+  "capabilities": {
+    "level": "VALIDITY_TRANSFORMATION",
+    "scope": "FIXTURE_ONLY",
+    "supported_operations": ["DROP", "REPLACE"],
+    "supported_arms": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN"],
+    "preserves_roles": true,
+    "preserves_order": true,
+    "preserves_multimodal_blocks": true,
+    "preserves_tool_adjacency": true,
+    "preserves_protocol_shell": true,
+    "live_ready": false,
+    "opaque_or_server_managed": false
+  },
+  "vectors": [
+    {
+      "vector_id": "raw-replay-assistant-and-observation-v1",
+      "target_record_key": "raw_assistant_step_1",
+      "correction_text": "地图入口尚未确认。",
+      "application_request": {
+        "model": "fixture-raw-replay",
+        "messages": [
+          {"role": "system", "content": "Follow the tool protocol exactly."},
+          {"role": "user", "content": "Task: find the map."},
+          {"role": "assistant", "content": "<thinking>地图在左侧，先点错误入口🙂。</thinking><tool_call>{\"action\":\"click\",\"x\":88}</tool_call>"},
+          {"role": "user", "content": [{"type": "text", "text": "Observation after step 1"}, {"type": "image_ref", "sha256": "1111111111111111111111111111111111111111111111111111111111111111"}]},
+          {"role": "user", "content": [{"type": "text", "text": "Current observation"}, {"type": "image_ref", "sha256": "2222222222222222222222222222222222222222222222222222222222222222"}]}
+        ],
+        "temperature": 0.0
+      },
+      "mapping": {
+        "codec_id": "mobileworld.g1.fixture.raw-replay/v1",
+        "host_id": "fixture-mai-raw-replay",
+        "history_family": "raw_replay",
+        "source_versions": [],
+        "regions": [
+          {"region_key": "system", "kind": "SYSTEM", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 0]], "text_slices": [], "preserve_exact": true},
+          {"region_key": "task", "kind": "TASK", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 1]], "text_slices": [], "preserve_exact": true},
+          {"region_key": "history", "kind": "HISTORY", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 2], ["messages", 3]], "text_slices": [], "preserve_exact": false},
+          {"region_key": "current", "kind": "CURRENT_OBSERVATION", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 4]], "text_slices": [], "preserve_exact": true},
+          {
+            "region_key": "tool",
+            "kind": "TOOL_PROTOCOL",
+            "availability": "COLOCATED",
+            "absence_reason": null,
+            "paths": [],
+            "text_slices": [
+              {"container_path": ["messages", 2, "content"], "char_start": 35, "exact_text": "<tool_call>{\"action\":\"click\",\"x\":88}</tool_call>"}
+            ],
+            "preserve_exact": true
+          }
+        ],
+        "records": [
+          {
+            "record_key": "raw_assistant_step_1",
+            "record_class": "MAI_RAW_ASSISTANT_MESSAGE",
+            "region_key": "history",
+            "role": "assistant",
+            "author": "ACTOR",
+            "modality": "TOOL_CALL",
+            "coordinates": {"message_index": 2, "content_block_index": null, "representation_record_index": 0},
+            "container_path": ["messages", 2, "content"],
+            "source_char_start": 0,
+            "source_exact_text": "<thinking>地图在左侧，先点错误入口🙂。</thinking><tool_call>{\"action\":\"click\",\"x\":88}</tool_call>",
+            "editable_spans": [
+              {"container_path": ["messages", 2, "content"], "char_start": 10, "exact_text": "地图在左侧，先点错误入口🙂。", "span_role": "EDITABLE_CLAIM", "claim_key": "wrong_route"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 2, "content"], "char_start": 0, "exact_text": "<thinking>", "span_role": "PROTECTED_PROTOCOL"},
+              {"container_path": ["messages", 2, "content"], "char_start": 24, "exact_text": "</thinking>", "span_role": "PROTECTED_PROTOCOL"},
+              {"container_path": ["messages", 2, "content"], "char_start": 35, "exact_text": "<tool_call>{\"action\":\"click\",\"x\":88}</tool_call>", "span_role": "PROTECTED_PROTOCOL"}
+            ],
+            "correction_anchors": [
+              {"container_path": ["messages", 4, "content"], "insert_index": 1, "owner_region_key": "current", "host_context_path": ["messages", 4], "role_path": ["messages", 4, "role"], "expected_role": "user", "reference_path": ["messages", 4, "content", 1], "placement": "BEFORE", "context_kind": "TEXT_CONTENT_BLOCK", "visible_prefix": "[SENTINEL CONTEXT]\n", "visible_suffix": ""}
+            ],
+            "write_time": "2026-01-01T00:00:01Z",
+            "exposure_time": "2026-01-01T00:00:02Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"source_step": 1, "accepted_decision": true, "history_n": 3},
+            "relationships": [
+              {"kind": "TOOL_CALL_RESULT", "target_path": ["messages", 3, "content"]},
+              {"kind": "ACTION_OBSERVATION", "target_path": ["messages", 4, "content"]}
+            ],
+            "related_content": [
+              {"path": ["messages", 3, "content", 1], "kind": "IMAGE"},
+              {"path": ["messages", 4, "content", 1], "kind": "IMAGE"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vector_id": "flat-progress-conclusion-and-external-suffix-v1",
+      "target_record_key": "progress_step_1",
+      "correction_text": "当前截图未显示设置页面已打开🙂",
+      "application_request": {
+        "model": "fixture-flat-progress",
+        "messages": [
+          {"role": "system", "content": "Return one JSON action."},
+          {"role": "user", "content": [
+            {"type": "text", "text": "Task progress:\nStep 1: 已打开设置🙂; Tool response: screen unchanged\nStep 2: 已选择显示🙂; Tool response: no visible change\nCurrent task: adjust display"},
+            {"type": "image_ref", "sha256": "3333333333333333333333333333333333333333333333333333333333333333"}
+          ]}
+        ],
+        "temperature": 0.0
+      },
+      "mapping": {
+        "codec_id": "mobileworld.g1.fixture.flat-progress/v1",
+        "host_id": "fixture-qwen-flat-progress",
+        "history_family": "flat_progress",
+        "source_versions": [],
+        "regions": [
+          {"region_key": "system", "kind": "SYSTEM", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 0]], "text_slices": [], "preserve_exact": true},
+          {
+            "region_key": "task",
+            "kind": "TASK",
+            "availability": "COLOCATED",
+            "absence_reason": null,
+            "paths": [],
+            "text_slices": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 112, "exact_text": "Current task: adjust display"}
+            ],
+            "preserve_exact": true
+          },
+          {
+            "region_key": "history",
+            "kind": "HISTORY",
+            "availability": "COLOCATED",
+            "absence_reason": null,
+            "paths": [],
+            "text_slices": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 0, "exact_text": "Task progress:\nStep 1: 已打开设置🙂; Tool response: screen unchanged\nStep 2: 已选择显示🙂; Tool response: no visible change"}
+            ],
+            "preserve_exact": false
+          },
+          {"region_key": "current", "kind": "CURRENT_OBSERVATION", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 1, "content", 1]], "text_slices": [], "preserve_exact": true},
+          {
+            "region_key": "tool",
+            "kind": "TOOL_PROTOCOL",
+            "availability": "COLOCATED",
+            "absence_reason": null,
+            "paths": [],
+            "text_slices": [
+              {"container_path": ["messages", 0, "content"], "char_start": 0, "exact_text": "Return one JSON action."}
+            ],
+            "preserve_exact": true
+          }
+        ],
+        "records": [
+          {
+            "record_key": "progress_step_1",
+            "record_class": "QWEN_FLAT_PROGRESS_STEP",
+            "region_key": "history",
+            "role": "user",
+            "author": "ACTOR_DERIVED_HISTORY",
+            "modality": "TEXT",
+            "coordinates": {"message_index": 1, "content_block_index": 0, "representation_record_index": 0},
+            "container_path": ["messages", 1, "content", 0, "text"],
+            "source_char_start": 15,
+            "source_exact_text": "Step 1: 已打开设置🙂; Tool response: screen unchanged",
+            "editable_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 23, "exact_text": "已打开设置🙂", "span_role": "EDITABLE_CLAIM", "claim_key": "conclusion"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 15, "exact_text": "Step 1: ", "span_role": "PROTECTED_PROTOCOL"},
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 29, "exact_text": "; Tool response: screen unchanged", "span_role": "PROTECTED_EXTERNAL_RESULT"}
+            ],
+            "correction_anchors": [
+              {"container_path": ["messages", 1, "content"], "insert_index": 1, "owner_region_key": "current", "host_context_path": ["messages", 1], "role_path": ["messages", 1, "role"], "expected_role": "user", "reference_path": ["messages", 1, "content", 1], "placement": "BEFORE", "context_kind": "TEXT_CONTENT_BLOCK", "visible_prefix": "[SENTINEL CONTEXT]\n", "visible_suffix": ""}
+            ],
+            "write_time": "2026-01-01T00:00:01Z",
+            "exposure_time": "2026-01-01T00:00:02Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"source_step": 1, "mapping_status": "exact_qwen_flat_progress", "step_ordinal_base": 1},
+            "relationships": [{"kind": "ACTION_OBSERVATION", "target_path": ["messages", 1, "content", 1]}],
+            "related_content": [{"path": ["messages", 1, "content", 1], "kind": "IMAGE"}]
+          },
+          {
+            "record_key": "progress_step_2",
+            "record_class": "QWEN_FLAT_PROGRESS_STEP",
+            "region_key": "history",
+            "role": "user",
+            "author": "ACTOR_DERIVED_HISTORY",
+            "modality": "TEXT",
+            "coordinates": {"message_index": 1, "content_block_index": 0, "representation_record_index": 1},
+            "container_path": ["messages", 1, "content", 0, "text"],
+            "source_char_start": 63,
+            "source_exact_text": "Step 2: 已选择显示🙂; Tool response: no visible change",
+            "editable_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 71, "exact_text": "已选择显示🙂", "span_role": "EDITABLE_CLAIM", "claim_key": "conclusion"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 63, "exact_text": "Step 2: ", "span_role": "PROTECTED_PROTOCOL"},
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 77, "exact_text": "; Tool response: no visible change", "span_role": "PROTECTED_EXTERNAL_RESULT"}
+            ],
+            "correction_anchors": [],
+            "write_time": "2026-01-01T00:00:02Z",
+            "exposure_time": "2026-01-01T00:00:03Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"source_step": 2, "mapping_status": "exact_qwen_flat_progress", "step_ordinal_base": 1},
+            "relationships": [{"kind": "ACTION_OBSERVATION", "target_path": ["messages", 1, "content", 1]}],
+            "related_content": [{"path": ["messages", 1, "content", 1], "kind": "IMAGE"}]
+          }
+        ]
+      }
+    },
+    {
+      "vector_id": "rolling-summary-current-version-v1",
+      "target_record_key": "rolling_summary_v3",
+      "correction_text": "当前页面状态尚未确认🙂",
+      "application_request": {
+        "model": "fixture-rolling-summary",
+        "messages": [
+          {"role": "user", "content": [
+            {"type": "text", "text": "Task: send the correct message."},
+            {"type": "text", "text": "历史操作总结：仍在错误页面🙂 用户回复说：继续"},
+            {"type": "image_ref", "sha256": "4444444444444444444444444444444444444444444444444444444444444444"},
+            {"type": "text", "text": "Allowed action schema"}
+          ]}
+        ],
+        "temperature": 0.0
+      },
+      "mapping": {
+        "codec_id": "mobileworld.g1.fixture.rolling-summary/v1",
+        "host_id": "fixture-gelab-rolling-summary",
+        "history_family": "rolling_summary",
+        "source_versions": [
+          {
+            "version_key": "rolling_summary_v2",
+            "source_record_id": "record_external_gelab_summary_v2",
+            "version": 2,
+            "source_request_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+            "source_span_sha256": "7207390efaf02b2233aa7a2c5b5d34eb87c4d0bb9d1910f72005fff4ed174317",
+            "write_time": "2026-01-01T00:00:02Z",
+            "model_visible_in_current_request": false,
+            "provenance": {"source_step": 2, "lineage_kind": "prior_recursive_summary", "exact_text_available": false}
+          }
+        ],
+        "regions": [
+          {"region_key": "system", "kind": "SYSTEM", "availability": "ABSENT_NOT_IN_HOST_CONTRACT", "absence_reason": "This host fixture has no distinct model-visible system region.", "paths": [], "text_slices": [], "preserve_exact": true},
+          {"region_key": "task", "kind": "TASK", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 0, "content", 0]], "text_slices": [], "preserve_exact": true},
+          {"region_key": "history", "kind": "HISTORY", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 0, "content", 1, "text"]], "text_slices": [], "preserve_exact": false},
+          {"region_key": "current", "kind": "CURRENT_OBSERVATION", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 0, "content", 2]], "text_slices": [], "preserve_exact": true},
+          {"region_key": "tool", "kind": "TOOL_PROTOCOL", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 0, "content", 3]], "text_slices": [], "preserve_exact": true}
+        ],
+        "records": [
+          {
+            "record_key": "rolling_summary_v3",
+            "record_class": "GELAB_ROLLING_SUMMARY_ENTRY",
+            "region_key": "history",
+            "role": "user",
+            "author": "ACTOR_DERIVED_HISTORY",
+            "modality": "ROLLING_SUMMARY",
+            "coordinates": {"message_index": 0, "content_block_index": 1, "representation_record_index": 0},
+            "container_path": ["messages", 0, "content", 1, "text"],
+            "source_char_start": 0,
+            "source_exact_text": "历史操作总结：仍在错误页面🙂 用户回复说：继续",
+            "editable_spans": [
+              {"container_path": ["messages", 0, "content", 1, "text"], "char_start": 7, "exact_text": "仍在错误页面🙂", "span_role": "EDITABLE_CLAIM", "claim_key": "current_summary"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 0, "content", 1, "text"], "char_start": 0, "exact_text": "历史操作总结：", "span_role": "PROTECTED_PROTOCOL"},
+              {"container_path": ["messages", 0, "content", 1, "text"], "char_start": 14, "exact_text": " 用户回复说：继续", "span_role": "PROTECTED_EXTERNAL_RESULT"}
+            ],
+            "correction_anchors": [
+              {"container_path": ["messages", 0, "content"], "insert_index": 2, "owner_region_key": "current", "host_context_path": ["messages", 0], "role_path": ["messages", 0, "role"], "expected_role": "user", "reference_path": ["messages", 0, "content", 2], "placement": "BEFORE", "context_kind": "TEXT_CONTENT_BLOCK", "visible_prefix": "[SENTINEL CONTEXT]\n", "visible_suffix": ""}
+            ],
+            "write_time": "2026-01-01T00:00:01Z",
+            "exposure_time": "2026-01-01T00:00:03Z",
+            "version": 3,
+            "source_version_keys": ["rolling_summary_v2"],
+            "provenance": {"source_step": 1, "summary_source_version_id": "summary-v2", "parser_failure_lag_supported": true},
+            "relationships": [
+              {"kind": "SOURCE_VERSION", "target_version_key": "rolling_summary_v2"},
+              {"kind": "ACTION_OBSERVATION", "target_path": ["messages", 0, "content", 2]}
+            ],
+            "related_content": [
+              {"path": ["messages", 0, "content", 2], "kind": "IMAGE"},
+              {"path": ["messages", 0, "content", 3], "kind": "TOOL_SCHEMA"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vector_id": "flat-previous-actions-think-action-v1",
+      "target_record_key": "previous_action_step_0",
+      "correction_text": "当前截图未显示按钮点击已改变页面🙂",
+      "application_request": {
+        "model": "fixture-flat-previous-actions",
+        "messages": [
+          {"role": "system", "content": "Use the current screenshot and previous actions."},
+          {"role": "user", "content": [
+            {"type": "text", "text": "Previous actions:\nStep 0: <think>需要点错误按钮🙂</think><action>click(9,9)</action>\nStep 1: <think>仍在同一页面🙂</think><action>wait</action>\nCurrent screenshot:"},
+            {"type": "image_ref", "sha256": "5555555555555555555555555555555555555555555555555555555555555555"}
+          ]}
+        ],
+        "temperature": 0.0
+      },
+      "mapping": {
+        "codec_id": "mobileworld.g1.fixture.flat-previous-actions/v1",
+        "host_id": "fixture-ui-venus-previous-actions",
+        "history_family": "flat_previous_actions",
+        "source_versions": [],
+        "regions": [
+          {"region_key": "system", "kind": "SYSTEM", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 0]], "text_slices": [], "preserve_exact": true},
+          {"region_key": "task", "kind": "TASK", "availability": "ABSENT_NOT_IN_HOST_CONTRACT", "absence_reason": "The UI-Venus previous-actions fixture has no distinct task region.", "paths": [], "text_slices": [], "preserve_exact": true},
+          {
+            "region_key": "history",
+            "kind": "HISTORY",
+            "availability": "COLOCATED",
+            "absence_reason": null,
+            "paths": [],
+            "text_slices": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 0, "exact_text": "Previous actions:\nStep 0: <think>需要点错误按钮🙂</think><action>click(9,9)</action>\nStep 1: <think>仍在同一页面🙂</think><action>wait</action>"}
+            ],
+            "preserve_exact": false
+          },
+          {
+            "region_key": "current",
+            "kind": "CURRENT_OBSERVATION",
+            "availability": "PRESENT",
+            "absence_reason": null,
+            "paths": [["messages", 1, "content", 1]],
+            "text_slices": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 129, "exact_text": "Current screenshot:"}
+            ],
+            "preserve_exact": true
+          },
+          {
+            "region_key": "tool",
+            "kind": "TOOL_PROTOCOL",
+            "availability": "COLOCATED",
+            "absence_reason": null,
+            "paths": [],
+            "text_slices": [
+              {"container_path": ["messages", 0, "content"], "char_start": 0, "exact_text": "Use the current screenshot and previous actions."}
+            ],
+            "preserve_exact": true
+          }
+        ],
+        "records": [
+          {
+            "record_key": "previous_action_step_0",
+            "record_class": "UI_VENUS_PREVIOUS_ACTION_STEP",
+            "region_key": "history",
+            "role": "user",
+            "author": "ACTOR_DERIVED_HISTORY",
+            "modality": "TOOL_CALL",
+            "coordinates": {"message_index": 1, "content_block_index": 0, "representation_record_index": 0},
+            "container_path": ["messages", 1, "content", 0, "text"],
+            "source_char_start": 18,
+            "source_exact_text": "Step 0: <think>需要点错误按钮🙂</think><action>click(9,9)</action>",
+            "editable_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 33, "exact_text": "需要点错误按钮🙂", "span_role": "EDITABLE_CLAIM", "claim_key": "thinking_premise"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 18, "exact_text": "Step 0: <think>", "span_role": "PROTECTED_PROTOCOL"},
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 41, "exact_text": "</think><action>click(9,9)</action>", "span_role": "PROTECTED_PROTOCOL"}
+            ],
+            "correction_anchors": [
+              {"container_path": ["messages", 1, "content"], "insert_index": 1, "owner_region_key": "current", "host_context_path": ["messages", 1], "role_path": ["messages", 1, "role"], "expected_role": "user", "reference_path": ["messages", 1, "content", 1], "placement": "BEFORE", "context_kind": "TEXT_CONTENT_BLOCK", "visible_prefix": "[SENTINEL CONTEXT]\n", "visible_suffix": ""}
+            ],
+            "write_time": "2026-01-01T00:00:01Z",
+            "exposure_time": "2026-01-01T00:00:02Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"source_step": 0, "history_length": 2, "parse_failed_history_retained": true, "historical_result_visibility": "NOT_MODEL_VISIBLE"},
+            "relationships": [{"kind": "ACTION_OBSERVATION", "target_path": ["messages", 1, "content", 1]}],
+            "related_content": [{"path": ["messages", 1, "content", 1], "kind": "IMAGE"}]
+          },
+          {
+            "record_key": "previous_action_step_1",
+            "record_class": "UI_VENUS_PREVIOUS_ACTION_STEP",
+            "region_key": "history",
+            "role": "user",
+            "author": "ACTOR_DERIVED_HISTORY",
+            "modality": "TOOL_CALL",
+            "coordinates": {"message_index": 1, "content_block_index": 0, "representation_record_index": 1},
+            "container_path": ["messages", 1, "content", 0, "text"],
+            "source_char_start": 77,
+            "source_exact_text": "Step 1: <think>仍在同一页面🙂</think><action>wait</action>",
+            "editable_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 92, "exact_text": "仍在同一页面🙂", "span_role": "EDITABLE_CLAIM", "claim_key": "thinking_premise"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 77, "exact_text": "Step 1: <think>", "span_role": "PROTECTED_PROTOCOL"},
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 99, "exact_text": "</think><action>wait</action>", "span_role": "PROTECTED_PROTOCOL"}
+            ],
+            "correction_anchors": [],
+            "write_time": "2026-01-01T00:00:02Z",
+            "exposure_time": "2026-01-01T00:00:03Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"source_step": 1, "history_length": 2, "parse_failed_history_retained": true, "historical_result_visibility": "NOT_MODEL_VISIBLE"},
+            "relationships": [{"kind": "ACTION_OBSERVATION", "target_path": ["messages", 1, "content", 1]}],
+            "related_content": [{"path": ["messages", 1, "content", 1], "kind": "IMAGE"}]
+          }
+        ]
+      }
+    },
+    {
+      "vector_id": "hybrid-folding-action-result-alignment-v1",
+      "target_record_key": "collapsed_action_step_1",
+      "correction_text": "工具结果显示当前页面仍为错误页面🙂",
+      "application_request": {
+        "model": "fixture-hybrid-folding",
+        "messages": [
+          {"role": "system", "content": "Generate the next move."},
+          {"role": "user", "content": [
+            {"type": "text", "text": "Previous actions:\nStep1: click(9,9) Tool response: Wrong page🙂\nCurrent screenshot:"},
+            {"type": "image_ref", "sha256": "6666666666666666666666666666666666666666666666666666666666666666"}
+          ]}
+        ],
+        "temperature": 0.0
+      },
+      "mapping": {
+        "codec_id": "mobileworld.g1.fixture.hybrid-folding/v1",
+        "host_id": "fixture-gui-owl-hybrid-folding",
+        "history_family": "hybrid_folding",
+        "source_versions": [],
+        "regions": [
+          {"region_key": "system", "kind": "SYSTEM", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 0]], "text_slices": [], "preserve_exact": true},
+          {"region_key": "task", "kind": "TASK", "availability": "ABSENT_NOT_IN_HOST_CONTRACT", "absence_reason": "The hybrid-collapsed fixture has no distinct task region.", "paths": [], "text_slices": [], "preserve_exact": true},
+          {
+            "region_key": "history",
+            "kind": "HISTORY",
+            "availability": "COLOCATED",
+            "absence_reason": null,
+            "paths": [],
+            "text_slices": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 0, "exact_text": "Previous actions:\nStep1: click(9,9) Tool response: Wrong page🙂"}
+            ],
+            "preserve_exact": false
+          },
+          {
+            "region_key": "current",
+            "kind": "CURRENT_OBSERVATION",
+            "availability": "PRESENT",
+            "absence_reason": null,
+            "paths": [["messages", 1, "content", 1]],
+            "text_slices": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 63, "exact_text": "Current screenshot:"}
+            ],
+            "preserve_exact": true
+          },
+          {
+            "region_key": "tool",
+            "kind": "TOOL_PROTOCOL",
+            "availability": "COLOCATED",
+            "absence_reason": null,
+            "paths": [],
+            "text_slices": [
+              {"container_path": ["messages", 0, "content"], "char_start": 0, "exact_text": "Generate the next move."}
+            ],
+            "preserve_exact": true
+          }
+        ],
+        "records": [
+          {
+            "record_key": "collapsed_action_step_1",
+            "record_class": "GUI_OWL_COLLAPSED_ACTION_STEP",
+            "region_key": "history",
+            "role": "user",
+            "author": "ACTOR_DERIVED_HISTORY",
+            "modality": "TOOL_CALL",
+            "coordinates": {"message_index": 1, "content_block_index": 0, "representation_record_index": 0},
+            "container_path": ["messages", 1, "content", 0, "text"],
+            "source_char_start": 18,
+            "source_exact_text": "Step1: click(9,9)",
+            "editable_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 25, "exact_text": "click(9,9)", "span_role": "EDITABLE_CLAIM", "claim_key": "collapsed_action"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 18, "exact_text": "Step1: ", "span_role": "ELIGIBLE_PROTOCOL_SHELL"}
+            ],
+            "correction_anchors": [
+              {"container_path": ["messages", 1, "content"], "insert_index": 1, "owner_region_key": "current", "host_context_path": ["messages", 1], "role_path": ["messages", 1, "role"], "expected_role": "user", "reference_path": ["messages", 1, "content", 1], "placement": "BEFORE", "context_kind": "TEXT_CONTENT_BLOCK", "visible_prefix": "[SENTINEL CONTEXT]\n", "visible_suffix": ""}
+            ],
+            "write_time": "2026-01-01T00:00:01Z",
+            "exposure_time": "2026-01-01T00:00:02Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"source_step": 1, "result_observation_step": 2, "history_n": 1},
+            "relationships": [
+              {"kind": "ALIGNED_RECORD", "target_record_key": "collapsed_result_step_1"},
+              {"kind": "TOOL_CALL_RESULT", "target_record_key": "collapsed_result_step_1"},
+              {"kind": "ACTION_OBSERVATION", "target_path": ["messages", 1, "content", 1]}
+            ],
+            "related_content": [{"path": ["messages", 1, "content", 1], "kind": "IMAGE"}]
+          },
+          {
+            "record_key": "collapsed_result_step_1",
+            "record_class": "GUI_OWL_COLLAPSED_RESULT_STEP",
+            "region_key": "history",
+            "role": "user",
+            "author": "RUNTIME_TOOL",
+            "modality": "TOOL_RESULT",
+            "coordinates": {"message_index": 1, "content_block_index": 0, "representation_record_index": 1},
+            "container_path": ["messages", 1, "content", 0, "text"],
+            "source_char_start": 36,
+            "source_exact_text": "Tool response: Wrong page🙂",
+            "editable_spans": [],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 36, "exact_text": "Tool response: Wrong page🙂", "span_role": "PROTECTED_EXTERNAL_RESULT"}
+            ],
+            "correction_anchors": [],
+            "write_time": "2026-01-01T00:00:01Z",
+            "exposure_time": "2026-01-01T00:00:02Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"source_step": 1, "result_observation_step": 2, "history_n": 1},
+            "relationships": [
+              {"kind": "ALIGNED_RECORD", "target_record_key": "collapsed_action_step_1"},
+              {"kind": "ACTION_OBSERVATION", "target_path": ["messages", 1, "content", 1]}
+            ],
+            "related_content": [{"path": ["messages", 1, "content", 1], "kind": "IMAGE"}]
+          }
+        ]
+      }
+    },
+    {
+      "vector_id": "structured-folding-hlm-versioned-v1",
+      "target_record_key": "h_current_v2",
+      "correction_text": "页面状态尚未确认🙂",
+      "application_request": {
+        "model": "fixture-structured-folding",
+        "messages": [
+          {"role": "system", "content": "H, L, and M are separate history sections."},
+          {"role": "user", "content": [
+            {"type": "text", "text": "H:\nv1: first observation\nv2: 错误总结🙂"},
+            {"type": "text", "text": "L:\nObservation: wrong page\nAction Intent: continue\nAction Taken: click"},
+            {"type": "text", "text": "M:\nplace=wrong page🙂"},
+            {"type": "image_ref", "sha256": "7777777777777777777777777777777777777777777777777777777777777777"}
+          ]}
+        ],
+        "temperature": 0.0
+      },
+      "mapping": {
+        "codec_id": "mobileworld.g1.fixture.structured-folding/v1",
+        "host_id": "fixture-memgui-structured-folding",
+        "history_family": "structured_folding",
+        "source_versions": [],
+        "regions": [
+          {"region_key": "system", "kind": "SYSTEM", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 0]], "text_slices": [], "preserve_exact": true},
+          {"region_key": "task", "kind": "TASK", "availability": "ABSENT_NOT_IN_HOST_CONTRACT", "absence_reason": "The structured H/L/M fixture has no distinct task region.", "paths": [], "text_slices": [], "preserve_exact": true},
+          {"region_key": "history_h", "kind": "HISTORY", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 1, "content", 0, "text"]], "text_slices": [], "preserve_exact": false},
+          {"region_key": "history_l", "kind": "HISTORY", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 1, "content", 1, "text"]], "text_slices": [], "preserve_exact": false},
+          {"region_key": "history_m", "kind": "HISTORY", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 1, "content", 2, "text"]], "text_slices": [], "preserve_exact": false},
+          {"region_key": "current", "kind": "CURRENT_OBSERVATION", "availability": "PRESENT", "absence_reason": null, "paths": [["messages", 1, "content", 3]], "text_slices": [], "preserve_exact": true},
+          {"region_key": "tool", "kind": "TOOL_PROTOCOL", "availability": "ABSENT_NOT_IN_HOST_CONTRACT", "absence_reason": "The structured H/L/M fixture has no distinct tool-protocol region.", "paths": [], "text_slices": [], "preserve_exact": true}
+        ],
+        "records": [
+          {
+            "record_key": "h_source_v1",
+            "record_class": "MEMGUI_H_FOLDED_ACTION_ENTRY",
+            "region_key": "history_h",
+            "role": "user",
+            "author": "ACTOR_DERIVED_HISTORY",
+            "modality": "STRUCTURED_SECTION",
+            "coordinates": {"message_index": 1, "content_block_index": 0, "representation_record_index": 0},
+            "container_path": ["messages", 1, "content", 0, "text"],
+            "source_char_start": 3,
+            "source_exact_text": "v1: first observation",
+            "editable_spans": [],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 3, "exact_text": "v1: first observation", "span_role": "PROTECTED_PROTOCOL"}
+            ],
+            "correction_anchors": [],
+            "write_time": "2026-01-01T00:00:01Z",
+            "exposure_time": "2026-01-01T00:00:03Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"section": "H", "source_step": 1},
+            "relationships": [],
+            "related_content": [{"path": ["messages", 1, "content", 3], "kind": "IMAGE"}]
+          },
+          {
+            "record_key": "h_current_v2",
+            "record_class": "MEMGUI_H_FOLDED_ACTION_ENTRY",
+            "region_key": "history_h",
+            "role": "user",
+            "author": "ACTOR_DERIVED_HISTORY",
+            "modality": "STRUCTURED_SECTION",
+            "coordinates": {"message_index": 1, "content_block_index": 0, "representation_record_index": 1},
+            "container_path": ["messages", 1, "content", 0, "text"],
+            "source_char_start": 25,
+            "source_exact_text": "v2: 错误总结🙂",
+            "editable_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 29, "exact_text": "错误总结🙂", "span_role": "EDITABLE_CLAIM", "claim_key": "h_summary"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 0, "text"], "char_start": 25, "exact_text": "v2: ", "span_role": "PROTECTED_PROTOCOL"}
+            ],
+            "correction_anchors": [
+              {"container_path": ["messages", 1, "content"], "insert_index": 3, "owner_region_key": "current", "host_context_path": ["messages", 1], "role_path": ["messages", 1, "role"], "expected_role": "user", "reference_path": ["messages", 1, "content", 3], "placement": "BEFORE", "context_kind": "TEXT_CONTENT_BLOCK", "visible_prefix": "[SENTINEL CONTEXT]\n", "visible_suffix": ""}
+            ],
+            "write_time": "2026-01-01T00:00:02Z",
+            "exposure_time": "2026-01-01T00:00:03Z",
+            "version": 2,
+            "source_version_keys": ["h_source_v1"],
+            "provenance": {"section": "H", "source_step": 2, "overlap_replacement": true},
+            "relationships": [{"kind": "SOURCE_VERSION", "target_record_key": "h_source_v1"}],
+            "related_content": [{"path": ["messages", 1, "content", 3], "kind": "IMAGE"}]
+          },
+          {
+            "record_key": "l_recent_step",
+            "record_class": "MEMGUI_L_RECENT_STEP_ENTRY",
+            "region_key": "history_l",
+            "role": "user",
+            "author": "MIXED_ACTOR_RUNTIME",
+            "modality": "STRUCTURED_SECTION",
+            "coordinates": {"message_index": 1, "content_block_index": 1, "representation_record_index": 0},
+            "container_path": ["messages", 1, "content", 1, "text"],
+            "source_char_start": 0,
+            "source_exact_text": "L:\nObservation: wrong page\nAction Intent: continue\nAction Taken: click",
+            "editable_spans": [
+              {"container_path": ["messages", 1, "content", 1, "text"], "char_start": 3, "exact_text": "Observation: wrong page", "span_role": "EDITABLE_CLAIM", "claim_key": "l_observation"},
+              {"container_path": ["messages", 1, "content", 1, "text"], "char_start": 27, "exact_text": "Action Intent: continue", "span_role": "EDITABLE_CLAIM", "claim_key": "l_intent"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 1, "text"], "char_start": 0, "exact_text": "L:\n", "span_role": "PROTECTED_PROTOCOL"},
+              {"container_path": ["messages", 1, "content", 1, "text"], "char_start": 51, "exact_text": "Action Taken: click", "span_role": "PROTECTED_EXTERNAL_RESULT"}
+            ],
+            "correction_anchors": [
+              {"container_path": ["messages", 1, "content"], "insert_index": 3, "owner_region_key": "current", "host_context_path": ["messages", 1], "role_path": ["messages", 1, "role"], "expected_role": "user", "reference_path": ["messages", 1, "content", 3], "placement": "BEFORE", "context_kind": "TEXT_CONTENT_BLOCK", "visible_prefix": "[SENTINEL CONTEXT]\n", "visible_suffix": ""}
+            ],
+            "write_time": "2026-01-01T00:00:02Z",
+            "exposure_time": "2026-01-01T00:00:03Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"section": "L", "atomic_commit": true},
+            "relationships": [{"kind": "ALIGNED_RECORD", "target_record_key": "h_current_v2"}],
+            "related_content": [{"path": ["messages", 1, "content", 3], "kind": "IMAGE"}]
+          },
+          {
+            "record_key": "m_place_v1",
+            "record_class": "MEMGUI_M_FOLDED_UI_MEMORY_ENTRY",
+            "region_key": "history_m",
+            "role": "user",
+            "author": "ACTOR_DERIVED_HISTORY",
+            "modality": "STRUCTURED_SECTION",
+            "coordinates": {"message_index": 1, "content_block_index": 2, "representation_record_index": 0},
+            "container_path": ["messages", 1, "content", 2, "text"],
+            "source_char_start": 0,
+            "source_exact_text": "M:\nplace=wrong page🙂",
+            "editable_spans": [
+              {"container_path": ["messages", 1, "content", 2, "text"], "char_start": 9, "exact_text": "wrong page🙂", "span_role": "EDITABLE_CLAIM", "claim_key": "m_description"}
+            ],
+            "protected_spans": [
+              {"container_path": ["messages", 1, "content", 2, "text"], "char_start": 0, "exact_text": "M:\nplace=", "span_role": "PROTECTED_PROTOCOL"}
+            ],
+            "correction_anchors": [
+              {"container_path": ["messages", 1, "content"], "insert_index": 3, "owner_region_key": "current", "host_context_path": ["messages", 1], "role_path": ["messages", 1, "role"], "expected_role": "user", "reference_path": ["messages", 1, "content", 3], "placement": "BEFORE", "context_kind": "TEXT_CONTENT_BLOCK", "visible_prefix": "[SENTINEL CONTEXT]\n", "visible_suffix": ""}
+            ],
+            "write_time": "2026-01-01T00:00:02Z",
+            "exposure_time": "2026-01-01T00:00:03Z",
+            "version": 1,
+            "source_version_keys": [],
+            "provenance": {"section": "M", "mutation": "ADD", "ordered": true},
+            "relationships": [{"kind": "SECTION_MEMBER", "target_record_key": "h_current_v2"}],
+            "related_content": [{"path": ["messages", 1, "content", 3], "kind": "IMAGE"}]
+          }
+        ]
+      }
+    }
+  ]
+}

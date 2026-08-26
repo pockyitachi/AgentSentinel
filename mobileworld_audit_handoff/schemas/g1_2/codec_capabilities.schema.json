@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_2/codec_capabilities.schema.json",
+  "title": "G1.2 Portable History Codec Capabilities v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "codec_id",
+    "contract_version",
+    "history_family",
+    "level",
+    "scope",
+    "supported_operations",
+    "supported_arms",
+    "preservation",
+    "live_ready",
+    "opaque_or_server_managed"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "mobileworld.g1.portable-sentinel.codec-capabilities/v1"
+    },
+    "codec_id": {"type": "string", "minLength": 1},
+    "contract_version": {"type": "string", "minLength": 1},
+    "history_family": {
+      "type": "string",
+      "enum": [
+        "raw_replay",
+        "flat_progress",
+        "rolling_summary",
+        "flat_previous_actions",
+        "hybrid_folding",
+        "structured_folding"
+      ]
+    },
+    "level": {
+      "type": "string",
+      "enum": [
+        "AUDIT_ONLY",
+        "ANNOTATION_ONLY",
+        "VALIDITY_TRANSFORMATION",
+        "FULL_TRANSFORMATION"
+      ]
+    },
+    "scope": {"type": "string", "enum": ["FIXTURE_ONLY", "LIVE"]},
+    "supported_operations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["KEEP", "DROP", "REPLACE", "ARCHIVE", "KEEP_UNCERTAIN"]
+      }
+    },
+    "supported_arms": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "contains": {"const": "ORIGINAL"},
+      "items": {
+        "type": "string",
+        "enum": [
+          "ORIGINAL",
+          "MASK",
+          "MASK_CORRECTION",
+          "ORACLE_CLEAN",
+          "SHAM_BENIGN_EDIT"
+        ]
+      }
+    },
+    "preservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roles",
+        "ordering",
+        "multimodal_blocks",
+        "tool_call_result_adjacency",
+        "protocol_shell"
+      ],
+      "properties": {
+        "roles": {"type": "boolean"},
+        "ordering": {"type": "boolean"},
+        "multimodal_blocks": {"type": "boolean"},
+        "tool_call_result_adjacency": {"type": "boolean"},
+        "protocol_shell": {"type": "boolean"}
+      }
+    },
+    "live_ready": {"type": "boolean"},
+    "opaque_or_server_managed": {"type": "boolean"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"scope": {"const": "FIXTURE_ONLY"}},
+        "required": ["scope"]
+      },
+      "then": {"properties": {"live_ready": {"const": false}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "level": {"enum": ["AUDIT_ONLY", "ANNOTATION_ONLY"]}
+        },
+        "required": ["level"]
+      },
+      "then": {
+        "properties": {
+          "supported_arms": {
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {"const": "ORIGINAL"}
+          },
+          "supported_operations": {
+            "not": {"contains": {"enum": ["DROP", "REPLACE", "ARCHIVE"]}}
+          },
+          "live_ready": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"opaque_or_server_managed": {"const": true}},
+        "required": ["opaque_or_server_managed"]
+      },
+      "then": {
+        "properties": {
+          "supported_arms": {
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {"const": "ORIGINAL"}
+          },
+          "supported_operations": {
+            "not": {"contains": {"enum": ["DROP", "REPLACE", "ARCHIVE"]}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"level": {"const": "VALIDITY_TRANSFORMATION"}},
+        "required": ["level"]
+      },
+      "then": {
+        "properties": {
+          "supported_operations": {
+            "not": {"contains": {"const": "ARCHIVE"}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "supported_arms": {"contains": {"const": "MASK"}}
+        },
+        "required": ["supported_arms"]
+      },
+      "then": {
+        "properties": {
+          "supported_operations": {"contains": {"const": "DROP"}}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "supported_arms": {"contains": {"const": "MASK_CORRECTION"}}
+        },
+        "required": ["supported_arms"]
+      },
+      "then": {
+        "properties": {
+          "supported_operations": {"contains": {"const": "REPLACE"}}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "supported_arms": {"contains": {"const": "ORACLE_CLEAN"}}
+        },
+        "required": ["supported_arms"]
+      },
+      "then": {
+        "properties": {
+          "supported_operations": {"contains": {"const": "DROP"}}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "supported_arms": {"contains": {"const": "SHAM_BENIGN_EDIT"}}
+        },
+        "required": ["supported_arms"]
+      },
+      "then": {
+        "properties": {
+          "supported_operations": {"contains": {"const": "DROP"}}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"live_ready": {"const": true}},
+        "required": ["live_ready"]
+      },
+      "then": {
+        "properties": {
+          "preservation": {
+            "properties": {
+              "roles": {"const": true},
+              "ordering": {"const": true},
+              "multimodal_blocks": {"const": true},
+              "tool_call_result_adjacency": {"const": true},
+              "protocol_shell": {"const": true}
+            }
+          }
+        }
+      }
+    }
+  ]
+}

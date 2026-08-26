@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_2/provider_result.schema.json",
+  "title": "G1.2 Provider Codec Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "provider_codec_id",
+    "provider_contract_version",
+    "endpoint_revision",
+    "status",
+    "application_request_sha256",
+    "encoded_request_sha256",
+    "response_sha256",
+    "raw_response_ref",
+    "normalized_action",
+    "normalized_action_sha256",
+    "error",
+    "model_parameters",
+    "model_parameters_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "mobileworld.g1.portable-sentinel.provider-result/v1"
+    },
+    "provider_codec_id": {"type": "string", "minLength": 1},
+    "provider_contract_version": {"type": "string", "minLength": 1},
+    "endpoint_revision": {"type": "string", "minLength": 1},
+    "status": {
+      "type": "string",
+      "enum": ["RETURNED", "PROVIDER_ERROR", "PARSE_ERROR", "MISSING"]
+    },
+    "application_request_sha256": {"$ref": "#/$defs/sha256"},
+    "encoded_request_sha256": {"$ref": "#/$defs/sha256"},
+    "response_sha256": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "raw_response_ref": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/artifactRef"}]
+    },
+    "normalized_action": {"type": ["object", "null"]},
+    "normalized_action_sha256": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "error": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/error"}]
+    },
+    "model_parameters": {"type": "object"},
+    "model_parameters_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "response_sha256": {"type": "null"},
+            "raw_response_ref": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "response_sha256": {"$ref": "#/$defs/sha256"},
+            "raw_response_ref": {"$ref": "#/$defs/artifactRef"}
+          }
+        }
+      ]
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "RETURNED"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "response_sha256": {"$ref": "#/$defs/sha256"},
+          "raw_response_ref": {"$ref": "#/$defs/artifactRef"},
+          "normalized_action": {"type": "object"},
+          "normalized_action_sha256": {"$ref": "#/$defs/sha256"},
+          "error": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "PARSE_ERROR"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "response_sha256": {"$ref": "#/$defs/sha256"},
+          "raw_response_ref": {"$ref": "#/$defs/artifactRef"},
+          "normalized_action": {"type": "null"},
+          "normalized_action_sha256": {"type": "null"},
+          "error": {"$ref": "#/$defs/error"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"enum": ["PROVIDER_ERROR", "MISSING"]}
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "normalized_action": {"type": "null"},
+          "normalized_action_sha256": {"type": "null"},
+          "error": {"$ref": "#/$defs/error"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "MISSING"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "response_sha256": {"type": "null"},
+          "raw_response_ref": {"type": "null"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "byte_count",
+        "media_type",
+        "schema_version",
+        "relative_path"
+      ],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1},
+        "schema_version": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "minLength": 1}
+          ]
+        },
+        "relative_path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string"},
+        "retryable": {"type": "boolean"}
+      }
+    }
+  }
+}

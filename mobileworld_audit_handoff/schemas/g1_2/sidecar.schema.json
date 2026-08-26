@@ -1,0 +1,786 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_2/sidecar.schema.json",
+  "title": "G1.2 Derived Replay Sidecar v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "sidecar_id",
+    "untouched_request",
+    "history_ir_sha256",
+    "history_ir",
+    "transformation_plan_sha256",
+    "transformation_plan",
+    "paired_plan_set_sha256",
+    "plan_set_profile",
+    "paired_plan_set",
+    "render_result_sha256",
+    "exact_diff",
+    "list_insertions",
+    "source_mapping",
+    "final_request",
+    "evidence_refs",
+    "capability",
+    "fallback",
+    "execution",
+    "validation_receipt",
+    "provider_attempt",
+    "provider_result"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "mobileworld.g1.portable-sentinel.sidecar/v1"
+    },
+    "sidecar_id": {"type": "string", "pattern": "^sidecar-[0-9a-f]{32}$"},
+    "untouched_request": {"$ref": "#/$defs/requestSnapshot"},
+    "history_ir_sha256": {"$ref": "#/$defs/sha256"},
+    "history_ir": {
+      "$ref": "https://agentsentinel.local/schemas/g1_2/history_ir.schema.json"
+    },
+    "transformation_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "transformation_plan": {
+      "$ref": "https://agentsentinel.local/schemas/g1_2/transformation_plan.schema.json"
+    },
+    "paired_plan_set_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_set_profile": {
+      "type": "string",
+      "enum": ["PORTABLE_CORE", "G1_STRICT_MHR", "G1_CLEAN_CONTROL"]
+    },
+    "paired_plan_set": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "https://agentsentinel.local/schemas/g1_2/transformation_plan.schema.json"
+      }
+    },
+    "render_result_sha256": {"$ref": "#/$defs/sha256"},
+    "exact_diff": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/textDiff"}
+    },
+    "list_insertions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/listInsertion"}
+    },
+    "source_mapping": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/sourceMapping"}
+    },
+    "final_request": {"$ref": "#/$defs/requestSnapshot"},
+    "evidence_refs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evidence"}
+    },
+    "capability": {
+      "$ref": "https://agentsentinel.local/schemas/g1_2/codec_capabilities.schema.json"
+    },
+    "fallback": {"$ref": "#/$defs/fallback"},
+    "execution": {"$ref": "#/$defs/execution"},
+    "validation_receipt": {"$ref": "#/$defs/validationReceipt"},
+    "provider_attempt": {"$ref": "#/$defs/providerAttempt"},
+    "provider_result": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "$ref": "https://agentsentinel.local/schemas/g1_2/provider_result.schema.json"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"plan_set_profile": {"const": "PORTABLE_CORE"}},
+        "required": ["plan_set_profile"]
+      },
+      "then": {
+        "properties": {
+          "paired_plan_set": {
+            "minItems": 4,
+            "maxItems": 4,
+            "prefixItems": [
+              {"properties": {"arm": {"const": "ORIGINAL"}}},
+              {"properties": {"arm": {"const": "MASK"}}},
+              {"properties": {"arm": {"const": "MASK_CORRECTION"}}},
+              {"properties": {"arm": {"const": "ORACLE_CLEAN"}}}
+            ]
+          },
+          "capability": {"properties": {"scope": {"const": "FIXTURE_ONLY"}}},
+          "validation_receipt": {
+            "properties": {
+              "plan_set_profile": {"const": "PORTABLE_CORE"},
+              "provider_invocation_allowed": {"const": false},
+              "provider_decision": {"const": "BLOCK"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"plan_set_profile": {"const": "G1_STRICT_MHR"}},
+        "required": ["plan_set_profile"]
+      },
+      "then": {
+        "properties": {
+          "paired_plan_set": {
+            "minItems": 5,
+            "maxItems": 5,
+            "prefixItems": [
+              {"properties": {"arm": {"const": "ORIGINAL"}}},
+              {"properties": {"arm": {"const": "MASK"}}},
+              {"properties": {"arm": {"const": "MASK_CORRECTION"}}},
+              {"properties": {"arm": {"const": "ORACLE_CLEAN"}}},
+              {"properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}}}
+            ]
+          },
+          "validation_receipt": {
+            "properties": {"plan_set_profile": {"const": "G1_STRICT_MHR"}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"plan_set_profile": {"const": "G1_CLEAN_CONTROL"}},
+        "required": ["plan_set_profile"]
+      },
+      "then": {
+        "properties": {
+          "paired_plan_set": {
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              {"properties": {"arm": {"const": "ORIGINAL"}}},
+              {"properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}}}
+            ]
+          },
+          "validation_receipt": {
+            "properties": {"plan_set_profile": {"const": "G1_CLEAN_CONTROL"}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "provider_attempt": {
+            "properties": {"invocation_attempted": {"const": true}},
+            "required": ["invocation_attempted"]
+          }
+        },
+        "required": ["provider_attempt"]
+      },
+      "then": {
+        "properties": {
+          "provider_result": {
+            "$ref": "https://agentsentinel.local/schemas/g1_2/provider_result.schema.json"
+          }
+        }
+      },
+      "else": {"properties": {"provider_result": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "provider_attempt": {
+            "properties": {"invocation_attempted": {"const": true}},
+            "required": ["invocation_attempted"]
+          }
+        },
+        "required": ["provider_attempt"]
+      },
+      "then": {
+        "properties": {
+          "validation_receipt": {
+            "properties": {"provider_invocation_allowed": {"const": true}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "fallback": {
+            "properties": {"state": {"const": "BLOCKED_BEFORE_PROVIDER"}},
+            "required": ["state"]
+          }
+        },
+        "required": ["fallback"]
+      },
+      "then": {
+        "properties": {
+          "validation_receipt": {
+            "properties": {
+              "provider_invocation_allowed": {"const": false},
+              "provider_decision": {"const": "BLOCK"}
+            }
+          },
+          "provider_attempt": {
+            "properties": {
+              "invocation_attempted": {"const": false},
+              "provider_codec_id": {"type": "null"},
+              "provider_contract_version": {"type": "null"},
+              "endpoint_revision": {"type": "null"},
+              "application_request_sha256": {"type": "null"},
+              "encoded_request_sha256": {"type": "null"},
+              "model_parameters_sha256": {"type": "null"}
+            }
+          },
+          "provider_result": {"type": "null"},
+          "execution": {
+            "properties": {
+              "effective_arm": {"type": "null"},
+              "unsupported_reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "execution": {
+            "properties": {"effective_arm": {"$ref": "#/$defs/arm"}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "fallback": {
+            "properties": {"state": {"const": "EXPLICIT_ORIGINAL"}},
+            "required": ["state"]
+          }
+        },
+        "required": ["fallback"]
+      },
+      "then": {
+        "properties": {
+          "validation_receipt": {
+            "properties": {
+              "provider_decision": {"enum": ["BLOCK", "BYPASS_ORIGINAL"]}
+            }
+          },
+          "execution": {
+            "properties": {
+              "effective_arm": {"const": "ORIGINAL"},
+              "execution_mode": {"const": "RUNTIME"},
+              "failure_policy": {"const": "FAIL_OPEN_ORIGINAL"},
+              "unsupported_reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "fallback": {
+            "properties": {"state": {"const": "EXPLICIT_ORIGINAL"}},
+            "required": ["state"]
+          },
+          "provider_attempt": {
+            "properties": {"invocation_attempted": {"const": true}},
+            "required": ["invocation_attempted"]
+          }
+        },
+        "required": ["fallback", "provider_attempt"]
+      },
+      "then": {
+        "properties": {
+          "validation_receipt": {
+            "properties": {
+              "provider_invocation_allowed": {"const": true},
+              "provider_decision": {"const": "BYPASS_ORIGINAL"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "fallback": {
+            "properties": {"state": {"const": "NOT_NEEDED"}},
+            "required": ["state"]
+          }
+        },
+        "required": ["fallback"]
+      },
+      "then": {
+        "properties": {
+          "execution": {
+            "properties": {"unsupported_reason": {"type": "null"}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "validation_receipt": {
+            "properties": {"provider_decision": {"const": "BLOCK"}},
+            "required": ["provider_decision"]
+          }
+        },
+        "required": ["validation_receipt"]
+      },
+      "then": {
+        "properties": {
+          "provider_attempt": {
+            "properties": {
+              "invocation_attempted": {"const": false},
+              "provider_codec_id": {"type": "null"},
+              "provider_contract_version": {"type": "null"},
+              "endpoint_revision": {"type": "null"},
+              "application_request_sha256": {"type": "null"},
+              "encoded_request_sha256": {"type": "null"},
+              "model_parameters_sha256": {"type": "null"}
+            }
+          },
+          "provider_result": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "validation_receipt": {
+            "properties": {"provider_decision": {"const": "BYPASS_ORIGINAL"}},
+            "required": ["provider_decision"]
+          }
+        },
+        "required": ["validation_receipt"]
+      },
+      "then": {
+        "properties": {
+          "fallback": {
+            "properties": {"state": {"const": "EXPLICIT_ORIGINAL"}},
+            "required": ["state"]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "arm": {
+      "type": "string",
+      "enum": [
+        "ORIGINAL",
+        "MASK",
+        "MASK_CORRECTION",
+        "ORACLE_CLEAN",
+        "SHAM_BENIGN_EDIT"
+      ]
+    },
+    "path": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {"type": "string", "minLength": 1},
+          {"type": "integer", "minimum": 0}
+        ]
+      }
+    },
+    "requestSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "value"],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "value": {}
+      }
+    },
+    "textDiff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "container_path",
+        "source_char_start",
+        "source_char_end",
+        "original_text",
+        "rendered_text",
+        "original_sha256",
+        "rendered_sha256",
+        "mapping_kind"
+      ],
+      "properties": {
+        "operation_id": {"type": "string", "minLength": 1},
+        "container_path": {"$ref": "#/$defs/path"},
+        "source_char_start": {"type": "integer", "minimum": 0},
+        "source_char_end": {"type": "integer", "minimum": 1},
+        "original_text": {"type": "string", "minLength": 1},
+        "rendered_text": {"type": "string"},
+        "original_sha256": {"$ref": "#/$defs/sha256"},
+        "rendered_sha256": {"$ref": "#/$defs/sha256"},
+        "mapping_kind": {
+          "type": "string",
+          "enum": ["DELETED", "SYNTAX_REPAIR"]
+        }
+      }
+    },
+    "listInsertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "container_path",
+        "source_index",
+        "rendered_index",
+        "inserted_value",
+        "inserted_value_sha256"
+      ],
+      "properties": {
+        "operation_id": {"type": "string", "minLength": 1},
+        "container_path": {"$ref": "#/$defs/path"},
+        "source_index": {"type": "integer", "minimum": 0},
+        "rendered_index": {"type": "integer", "minimum": 0},
+        "inserted_value": {},
+        "inserted_value_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_path",
+        "source_char_start",
+        "source_char_end",
+        "rendered_char_start",
+        "rendered_char_end",
+        "kind",
+        "operation_id"
+      ],
+      "properties": {
+        "container_path": {"$ref": "#/$defs/path"},
+        "source_char_start": {"type": "integer", "minimum": 0},
+        "source_char_end": {"type": "integer", "minimum": 0},
+        "rendered_char_start": {"type": "integer", "minimum": 0},
+        "rendered_char_end": {"type": "integer", "minimum": 0},
+        "kind": {
+          "type": "string",
+          "enum": ["COPIED", "DELETED", "INSERTED", "SYNTAX_REPAIR"]
+        },
+        "operation_id": {"type": ["string", "null"], "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"kind": {"const": "COPIED"}},
+            "required": ["kind"]
+          },
+          "then": {"properties": {"operation_id": {"type": "null"}}},
+          "else": {
+            "properties": {"operation_id": {"type": "string", "minLength": 1}}
+          }
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "sha256", "role", "event_seq"],
+      "properties": {
+        "evidence_id": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "role": {"type": "string", "minLength": 1},
+        "event_seq": {
+          "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]
+        }
+      }
+    },
+    "fallback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "count_as_treatment", "warnings"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "NOT_NEEDED",
+            "BLOCKED_BEFORE_PROVIDER",
+            "EXPLICIT_ORIGINAL"
+          ]
+        },
+        "count_as_treatment": {"type": "boolean"},
+        "warnings": {"type": "array", "items": {"type": "string"}}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": ["BLOCKED_BEFORE_PROVIDER", "EXPLICIT_ORIGINAL"]
+              }
+            },
+            "required": ["state"]
+          },
+          "then": {"properties": {"count_as_treatment": {"const": false}}}
+        }
+      ]
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested_arm",
+        "effective_arm",
+        "execution_mode",
+        "failure_policy",
+        "capability_sha256",
+        "unsupported_reason"
+      ],
+      "properties": {
+        "requested_arm": {"$ref": "#/$defs/arm"},
+        "effective_arm": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/arm"}]
+        },
+        "execution_mode": {
+          "type": "string",
+          "enum": ["G1_SCIENTIFIC", "RUNTIME"]
+        },
+        "failure_policy": {
+          "type": "string",
+          "enum": ["BLOCK", "FAIL_OPEN_ORIGINAL"]
+        },
+        "capability_sha256": {"$ref": "#/$defs/sha256"},
+        "unsupported_reason": {
+          "oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"execution_mode": {"const": "G1_SCIENTIFIC"}},
+            "required": ["execution_mode"]
+          },
+          "then": {"properties": {"failure_policy": {"const": "BLOCK"}}}
+        }
+      ]
+    },
+    "validationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "valid",
+        "provider_invocation_allowed",
+        "provider_decision",
+        "execution_mode",
+        "failure_policy",
+        "invocation_attempted",
+        "source_request_sha256",
+        "rendered_request_sha256",
+        "plan_sha256",
+        "plan_set_sha256",
+        "plan_set_profile",
+        "capability_sha256",
+        "history_codec_contract_version",
+        "intended_provider_codec_id",
+        "intended_provider_contract_version",
+        "intended_endpoint_revision",
+        "model_parameters_sha256",
+        "checks",
+        "errors"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "mobileworld.g1.portable-sentinel.validation-receipt/v1"
+        },
+        "valid": {"type": "boolean", "const": true},
+        "provider_invocation_allowed": {"type": "boolean"},
+        "provider_decision": {
+          "type": "string",
+          "enum": ["ALLOW", "BLOCK", "BYPASS_ORIGINAL"]
+        },
+        "execution_mode": {
+          "type": "string",
+          "enum": ["G1_SCIENTIFIC", "RUNTIME"]
+        },
+        "failure_policy": {
+          "type": "string",
+          "enum": ["BLOCK", "FAIL_OPEN_ORIGINAL"]
+        },
+        "invocation_attempted": {"type": "boolean", "const": false},
+        "source_request_sha256": {"$ref": "#/$defs/sha256"},
+        "rendered_request_sha256": {"$ref": "#/$defs/sha256"},
+        "plan_sha256": {"$ref": "#/$defs/sha256"},
+        "plan_set_sha256": {"$ref": "#/$defs/sha256"},
+        "plan_set_profile": {
+          "type": "string",
+          "enum": ["PORTABLE_CORE", "G1_STRICT_MHR", "G1_CLEAN_CONTROL"]
+        },
+        "capability_sha256": {"$ref": "#/$defs/sha256"},
+        "history_codec_contract_version": {"type": "string", "minLength": 1},
+        "intended_provider_codec_id": {"type": ["string", "null"], "minLength": 1},
+        "intended_provider_contract_version": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "intended_endpoint_revision": {"type": ["string", "null"], "minLength": 1},
+        "model_parameters_sha256": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "errors": {
+          "type": "array",
+          "maxItems": 0,
+          "items": {"type": "string"}
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "intended_provider_codec_id": {"type": "null"},
+                "intended_provider_contract_version": {"type": "null"},
+                "intended_endpoint_revision": {"type": "null"},
+                "model_parameters_sha256": {"type": "null"}
+              }
+            },
+            {
+              "properties": {
+                "intended_provider_codec_id": {"type": "string", "minLength": 1},
+                "intended_provider_contract_version": {"type": "string", "minLength": 1},
+                "intended_endpoint_revision": {"type": "string", "minLength": 1},
+                "model_parameters_sha256": {"$ref": "#/$defs/sha256"}
+              }
+            }
+          ]
+        },
+        {
+          "if": {
+            "properties": {
+              "provider_decision": {"enum": ["ALLOW", "BYPASS_ORIGINAL"]}
+            },
+            "required": ["provider_decision"]
+          },
+          "then": {
+            "properties": {
+              "provider_invocation_allowed": {"const": true},
+              "plan_set_sha256": {"$ref": "#/$defs/sha256"},
+              "intended_provider_codec_id": {"type": "string", "minLength": 1},
+              "intended_provider_contract_version": {"type": "string", "minLength": 1},
+              "intended_endpoint_revision": {"type": "string", "minLength": 1},
+              "model_parameters_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"provider_decision": {"const": "BLOCK"}},
+            "required": ["provider_decision"]
+          },
+          "then": {
+            "properties": {"provider_invocation_allowed": {"const": false}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"provider_decision": {"const": "BYPASS_ORIGINAL"}},
+            "required": ["provider_decision"]
+          },
+          "then": {
+            "properties": {
+              "execution_mode": {"const": "RUNTIME"},
+              "failure_policy": {"const": "FAIL_OPEN_ORIGINAL"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"execution_mode": {"const": "G1_SCIENTIFIC"}},
+            "required": ["execution_mode"]
+          },
+          "then": {
+            "properties": {
+              "failure_policy": {"const": "BLOCK"},
+              "provider_decision": {"not": {"const": "BYPASS_ORIGINAL"}}
+            }
+          }
+        }
+      ]
+    },
+    "providerAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invocation_attempted",
+        "provider_codec_id",
+        "provider_contract_version",
+        "endpoint_revision",
+        "application_request_sha256",
+        "encoded_request_sha256",
+        "model_parameters_sha256"
+      ],
+      "properties": {
+        "invocation_attempted": {"type": "boolean"},
+        "provider_codec_id": {"type": ["string", "null"], "minLength": 1},
+        "provider_contract_version": {"type": ["string", "null"], "minLength": 1},
+        "endpoint_revision": {"type": ["string", "null"], "minLength": 1},
+        "application_request_sha256": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        },
+        "encoded_request_sha256": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        },
+        "model_parameters_sha256": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        }
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "provider_codec_id": {"type": "null"},
+                "provider_contract_version": {"type": "null"},
+                "endpoint_revision": {"type": "null"},
+                "application_request_sha256": {"type": "null"},
+                "encoded_request_sha256": {"type": "null"},
+                "model_parameters_sha256": {"type": "null"}
+              }
+            },
+            {
+              "properties": {
+                "provider_codec_id": {"type": "string", "minLength": 1},
+                "provider_contract_version": {"type": "string", "minLength": 1},
+                "endpoint_revision": {"type": "string", "minLength": 1},
+                "application_request_sha256": {"$ref": "#/$defs/sha256"},
+                "encoded_request_sha256": {"$ref": "#/$defs/sha256"},
+                "model_parameters_sha256": {"$ref": "#/$defs/sha256"}
+              }
+            }
+          ]
+        },
+        {
+          "if": {
+            "properties": {"invocation_attempted": {"const": true}},
+            "required": ["invocation_attempted"]
+          },
+          "then": {
+            "properties": {
+              "provider_codec_id": {"type": "string", "minLength": 1},
+              "provider_contract_version": {"type": "string", "minLength": 1},
+              "endpoint_revision": {"type": "string", "minLength": 1},
+              "application_request_sha256": {"$ref": "#/$defs/sha256"},
+              "encoded_request_sha256": {"$ref": "#/$defs/sha256"},
+              "model_parameters_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        }
+      ]
+    }
+  }
+}
