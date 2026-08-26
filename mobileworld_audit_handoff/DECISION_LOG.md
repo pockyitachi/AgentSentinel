@@ -342,6 +342,35 @@ response 回头选择 case。G1.2 及后续 replay 执行必须等待本条 deci
 
 ---
 
+## D-022 — G1.2 冻结可移植 Sentinel 契约，不实施自动 Sentinel
+
+**状态：Locked（owner 于 2026-08-26 明确授权 ALE-320 / G1.2）**
+
+G1.1 已经合并并完成 CPU-only 校验，因此允许实现 G1.2 的离线、派生、
+evaluation-time 可移植契约。实现必须拆分为四层：无模型特定逻辑的 canonical
+History IR / Sentinel Core、history-family codec、provider codec 接口，以及 provider 调用前
+protocol validator 与 derived sidecar。Core 只能校验并应用已给定的人工审核
+Transformation Plan，不得抽取 claim、推断真假、生成 correction 或做 deployment
+prediction。所有 G1 plan 必须 `curated=true` 且 `deployment_prediction=false`。
+
+`sentinel_mvp` 只是 legacy 行为参考；可迁移其已验证的
+`KEEP/DROP/REPLACE/ARCHIVE/KEEP_UNCERTAIN`、span/evidence、fail-closed、raw immutability
+与 sidecar 语义，但正式 G1 package 不得 import `sentinel_mvp`。六种已完成 history
+representation 本 story 只做 fixture-level extraction/render/conformance mapping，不宣称六个
+production-ready live adapter。
+
+G1 科学执行中，不支持、server-managed、opaque 或无法安全变换的 treatment
+必须在 provider invocation 前 fail closed，不得静默改发 Original。未来 deployment runtime
+可定义显式 fail-open-to-Original 策略，但该 fallback 必须在 capability/sidecar 中可见，
+不得被计为 G1 treatment。“忽略上文”后缀不构成 Mask 或 active-history reconstruction。
+
+Collector v1 保持原样：raw events 继续 label-free、passive、append-only；G1 label、plan、
+rendered request 和 sidecar 只能存在离线 derived/replay 层。ALE-320 不授权任何 GPU、
+model/provider invocation、GUI action、live prompt interception、natural-task intervention、decision capsule
+物化或 G1.3+ 执行；这些仍需后续 story 与 owner 单独授权。
+
+---
+
 ## 尚未锁定、留给后续实验设计的问题
 
 以下内容不要在 collector 中写死：
