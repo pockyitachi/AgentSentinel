@@ -11,6 +11,14 @@ from loguru import logger
 from markdownify import markdownify
 from PIL import Image
 
+from mobile_world.runtime.audit.execution_io import (
+    record_gui_request,
+    record_gui_response,
+    record_mcp_raw_result,
+    record_mcp_request,
+    record_mcp_visible_result,
+    record_screenshot_source,
+)
 from mobile_world.runtime.mcp_server import init_mcp_clients
 from mobile_world.runtime.utils.models import MCP, NAVIGATE_HOME, JSONAction, Observation, Response
 from mobile_world.runtime.utils.trajectory_logger import SCORE_FILE_NAME
@@ -18,6 +26,23 @@ from mobile_world.tasks.registry import TaskRegistry
 
 TASK_META_DATA_PATH = "./new_task_metadata.json"
 DEFAULT_MAX_STEP = 15
+# A same-request recovery can include a 15s snapshot-console call plus 45s
+# stability barrier, the bounded 150s emulator restart, a 5s controller query
+# plus 45s replacement barrier, and one full task reinitialization.  Keep the
+# HTTP budget above that bounded infrastructure path so the client cannot retry
+# while the original request still owns the lifecycle.
+TASK_INITIALIZATION_TIMEOUT_SECONDS = 600
+
+
+def _safe_audit_hook(hook, *args, **kwargs) -> None:
+    """Keep passive audit observers outside the environment control plane."""
+
+    try:
+        hook(*args, **kwargs)
+    except Exception:
+        # Collector state is best-effort and is finalized as incomplete by its
+        # own boundary.  Never replace a live environment result/exception.
+        pass
 
 
 class AndroidEnvClient:
@@ -157,7 +182,14 @@ class AndroidEnvClient:
             "action": action.model_dump(),
         }
 
-        response = requests.post(f"{self.base_url}/step", json=step_data)
+        request_endpoint = f"{self.base_url}/step"
+        _safe_audit_hook(
+            record_gui_request,
+            step_data,
+            request_endpoint=request_endpoint,
+        )
+        response = requests.post(request_endpoint, json=step_data)
+        _safe_audit_hook(record_gui_response, response)
         logger.debug(f"""execute_action response: {{
             "status": {response.status_code},
             "message": {response.text},
@@ -199,7 +231,6 @@ class AndroidEnvClient:
 
         # Filter tasks based on tags
         filtered_tasks = []
-        gui_only = []
         for task in task_list:
             tags = task.get("tags", [])
             # Skip agent-mcp tasks if not enabled
@@ -232,7 +263,11 @@ class AndroidEnvClient:
 
         try:
             init_data = {"task_name": task_name, "req_device": self.device}
-            response = requests.post(f"{self.base_url}/task/init", json=init_data, timeout=300)
+            response = requests.post(
+                f"{self.base_url}/task/init",
+                json=init_data,
+                timeout=TASK_INITIALIZATION_TIMEOUT_SECONDS,
+            )
             response.raise_for_status()
 
             self._current_task_type = task_name
@@ -331,6 +366,7 @@ class AndroidEnvClient:
 
         image_data = base64.b64decode(base64_str)
         image = Image.open(BytesIO(image_data))
+        _safe_audit_hook(record_screenshot_source, image, image_data)
         return image
 
     def get_task_list(self) -> list[str]:
@@ -386,8 +422,15 @@ class AndroidMCPEnvClient(AndroidEnvClient):
             action_name = action.action_name
             action_args = action.action_json
             client = self.tool_map[action_name]
+            _safe_audit_hook(
+                record_mcp_request,
+                action_name=action_name,
+                action_arguments=action_args,
+            )
             result = client.call_tool_sync(action_name, action_args)
+            _safe_audit_hook(record_mcp_raw_result, result)
             result = self._truncate_tool_call(result)
+            _safe_audit_hook(record_mcp_visible_result, result)
 
             res = self.get_screenshot(wait_to_stabilize=True)
             return Observation(

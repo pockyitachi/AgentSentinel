@@ -267,17 +267,36 @@ class Qwen3VLAgentMCP(MCPAgent):
 
         pretty_print_messages(messages)
 
+        audit_retry_group = self._begin_outer_model_audit_retry_group()
+
         try_times = 3
+        adapter_attempt_index = 0
         origin_h, origin_w = screenshot.height, screenshot.width
         parsed_response = None
 
         while True:
-            prediction = self.openai_chat_completions_create(
-                model=self.model_name,
-                messages=messages,
-                retry_times=3,
-                **self.runtime_conf,
-            )
+            adapter_attempt_index += 1
+            if audit_retry_group is None:
+                prediction = self.openai_chat_completions_create(
+                    model=self.model_name,
+                    messages=messages,
+                    retry_times=3,
+                    **self.runtime_conf,
+                )
+            else:
+                with self._outer_model_audit_attempt_scope(
+                    audit_retry_group,
+                    adapter_attempt_index=adapter_attempt_index,
+                    # Provider failure exits this adapter; only a successful but
+                    # malformed response reaches the outer parse retry.
+                    adapter_retry_planned=False,
+                ):
+                    prediction = self.openai_chat_completions_create(
+                        model=self.model_name,
+                        messages=messages,
+                        retry_times=3,
+                        **self.runtime_conf,
+                    )
 
             if prediction is None:
                 raise Exception("Error when fetching response from clients")

@@ -13,6 +13,12 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from mobile_world.runtime.audit.config import AuditConfig
+from mobile_world.runtime.audit.lifecycle import (
+    DEGRADED_AUDIT_LIFECYCLE,
+    bootstrap_audit_run,
+    detect_repository_dirty,
+)
 from mobile_world.runtime.client import scan_finished_tasks
 
 from ..runner import run_agent_with_evaluation
@@ -68,8 +74,7 @@ def generate_pass_k_report(
         }
 
     per_run_success_rates = [
-        count / total_tasks if total_tasks > 0 else 0.0
-        for count in per_run_success_counts
+        count / total_tasks if total_tasks > 0 else 0.0 for count in per_run_success_counts
     ]
 
     return {
@@ -99,26 +104,26 @@ def _print_pass_k_report(report: dict, report_file: Path) -> None:
 
     summary_text = Text()
     summary_text.append(f"Pass@{k} Evaluation Complete!\n\n", style="bold green")
-    summary_text.append(
-        f"Pass@{k} Rate: {summary['pass_at_k_rate']:.1%}\n", style="cyan"
-    )
+    summary_text.append(f"Pass@{k} Rate: {summary['pass_at_k_rate']:.1%}\n", style="cyan")
     summary_text.append(
         f"Tasks Passed: {summary['tasks_passed_at_k']}/{summary['total_tasks']}\n",
         style="magenta",
     )
-    per_run_strs = [f"Run {i+1}: {r:.1%}" for i, r in enumerate(summary["per_run_success_rates"])]
+    per_run_strs = [f"Run {i + 1}: {r:.1%}" for i, r in enumerate(summary["per_run_success_rates"])]
     summary_text.append(f"Per-Run Success Rates: {', '.join(per_run_strs)}\n", style="yellow")
     summary_text.append(
         f"Total Duration: {summary['total_duration_seconds']:.1f} seconds\n",
         style="yellow",
     )
 
-    console.print(Panel(
-        summary_text,
-        title=f"[bold blue]Pass@{k} Evaluation Summary",
-        border_style="blue",
-        padding=(1, 2),
-    ))
+    console.print(
+        Panel(
+            summary_text,
+            title=f"[bold blue]Pass@{k} Evaluation Summary",
+            border_style="blue",
+            padding=(1, 2),
+        )
+    )
 
     metadata = report["metadata"]
     metadata_text = Text()
@@ -127,9 +132,9 @@ def _print_pass_k_report(report: dict, report_file: Path) -> None:
     metadata_text.append(f"Timestamp: {metadata['timestamp']}\n", style="green")
     metadata_text.append(f"Log Root: {metadata['log_file_root']}\n", style="green")
 
-    console.print(Panel(
-        metadata_text, title="[bold]Configuration", border_style="green", padding=(1, 2)
-    ))
+    console.print(
+        Panel(metadata_text, title="[bold]Configuration", border_style="green", padding=(1, 2))
+    )
 
     tasks = report["tasks"]
     if tasks:
@@ -142,7 +147,7 @@ def _print_pass_k_report(report: dict, report_file: Path) -> None:
         results_table.add_column(f"Pass@{k}", justify="center")
         results_table.add_column("Passed Runs", justify="center")
         for i in range(k):
-            results_table.add_column(f"Run {i+1}", justify="center")
+            results_table.add_column(f"Run {i + 1}", justify="center")
 
         for task_name, task_data in tasks.items():
             pass_str = "[green]Yes[/green]" if task_data["pass_at_k"] else "[red]No[/red]"
@@ -161,9 +166,9 @@ def _print_pass_k_report(report: dict, report_file: Path) -> None:
     files_text.append(f"Results JSON: {report_file}\n", style="blue")
     files_text.append(f"Trajectory Logs: {metadata['log_file_root']}", style="blue")
 
-    console.print(Panel(
-        files_text, title="[bold]Output Files", border_style="cyan", padding=(1, 2)
-    ))
+    console.print(
+        Panel(files_text, title="[bold]Output Files", border_style="cyan", padding=(1, 2))
+    )
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
@@ -193,6 +198,35 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--log_file_root",
         dest="log_file_root",
         help="Root directory for log files",
+    )
+    parser.add_argument(
+        "--enable-audit",
+        "--enable_audit",
+        dest="enable_audit",
+        action="store_true",
+        help="Enable passive raw audit collection (default: disabled)",
+    )
+    parser.add_argument(
+        "--audit-log-root",
+        "--audit_log_root",
+        dest="audit_log_root",
+        help="Explicit raw audit data root; when enabled it must be outside the Git repository",
+    )
+    stream_chunk_group = parser.add_mutually_exclusive_group()
+    stream_chunk_group.add_argument(
+        "--audit-store-stream-chunks",
+        "--audit_store_stream_chunks",
+        dest="audit_store_stream_chunks",
+        action="store_true",
+        default=True,
+        help="Persist every application-visible streaming response chunk (default)",
+    )
+    stream_chunk_group.add_argument(
+        "--no-audit-store-stream-chunks",
+        "--no_audit_store_stream_chunks",
+        dest="audit_store_stream_chunks",
+        action="store_false",
+        help="Omit stream chunks and explicitly mark capture incomplete",
     )
     parser.add_argument(
         "--max-round",
@@ -350,6 +384,87 @@ def configure_parser(subparsers: argparse._SubParsersAction) -> None:
     )
 
 
+def _start_eval_audit(args: argparse.Namespace, *, effective_api_key: str | None):
+    """Bootstrap only the explicitly enabled collector for this eval invocation."""
+
+    config = AuditConfig.from_cli_values(
+        enable_audit=bool(getattr(args, "enable_audit", False)),
+        audit_log_root=getattr(args, "audit_log_root", None),
+        audit_store_stream_chunks=bool(getattr(args, "audit_store_stream_chunks", True)),
+    )
+    if not config.enabled:
+        return bootstrap_audit_run(config)
+
+    known_secrets = [secret for secret in (effective_api_key,) if secret]
+    seed_environment_key = os.getenv("DOUBAO_API_KEY")
+    if seed_environment_key:
+        known_secrets.append(seed_environment_key)
+    resolved_cli_config = {**vars(args), **config.to_manifest_config()}
+    resolved_agent_runtime_config = {
+        "executor_llm_base_url": getattr(args, "executor_llm_base_url", None),
+        "executor_model_name": getattr(args, "executor_model_name", None),
+        "executor_agent_class": getattr(args, "executor_agent_class", None),
+        "scale_factor": getattr(args, "scale_factor", 1000),
+    }
+    try:
+        repository_dirty = detect_repository_dirty()
+    except Exception:
+        repository_dirty = None
+    return bootstrap_audit_run(
+        config,
+        repository_dirty=repository_dirty,
+        resolved_cli_config=resolved_cli_config,
+        resolved_agent_runtime_config=resolved_agent_runtime_config,
+        agent_type=args.agent_type,
+        model_name=args.model_name,
+        suite_family=getattr(args, "suite_family", "mobile_world"),
+        environment_image=getattr(args, "env_image", None),
+        configured_secrets=known_secrets,
+    )
+
+
+def _run_evaluation_once(
+    *,
+    args: argparse.Namespace,
+    api_key: str | None,
+    **runner_kwargs: object,
+):
+    """Run one physical eval invocation inside one independently finalized audit run."""
+
+    try:
+        lifecycle = _start_eval_audit(args, effective_api_key=api_key)
+    except Exception:
+        logger.exception(
+            "Audit bootstrap failed before a durable run could be created; "
+            "continuing this evaluation without audit artifacts"
+        )
+        lifecycle = DEGRADED_AUDIT_LIFECYCLE
+    if getattr(lifecycle, "degraded", False):
+        logger.error(
+            "Audit storage could not initialize; continuing this evaluation without audit artifacts"
+        )
+    try:
+        result = run_agent_with_evaluation(
+            api_key=api_key,
+            audit_lifecycle=lifecycle if lifecycle.enabled else None,
+            **runner_kwargs,
+        )
+    except BaseException:
+        try:
+            lifecycle.finalize(runtime_status="crashed")
+        except Exception:
+            logger.exception("Audit finalization also failed while preserving eval exception")
+        raise
+    try:
+        lifecycle.finalize(runtime_status="completed")
+    except Exception:
+        # A collector-only shutdown failure must not replace a successful
+        # evaluation result.  Concrete runtime lifecycles are also no-throw;
+        # this guard protects custom/injected lifecycle implementations.
+        logger.exception("Audit finalization failed after successful evaluation")
+    return result
+
+
 async def _execute_pass_k(
     args: argparse.Namespace,
     log_file_root: str,
@@ -359,12 +474,16 @@ async def _execute_pass_k(
 ) -> None:
     """Execute pass@k evaluation: run the eval k times and generate aggregated report."""
     start_time = time.time()
+    effective_api_key = args.api_key or os.getenv("API_KEY")
 
     for i in range(1, pass_k + 1):
         run_log_root = os.path.join(log_file_root, f"run_{i}")
-        logger.info("=== Starting pass@{} run {}/{} (log_root: {}) ===", pass_k, i, pass_k, run_log_root)
+        logger.info(
+            "=== Starting pass@{} run {}/{} (log_root: {}) ===", pass_k, i, pass_k, run_log_root
+        )
 
-        run_agent_with_evaluation(
+        _run_evaluation_once(
+            args=args,
             agent_type=args.agent_type,
             model_name=args.model_name,
             llm_base_url=args.llm_base_url,
@@ -372,7 +491,7 @@ async def _execute_pass_k(
             tasks=final_tasks,
             max_step=args.max_round or -1,
             aw_urls=aw_urls,
-            api_key=args.api_key or os.getenv("API_KEY"),
+            api_key=effective_api_key,
             executor_llm_base_url=args.executor_llm_base_url,
             executor_model_name=args.executor_model_name,
             executor_agent_class=args.executor_agent_class,
@@ -439,7 +558,9 @@ async def execute(args: argparse.Namespace) -> None:
         await _execute_pass_k(args, log_file_root, final_tasks, aw_urls, pass_k)
         return
 
-    task_results, task_list_with_no_results = run_agent_with_evaluation(
+    effective_api_key = args.api_key or os.getenv("API_KEY")
+    task_results, task_list_with_no_results = _run_evaluation_once(
+        args=args,
         agent_type=args.agent_type,
         model_name=args.model_name,
         llm_base_url=args.llm_base_url,
@@ -447,7 +568,7 @@ async def execute(args: argparse.Namespace) -> None:
         tasks=final_tasks,
         max_step=args.max_round or -1,
         aw_urls=aw_urls,
-        api_key=args.api_key or os.getenv("API_KEY"),
+        api_key=effective_api_key,
         executor_llm_base_url=args.executor_llm_base_url,
         executor_model_name=args.executor_model_name,
         executor_agent_class=args.executor_agent_class,

@@ -393,19 +393,36 @@ class GeneralE2EAgentMCP(MCPAgent):
         pretty_print_messages(messages, max_messages=10)
         logger.debug("*" * 100)
 
+        audit_retry_group = self._begin_outer_model_audit_retry_group()
+
         try_times = 3
+        adapter_attempt_index = 0
         response = None
         thought = None
         action_str = None
 
         while try_times > 0:
+            adapter_attempt_index += 1
             try:
-                response = self.openai_chat_completions_create(
-                    model=self.model_name,
-                    messages=messages,
-                    retry_times=1,
-                    **self.runtime_conf,
-                )
+                if audit_retry_group is None:
+                    response = self.openai_chat_completions_create(
+                        model=self.model_name,
+                        messages=messages,
+                        retry_times=1,
+                        **self.runtime_conf,
+                    )
+                else:
+                    with self._outer_model_audit_attempt_scope(
+                        audit_retry_group,
+                        adapter_attempt_index=adapter_attempt_index,
+                        adapter_retry_planned=try_times > 1,
+                    ):
+                        response = self.openai_chat_completions_create(
+                            model=self.model_name,
+                            messages=messages,
+                            retry_times=1,
+                            **self.runtime_conf,
+                        )
                 logger.info(f"\nRaw LLM response received:\n{response}")
 
                 thought, action_str = parse_action(response)

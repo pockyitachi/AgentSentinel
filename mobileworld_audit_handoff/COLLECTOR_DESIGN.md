@@ -335,7 +335,8 @@ Do not silently redact model-visible task text, screenshots, user replies, tool 
 
 The collector must not silently change the agent trajectory.
 
-Recommended motivation-study mode is `fail_open_with_incomplete_marker`:
+The only policy reachable from real eval/runtime collection is
+`fail_open_with_incomplete_marker`:
 
 1. collection operates on deep copies or serialized snapshots;
 2. a collection exception never mutates `messages`, response objects, chunks, observations, or actions;
@@ -344,7 +345,12 @@ Recommended motivation-study mode is `fail_open_with_incomplete_marker`:
 5. `task_ended.capture_complete` and `manifest.final.capture_complete` become `false`;
 6. incomplete task runs are excluded from analyses needing the missing event.
 
-A separate strict CI mode may fail the smoke test on any missing artifact. Do not use “lossless” to describe a run with an undisclosed collector failure.
+Collector faults must never fail or interrupt a real task or smoke run. After the
+run, the offline integrity checker rejects evidence that is incomplete or
+internally inconsistent. CI exercises this behavior with fault injection: it
+asserts that the agent/environment path continues, the missing evidence is
+marked, and the checker reports the run invalid. Do not use “lossless” to
+describe a run with an undisclosed collector failure.
 
 ## 11. Integration points in MobileWorld
 

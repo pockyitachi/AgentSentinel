@@ -1,10 +1,13 @@
 import base64
+import io
 import os
 import shlex
+import subprocess
 import time
 from datetime import datetime
 
 from loguru import logger
+from PIL import Image
 
 from mobile_world.runtime.utils.helpers import (
     AdbResponse,
@@ -17,6 +20,42 @@ APP_LOWER_DICT = {
     app_name.lower(): package_name for package_name, app_name in COMMON_APP_MAPPER.items()
 }
 APP_LOWER_DICT.update({k.lower(): v for k, v in APP_DICT.items()})
+
+SNAPSHOT_STABILITY_SECONDS = 12.0
+SNAPSHOT_STABILITY_TIMEOUT_SECONDS = 45.0
+SNAPSHOT_STABILITY_POLL_INTERVAL_SECONDS = 1.0
+SNAPSHOT_HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
+DEVICE_HEALTH_PROBE_TIMEOUT_SECONDS = 5.0
+SNAPSHOT_CONSOLE_TIMEOUT_SECONDS = 15.0
+SNAPSHOT_PNG_PROBE_TIMEOUT_SECONDS = 5.0
+DEVICE_QUERY_TIMEOUT_SECONDS = 5.0
+SCREENSHOT_COMMAND_TIMEOUT_SECONDS = 15.0
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _is_valid_png_bytes(data: bytes) -> bool:
+    if not data.startswith(PNG_SIGNATURE):
+        return False
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+            return image.width > 0 and image.height > 0
+    except Exception:
+        return False
+
+
+def _is_valid_png_file(path: str) -> bool:
+    try:
+        with open(path, "rb") as file:
+            return _is_valid_png_bytes(file.read())
+    except OSError:
+        return False
+
+
+class DeviceUnhealthyError(RuntimeError):
+    """Raised when an Android device cannot be proven healthy for continued use."""
 
 
 class AndroidController:
@@ -39,7 +78,7 @@ class AndroidController:
     def get_device_size(self):
         try:
             command = f"adb -s {self.device} shell wm size"
-            result = execute_adb(command)
+            result = execute_adb(command, timeout_seconds=DEVICE_QUERY_TIMEOUT_SECONDS)
             if not result.success:
                 raise RuntimeError("Failed to get device size for device")
             resolution = result.output.split(":")[1].strip()
@@ -58,29 +97,68 @@ class AndroidController:
         # try the stealth API first, otherwise screenshot
         # may trigger events in some apps
         stealth_command = f"adb -s {self.device} exec-out screencap -p > {local_path}"
-        stealth_result = execute_adb(stealth_command)
-        if stealth_result.success:
+        stealth_result = execute_adb(
+            stealth_command,
+            timeout_seconds=SCREENSHOT_COMMAND_TIMEOUT_SECONDS,
+        )
+        if stealth_result.success and _is_valid_png_file(local_path):
             return AdbResponse(success=True, output=local_path, command=stealth_command)
+        if stealth_result.success:
+            logger.warning(
+                f"Stealth screenshot returned an empty or invalid PNG for device {self.device}; "
+                "falling back to the remote capture path"
+            )
+            try:
+                os.remove(local_path)
+            except OSError:
+                pass
 
         cap_command = f"adb -s {self.device} shell screencap -p {remote_path}"
         pull_command = f"adb -s {self.device} pull {remote_path} {local_path}"
         rm_command = f"adb -s {self.device} shell rm {remote_path}"
 
-        cap_result = execute_adb(cap_command)
+        cap_result = execute_adb(
+            cap_command,
+            timeout_seconds=SCREENSHOT_COMMAND_TIMEOUT_SECONDS,
+        )
         if cap_result.success:
-            result = execute_adb(pull_command)
+            result = execute_adb(
+                pull_command,
+                timeout_seconds=SCREENSHOT_COMMAND_TIMEOUT_SECONDS,
+            )
 
             if not result.success and try_times > 0:
                 # occasionally the pull command fails at file not found, so we try again, likely due to file not finished being written yet
                 time.sleep(1)
                 return self.get_screenshot(prefix, save_dir, try_times - 1)
             elif not result.success and try_times <= 0:
-                execute_adb(rm_command, output=False)
+                execute_adb(
+                    rm_command,
+                    output=False,
+                    timeout_seconds=SCREENSHOT_COMMAND_TIMEOUT_SECONDS,
+                )
                 return AdbResponse(
                     success=False, error=result.error + cap_result.output, command=pull_command
                 )
             else:
-                execute_adb(rm_command, output=False)
+                execute_adb(
+                    rm_command,
+                    output=False,
+                    timeout_seconds=SCREENSHOT_COMMAND_TIMEOUT_SECONDS,
+                )
+                if not _is_valid_png_file(local_path):
+                    try:
+                        os.remove(local_path)
+                    except OSError:
+                        pass
+                    if try_times > 0:
+                        time.sleep(1)
+                        return self.get_screenshot(prefix, save_dir, try_times - 1)
+                    return AdbResponse(
+                        success=False,
+                        error="Screenshot capture returned an empty or invalid PNG",
+                        command=pull_command,
+                    )
                 return AdbResponse(success=True, output=local_path, command=pull_command)
         return cap_result
 
@@ -395,22 +473,166 @@ class AndroidController:
             logger.error(f"Failed to create snapshot: {e}")
             return False
 
-    def load_snapshot(self, tag):
+    def check_screenshot_readiness(
+        self,
+        *,
+        timeout_seconds: float = SNAPSHOT_PNG_PROBE_TIMEOUT_SECONDS,
+    ) -> bool:
+        """Check that the booted guest can produce one decodable PNG in memory."""
+        try:
+            result = subprocess.run(
+                ["adb", "-s", self.device, "exec-out", "screencap", "-p"],
+                capture_output=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            logger.warning(f"Screenshot readiness probe failed for device {self.device}: {error}")
+            return False
+
+        if result.returncode != 0 or not _is_valid_png_bytes(result.stdout):
+            logger.warning(
+                f"Screenshot readiness probe returned an empty or invalid PNG for "
+                f"device {self.device}"
+            )
+            return False
+        return True
+
+    def wait_for_device_stability(
+        self,
+        *,
+        stable_for_seconds: float = SNAPSHOT_STABILITY_SECONDS,
+        timeout_seconds: float = SNAPSHOT_STABILITY_TIMEOUT_SECONDS,
+        poll_interval_seconds: float = SNAPSHOT_STABILITY_POLL_INTERVAL_SECONDS,
+        health_probe_timeout_seconds: float = SNAPSHOT_HEALTH_PROBE_TIMEOUT_SECONDS,
+        png_probe_timeout_seconds: float = SNAPSHOT_PNG_PROBE_TIMEOUT_SECONDS,
+    ) -> None:
+        """Require continuous boot health before the device may be used.
+
+        The emulator console can acknowledge a snapshot before the guest has
+        finished transitioning.  A single successful health check therefore is
+        not a safe completion signal: the device must remain boot-complete for a
+        full stability window, within a bounded overall deadline.
+        """
+        if stable_for_seconds < 0:
+            raise ValueError("stable_for_seconds must be non-negative")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
+        if health_probe_timeout_seconds <= 0:
+            raise ValueError("health_probe_timeout_seconds must be positive")
+        if png_probe_timeout_seconds <= 0:
+            raise ValueError("png_probe_timeout_seconds must be positive")
+        if stable_for_seconds > timeout_seconds:
+            raise ValueError("stable_for_seconds must not exceed timeout_seconds")
+
+        started_at = time.monotonic()
+        deadline = started_at + timeout_seconds
+        healthy_since: float | None = None
+
+        while True:
+            remaining_before_probe = deadline - time.monotonic()
+            if remaining_before_probe <= 0:
+                raise DeviceUnhealthyError(
+                    "Device is not healthy: "
+                    f"{self.device} did not remain boot-complete for "
+                    f"{stable_for_seconds:g}s within {timeout_seconds:g}s"
+                )
+            is_healthy = self.check_health(
+                try_times=0,
+                timeout_seconds=min(health_probe_timeout_seconds, remaining_before_probe),
+            )
+            checked_at = time.monotonic()
+
+            if checked_at > deadline:
+                raise DeviceUnhealthyError(
+                    "Device is not healthy: "
+                    f"{self.device} did not remain boot-complete for "
+                    f"{stable_for_seconds:g}s within {timeout_seconds:g}s"
+                )
+
+            if is_healthy:
+                if healthy_since is None:
+                    healthy_since = checked_at
+                if checked_at - healthy_since >= stable_for_seconds:
+                    remaining_for_png = deadline - checked_at
+                    if remaining_for_png <= 0:
+                        raise DeviceUnhealthyError(
+                            "Device is not healthy: "
+                            f"{self.device} did not produce a valid PNG within "
+                            f"{timeout_seconds:g}s"
+                        )
+                    png_ready = self.check_screenshot_readiness(
+                        timeout_seconds=min(png_probe_timeout_seconds, remaining_for_png)
+                    )
+                    checked_at = time.monotonic()
+                    if checked_at > deadline:
+                        raise DeviceUnhealthyError(
+                            "Device is not healthy: "
+                            f"{self.device} did not produce a valid PNG within "
+                            f"{timeout_seconds:g}s"
+                        )
+                    if png_ready:
+                        return
+                    healthy_since = None
+            else:
+                healthy_since = None
+
+            remaining = deadline - checked_at
+            if remaining <= 0:
+                raise DeviceUnhealthyError(
+                    "Device is not healthy: "
+                    f"{self.device} did not remain boot-complete for "
+                    f"{stable_for_seconds:g}s within {timeout_seconds:g}s"
+                )
+            time.sleep(min(poll_interval_seconds, remaining))
+
+    def load_snapshot(
+        self,
+        tag,
+        *,
+        stable_for_seconds: float = SNAPSHOT_STABILITY_SECONDS,
+        timeout_seconds: float = SNAPSHOT_STABILITY_TIMEOUT_SECONDS,
+        poll_interval_seconds: float = SNAPSHOT_STABILITY_POLL_INTERVAL_SECONDS,
+        health_probe_timeout_seconds: float = SNAPSHOT_HEALTH_PROBE_TIMEOUT_SECONDS,
+        png_probe_timeout_seconds: float = SNAPSHOT_PNG_PROBE_TIMEOUT_SECONDS,
+        console_timeout_seconds: float = SNAPSHOT_CONSOLE_TIMEOUT_SECONDS,
+    ):
         """Load a snapshot with the given tag"""
         try:
             adb_command = f"adb -s {self.device} emu avd snapshot load {tag}"
-            result = execute_adb(adb_command)
+            result = execute_adb(
+                adb_command,
+                timeout_seconds=console_timeout_seconds,
+            )
 
             if result.success and "OK" in result.output:
-                logger.info(f"Successfully loaded snapshot: {tag}")
-                # Wait a moment for the snapshot to fully load
-                time.sleep(3)
+                logger.info(f"Snapshot console accepted load: {tag}; verifying device stability")
+                self.wait_for_device_stability(
+                    stable_for_seconds=stable_for_seconds,
+                    timeout_seconds=timeout_seconds,
+                    poll_interval_seconds=poll_interval_seconds,
+                    health_probe_timeout_seconds=health_probe_timeout_seconds,
+                    png_probe_timeout_seconds=png_probe_timeout_seconds,
+                )
+                logger.info(f"Successfully loaded stable snapshot: {tag}")
                 return True
             else:
+                if not self.check_health(
+                    try_times=0,
+                    timeout_seconds=health_probe_timeout_seconds,
+                ):
+                    raise DeviceUnhealthyError(
+                        "Device is not healthy: "
+                        f"snapshot console failed while loading {tag} on {self.device}"
+                    )
                 logger.error(
                     f"Failed to load snapshot {tag}: {result.error if not result.success else result.output}"
                 )
                 return False
+        except DeviceUnhealthyError:
+            raise
         except Exception as e:
             logger.error(f"Failed to load snapshot {tag}: {e}")
             return False
@@ -418,16 +640,27 @@ class AndroidController:
     def activate_adb_keyboard(self):
         execute_adb("adb shell ime set com.android.adbkeyboard/.AdbIME")
 
-    def check_health(self, try_times: int = 0) -> bool:
+    def check_health(
+        self,
+        try_times: int = 0,
+        timeout_seconds: float | None = DEVICE_HEALTH_PROBE_TIMEOUT_SECONDS,
+    ) -> bool:
         try:
             adb_command = f"adb -s {self.device} shell getprop sys.boot_completed"
-            result = execute_adb(adb_command, output=False)
+            result = execute_adb(
+                adb_command,
+                output=False,
+                timeout_seconds=timeout_seconds,
+            )
 
             if not result.success or not result.output:
                 logger.error(f"Health check failed for device {self.device}: {result.error}")
                 if try_times > 0:
                     time.sleep(3)
-                    return self.check_health(try_times - 1)
+                    return self.check_health(
+                        try_times - 1,
+                        timeout_seconds=timeout_seconds,
+                    )
                 else:
                     return False
 

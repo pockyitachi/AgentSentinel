@@ -1,11 +1,18 @@
+from __future__ import annotations
+
 import copy
 import json
 import os
+import signal
 import subprocess
+import time
 from datetime import datetime, timedelta
 
 from loguru import logger
 from pydantic import BaseModel
+
+DEFAULT_ADB_TIMEOUT_SECONDS = 60.0
+ADB_TERMINATION_GRACE_SECONDS = 2.0
 
 
 class AdbResponse(BaseModel):
@@ -107,27 +114,86 @@ def pretty_print_messages(messages: list[dict], max_messages: int = 2) -> None:
     logger.info(final_str)
 
 
-def execute_adb(adb_command: str, output: bool = True, root_required=False) -> AdbResponse:
+def execute_adb(
+    adb_command: str,
+    output: bool = True,
+    root_required=False,
+    timeout_seconds: float | None = DEFAULT_ADB_TIMEOUT_SECONDS,
+) -> AdbResponse:
     if not adb_command.startswith("adb "):
         adb_command = "adb " + adb_command
     env = os.environ.copy()
+    started_at = time.monotonic()
 
-    if root_required:
-        whoami_check = subprocess.run(
-            "adb shell whoami",
-            shell=True,
-            capture_output=True,
-            text=True,
-            env=env,
+    def timeout_response() -> AdbResponse:
+        timeout_description = (
+            f"{timeout_seconds:g}s" if timeout_seconds is not None else "the configured deadline"
         )
-        if whoami_check.returncode == 0 and whoami_check.stdout.strip() != "root":
-            root_attempt = subprocess.run(
-                "adb root",
+        error = f"ADB command timed out after {timeout_description}"
+        if output:
+            logger.error(f"Command execution failed: {adb_command}")
+            logger.error(error)
+        return AdbResponse(
+            success=False,
+            error=error,
+            return_code=-1,
+            command=adb_command,
+        )
+
+    def terminate_process_group(process: subprocess.Popen[str]) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=ADB_TERMINATION_GRACE_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+
+    def run(command: str) -> subprocess.CompletedProcess[str] | None:
+        remaining = timeout_seconds
+        if timeout_seconds is not None:
+            remaining = timeout_seconds - (time.monotonic() - started_at)
+            if remaining <= 0:
+                return None
+        try:
+            process = subprocess.Popen(
+                command,
                 shell=True,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 env=env,
+                start_new_session=True,
             )
+        except OSError:
+            raise
+        try:
+            stdout, stderr = process.communicate(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            terminate_process_group(process)
+            return None
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    if root_required:
+        whoami_check = run("adb shell whoami")
+        if whoami_check is None:
+            return timeout_response()
+        if whoami_check.returncode == 0 and whoami_check.stdout.strip() != "root":
+            root_attempt = run("adb root")
+            if root_attempt is None:
+                return timeout_response()
             if root_attempt.returncode != 0:
                 if output:
                     logger.error("Failed to gain root access to the emulator")
@@ -139,13 +205,9 @@ def execute_adb(adb_command: str, output: bool = True, root_required=False) -> A
                     command=adb_command,
                 )
 
-            verify_check = subprocess.run(
-                "adb shell whoami",
-                shell=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
+            verify_check = run("adb shell whoami")
+            if verify_check is None:
+                return timeout_response()
             if verify_check.returncode != 0 or verify_check.stdout.strip() != "root":
                 if output:
                     logger.error("Root permission required but not available on the emulator")
@@ -156,13 +218,9 @@ def execute_adb(adb_command: str, output: bool = True, root_required=False) -> A
                     command=adb_command,
                 )
 
-    result = subprocess.run(
-        adb_command,
-        shell=True,
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    result = run(adb_command)
+    if result is None:
+        return timeout_response()
     if result.returncode == 0:
         return AdbResponse(
             success=True,

@@ -5,11 +5,10 @@ from typing import Any
 from loguru import logger
 
 from mobile_world.agents.base import MCPAgent
-from mobile_world.runtime.utils.helpers import mask_api_key
 from mobile_world.agents.grounding import GROUNDING_MODELS
 from mobile_world.agents.utils.helpers import pil_to_base64
 from mobile_world.agents.utils.prompts import PLANNER_EXECUTOR_PROMPT_TEMPLATE
-from mobile_world.runtime.utils.helpers import pretty_print_messages
+from mobile_world.runtime.utils.helpers import mask_api_key, pretty_print_messages
 from mobile_world.runtime.utils.models import JSONAction
 from mobile_world.runtime.utils.parsers import parse_json_markdown
 
@@ -291,16 +290,33 @@ class PlannerExecutorAgentMCP(MCPAgent):
         pretty_print_messages(messages, max_messages=4)
         logger.debug("*" * 100)
 
+        audit_retry_group = self._begin_outer_model_audit_retry_group()
+
         try_times = 3
+        adapter_attempt_index = 0
 
         while try_times > 0:
+            adapter_attempt_index += 1
             try:
-                plan = self.openai_chat_completions_create(
-                    model=self.model_name,
-                    messages=messages,
-                    retry_times=1,
-                    **self.runtime_conf,
-                )
+                if audit_retry_group is None:
+                    plan = self.openai_chat_completions_create(
+                        model=self.model_name,
+                        messages=messages,
+                        retry_times=1,
+                        **self.runtime_conf,
+                    )
+                else:
+                    with self._outer_model_audit_attempt_scope(
+                        audit_retry_group,
+                        adapter_attempt_index=adapter_attempt_index,
+                        adapter_retry_planned=try_times > 1,
+                    ):
+                        plan = self.openai_chat_completions_create(
+                            model=self.model_name,
+                            messages=messages,
+                            retry_times=1,
+                            **self.runtime_conf,
+                        )
 
                 plan_thought, action_str = parse_action(plan)
 

@@ -295,7 +295,6 @@ tests/runtime/audit/
 ```text
 --enable-audit
 --audit-log-root PATH
---audit-collector-mode {fail_open_with_incomplete_marker,strict_ci}
 --audit-store-stream-chunks / --no-audit-store-stream-chunks
 ```
 
@@ -303,9 +302,9 @@ tests/runtime/audit/
 
 ```text
 enable_audit = false
-audit_log_root = <log_file_root>/audit_raw
-audit_collector_mode = fail_open_with_incomplete_marker
+audit_log_root = unset；启用时必须显式指定 Git 工作树之外的受限目录
 audit_store_stream_chunks = true
+runtime collector policy = fail_open_with_incomplete_marker（固定，不是 CLI 选项）
 ```
 
 需要在以下链路显式透传：
@@ -338,7 +337,7 @@ src/mobile_world/core/runner.py
 
 ### 3.4 启用时的失败策略
 
-正式 motivation run 使用权威契约定义的：
+所有真实 eval/runtime collection 使用权威契约定义的唯一策略：
 
 ```text
 collector_mode = fail_open_with_incomplete_marker
@@ -352,7 +351,7 @@ collector_mode = fail_open_with_incomplete_marker
 4. `task_ended.capture_complete` 与 `manifest.final.capture_complete` 设为 `false`；
 5. 缺失 artifact 写入 `missing_artifacts`，相关 run 不进入依赖该证据的分析。
 
-CI可以有严格模式使测试失败，但正式自然轨迹采集不得因 collector error 中止task或触发MobileWorld task retry，否则会改变trajectory。
+collector error 不得中止task、触发MobileWorld task retry或替换原返回值/异常，否则会改变trajectory。完整性故障在运行后交给 offline integrity checker 判定；CI 通过 fault-injection test 断言故障被标记、checker拒绝不完整run，同时原agent/env路径继续，不提供可进入真实runtime的严格失败模式。
 
 ---
 
@@ -790,7 +789,6 @@ uv run mw eval \
   --log_file_root traj_logs/audit_smoke_seed \
   --enable-audit \
   --audit-log-root "$MOBILEWORLD_AUDIT_ROOT" \
-  --audit-collector-mode fail_open_with_incomplete_marker \
   --max-concurrency 1 \
   --auto-retry 0
 ```

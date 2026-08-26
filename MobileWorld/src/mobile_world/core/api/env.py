@@ -15,6 +15,10 @@ from pathlib import Path
 import requests
 from loguru import logger
 
+from mobile_world.runtime.user_agent_config import (
+    UserAgentConfigurationError,
+    validate_user_agent_env_file,
+)
 from mobile_world.runtime.utils.docker import (
     build_run_command,
     docker_exec_bash,
@@ -244,6 +248,20 @@ def launch_container(
         adb_port=config.adb_port,
     )
 
+    if not config.env_file_path:
+        result.error_message = (
+            "A simulated-user environment file containing USER_AGENT_API_KEY, "
+            "USER_AGENT_BASE_URL, and USER_AGENT_MODEL is required."
+        )
+        logger.error(f"Refusing to launch container '{config.name}': {result.error_message}")
+        return result
+    try:
+        validate_user_agent_env_file(Path(config.env_file_path))
+    except UserAgentConfigurationError as exc:
+        result.error_message = str(exc)
+        logger.error(f"Refusing to launch container '{config.name}': {exc}")
+        return result
+
     envs: dict[str, str] = {}
     if config.enable_vnc or config.dev_mode:
         envs["ENABLE_VNC"] = "true"
@@ -340,7 +358,9 @@ def launch_containers(
     if dev_mode and count > 1:
         raise ValueError("Dev mode only supports launching a single container")
 
-    port_sets = find_available_ports(backend_start_port, viewer_start_port, vnc_start_port, adb_start_port, count)
+    port_sets = find_available_ports(
+        backend_start_port, viewer_start_port, vnc_start_port, adb_start_port, count
+    )
 
     if len(port_sets) < count:
         logger.warning(f"Could only find {len(port_sets)} available port sets out of {count}")

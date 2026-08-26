@@ -1,0 +1,354 @@
+--- a/app/service/src/mobile_world/runtime/utils/docker.py
++++ b/app/service/src/mobile_world/runtime/utils/docker.py
+@@ -8,13 +8,30 @@
+ 
+ import json
+ import os
++import re
++import signal
+ import subprocess
+ import sys
++import uuid
+ from collections.abc import Iterable
++from pathlib import Path
+ from typing import Any
+ 
+ from loguru import logger
+ 
++_EMULATOR_SCRIPT_PATH = Path("/app/docker/start_emulator.sh")
++_EMULATOR_STATE_DIR = Path("/run/mobileworld-emulator")
++_EMULATOR_LOG_PATH = Path("/var/log/emulator.log")
++_PROC_ROOT = Path("/proc")
++_RESTART_DIAGNOSTIC_LIMIT = 6_000
++_RESTART_LOG_TAIL_BYTES = 12_000
++_RESTART_HARD_DEADLINE_SECONDS = 150
++_RESTART_TERMINATION_GRACE_SECONDS = 5
++_URI_USERINFO_PATTERN = re.compile(r"(?i)(https?://)[^/@\s]+@")
++_SECRET_ASSIGNMENT_PATTERN = re.compile(
++    r"(?i)\b(api[_-]?key|authorization|cookie|password|secret|token)\s*[:=]\s*[^\s]+"
++)
++
+ 
+ def run_command(
+     cmd: list[str],
+@@ -249,6 +266,192 @@
+     return backend_urls, container_names
+ 
+ 
++def _emulator_state_path() -> Path:
++    return _EMULATOR_STATE_DIR / "emulator.state.json"
++
++
++def _load_emulator_state() -> dict[str, Any] | None:
++    try:
++        value = json.loads(_emulator_state_path().read_text(encoding="utf-8"))
++    except (OSError, UnicodeError, json.JSONDecodeError):
++        return None
++    return value if isinstance(value, dict) else None
++
++
++def _safe_bounded_diagnostic(*parts: str | bytes | None) -> str:
++    text_parts: list[str] = []
++    for part in parts:
++        if part is None:
++            continue
++        if isinstance(part, bytes):
++            text_parts.append(part.decode("utf-8", errors="replace"))
++        else:
++            text_parts.append(part)
++    text = "\n".join(text_parts)
++    text = _URI_USERINFO_PATTERN.sub(r"\1<redacted>@", text)
++    text = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1=<redacted>", text)
++    text = "".join(char if char in "\n\t" or char.isprintable() else "?" for char in text)
++    if len(text) > _RESTART_DIAGNOSTIC_LIMIT:
++        text = f"<truncated to final {_RESTART_DIAGNOSTIC_LIMIT} characters>\n{text[-_RESTART_DIAGNOSTIC_LIMIT:]}"
++    return text.strip()
++
++
++def _read_emulator_log_tail() -> str:
++    try:
++        with _EMULATOR_LOG_PATH.open("rb") as log_file:
++            log_file.seek(0, os.SEEK_END)
++            byte_length = log_file.tell()
++            log_file.seek(max(0, byte_length - _RESTART_LOG_TAIL_BYTES))
++            return _safe_bounded_diagnostic(log_file.read())
++    except OSError:
++        return ""
++
++
++def _emulator_process_matches(pid: int, avd_name: str) -> bool:
++    try:
++        cmdline = (_PROC_ROOT / str(pid) / "cmdline").read_bytes()
++    except OSError:
++        return False
++    tokens = [
++        token.decode("utf-8", errors="surrogateescape") for token in cmdline.split(b"\0") if token
++    ]
++    if not tokens:
++        return False
++
++    executable = Path(tokens[0]).name
++    if executable != "emulator" and not executable.startswith(("emulator64-", "qemu-system-")):
++        return False
++
++    for index, token in enumerate(tokens):
++        if token == "-avd" and index + 1 < len(tokens) and tokens[index + 1] == avd_name:
++            return True
++        if token == f"@{avd_name}":
++            return True
++        if token.endswith(f"/{avd_name}.avd") or f"/{avd_name}.avd/" in token:
++            return True
++    return False
++
++
++def _run_adb(args: list[str]) -> subprocess.CompletedProcess[str]:
++    return subprocess.run(
++        ["adb", *args],
++        capture_output=True,
++        text=True,
++        timeout=15,
++        check=False,
++    )
++
++
++def _online_emulator_devices(output: str) -> list[str]:
++    devices: list[str] = []
++    for line in output.splitlines()[1:]:
++        fields = line.split()
++        if len(fields) >= 2 and fields[0].startswith("emulator-") and fields[1] == "device":
++            devices.append(fields[0])
++    return devices
++
++
++def _verify_emulator_generation(
++    *, expected_generation: str, avd_name: str, previous_pid: int | None
++) -> tuple[str | None, str]:
++    state = _load_emulator_state()
++    if state is None:
++        return None, "ready-state file is missing or invalid"
++    if state.get("generation_id") != expected_generation:
++        return None, "ready-state generation does not match this restart"
++    if state.get("avd_name") != avd_name:
++        return None, "ready-state AVD does not match the requested AVD"
++    if state.get("ready") is not True:
++        return None, "ready-state marker is not ready"
++    if state.get("log_path") != str(_EMULATOR_LOG_PATH):
++        return None, "ready-state log path is unexpected"
++
++    pid = state.get("pid")
++    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
++        return None, "ready-state emulator PID is invalid"
++    if previous_pid is not None and pid == previous_pid:
++        return None, "emulator process identity did not change"
++    if not _emulator_process_matches(pid, avd_name):
++        return None, "new emulator process is absent or has the wrong AVD"
++
++    device_id = state.get("device_id")
++    if not isinstance(device_id, str) or re.fullmatch(r"emulator-[0-9]+", device_id) is None:
++        return None, "ready-state device ID is invalid"
++
++    try:
++        devices_result = _run_adb(["devices"])
++    except (OSError, subprocess.SubprocessError):
++        return None, "could not query ADB devices"
++    if devices_result.returncode != 0:
++        return None, "ADB devices query failed"
++    online_devices = _online_emulator_devices(devices_result.stdout or "")
++    if online_devices != [device_id]:
++        return None, "the new emulator is not the unique online ADB emulator"
++
++    try:
++        boot_result = _run_adb(["-s", device_id, "shell", "getprop", "sys.boot_completed"])
++    except (OSError, subprocess.SubprocessError):
++        return None, "could not verify emulator boot completion"
++    if boot_result.returncode != 0 or (boot_result.stdout or "").strip() != "1":
++        return None, "the new emulator is not boot-complete"
++    if not _emulator_process_matches(pid, avd_name):
++        return None, "new emulator process exited during postcondition verification"
++    return device_id, "verified"
++
++
++def _bounded_restart_timeout(env: dict[str, str], key: str, default: int, maximum: int) -> str:
++    try:
++        value = int(env.get(key, str(default)))
++    except ValueError:
++        value = default
++    return str(min(max(value, 0), maximum))
++
++
++def _terminate_restart_process_group(process: subprocess.Popen[str]) -> tuple[str, str]:
++    try:
++        os.killpg(process.pid, signal.SIGTERM)
++    except ProcessLookupError:
++        pass
++    try:
++        return process.communicate(timeout=_RESTART_TERMINATION_GRACE_SECONDS)
++    except subprocess.TimeoutExpired:
++        try:
++            os.killpg(process.pid, signal.SIGKILL)
++        except ProcessLookupError:
++            pass
++        return process.communicate()
++
++
++def _run_emulator_restart_script(env: dict[str, str]) -> tuple[int | None, str]:
++    try:
++        process = subprocess.Popen(
++            ["/bin/bash", str(_EMULATOR_SCRIPT_PATH)],
++            env=env,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.PIPE,
++            text=True,
++            start_new_session=True,
++        )
++    except OSError as error:
++        return None, _safe_bounded_diagnostic(
++            f"script execution error: {type(error).__name__}: {error}"
++        )
++
++    try:
++        stdout, stderr = process.communicate(timeout=_RESTART_HARD_DEADLINE_SECONDS)
++        return process.returncode, _safe_bounded_diagnostic(stdout, stderr)
++    except subprocess.TimeoutExpired as error:
++        stdout, stderr = _terminate_restart_process_group(process)
++        return None, _safe_bounded_diagnostic(
++            error.stdout,
++            error.stderr,
++            stdout,
++            stderr,
++            f"restart exceeded the {_RESTART_HARD_DEADLINE_SECONDS}s hard deadline; "
++            "its process group was terminated",
++        )
++
++
+ def restart_emulator_with_avd(avd_name: str) -> str:
+     """Restart emulator with the specified AVD using existing script.
+ 
+@@ -261,53 +464,86 @@
+         Device ID of the started emulator
+     """
+ 
+-    logger.info(f"Restarting emulator with AVD: {avd_name}")
++    logger.info("Restarting emulator with AVD: {}", avd_name)
+ 
+-    try:
+-        # Set environment variable for the script
+-        env = os.environ.copy()
+-        env["AVD_NAME"] = avd_name
++    previous_state = _load_emulator_state() or {}
++    previous_pid_value = previous_state.get("pid")
++    previous_pid = (
++        previous_pid_value
++        if isinstance(previous_pid_value, int) and not isinstance(previous_pid_value, bool)
++        else None
++    )
++    generation_id = uuid.uuid4().hex
++    env = os.environ.copy()
++    env["AVD_NAME"] = avd_name
++    env["MOBILEWORLD_EMULATOR_GENERATION_ID"] = generation_id
++    env["MOBILEWORLD_EMULATOR_STATE_DIR"] = str(_EMULATOR_STATE_DIR)
++    env["MOBILEWORLD_EMULATOR_LOG_PATH"] = str(_EMULATOR_LOG_PATH)
++    env["EMULATOR_SHUTDOWN_TIMEOUT"] = _bounded_restart_timeout(
++        env, "EMULATOR_SHUTDOWN_TIMEOUT", 8, 8
++    )
++    env["EMULATOR_TERM_TIMEOUT"] = _bounded_restart_timeout(env, "EMULATOR_TERM_TIMEOUT", 3, 3)
++    env["EMULATOR_KILL_TIMEOUT"] = _bounded_restart_timeout(env, "EMULATOR_KILL_TIMEOUT", 2, 2)
++    env["EMULATOR_TIMEOUT"] = _bounded_restart_timeout(env, "EMULATOR_TIMEOUT", 110, 110)
++    env["EMULATOR_ROOT_RECONNECT_TIMEOUT"] = _bounded_restart_timeout(
++        env, "EMULATOR_ROOT_RECONNECT_TIMEOUT", 15, 15
++    )
++    env["EMULATOR_POLL_INTERVAL"] = _bounded_restart_timeout(env, "EMULATOR_POLL_INTERVAL", 2, 2)
++    env["MOBILEWORLD_PROXY_STARTUP_WAIT"] = _bounded_restart_timeout(
++        env, "MOBILEWORLD_PROXY_STARTUP_WAIT", 1, 1
++    )
+ 
+-        # Call the existing emulator management script
+-        script_path = "/app/docker/start_emulator.sh"
+-        logger.info(f"Calling {script_path} with AVD_NAME={avd_name}")
++    logger.info(
++        "Calling {} for emulator generation {}; generation log: {}",
++        _EMULATOR_SCRIPT_PATH,
++        generation_id,
++        _EMULATOR_LOG_PATH,
++    )
++    script_returncode, script_diagnostic = _run_emulator_restart_script(env)
+ 
+-        result = subprocess.run(
+-            ["/bin/bash", script_path],
+-            env=env,
+-            stdout=subprocess.DEVNULL,
+-            stderr=subprocess.DEVNULL,
+-            timeout=600,
++    device_id, verification = _verify_emulator_generation(
++        expected_generation=generation_id,
++        avd_name=avd_name,
++        previous_pid=previous_pid,
++    )
++    if device_id is None:
++        logger.error(
++            "Emulator generation {} failed its verified postcondition: {}; script rc: {}; log: {}",
++            generation_id,
++            verification,
++            script_returncode if script_returncode is not None else "unavailable",
++            _EMULATOR_LOG_PATH,
+         )
+-
+-        if result.returncode != 0:
+-            logger.error(f"Emulator script failed with code {result.returncode}")
+-            raise RuntimeError(f"Failed to start emulator (exit code: {result.returncode})")
+-
+-        logger.info("Emulator script completed successfully")
+-
+-        # Get the device ID of the running emulator
+-        device_result = subprocess.run(
+-            ["adb", "devices"], capture_output=True, text=True, check=True
++        log_tail = _read_emulator_log_tail()
++        combined_diagnostic = _safe_bounded_diagnostic(script_diagnostic, log_tail)
++        if combined_diagnostic:
++            logger.error("Bounded emulator restart diagnostics:\n{}", combined_diagnostic)
++        raise RuntimeError(
++            f"Failed to start a verified new emulator generation; see {_EMULATOR_LOG_PATH}"
+         )
+ 
+-        device_id = None
+-        for line in device_result.stdout.split("\n")[1:]:
+-            if line.strip() and "device" in line:
+-                dev_id = line.split()[0]
+-                if dev_id.startswith("emulator-"):
+-                    device_id = dev_id
+-                    break
+-
+-        if not device_id:
+-            raise RuntimeError("No emulator device found after script execution")
+-
+-        logger.info(f"Emulator started successfully: {device_id}")
+-        return device_id
+-
+-    except Exception as e:
+-        logger.error(f"Failed to restart emulator: {e}")
+-        raise
++    if script_returncode not in (None, 0):
++        logger.warning(
++            "Emulator restart script returned {}, but generation {} passed the independent "
++            "process/ADB/boot postcondition",
++            script_returncode,
++            generation_id,
++        )
++    elif script_returncode is None:
++        logger.warning(
++            "Emulator restart script did not return normally, but generation {} passed the "
++            "independent process/ADB/boot postcondition",
++            generation_id,
++        )
++    if script_diagnostic:
++        logger.debug("Bounded emulator restart script diagnostics:\n{}", script_diagnostic)
++    logger.info(
++        "Emulator generation {} verified successfully: {} (log: {})",
++        generation_id,
++        device_id,
++        _EMULATOR_LOG_PATH,
++    )
++    return device_id
+ 
+ 
+ __all__ = [

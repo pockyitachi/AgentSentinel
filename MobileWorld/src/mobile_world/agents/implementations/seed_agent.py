@@ -225,6 +225,35 @@ class SeedAgent(MCPAgent):
 
         return prediction
 
+    def _inference_with_retries(self, messages: list[dict]) -> str:
+        """Run Seed's existing outer retries with optional audit correlation."""
+
+        audit_retry_group = self._begin_outer_model_audit_retry_group()
+
+        retry_times = 3
+        adapter_attempt_index = 0
+        prediction = None
+        while retry_times > 0:
+            adapter_attempt_index += 1
+            try:
+                if audit_retry_group is None:
+                    prediction = self._inference_with_thinking(messages)
+                else:
+                    with self._outer_model_audit_attempt_scope(
+                        audit_retry_group,
+                        adapter_attempt_index=adapter_attempt_index,
+                        adapter_retry_planned=retry_times > 1,
+                    ):
+                        prediction = self._inference_with_thinking(messages)
+                break
+            except Exception as e:
+                logger.warning(f"Error calling LLM: {e}")
+                retry_times -= 1
+                if retry_times == 0:
+                    raise ValueError(f"Failed to get response from LLM after retries: {e}")
+
+        return prediction
+
     def _prepare_image(self, screenshot: Image.Image) -> str:
         """Prepare image for API call, optionally resizing."""
         if self.resize_image:
@@ -413,18 +442,7 @@ class SeedAgent(MCPAgent):
         pretty_print_messages(messages, max_messages=5)
 
         # Call API with retries
-        retry_times = 3
-        prediction = None
-
-        while retry_times > 0:
-            try:
-                prediction = self._inference_with_thinking(messages)
-                break
-            except Exception as e:
-                logger.warning(f"Error calling LLM: {e}")
-                retry_times -= 1
-                if retry_times == 0:
-                    raise ValueError(f"Failed to get response from LLM after retries: {e}")
+        prediction = self._inference_with_retries(messages)
 
         logger.info(f"Raw LLM response:\n{prediction}")
         self.history_responses.append(prediction)

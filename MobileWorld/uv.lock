@@ -1314,6 +1314,7 @@ dependencies = [
     { name = "rich" },
     { name = "tenacity" },
     { name = "termcolor" },
+    { name = "tiktoken" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "xmltodict" },
 ]
@@ -1391,6 +1392,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.6" },
     { name = "tenacity" },
     { name = "termcolor" },
+    { name = "tiktoken", specifier = "==0.12.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
     { name = "xmltodict", specifier = ">=0.15.0" },
 ]

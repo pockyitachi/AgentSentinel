@@ -6,6 +6,8 @@ import base64
 import os
 import threading
 import time
+from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,7 +18,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
 
 from mobile_world.runtime.app_helpers.mall import get_config, write_callback_file
-from mobile_world.runtime.controller import AndroidController
+from mobile_world.runtime.controller import AndroidController, DeviceUnhealthyError
+from mobile_world.runtime.user_agent_config import validate_user_agent_environment
 from mobile_world.runtime.utils.constants import ARTIFACTS_ROOT, device_dir
 from mobile_world.runtime.utils.docker import restart_emulator_with_avd
 from mobile_world.runtime.utils.helpers import AdbResponse
@@ -60,6 +63,10 @@ def initialize_suite_family(suite_family: str) -> None:
     """
     global SUITE_FAMILY, task_registry
 
+    # Any GUI agent can emit ``ask_user``, including on tasks selected as GUI-only.
+    # Fail before the backend accepts an eval rather than during a task transition.
+    validate_user_agent_environment()
+
     SUITE_FAMILY = suite_family
     logger.info(f"Initializing suite_family: {suite_family}")
 
@@ -69,22 +76,125 @@ def initialize_suite_family(suite_family: str) -> None:
 
 CONTROLLERS: dict[str, AndroidController] = {}
 
-# Lock and tracking for emulator restart to prevent concurrent restarts
-_restart_lock = threading.Lock()
-_last_restart_attempt: float = 0.0  # Track last restart attempt per suite family
+# Snapshot restore and emulator restart both transition the same global emulator.
+# Keep the lock for the entire transition, not merely for the restart decision.
+_lifecycle_lock = threading.RLock()
+_lifecycle_state_lock = threading.Lock()
+_lifecycle_transition_started: float | None = None
+_lifecycle_transition_name: str | None = None
+_last_restart_success: float | None = None
 RESTART_COOLDOWN_SECONDS = 300  # Minimum time between restart attempts
+# Match the host client's task-initialization budget: a probe stays liveness-OK
+# while that request may still complete, then becomes unhealthy at the same bound.
+MAX_LIFECYCLE_TRANSITION_SECONDS = 600
 
 
-def ensure_controller(req_device: str) -> AndroidController:
+class TaskInitializationError(RuntimeError):
+    """Raised when a task reports that its initialization did not complete."""
+
+
+def _serialized_device_operation(operation: Callable[..., Any]) -> Callable[..., Any]:
+    """Keep a complete device operation on one emulator lifecycle generation."""
+
+    @wraps(operation)
+    def serialized(*args: Any, **kwargs: Any) -> Any:
+        with _lifecycle_lock:
+            owns_transition = _begin_lifecycle_transition(operation.__name__)
+            try:
+                return operation(*args, **kwargs)
+            finally:
+                _end_lifecycle_transition(owns_transition)
+
+    return serialized
+
+
+def _begin_lifecycle_transition(name: str) -> bool:
+    global _lifecycle_transition_name, _lifecycle_transition_started
+    with _lifecycle_state_lock:
+        if _lifecycle_transition_started is not None:
+            return False
+        _lifecycle_transition_started = time.monotonic()
+        _lifecycle_transition_name = name
+        return True
+
+
+def _end_lifecycle_transition(owns_transition: bool) -> None:
+    global _lifecycle_transition_name, _lifecycle_transition_started
+    if not owns_transition:
+        return
+    with _lifecycle_state_lock:
+        _lifecycle_transition_started = None
+        _lifecycle_transition_name = None
+
+
+def _lifecycle_transition_snapshot() -> tuple[str | None, float | None]:
+    with _lifecycle_state_lock:
+        if _lifecycle_transition_started is None:
+            return None, None
+        return (
+            _lifecycle_transition_name,
+            max(0.0, time.monotonic() - _lifecycle_transition_started),
+        )
+
+
+def _ensure_controller_healthy(req_device: str) -> AndroidController:
     if req_device not in CONTROLLERS:
         logger.info(f"[INIT] Device {req_device} not initialized, initializing...")
         ctr = AndroidController(device=req_device)
         CONTROLLERS[req_device] = ctr
+    viewport_size = getattr(CONTROLLERS[req_device], "viewport_size", (None, None))
+    if not (
+        isinstance(viewport_size, tuple)
+        and len(viewport_size) == 2
+        and all(isinstance(value, int) and value > 0 for value in viewport_size)
+    ):
+        raise DeviceUnhealthyError(f"Device is not healthy: invalid viewport for {req_device}")
     if not CONTROLLERS[req_device].check_health(try_times=3):
-        logger.error(f"[INIT] Device {req_device} is not healthy, restarting...")
-        raise HTTPException(status_code=500, detail="Device is not healthy")
-        # restart_emulator_with_avd(AVD_MAPPING[SUITE_FAMILY])
+        logger.error(f"[INIT] Device {req_device} is not healthy")
+        raise DeviceUnhealthyError(f"Device is not healthy: {req_device}")
     return CONTROLLERS[req_device]
+
+
+def ensure_controller(req_device: str) -> AndroidController:
+    with _lifecycle_lock:
+        try:
+            return _ensure_controller_healthy(req_device)
+        except DeviceUnhealthyError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+def _restart_and_verify_emulator(req_device: str) -> AndroidController:
+    """Perform one global emulator restart and install only a verified controller."""
+    avd_name = AVD_MAPPING[SUITE_FAMILY]
+    try:
+        device_id = restart_emulator_with_avd(avd_name)
+        replacement = AndroidController(device=device_id)
+        viewport_size = replacement.viewport_size
+        if not all(isinstance(value, int) and value > 0 for value in viewport_size):
+            raise DeviceUnhealthyError(
+                f"Device is not healthy after emulator restart for {req_device}: invalid viewport"
+            )
+        replacement.wait_for_device_stability()
+    except Exception as error:
+        if isinstance(error, DeviceUnhealthyError):
+            raise
+        raise DeviceUnhealthyError(
+            f"Device is not healthy after emulator restart for {req_device}: {error}"
+        ) from error
+
+    # A restart replaces the global emulator generation.  Publish the new
+    # controller atomically only after its continuous-health barrier succeeds.
+    CONTROLLERS.clear()
+    CONTROLLERS[req_device] = replacement
+    logger.info(
+        f"[RECOVERY] Verified restarted emulator with AVD {avd_name}, device_id={device_id}"
+    )
+    return replacement
+
+
+def _mark_restart_success() -> None:
+    global _last_restart_success
+    _last_restart_success = time.monotonic()
 
 
 app = FastAPI(title="Mobile GUI Agent Benchmark Server", version="0.1.0")
@@ -108,64 +218,106 @@ def health():
     If any device is unhealthy, automatically restarts the emulator for the current
     suite family. Implements locking to prevent concurrent restart attempts.
     """
-    device_status = {}
-    all_healthy = True
-    unhealthy_devices = []
+    # Health probes must never race a planned snapshot/restart transition, and
+    # must not wait behind a potentially long emulator operation.  HTTP 200
+    # keeps container liveness distinct from temporary device unavailability.
+    if not _lifecycle_lock.acquire(blocking=False):
+        transition_name, transition_elapsed = _lifecycle_transition_snapshot()
+        transition_overdue = (
+            transition_elapsed is not None
+            and transition_elapsed >= MAX_LIFECYCLE_TRANSITION_SECONDS
+        )
+        return JSONResponse(
+            status_code=503 if transition_overdue else 200,
+            content={
+                "ok": False,
+                "devices": list(CONTROLLERS.keys()),
+                "device_status": {},
+                "transition_in_progress": True,
+                "transition_name": transition_name,
+                "transition_elapsed_seconds": transition_elapsed,
+                "transition_overdue": transition_overdue,
+            },
+        )
 
-    for device_id, controller in CONTROLLERS.items():
-        is_healthy = controller.check_health(try_times=2)
-        device_status[device_id] = is_healthy
-        if not is_healthy:
-            all_healthy = False
-            unhealthy_devices.append(device_id)
+    owns_transition = _begin_lifecycle_transition("health")
+    try:
+        device_status = {}
+        unhealthy_devices = []
 
-    # If unhealthy, attempt to restart emulator (with concurrency protection)
-    if not all_healthy:
-        current_time = time.time()
+        for device_id, controller in CONTROLLERS.items():
+            is_healthy = controller.check_health(try_times=2)
+            device_status[device_id] = is_healthy
+            if not is_healthy:
+                unhealthy_devices.append(device_id)
 
-        # Check if we should attempt restart (cooldown check)
-        should_restart = False
-        global _last_restart_attempt
-        with _restart_lock:
-            if current_time - _last_restart_attempt >= RESTART_COOLDOWN_SECONDS:
-                _last_restart_attempt = current_time
-                should_restart = True
-
-        if should_restart:
-            try:
+        all_healthy = not unhealthy_devices
+        if not all_healthy:
+            if RUNNING_TASK is not None:
+                # Never replace the emulator underneath an active task attempt.
+                # The next task operation must observe the factual device
+                # failure; the following /task/init may then recover from a
+                # clean snapshot inside the new attempt boundary.
                 logger.warning(
-                    f"[HEALTH] Unhealthy devices detected: {unhealthy_devices}. "
-                    f"Restarting emulator for suite family: {SUITE_FAMILY}"
+                    f"[HEALTH] Recovery deferred for active task "
+                    f"{RUNNING_TASK.name}; unhealthy devices: {unhealthy_devices}"
                 )
-                avd_name = AVD_MAPPING[SUITE_FAMILY]
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "ok": False,
+                        "devices": list(CONTROLLERS.keys()),
+                        "device_status": device_status,
+                        "recovery_deferred_for_active_task": True,
+                        "active_task": RUNNING_TASK.name,
+                    },
+                )
 
-                device_id = restart_emulator_with_avd(avd_name)
-                logger.info(
-                    f"[HEALTH] Successfully restarted emulator with AVD {avd_name}, "
-                    f"new device_id: {device_id}"
-                )
-
-            except Exception as e:
-                logger.error(
-                    f"[HEALTH] Failed to restart emulator for suite family {SUITE_FAMILY}: {e}",
-                    exc_info=True,
-                )
-        else:
-            time_since_last = current_time - _last_restart_attempt
-            logger.debug(
-                f"[HEALTH] Restart skipped - cooldown period active "
-                f"(last attempt: {time_since_last:.1f}s ago, "
-                f"cooldown: {RESTART_COOLDOWN_SECONDS}s)"
+            now = time.monotonic()
+            cooldown_active = (
+                _last_restart_success is not None
+                and now - _last_restart_success < RESTART_COOLDOWN_SECONDS
             )
 
-    return JSONResponse(
-        status_code=200 if all_healthy else 503,
-        content={
-            "ok": all_healthy,
-            "devices": list(CONTROLLERS.keys()),
-            "device_status": device_status,
-        },
-    )
+            if not cooldown_active:
+                try:
+                    logger.warning(
+                        f"[HEALTH] Unhealthy devices detected: {unhealthy_devices}. "
+                        f"Restarting emulator for suite family: {SUITE_FAMILY}"
+                    )
+                    req_device = unhealthy_devices[0]
+                    _restart_and_verify_emulator(req_device)
+                    _mark_restart_success()
+                    device_status = {device_id: True for device_id in CONTROLLERS}
+                    all_healthy = True
+                except Exception as error:
+                    # A failed restart does not arm the cooldown.  The old
+                    # controller generation remains unavailable and must not be
+                    # reported healthy.
+                    logger.error(
+                        f"[HEALTH] Failed to restart emulator for suite family "
+                        f"{SUITE_FAMILY}: {error}",
+                        exc_info=True,
+                    )
+            else:
+                time_since_last = now - _last_restart_success
+                logger.debug(
+                    f"[HEALTH] Restart skipped - cooldown after verified restart active "
+                    f"(last success: {time_since_last:.1f}s ago, "
+                    f"cooldown: {RESTART_COOLDOWN_SECONDS}s)"
+                )
+
+        return JSONResponse(
+            status_code=200 if all_healthy else 503,
+            content={
+                "ok": all_healthy,
+                "devices": list(CONTROLLERS.keys()),
+                "device_status": device_status,
+            },
+        )
+    finally:
+        _end_lifecycle_transition(owns_transition)
+        _lifecycle_lock.release()
 
 
 def _init_controller(device: str) -> dict[str, Any]:
@@ -183,18 +335,21 @@ def _init_controller(device: str) -> dict[str, Any]:
 
 
 @app.get("/init")
+@_serialized_device_operation
 def init_controller_get(device: str = Query("emulator-5554", description="adb device ID")):
     """Initialize controller via GET request."""
     return _init_controller(device)
 
 
 @app.post("/init")
+@_serialized_device_operation
 def init_controller_post(req: InitRequest):
     """Initialize controller via POST request."""
     return _init_controller(req.device)
 
 
 @app.get("/state")
+@_serialized_device_operation
 def get_state(device: str = Query(..., description="adb device ID")):
     logger.info(f"[STATE] Request: device={device}")
 
@@ -213,6 +368,7 @@ def get_state(device: str = Query(..., description="adb device ID")):
 
 
 @app.get("/screenshot")
+@_serialized_device_operation
 def get_screenshot(
     device: str = Query(...),
     prefix: str | None = Query(None),
@@ -270,6 +426,7 @@ def get_task_asset(asset_path: str):
 
 
 @app.get("/xml")
+@_serialized_device_operation
 def get_xml(
     device: str = Query(...),
     prefix: str | None = Query(None),
@@ -310,6 +467,7 @@ def get_xml(
 
 
 @app.post("/sms")
+@_serialized_device_operation
 def simulate_sms(req: SmsRequest):
     """Send a simulated SMS to the device."""
     logger.info(f"[SMS] Request: device={req.device}, sender={req.sender}, message={req.message}")
@@ -332,6 +490,7 @@ def simulate_sms(req: SmsRequest):
 
 
 @app.post("/step")
+@_serialized_device_operation
 def step(req: StepRequest):
     logger.info(f"[STEP] Request: device={req.device}, action={req.action}")
 
@@ -508,7 +667,19 @@ def get_task_metadata(task_name: str):
     return JSONResponse(status_code=200, content=metadata)
 
 
+def _initialize_task_once(task: Any, controller: AndroidController) -> None:
+    result = task.initialize_task(controller)
+    if result is False:
+        task.initialized = False
+        raise TaskInitializationError(
+            f"Failed to initialize task: {task.name} (initialize_task returned False)"
+        )
+    if not task.initialized:
+        raise TaskInitializationError(f"Failed to initialize task: {task.name}")
+
+
 @app.post("/task/init")
+@_serialized_device_operation
 def init_task(req: TaskOperationRequest):
     """Initialize a task."""
     if task_registry is None:
@@ -516,23 +687,46 @@ def init_task(req: TaskOperationRequest):
             status_code=500, detail="Task registry not initialized. Server not properly configured."
         )
 
-    logger.info(f"[TASK_INIT] Initializing task: {req.task_name}")
-    ctr = ensure_controller(req.req_device)
-    try:
-        task = task_registry.get_task(req.task_name)
-        task.initialize_task(ctr)
-    except Exception as e:
-        logger.error(f"[TASK_INIT] Error initializing task: {e}")
-        raise HTTPException(status_code=500, detail=f"Error initializing task: {str(e)}")
-    if not task.initialized:
-        logger.error(f"[TASK_INIT] Failed to initialize task: {req.task_name}")
-        raise HTTPException(status_code=500, detail=f"Failed to initialize task: {req.task_name}")
     global RUNNING_TASK
-    RUNNING_TASK = task
+    logger.info(f"[TASK_INIT] Initializing task: {req.task_name}")
+
+    with _lifecycle_lock:
+        # Do not leave the previous singleton task addressable if any part of a
+        # new initialization fails.
+        RUNNING_TASK = None
+        task = None
+        try:
+            task = task_registry.get_task(req.task_name)
+            try:
+                ctr = _ensure_controller_healthy(req.req_device)
+                _initialize_task_once(task, ctr)
+            except DeviceUnhealthyError as initial_error:
+                # Snapshot acknowledgement can be followed by a delayed ADB
+                # disconnect.  Recover once, inside this same request, so a
+                # successful repair never becomes a runner-level crashed attempt.
+                logger.warning(
+                    f"[TASK_INIT] Device transition failed for {req.task_name}; "
+                    f"performing one serialized emulator recovery: {initial_error}"
+                )
+                task.initialized = False
+                ctr = _restart_and_verify_emulator(req.req_device)
+                _mark_restart_success()
+                _initialize_task_once(task, ctr)
+        except Exception as error:
+            if task is not None:
+                task.initialized = False
+            logger.error(f"[TASK_INIT] Error initializing task: {error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error initializing task: {error}",
+            ) from error
+
+        RUNNING_TASK = task
     return JSONResponse(status_code=200, content="OK")
 
 
 @app.get("/task/eval")
+@_serialized_device_operation
 def eval_task(req: TaskOperationRequest):
     """Check if a task is successful."""
     if task_registry is None:
@@ -551,6 +745,7 @@ def eval_task(req: TaskOperationRequest):
 
 
 @app.post("/task/tear_down")
+@_serialized_device_operation
 def tear_down_task(req: TaskOperationRequest):
     """Tear down a task."""
     if task_registry is None:
@@ -630,6 +825,7 @@ def get_mall_config():
 
 
 @app.post("/suite_family/switch")
+@_serialized_device_operation
 def switch_suite_family(target_family: str = Query(..., description="Target suite family")):
     """Switch to a different suite family.
 
@@ -658,50 +854,51 @@ def switch_suite_family(target_family: str = Query(..., description="Target suit
             detail=f"Invalid suite_family: {target_family}. Must be 'mobile_world'",
         )
 
-    is_healthy = all(ctr.check_health() for ctr in CONTROLLERS.values())
+    with _lifecycle_lock:
+        is_healthy = all(ctr.check_health() for ctr in CONTROLLERS.values())
 
-    if SUITE_FAMILY == target_family and is_healthy:
-        logger.info(f"[SUITE_FAMILY_SWITCH] Already on {target_family}, no switch needed")
-        return JSONResponse(
-            status_code=200,
-            content={
-                "message": f"Already on suite_family {target_family}",
+        if SUITE_FAMILY == target_family and is_healthy:
+            logger.info(f"[SUITE_FAMILY_SWITCH] Already on {target_family}, no switch needed")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "message": f"Already on suite_family {target_family}",
+                    "suite_family": target_family,
+                    "switched": False,
+                },
+            )
+
+        try:
+            target_avd = AVD_MAPPING[target_family]
+
+            logger.info("[SUITE_FAMILY_SWITCH] Clearing controller registry")
+            CONTROLLERS.clear()
+
+            logger.info(f"[SUITE_FAMILY_SWITCH] Restarting emulator with AVD {target_avd}")
+            device_id = restart_emulator_with_avd(target_avd)
+
+            logger.info(f"[SUITE_FAMILY_SWITCH] Reinitializing task registry for {target_family}")
+            initialize_suite_family(target_family)
+
+            response = {
+                "message": f"Successfully switched to {target_family}",
                 "suite_family": target_family,
-                "switched": False,
-            },
-        )
+                "switched": True,
+                "emulator_device_id": device_id,
+                "avd_name": target_avd,
+                "num_tasks": (
+                    len(task_registry.tasks)
+                    if hasattr(task_registry, "tasks")
+                    else len(task_registry.list_tasks())
+                ),
+            }
 
-    try:
-        target_avd = AVD_MAPPING[target_family]
+            logger.info(f"[SUITE_FAMILY_SWITCH] Success: {response}")
+            return JSONResponse(status_code=200, content=response)
 
-        logger.info("[SUITE_FAMILY_SWITCH] Clearing controller registry")
-        CONTROLLERS.clear()
-
-        logger.info(f"[SUITE_FAMILY_SWITCH] Restarting emulator with AVD {target_avd}")
-        device_id = restart_emulator_with_avd(target_avd)
-
-        logger.info(f"[SUITE_FAMILY_SWITCH] Reinitializing task registry for {target_family}")
-        initialize_suite_family(target_family)
-
-        response = {
-            "message": f"Successfully switched to {target_family}",
-            "suite_family": target_family,
-            "switched": True,
-            "emulator_device_id": device_id,
-            "avd_name": target_avd,
-            "num_tasks": (
-                len(task_registry.tasks)
-                if hasattr(task_registry, "tasks")
-                else len(task_registry.list_tasks())
-            ),
-        }
-
-        logger.info(f"[SUITE_FAMILY_SWITCH] Success: {response}")
-        return JSONResponse(status_code=200, content=response)
-
-    except Exception as e:
-        logger.error(f"[SUITE_FAMILY_SWITCH] Error switching suite family: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to switch suite family: {str(e)}")
+        except Exception as e:
+            logger.error(f"[SUITE_FAMILY_SWITCH] Error switching suite family: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to switch suite family: {str(e)}")
 
 
 def main():
