@@ -1,105 +1,111 @@
-# Sentinel MVP
+# Sentinel MVP (Legacy Prototype)
 
-This directory turns the `seed_baseline` audit into executable middleware
-plumbing.  It is deliberately offline and deterministic: it does not call a
-paid model, mutate QR-MW, or claim that its curated fixture decisions are a
-general-purpose verifier.
+> [!WARNING]
+> This package is a legacy, single-host, offline prototype. It is retained as
+> a behavioral reference for curated history transformations; it is not the
+> formal G1 implementation, a production/runtime interceptor, an automatic
+> verifier, or a six-model adapter layer.
 
-The first milestone is to prove the deployment contract end to end:
+This directory was built from the historical Seed baseline audit to validate
+derived-history plumbing for one host:
 
 1. reconstruct the history visible before a selected Seed decision;
-2. represent an auditable claim and its evidence;
-3. apply a claim/span-level history-gate operation;
-4. emit the filtered history and evidence-grounded correction block that the
-   actor would receive on its next model call;
-5. preserve the untouched raw history in the fixture/sidecar record.
+2. represent a curated claim, its evidence, and an explicit transformation;
+3. apply a claim/span-level history operation;
+4. render the resulting Seed history view;
+5. preserve the untouched source history and provenance in a sidecar record.
 
-Canonical gate operations follow proposal section 3.4:
+The prototype does not call a provider, mutate MobileWorld, infer whether a
+claim is true, or establish that a curated transformation improves an agent's
+next action.
 
-- `KEEP`
-- `DROP`
-- `REPLACE`
-- `ARCHIVE`
-- `KEEP_UNCERTAIN`
+## Relationship to the current project
 
-At render time, `DROP` masks only the targeted claim span, `REPLACE` inserts a
-minimal correction, `ARCHIVE` removes a true but inactive-branch span from the
-active view, and `KEEP_UNCERTAIN` leaves uncertain text untouched.
+Epic 1 is complete: six host-native history representations were collected and
+audited across 702 MobileWorld model-task cases. G1.1's immutable pre-gold
+causal-replay protocol and registry are also complete.
 
-The bundled replay fixtures are drawn only from
-`traj_logs/seed_baseline`; images remain in QR-MW and are referenced by absolute
-path plus SHA-256 rather than copied.
+The next workstream, ALE-320 / G1.2, is being prepared separately as a
+portable, CPU-only contract:
+canonical History IR/Core, history-family codecs, a provider-codec interface,
+pre-provider protocol validation, and derived sidecars. This legacy package
+must not be treated as that formal implementation. A future formal package may
+migrate independently verified semantics from here, including span/evidence provenance,
+KEEP/DROP/REPLACE/ARCHIVE/KEEP_UNCERTAIN behavior, raw immutability, reversible
+mappings, and fail-closed treatment validation.
 
-## What Seed-2.0-Pro receives before each action
+The intended G1.2 scope applies curated Transformation Plans with
+`deployment_prediction=false`; it does not include automatic claim
+extraction, factual verification, correction generation, provider/model
+invocation, GUI action execution, or live runtime interception. Its phase
+decision and scope-file updates are being prepared in a separate change. This
+README is not implementation authorization.
 
-The audited `seed_baseline` run uses Doubao Seed-2.0-Pro
-(`doubao-seed-2-0-pro-260215`) with MobileWorld's `seed_agent`. Its default
-`history_n=3` is an **image limit, not a step/text limit**:
+See the [project overview](../README.md), [current status](../mobileworld_audit_handoff/STATUS.md),
+and [G1 causal-replay protocol](../mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md).
 
-- before action `t`, all prior assistant responses `P1 ... P(t-1)` remain in
-  the prompt;
-- only the latest three screenshot observations remain, including the current
-  screenshot: normally `S(t-2), S(t-1), S(t)` once `t >= 3`;
-- non-image tool/user-result observation messages are not removed by the image
-  counter.
+## Legacy gate operations
 
-For example, before action 50 the actor receives text from `P1 ... P49`, but
-only screenshots `S48, S49, S50`. This is why an old textual claim can remain
-active after its original visual evidence has disappeared.
+- `KEEP`: retain the selected span.
+- `DROP`: remove a targeted, safely removable span.
+- `REPLACE`: substitute a minimal curated correction.
+- `ARCHIVE`: remove a true but inactive-branch span from the active view
+  while preserving it in the sidecar.
+- `KEEP_UNCERTAIN`: retain content when the curated decision abstains.
 
-## Runtime boundary
+The prototype masks only the targeted span. A replacement is emitted as a
+Sentinel-authored block rather than rewriting an old assistant message as if
+the actor had originally said it. The raw history remains unchanged.
 
-```text
-Seed history + current GUI + claim/evidence decision
-                    |
-             Sentinel core gate
-                    |
-       KEEP / DROP / REPLACE / ARCHIVE /
-               KEEP_UNCERTAIN
-                    |
-              Seed host adapter
-                    |
- filtered_history_for_next_prompt
- + current GUI
- + Sentinel-authored correction block
-```
+## Seed representation captured by the prototype
 
-The host adapter removes only the targeted claim span. A `REPLACE` correction
-is emitted as a Sentinel-authored user block beside the current observation;
-it is not rewritten into the old assistant message as if the actor had said it
-originally. The raw history remains untouched in the sidecar.
+The historical fixture used Doubao Seed-2.0-Pro through MobileWorld's
+`seed_agent`. Its default `history_n=3` limits retained images, not prior
+assistant text:
 
-## Run
+- before action t, all earlier assistant responses P1 ... P(t-1) remain;
+- normally only the latest three screenshots remain once t >= 3;
+- non-image tool/user-result messages are not removed by the image counter.
 
-From `/Users/apigo/Desktop/agent monitor`:
+This fixture illustrated why a textual claim can remain active after its
+original visual evidence has left the prompt. It is not one of the six
+canonical Epic 1 model audits.
 
-```bash
-env PYTHONPATH='/Users/apigo/Desktop/agent monitor/sentinel_mvp' \
-  python3 -m unittest discover -s sentinel_mvp/tests -v
+## Legacy conceptual pipeline
 
-python3 sentinel_mvp/tools/build_seed_fixtures.py --mode check
-python3 sentinel_mvp/tools/run_replay_demo.py --check
-python3 sentinel_mvp/tools/run_replay_demo.py
-```
+~~~text
+Seed fixture history + current GUI + curated transformation plan
+                              |
+                     deterministic gate
+                              |
+          KEEP / DROP / REPLACE / ARCHIVE / KEEP_UNCERTAIN
+                              |
+                    Seed-specific renderer
+                              |
+                 derived active-history view
+                  + transformation sidecar
+~~~
 
-The final command writes
-`sentinel_mvp/output/seed_replay_demo_v1.json`. Every replay result contains:
+The original actor was not called on the rendered output.
 
-- `sentinel_input`: target step, current screenshot, claim span, evidence and
-  requested operation;
-- `sentinel_output.filtered_history_for_next_prompt`: the exact derived Seed
-  history strings for the next call;
-- `sentinel_output.actor_messages_for_next_model_call`: the host-rendered
-  history/current-observation messages (system/task prompts remain the host's
-  responsibility);
-- `sentinel_output.correction_block`: evidence-grounded guidance attached to
-  the current user observation;
-- `audit`: before/after source record, hashes, provenance and the explicit fact
-  that this first gate decision is curated rather than automatically predicted.
+## Reproducibility limitations
+
+The checked-in fixtures and demo output preserve historical absolute
+screenshot references and hashes. The source QR-MW trajectory tree and image
+bytes are not part of this repository. In addition, the legacy demo runner
+defaults to a no-longer-tracked v1 decision filename while the retained
+decision artifact is v2. Therefore the old end-to-end commands are preserved
+in source as provenance but must not be presented as a portable current
+workflow.
+
+The pure transformation modules and tests remain useful as historical
+behavioral examples. Any new executable work belongs in the formal G1 package
+and must follow the current handoff contracts rather than extending this
+prototype in place.
 
 ## Scope boundary
 
-This MVP tests the adapter, contracts, filtering semantics, and replay
-reproducibility.  Automatic claim extraction and evidence verification are the
-next component.  Until that component is calibrated, fixture gate decisions
-must be described as curated/gold decisions, not deployment predictions.
+Every fixture decision is curated/gold, not a deployment prediction. The
+prototype validates serialization, filtering semantics, and reversible audit
+records only. It provides no evidence that automatic verification, online
+rubric tracking, or a runtime pre-call gate is implemented or calibrated.

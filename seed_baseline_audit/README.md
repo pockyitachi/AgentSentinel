@@ -1,6 +1,18 @@
-# MobileWorld `seed_baseline` 中 pre-step misleading 问题审计
+# MobileWorld `seed_baseline` 历史性 pre-step misleading 初步审计
 
 审计日期：2026-08-15
+
+> [!IMPORTANT]
+> **Historical preliminary audit.** 本目录记录的是推动 Epic 1 立项的单模型
+> `seed_baseline` 早期调查。Seed 不属于 canonical 六模型 Epic 1 evaluation；
+> 本文的本地标签、分母、5/116 lower bound、15-chain 宽口径及 50-pair pilot
+> 不得与正式 MHR 及 observed-local-harm 结果合并或直接比较。
+>
+> Epic 1 已完成六种 history representation、共 702 个 model-task cases 的正式审核。
+> 当前定义和结果以
+> [六模型正式报告](../MobileWorld/docs/misleading_history_audit_report.md) 为准，
+> 最新阶段以 [Project Status](../mobileworld_audit_handoff/STATUS.md) 为准。本文后续
+> “建议的下一步”保留为历史设计记录，不代表当前 roadmap。
 
 ## 结论先行
 
@@ -10,15 +22,17 @@
 
 这些数字仍不是总体发生率，也不能仅凭观察日志声称“删除该 pre-step 一定能挽救任务”。50-pair pilot 只审紧邻上一条、单标注且有效样本量很小；原始轨迹也没有 KEEP/DROP 的反事实分支。
 
-因此，目前最准确的结论是：
+因此，当时最准确的结论是：
 
 > `seed_baseline` 中存在可复核的 invalid-history propagation；它值得成为 Sentinel 的首个研究对象。正式发生率研究应以 all-history target decision turn 为单位，对 500–600 turns 做概率抽样；因果部分应对 5 个低 state-confound 自然点做冻结状态的 history intervention replay。
 
-最新的合并结论、证据分层和可守住的 proposal 表述见 [问题加固报告](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/problem_solidification_report.md>)；20 例逐案红队见 [case_redteam.md](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/case_redteam.md>)。
+当时的合并结论、证据分层和 proposal 表述见
+[问题加固报告](problem_solidification_report.md)；20 例逐案红队见
+[case_redteam.md](case_redteam.md)。
 
 ## 1. 数据范围
 
-本审计只读取：
+本审计当时只读取以下 repo-external source tree（未随 Git 发布）：
 
 `/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline`
 
@@ -35,7 +49,10 @@
 
 两个缺失项应单独处理：`ThanksgivingPrepTask` 是初始化 HTTP 500 后的空 trajectory；`MastodonShareLocationTask` 有 6 steps，但没有 `result.txt`。二者都不能自动算作 failure。
 
-当前仓库的实验说明和启动命令把该组 agent 标为 **Doubao Seed-2.0-Pro**，具体 endpoint 为 `doubao-seed-2-0-pro-260215`，不是 Seed Pro 1.0，见 [QR-MW report](/Users/apigo/Desktop/Projects/QR-MW/report.md:9) 和 [启动参数](/Users/apigo/Desktop/Projects/QR-MW/report.md:94)。`traj.json` 本身没有保存 `model_name`，因此最终论文应把启动配置或 job metadata 一并归档。
+当时 QR-MW 的实验说明和启动命令把该组 agent 标为
+**Doubao Seed-2.0-Pro**，具体 endpoint 为
+`doubao-seed-2-0-pro-260215`，不是 Seed Pro 1.0。那些 repo-external
+启动材料未随本仓库发布；`traj.json` 本身也没有保存 `model_name`。
 
 另一个需要保留在 provenance ledger 里的事实是：当前正式目录按 `result.txt` 得到 46 个 success，而仓库 `report.md` 写的是 baseline 48/117。本文没有为了对齐 aggregate 而引入 backup 或其他 run；本审计所有分母均以当前正式目录为准。发表前需要单独解释这 2 个 task 的差异。
 
@@ -60,7 +77,10 @@
 
 ## 3. 为什么这个 run 特别适合研究该问题
 
-Seed adapter 的默认 `history_n=3`，见 [seed_agent.py](/Users/apigo/Desktop/Projects/QR-MW/src/mobile_world/agents/implementations/seed_agent.py:147)。构造下一次消息时，它遍历并重新加入所有历史 assistant response 的 `content` 和 `reasoning_content`，见 [history response loop](/Users/apigo/Desktop/Projects/QR-MW/src/mobile_world/agents/implementations/seed_agent.py:332)；随后只裁掉超过最近 3 个的 image observation，见 [image pruning](/Users/apigo/Desktop/Projects/QR-MW/src/mobile_world/agents/implementations/seed_agent.py:357)。
+Seed adapter 的默认 `history_n=3`，见当前
+[seed_agent.py](../MobileWorld/src/mobile_world/agents/implementations/seed_agent.py)。
+构造下一次消息时，它重新加入历史 assistant response 的 `content` 和
+`reasoning_content`，随后只裁掉超过最近 3 个的 image observation。
 
 按这个实际 history policy 计算：
 
@@ -102,12 +122,12 @@ Seed adapter 的默认 `history_n=3`，见 [seed_agent.py](/Users/apigo/Desktop/
 
 | Task | Source → target | 被反驳的 pre-step | 后续如何复用 | 结果 |
 |---|---|---|---|---|
-| `CheckConferenceAndSendSmsTask1` | s10 → s11–12 | s10 把 Paris 日期写成 `05/20/2025,05/27/2025`；[S3](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceAndSendSmsTask1/screenshots/CheckConferenceAndSendSmsTask1-0-3.png) 明确是 Oct 11–15 | [s11](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceAndSendSmsTask1/traj.json:123) 称其为 “correct dates” 并发送；s12 再次复述 | score 0，正确日期短信不存在 |
-| `CheckSetMeetTimeTask` | s6 → s7–9 | [S3](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckSetMeetTimeTask/screenshots/CheckSetMeetTimeTask-0-3.png) 邮件是 Nov 15, 3 PM；[s6](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckSetMeetTimeTask/traj.json:65) 却改成 Nov 1, 10–11 AM | s7 接受 Nov 1，s8–9 进入错误日期的创建流程；之后日期继续漂移 | score 0，calendar event 错误 |
-| `ScheduleLunchViaSmsTask` | s16 → s17–18 | [S4](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleLunchViaSmsTask/screenshots/ScheduleLunchViaSmsTask-0-4.png) 写明 tomorrow 11 AM/约1小时；s16 却说“没有指定时间”，表单仍是默认 1 PM | [s17](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleLunchViaSmsTask/traj.json:191) 直接保存；s18 把 1 PM 事件当作完成 | score 0，缺少 11–12 事件 |
+| `CheckConferenceAndSendSmsTask1` | s10 → s11–12 | s10 把 Paris 日期写成 `05/20/2025,05/27/2025`；repo-external S3 明确是 Oct 11–15 | s11 称其为 “correct dates” 并发送；s12 再次复述 | score 0，正确日期短信不存在 |
+| `CheckSetMeetTimeTask` | s6 → s7–9 | repo-external S3 邮件是 Nov 15, 3 PM；s6 却改成 Nov 1, 10–11 AM | s7 接受 Nov 1，s8–9 进入错误日期的创建流程；之后日期继续漂移 | score 0，calendar event 错误 |
+| `ScheduleLunchViaSmsTask` | s16 → s17–18 | repo-external S4 写明 tomorrow 11 AM/约1小时；s16 却说“没有指定时间”，表单仍是默认 1 PM | s17 直接保存；s18 把 1 PM 事件当作完成 | score 0，缺少 11–12 事件 |
 | `CheckInterviewTimesTask` | s20 → s21–28 | 三封邮件分别是 Amazon/Google/Meta；s20 凭空生成 TechNova、Nov 5、10–11 | 后续输入 TechNova，并配置和保存整条虚构事件 | score 0，calendar events 错误 |
-| `MastodonAdjustTootsTask` | s32 → s33–34 | s32 混淆 favorite 与 bookmark；[S33](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/MastodonAdjustTootsTask/screenshots/MastodonAdjustTootsTask-0-33.png) 菜单写 `Bookmark`，说明当前已未收藏 | [s33](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/MastodonAdjustTootsTask/traj.json:393) 却说点击会取消收藏，实际重新收藏；s34 又声称已移除 | score 0，两个 status 仍 bookmarked |
-| `CheckConferenceLocationTask` | s10 → s11、s18–20 | [S6](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/CheckConferenceLocationTask/screenshots/CheckConferenceLocationTask-0-6.png) 邮件只写 Harvard Square Hotel；s10 凭空归因为 100 Main St；task evaluator 的目标地址是 [110 Mt Auburn St](/Users/apigo/Desktop/Projects/QR-MW/src/mobile_world/tasks/definitions/gmail/check_conference_location.py:19) | s11 选择错误地点；s18 再次称地址“from the email”；最终计算错误路线 | score 0；同时漏做 SMS milestone |
+| `MastodonAdjustTootsTask` | s32 → s33–34 | s32 混淆 favorite 与 bookmark；repo-external S33 菜单写 `Bookmark`，说明当前已未收藏 | s33 却说点击会取消收藏，实际重新收藏；s34 又声称已移除 | score 0，两个 status 仍 bookmarked |
+| `CheckConferenceLocationTask` | s10 → s11、s18–20 | repo-external S6 邮件只写 Harvard Square Hotel；s10 凭空归因为 100 Main St；task evaluator 的目标地址是 [110 Mt Auburn St](../MobileWorld/src/mobile_world/tasks/definitions/gmail/check_conference_location.py) | s11 选择错误地点；s18 再次称地址“from the email”；最终计算错误路线 | score 0；同时漏做 SMS milestone |
 
 最适合讲 proposal 的单个例子是 `CheckSetMeetTimeTask`：证据、错误 claim 和下一步 GUI 行为最短、最清楚。
 
@@ -127,7 +147,9 @@ Seed adapter 的默认 `history_n=3`，见 [seed_agent.py](/Users/apigo/Desktop/
 
 ### 5.2 一个成功恢复对照
 
-`ScheduleCoffeeTimeViaSmsTask` 的 s8 把 9:10 AM 邀请错误改成 3 PM，s9 又按 3 PM/PTO 的 premise 继续；但 [S10](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleCoffeeTimeViaSmsTask/screenshots/ScheduleCoffeeTimeViaSmsTask-0-10.png) 重新展示原短信后，agent 在 s10 恢复到 9:10 AM，并结合 [S8 calendar](/Users/apigo/Desktop/Projects/QR-MW/traj_logs/seed_baseline/ScheduleCoffeeTimeViaSmsTask/screenshots/ScheduleCoffeeTimeViaSmsTask-0-8.png) 的 9–11 AM 冲突作出正确回复，最终 score 1。
+`ScheduleCoffeeTimeViaSmsTask` 的 s8 把 9:10 AM 邀请错误改成 3 PM，s9 又按
+3 PM/PTO 的 premise 继续；但 repo-external S10 重新展示原短信后，agent 在 s10
+恢复到 9:10 AM，并结合 S8 calendar 的 9–11 AM 冲突作出正确回复，最终 score 1。
 
 这个例子很重要：invalid pre-step 不等于必然失败，也不等于应该删除整条 record。新的强证据已经纠正错误时，Sentinel 应把旧 claim 标为 `SUPERSEDED/REFUTED`，保留该 step 中仍正确的动作和实体信息，而不是无条件删除整轮。
 
@@ -135,7 +157,12 @@ Seed adapter 的默认 `history_n=3`，见 [seed_agent.py](/Users/apigo/Desktop/
 
 `SetAlarmTask`、`CheckEventTimeTask` 和 `AdjustFontIconMaximumTask` 都出现过误点或 drag 未生效，但下一步根据新截图识别并恢复。如果源 `P_i` 只表达“我将点击/拖动”，而没有声称“已经成功”，这类样本应标为 `ACTION_FAILURE_ONLY`，不进入 misleading history 分子。
 
-## 6. 对 Sentinel 设计的直接影响
+## 6. 历史设计推论
+
+本节是 Epic 1 和正式 G1 contract 之前的方案草图，不代表已经实现的 runtime 行为，
+也不是当前 G1.2 的权威 operation contract。旧的 MASK/CORRECT/LOW_RELEVANCE
+术语仅用于保留设计演进；当前 curated transformation 语义与 phase boundary 必须以
+[handoff decisions](../mobileworld_audit_handoff/DECISION_LOG.md) 为准。
 
 用户最初的直觉是对的：Sentinel 最终要 guide agent 的主要方式，确实是**在下一次 model call 前决定哪些 pre-step 内容还能进入 prompt**。但从这些真实轨迹看，操作粒度不能只到整个 step。
 
@@ -182,7 +209,10 @@ Use November 15 at 3:00 PM for the calendar milestone.
 4. 不能从观察日志直接推出“删除历史会提高成功率”；
 5. 不能只检查 scanner hit。若不审查 non-hit，就只能报告确认案例下界和 scanner precision。
 
-## 8. 建议的下一步实验
+## 8. 历史上建议的下一步实验
+
+以下方案没有按本文写法执行，保留它们只是为了记录 Epic 1 之前的研究设计演进。
+当前 G1 protocol 与 admission gate 以 handoff 目录中的 locked 文档为准。
 
 ### 8.1 先估计自然发生率
 
@@ -213,12 +243,13 @@ Use November 15 at 3:00 PM for the calendar milestone.
 
 ## 9. 审计产物
 
-- [全量扫描脚本](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/scan_seed_baseline.py>)
-- [保守 repetition/static/revision 量化脚本](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/quantify_baseline_signals.py>)
-- [数据与候选摘要](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/output/summary.json>)
-- [保守量化完整结果](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/output/conservative_metrics.json>)
-- [全部 step ledger](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/output/steps.csv>)
-- [自动候选 ledger](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/output/candidates.csv>)
-- [人工案例账本](</Users/apigo/Desktop/agent monitor/seed_baseline_audit/output/manual_review.json>)
+- [全量扫描脚本](scan_seed_baseline.py)
+- [保守 repetition/static/revision 量化脚本](quantify_baseline_signals.py)
+- [数据与候选摘要](output/summary.json)
+- [保守量化完整结果](output/conservative_metrics.json)
+- [全部 step ledger](output/steps.csv)
+- [自动候选 ledger](output/candidates.csv)
+- [人工案例账本](output/manual_review.json)
 
-所有产物均写在 proposal 工作区；QR-MW 原始日志没有被修改。
+以上 derived artifacts 现保留在本目录；repo-external QR-MW 原始日志未被修改，
+也没有随 Git 发布。

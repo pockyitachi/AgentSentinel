@@ -1,77 +1,139 @@
-# MobileWorld Pre-step Audit Collector — Server Handoff
+# AgentSentinel MobileWorld Research Handoff
 
-本目录是 AgentSentinel monorepo 中的设计与续作包。服务器端只需 clone 整个 AgentSentinel 仓库，不需要读取原始聊天记录，也不应依赖服务器上其他 MobileWorld checkout，即可理解当前研究、实现第一阶段 collector，并生成后续可重复评测的数据。
+本目录保存 AgentSentinel 在 MobileWorld 上的权威研究边界、原始数据契约、实现决策、
+验收记录和 G1 因果可行性协议。它不再只是“尚待实现的 collector 设计包”：
+Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1。
 
-## 当前唯一工程目标
+## 当前状态
 
-在官方 MobileWorld 中实现一个可关闭、零干预、event-sourced、lossless、label-free 的 runtime audit collector，完整保存：
+截至 2026-08-26：
 
-1. 每次模型调用真正收到的最终 request（包括 role、文本、tool schema、图片、模型参数和 retry/stream 信息）；
-2. 每次模型调用的原始 response 与规范化 response；
-3. 完整 decision/transition：`S_t → I_t → P_t → A_t → R_t → S_{t+1}`，以及 MCP/tool result、用户回复、执行异常和任务终局分数；
-4. 足够的版本、ID、时间和 artifact provenance，使离线评测可以反复更换错误定义而无需重跑任务。
+| Workstream | 状态 | 说明 |
+| --- | --- | --- |
+| Runtime Audit Collector | 已实现并用于正式研究 | 默认关闭、passive、fail-open、event-sourced、append-only、label-free；保存应用层实际 SDK 参数和完整 transition |
+| Epic 1：Motivation Investigation | **已完成** | 六模型各 117 tasks，共 702 个 model-task cases；完成 exact history reconstruction、outcome-blind MHR 与 local-harm 审核和 outcome-aware failure-link 审核 |
+| ALE-319 / G1.1 | **已完成** | 冻结 CPU-only causal-replay protocol、schemas、pre-gold registry、controls、model/config manifest 与 locked analysis plan；没有生成 treatment response |
+| ALE-320 / G1.2 | **下一项；在单独变更中准备** | 计划定义可移植的 History IR/Core、history-family codec、provider codec interface、protocol validator 和 derived sidecar contract |
 
-Collector 只收集事实，不判断 history 是否错误，不生成 rubric，不修改 prompt，也不实现 Sentinel 的 `KEEP/DROP/REPLACE`。
+当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
+Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
 
-## 权威代码基线
+## Epic 1：六模型调查（已完成）
 
-- Repository: `https://github.com/Tongyi-MAI/MobileWorld.git`
-- Branch: `main`
-- Frozen design baseline: `0dcd0980eac64d76f498f93568a1ec0594b743c4`
-- Commit date: `2026-08-04`
-- 内置 registered adapters: 9
+Epic 1 在同一 canonical GUI-only 117-task suite 上分别审计六种 host-native history
+representation。MHR 要求错误或 stale 的模型历史实际进入后续 actor request，并被后续
+decision 明确复用。下表另列其中观察到局部 harmful effect 的 MHR cases；local harm 是
+reuse chain 的属性，不是第二个 history event。
 
-服务器开始实现前必须记录实际 checkout commit。若服务器代码不是上述 commit，不要强制 reset 或覆盖服务器已有修改；先做差异审计，再更新本包引用的行号和实现计划。
+| Model | Previous-history representation | MHR cases | MHR cases with observed local harm |
+| --- | --- | ---: | ---: |
+| MAI-UI-8B | raw replay | 7/117 (5.98%) | 7/117 (5.98%) |
+| Qwen3-VL-8B | flat task progress | 35/117 (29.91%) | 32/117 (27.35%) |
+| GELab-Zero-4B | rolling summary | 33/117 (28.21%) | 29/117 (24.79%) |
+| UI-Venus-1.5-8B | flat previous actions | 3/117 (2.56%) | 1/117 (0.85%) |
+| GUI-Owl-1.5-8B-Instruct | hybrid-collapsed action history | 11/117 (9.40%) | 7/117 (5.98%) |
+| MemGUI-8B-SFT | structured H/L/M folding | 27/117 (23.08%) | 18/117 (15.38%) |
+| **Total** | six families | **116/702 (16.52%)** | **94/702 (13.39%)** |
 
-## 建议阅读顺序
+六组数据合计 128 success、574 failure。116 个 strict-MHR cases 包含 272 条 reuse
+chains，其中 94 个 cases / 239 条 chains 观察到局部 harm。对 108 个失败且含 MHR 的
+cases 做 outcome-aware review 后，读者口径保留 10 个 explicit final-decision stop 与
+48 个 earlier unrecovered derailment：合计 58/108 failed-MHR cases，也就是 58/574
+全部失败 cases。
 
-1. [`AGENTS.md`](AGENTS.md) — coding agent 的强制范围与行为规则；
-2. [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) — 研究动机、已有证据和当前阶段；
-3. [`DECISION_LOG.md`](DECISION_LOG.md) — 已确定且不应擅自推翻的设计决策；
-4. [`MOBILEWORLD_CODE_AUDIT.md`](MOBILEWORLD_CODE_AUDIT.md) — 9 个 adapter 与实际 history 注入方式；
-5. [`COLLECTOR_DESIGN.md`](COLLECTOR_DESIGN.md) — collector 总体架构；
-6. [`EVENT_CONTRACT_V1.md`](EVENT_CONTRACT_V1.md) — raw event 与 artifact 的 V1 契约；
-7. [`IMPLEMENTATION_GUIDE.md`](IMPLEMENTATION_GUIDE.md) — 服务器端逐阶段改码说明；
-8. [`TEST_AND_ACCEPTANCE.md`](TEST_AND_ACCEPTANCE.md) — 测试矩阵和 Definition of Done；
-9. [`OFFLINE_EVALUATION_DESIGN.md`](OFFLINE_EVALUATION_DESIGN.md) — 与收集层隔离的版本化分析；
-10. [`SERVER_AGENT_INSTRUCTIONS.md`](SERVER_AGENT_INSTRUCTIONS.md) — 可直接交给服务器 coding agent 的续作任务；
-11. [`STATUS.md`](STATUS.md) — 当前完成度和下一动作。
-12. [`examples/sample_events.jsonl`](examples/sample_events.jsonl) — 仅用于说明 event shape 的无标签示例；
-13. [`UPLOAD_CHECKLIST.md`](UPLOAD_CHECKLIST.md) — 上传与服务器 bootstrap 核对表。
+这些结果全部是 observational evidence，且 causal_claim_supported=false。它们不能证明
+MHR 是失败的唯一原因、不能给模型排名，也不能估计删除或纠正 history 会提高多少成功率。
+六种 representation 必须各用自己的 exact mapper 和语义口径。GUI-Owl 只使用 corrected
+v3 的 11/117 与 7/117；已撤回的旧 v2 1/117 结果不得再引用。
 
-## 目录内容
+完整定义、逐模型证据和限制见
+[MobileWorld/docs/misleading_history_audit_report.md](../MobileWorld/docs/misleading_history_audit_report.md)。
 
-```text
+## 下一阶段方向：ALE-320 / G1.2
+
+G1 的下一目标是先验证 history-only intervention 的因果可行性，不是直接实现自动
+Sentinel。计划中的 G1.2 聚焦可移植、CPU-only、evaluation-time transformation
+contract：
+
+- model-agnostic canonical History IR 与 Sentinel Core；
+- 按 representation family 隔离的 extraction/render codec；
+- provider codec interface 与 provider-call 前 protocol validator；
+- raw request、Transformation Plan、rendered request、diff 与 provenance 的 derived sidecar；
+- 对 curated transformation plan 做确定性应用。
+
+预期边界不包含 claim truth inference、provider/model invocation、GPU、GUI action、
+live prompt interception 或自动 runtime Sentinel，也不把 fixture conformance 声称为六个
+production-ready adapters。
+
+Collector raw layer 保持不可变、passive 和 label-free。所有 G1 label、plan、rendered
+request、response 与统计都属于 repo 外的 versioned derived/replay layer。
+
+本 README 分支只包含已合并的 G1.1 authority；G1.2 的 phase decision、AGENTS/STATUS
+更新和 contract 正在另一项变更中准备。因此本节只记录 project direction，不授权实现。
+在相应 authoritative files 合并前，必须遵守当前 checkout 中的 AGENTS.md、
+DECISION_LOG.md 和 STATUS.md。
+
+## 强制入口与补充导航
+
+先读取 repo root 的 AGENTS.md 与本目录的 [AGENTS.md](AGENTS.md)，并以它们为工程授权。
+本目录 AGENTS 当前要求在任何代码修改前完整、依序阅读：
+
+1. 本 README；
+2. [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)；
+3. [DECISION_LOG.md](DECISION_LOG.md)；
+4. [COLLECTOR_DESIGN.md](COLLECTOR_DESIGN.md)；
+5. [EVENT_CONTRACT_V1.md](EVENT_CONTRACT_V1.md)；
+6. [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)；
+7. [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md)；
+8. [SERVER_AGENT_INSTRUCTIONS.md](SERVER_AGENT_INSTRUCTIONS.md)。
+
+Repo-root AGENTS 还要求完整读取 [STATUS.md](STATUS.md)。以下是研究结果与 G1 的补充
+导航，不替代上述强制顺序：
+
+- [OFFLINE_EVALUATION_DESIGN.md](OFFLINE_EVALUATION_DESIGN.md)；
+- [六模型正式报告](../MobileWorld/docs/misleading_history_audit_report.md)；
+- [G1_CAUSAL_REPLAY_PROTOCOL_V1.md](G1_CAUSAL_REPLAY_PROTOCOL_V1.md)；
+- [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
+- [g1/registry.lock.v1.json](g1/registry.lock.v1.json) 与 [schemas/g1/](schemas/g1/)。
+
+其中 Collector 文档保留其设计时状态与验收原则；完成记录以 STATUS.md 为准，工程授权
+以 AGENTS.md 与 DECISION_LOG.md 为准。本 README 不能覆盖它们。
+
+## 目录职责
+
+~~~text
 mobileworld_audit_handoff/
-├── README.md
-├── AGENTS.md
-├── PROJECT_CONTEXT.md
-├── DECISION_LOG.md
-├── MOBILEWORLD_CODE_AUDIT.md
-├── COLLECTOR_DESIGN.md
-├── EVENT_CONTRACT_V1.md
-├── IMPLEMENTATION_GUIDE.md
-├── OFFLINE_EVALUATION_DESIGN.md
-├── TEST_AND_ACCEPTANCE.md
-├── SERVER_AGENT_INSTRUCTIONS.md
-├── STATUS.md
-├── UPLOAD_CHECKLIST.md
+├── AGENTS.md, SERVER_AGENT_INSTRUCTIONS.md
+│   └── agent 工作范围与服务器操作规则
+├── PROJECT_CONTEXT.md, DECISION_LOG.md, STATUS.md
+│   └── 研究语义、locked decisions 与 append-only execution record
+├── COLLECTOR_DESIGN.md, EVENT_CONTRACT_V1.md
+├── IMPLEMENTATION_GUIDE.md, TEST_AND_ACCEPTANCE.md
+│   └── Collector v1 设计、raw contract、实现和验收
+├── MOBILEWORLD_CODE_AUDIT.md, OFFLINE_EVALUATION_DESIGN.md
+│   └── history representation 与 derived audit 设计
+├── G1_CAUSAL_REPLAY_PROTOCOL_V1.md
+├── G1_LOCKED_ANALYSIS_PLAN_V1.md
+├── g1/
+│   └── frozen registry inputs, model/config manifest, publication lock
+├── schemas/g1/
+│   └── versioned G1.1 contracts
 └── examples/
-    └── sample_events.jsonl
-```
+    └── label-free raw event example
+~~~
 
-## 服务器端的预期摆放方式
+## Monorepo、数据与 provenance
 
-本项目采用单一 monorepo；服务器必须使用同一次 clone 中的 `MobileWorld/`：
+服务器应只使用同一次 AgentSentinel clone 中的 MobileWorld/，并保留用户现有修改；
+不得切换到其他 MobileWorld checkout，也不得为了对齐上游而 reset 本仓库。
 
-```text
+~~~text
 AgentSentinel/
 ├── MobileWorld/
 └── mobileworld_audit_handoff/
-```
+~~~
 
-不要改用服务器上已有的其他 MobileWorld clone。实现代码进入本 monorepo 的 `MobileWorld/`；设计、决策和评测定义保留在本 handoff 目录。不要把运行生成的 raw audit logs 提交进 AgentSentinel Git 仓库。
-
-## 本包完成时的状态
-
-本包只交付设计和交接材料。Mac 环境不具备运行 MobileWorld 的条件，因此 collector 实现、单元测试、服务器 smoke run 和真实模型采集尚未执行。任何服务器端结果必须在 [`STATUS.md`](STATUS.md) 中追加记录。
+真实 raw collection、derived audit、screenshots、review receipts、replay capsules 和 model
+responses 都必须写在 Git 工作树之外的受限、versioned data root。Git 只保存代码、schema、
+协议、报告、manifest/hash 和非秘密引用。Raw evidence append-only；任何 derived 输出不得
+回写或“修复”既有 raw bytes。

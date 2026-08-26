@@ -1,10 +1,27 @@
-# `seed_baseline` prevalence study：概率抽样 pilot 与下一版主研究设计
+# `seed_baseline` historical prevalence pilot：概率抽样与旧版主研究设计
 
 审计日期：2026-08-15
 
+> [!IMPORTANT]
+> **Historical sampling pilot.** 这项 50-pair study 只用于测试
+> `seed_baseline` 上的抽样与标注机制，不是 canonical Epic 1 prevalence study。
+> 本文建议的 500–600-turn 设计没有按原方案执行，后文仅作为历史 planning record。
+>
+> 已完成的 Epic 1 evidence base 是六种 history representation、共 702 个
+> model-task cases 的 outcome-blind audit，以及后续 outcome-aware observational
+> failure-link review。当前定义和结果请使用
+> [六模型正式报告](../../MobileWorld/docs/misleading_history_audit_report.md)，
+> 当前项目阶段请使用
+> [Project Status](../../mobileworld_audit_handoff/STATUS.md)。
+
 ## 结论
 
-这轮只读取 `traj_logs/seed_baseline`。我完成了一个可复现的两阶段概率抽样 pilot：从 116 条非空轨迹中按 `success/failure/missing × trajectory length` 分层抽取 25 个 task，再在 task 内分别抽 scanner hit 与 non-hit，共人工复核 50 个 `P_(t-1) → P_t` immediate pair。
+这轮只读取 `traj_logs/seed_baseline`。我在当时的原始环境完成了一个可复现的
+两阶段概率抽样 pilot：从 116 条非空轨迹中按
+`success/failure/missing × trajectory length` 分层抽取 25 个 task，再在 task
+内分别抽 scanner hit 与 non-hit，共人工复核 50 个
+`P_(t-1) → P_t` immediate pair。由于 repo-external trajectory tree 未随 Git
+发布，这里的“可复现”不表示当前 clone 可以独立重跑。
 
 50 条全部完成单人复核，没有把空白模板当成标注结果；证据不足的 4 条保留为 `UNVERIFIABLE`。
 
@@ -54,7 +71,7 @@
 
 因此本 pilot 不报告正式 CI，也不据此作总体率结论。
 
-## 下一版：以 target decision turn 为主单位
+## 历史上建议的下一版：以 target decision turn 为主单位
 
 总体仍是同样的 3,281 个带历史 decision turn，但每一行改为：
 
@@ -90,7 +107,10 @@ iff P_t 明确复述、接受或操作性依赖某个被直接证据反驳的 P_
 
 本目录的 `pilot_turn_context_all_history.jsonl` 已经把相同 50 个 target turn 扩展为完整 prior-text bundle，可作为下一轮标注器和界面输入；**它目前还没有完成 all-history adjudication**。
 
-## 正式抽样建议
+## 历史正式抽样建议
+
+以下设计没有按本文写法执行，不能视为当前 sampling protocol 或尚待完成的 Epic 1
+工作项。它保留用于解释早期方法选择如何演进为后来的六模型 evidence-card audit。
 
 采用两阶段分层 cluster sample：
 
@@ -135,11 +155,13 @@ p_hat = Σ(w_j y_j) / Σ(w_j)
 - `pilot_turn_context_all_history.jsonl`：下一轮 target-turn/all-history 标注输入；
 - `analyze_pilot.py`：验证样本和标签一一对应，并重算所有数字。
 
-复现命令：
+原始环境中的 provenance commands（当前 clone 缺少它们所引用的 repo-external
+trajectory tree，不能独立执行）：
 
 ```bash
 python3 seed_baseline_audit/prevalence_study/build_sampling_frame.py
 python3 seed_baseline_audit/prevalence_study/analyze_pilot.py
 ```
 
-所有输出都写在 proposal 工作区，没有修改 QR-MW 或任何 trajectory。
+以上 derived outputs 现保留在本目录；repo-external QR-MW trajectories 未被修改，
+也没有随 Git 发布。

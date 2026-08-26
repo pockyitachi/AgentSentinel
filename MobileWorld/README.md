@@ -28,6 +28,35 @@
 </p>
 
 
+> [!IMPORTANT]
+> **AgentSentinel research workspace.** This tree is the instrumented
+> MobileWorld benchmark/runtime host used by AgentSentinel; the original
+> upstream MobileWorld documentation continues below.
+>
+> **Status (2026-08-26):** Epic 1 is complete. We collected and audited the
+> same canonical 117-task GUI-only suite for MAI-UI-8B, Qwen3-VL-8B,
+> GELab-Zero-4B, UI-Venus-1.5-8B, GUI-Owl-1.5-8B-Instruct, and
+> MemGUI-8B-SFT: 702 model-task cases across six host-native history
+> representations. Strict misleading-history reuse appeared in 116 cases /
+> 272 chains; 94 cases / 239 chains had observed local harm. A separate
+> outcome-aware review found 10 final-decision stops and 48 earlier
+> unrecovered derailments with a traceable connection to final failure
+> (58/574 failures).
+>
+> These findings are observational and remain
+> `causal_claim_supported=false`; they do not establish a model ranking,
+> prove that history alone caused failure, or estimate the benefit of removing
+> history. G1.1's immutable pre-gold causal-replay registry is complete. The
+> next workstream, ALE-320 / G1.2, is being prepared in a separate change to
+> define CPU-only portable History IR, codec, validator, and sidecar contracts.
+> This README does not authorize provider calls, GUI actions, or an automatic
+> runtime Sentinel; follow the checked-in handoff scope files.
+>
+> See the [six-model audit](docs/misleading_history_audit_report.md),
+> [project status](../mobileworld_audit_handoff/STATUS.md), and
+> [workspace overview](../README.md).
+
+
 While maintaining the same level of rigorous, reproducible evaluation as AndroidWorld, **MobileWorld** offers a more challenging online mobile-use benchmark by introducing four additional features that better capture real-world agent behavior.
 
 - 🎯 **Broad Real-World Coverage**: 201 carefully curated tasks across 20 mobile applications
