@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "registry_manifest.schema.json",
+  "title": "G1 registry manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "builder_version", "curated", "deployment_prediction", "registry_phase", "readiness", "case_state_policy", "source_base", "registry_contract", "forbidden_inputs", "inputs", "counts", "files"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-registry-manifest/v1"},
+    "record_type": {"const": "causal_replay_registry_manifest"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "builder_version": {"type": "string", "minLength": 1},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "registry_phase": {"const": "PRE_GOLD_G1_1"},
+    "readiness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["curation_and_admission_sealed", "admission_ready", "execution_ready", "run_ready", "treatment_response_generation_allowed"],
+      "properties": {
+        "curation_and_admission_sealed": {"const": false},
+        "admission_ready": {"const": false},
+        "execution_ready": {"const": false},
+        "run_ready": {"const": false},
+        "treatment_response_generation_allowed": {"const": false}
+      }
+    },
+    "case_state_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_registry_state", "append_only_admission_states", "included_count", "g1_6_required_before_inclusion", "g1_6_rewrites_source_records"],
+      "properties": {
+        "source_registry_state": {"const": "CANDIDATE_FROZEN"},
+        "append_only_admission_states": {"const": ["INCLUDED", "EXCLUDED"]},
+        "included_count": {"const": 0},
+        "g1_6_required_before_inclusion": {"const": true},
+        "g1_6_rewrites_source_records": {"const": false}
+      }
+    },
+    "source_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "absolute_path_is_content_identity"],
+      "properties": {
+        "kind": {"const": "explicit_external_source_base"},
+        "absolute_path_is_content_identity": {"const": false}
+      }
+    },
+    "registry_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_file_count", "source_config_sha256", "aggregate_sha256"],
+      "properties": {
+        "contract_file_count": {"type": "integer", "minimum": 1},
+        "source_config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "aggregate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "forbidden_inputs": {"type": "array", "minItems": 5, "items": {"type": "string"}},
+    "inputs": {"type": "array", "items": {"$ref": "#/$defs/input"}},
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict_mhr_case_count", "strict_mhr_task_count", "clean_control_selected_count", "clean_control_reserve_count", "ledger_count", "included_count", "treatment_response_count", "per_source"],
+      "properties": {
+        "strict_mhr_case_count": {"type": "integer", "minimum": 0},
+        "strict_mhr_task_count": {"type": "integer", "minimum": 0},
+        "clean_control_selected_count": {"type": "integer", "minimum": 0},
+        "clean_control_reserve_count": {"type": "integer", "minimum": 0},
+        "ledger_count": {"type": "integer", "minimum": 0},
+        "included_count": {"const": 0},
+        "treatment_response_count": {"const": 0},
+        "per_source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["qwen", "mai"],
+          "properties": {
+            "qwen": {"$ref": "#/$defs/sourceCounts"},
+            "mai": {"$ref": "#/$defs/sourceCounts"}
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_registry.pre_gold.jsonl", "clean_control_pool.jsonl", "selection_ledger.jsonl", "arm_catalog.json", "dry_validation.json"],
+      "properties": {
+        "case_registry.pre_gold.jsonl": {"$ref": "#/$defs/file"},
+        "clean_control_pool.jsonl": {"$ref": "#/$defs/file"},
+        "selection_ledger.jsonl": {"$ref": "#/$defs/file"},
+        "arm_catalog.json": {"$ref": "#/$defs/file"},
+        "dry_validation.json": {"$ref": "#/$defs/file"}
+      }
+    }
+  },
+  "$defs": {
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_key", "input_id", "sha256", "byte_count"],
+      "properties": {
+        "source_key": {"type": "string", "minLength": 1},
+        "input_id": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "byte_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "byte_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "sourceCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict_mhr_case_count", "strict_mhr_task_count", "clean_control_pool_count", "clean_control_selected_count", "clean_control_selected_task_count", "ledger_count", "included_count"],
+      "properties": {
+        "strict_mhr_case_count": {"type": "integer", "minimum": 0},
+        "strict_mhr_task_count": {"type": "integer", "minimum": 0},
+        "clean_control_pool_count": {"type": "integer", "minimum": 0},
+        "clean_control_selected_count": {"type": "integer", "minimum": 0},
+        "clean_control_selected_task_count": {"type": "integer", "minimum": 0},
+        "ledger_count": {"type": "integer", "minimum": 0},
+        "included_count": {"const": 0}
+      }
+    }
+  }
+}

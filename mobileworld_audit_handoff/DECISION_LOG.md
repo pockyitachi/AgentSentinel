@@ -298,6 +298,50 @@ MobileWorld clone。运行数据仍写到 repo 外的显式 data root。
 
 ---
 
+## D-020 — 本地无鉴权 API-key sentinel 不是 configured secret
+
+**状态：Locked for collector secret policy**
+
+MobileWorld 的 OpenAI-compatible 本地模型端点使用精确值 `empty` 作为“无鉴权”
+API-key sentinel；历史 CLI 同时存在大小写变体。因此 collector 在所有 secret
+normalization 边界中只把该精确值按大小写不敏感方式视为非 secret。
+
+该例外不 trim、不做子串匹配，也不泛化到其他短值。带前后缀、空白或任意其他
+非空 credential 仍是 configured secret，并保留 fail-closed 排除策略。transport
+配置中的 API-key 字段仍不得进入 raw metadata；sentinel 偶然出现在模型可见文本、
+图片 data URL 或其 base64 表示中时，不能据此丢失语义证据或把 capture 标为不完整。
+
+---
+
+## D-021 — G1 仅进入离线、派生的 next-action causal replay
+
+**状态：Locked（owner 于 2026-08-26 明确授权 ALE-319 / G1.1）**
+
+Epic 1 的自然轨迹 motivation 审核完成后，下一阶段允许实现 G1 的离线、派生、
+固定决策点 causal replay。G1 的实验单位是同一个
+`task × frozen decision capsule/request state × model config × seed`；只改变历史处理臂，
+先评估**下一步动作**，不在本阶段运行完整任务分支。
+
+G1.1 只冻结 protocol、case/arm/run/outcome schema、预处理 case registry、模型与环境
+manifest、immutable selection ledger 和 locked analysis plan。Qwen3-VL flat-progress 是主研究，
+MAI-UI raw-replay 是复现研究。G1.1 不生成 treatment model response，不自动验证 claim，
+也不把人工审核规则部署到 runtime；所有 G1.1 产物必须显式
+`deployment_prediction=false`。
+
+Collector v1 的既有边界保持不变：raw event stream 仍是不可变、被动、
+zero-intervention、label-free 的证据层。G1 只能从 frozen raw/derived evidence 读取和派生，
+不得改变 collector、在线 request、agent action、GUI/backend state 或既有 raw bytes；任何
+case registry、人工 gold、correction、oracle history、replay response 和统计结果都必须写入
+repo 外的 versioned derived/replay data root。repo 只保存协议、schema、代码、测试、manifest、
+hash 和非秘密引用。
+
+当前明确不在范围内：自动 claim verification、在线 rubric tracking、runtime
+interception/filtering/correction、代表 actor 执行动作、完整任务 branching，以及基于 treatment
+response 回头选择 case。G1.2 及后续 replay 执行必须等待本条 decision 与 G1.1 冻结产物通过
+完整校验；若实验边界改变，必须新增 decision，不得静默放宽。
+
+---
+
 ## 尚未锁定、留给后续实验设计的问题
 
 以下内容不要在 collector 中写死：

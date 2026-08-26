@@ -1,0 +1,147 @@
+{
+  "curated": true,
+  "deployment_prediction": false,
+  "protocol_version": "mobileworld.g1.causal-replay/protocol-v1",
+  "contract_files": [
+    {
+      "path": "MobileWorld/scripts/build_g1_causal_replay_registry.py",
+      "sha256": "5aecb1384b7dfcb10ef9a529ea93c6d054cce3e47fa35b7d28aa47176ab39b16"
+    },
+    {
+      "path": "MobileWorld/src/mobile_world/offline/causal_replay_registry.py",
+      "sha256": "e403941f817e842c5da528fbb74b6f357fa53984223d7af94d2a6c57db28dfdf"
+    },
+    {
+      "path": "MobileWorld/tests/offline/test_causal_replay_registry.py",
+      "sha256": "be50b1449694eec9d66ee93de53ab407f11cef7607993b4e204d89378f70fd0c"
+    },
+    {
+      "path": "mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md",
+      "sha256": "07fd0b64ea68f514e5369033a5f0b2f0c191c95fdb1cfef1b7e6ad4d81badd26"
+    },
+    {
+      "path": "mobileworld_audit_handoff/G1_LOCKED_ANALYSIS_PLAN_V1.md",
+      "sha256": "ecb98d1dfc1d28e496d9d7320054ee19cc222df5b9d7ee00105073dfc786e79b"
+    },
+    {
+      "path": "mobileworld_audit_handoff/g1/model_config_manifest.v1.json",
+      "sha256": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/action_gold_bundle.schema.json",
+      "sha256": "0e45cf94fe9ae510a01872a4e4e91c9a53efac49c123f537f956383026f2b254"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/admission.schema.json",
+      "sha256": "cc3f0b9f1ce98d20c0f4727f439d47bff83b6f11718cc64a46d3346737d9c91d"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/admission_seal.schema.json",
+      "sha256": "76873b8c535ed589b14be3a01b4aca90b3a7999781f23d38b79c5415fee00cee"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/admission_validation.schema.json",
+      "sha256": "ff34d20009031508cd61d50ca0a18edd6b5a62eb653b342631e4435d6e448af2"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/arm.schema.json",
+      "sha256": "d38a61f2542af17aa29e14b36ca81941d77983558daf75d883ecb5af1188b6a8"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/arm_catalog.schema.json",
+      "sha256": "64b868c81ee651b87a057a100cae6100215fe93670e280e81ce483b3c464458a"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/case.schema.json",
+      "sha256": "9875fdb32d7f3a3d29304dda917f46a4129f72dcfe8474e789b6b7883993147e"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/clean_control.schema.json",
+      "sha256": "104a28c068445314d45e57712ed9fcb3f99670c9b6868c8d433d1a93957c6050"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/curation_evidence.schema.json",
+      "sha256": "940d4dbbe42124928bdd410571a66a58e662e99ca29799243ba2df4874e20b7d"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/curation_input_manifest.schema.json",
+      "sha256": "551ccdb05857e36284fa39e6a9c6a17af980683040d87f4d0acfa975a42985af"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/ledger.schema.json",
+      "sha256": "5250d7212ccb9c03b5423c615ee4b0c0e8223a79ec37de02d31eb7ed74cfb69f"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/normalized_action.schema.json",
+      "sha256": "d476adb07cf1a651f57199e4604f07ce0978cb9194fdc44132e61373eaed5f9e"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/outcome.schema.json",
+      "sha256": "8d9d704118fa89a4f770bc61be0602eec8b798c99ddde3b4c4f8526778e6df64"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/registry_manifest.schema.json",
+      "sha256": "e907f7df16d899b1056fb7f21f2dacd8ad29f87b40d8a9f18faed86b066a0da2"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/review_ledger.schema.json",
+      "sha256": "71588604b112f54a6660e3a5ed19194119f928a575cadbe63a59b73370fc77a5"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/run.schema.json",
+      "sha256": "ced7773fd6fb3631807c255acc45bba38f89934794ddd89e87d832a540eedb6f"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/transformation_plan.schema.json",
+      "sha256": "97eed7da29ee61501975c31bcd3c38ae77ffc2397f5c94351799dd4ac224ab91"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/utf8_text.schema.json",
+      "sha256": "8d9fc19428cca5c4c6015a08dc69c5bea8f4bb51d79c7761f777271c102b24c2"
+    },
+    {
+      "path": "mobileworld_audit_handoff/schemas/g1/validation.schema.json",
+      "sha256": "27cb2118f3a0db74de8fb836951fa2158ef1b36bb662996a4be14f9d9b9f6dd3"
+    }
+  ],
+  "sources": [
+    {
+      "source_key": "qwen",
+      "study_role": "PRIMARY",
+      "history_family": "FLAT_PROGRESS",
+      "model_id": "qwen3vl_8b",
+      "audit_root": "qwen3vl_8b_gui117_g7_motivation_audit_v1_20260821_01",
+      "curated_manifest": "qwen3vl_8b_gui117_g7_curated117_20260821_01/manifest.json",
+      "curated_manifest_sha256": "266ab97b02fd6d479114a2f0db945dc9e66f17c4ba1f68a04b375ec3384a5cf2",
+      "final_reviews_relative_path": "review_v1/final/reviews.jsonl",
+      "final_reviews_sha256": "f4b7d53a909d22b39adc9dc36ab4f9aaf77c9bca76c8533ca4827bcbca5ad5e8",
+      "model_manifest": "/shared/linqiang/agent_monitor/AgentSentinel/mobileworld_audit_handoff/g1/model_config_manifest.v1.json",
+      "model_manifest_sha256": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f",
+      "expected_task_count": 117,
+      "expected_strict_case_count": 139,
+      "expected_strict_task_count": 35,
+      "expected_clean_pool_count": 53,
+      "clean_control_target": 30,
+      "clean_control_min_tasks": 30
+    },
+    {
+      "source_key": "mai",
+      "study_role": "REPLICATION",
+      "history_family": "RAW_REPLAY",
+      "model_id": "mai_ui_8b",
+      "audit_root": "mai_ui_8b_gui117_g7_motivation_audit_v1_20260821_01",
+      "curated_manifest": "mai_ui_8b_gui117_g7_curated117_20260821_01/manifest.json",
+      "curated_manifest_sha256": "1ffd746e21a15133c7124325b03ca94d7528a7aea5c4a5fda470fd9b8496a60d",
+      "final_reviews_relative_path": "review_v3/final/reviews.jsonl",
+      "final_reviews_sha256": "502f0d6c03873d840beda7263c51966f9f61f0b7b064dbf3266989db7b6e2da5",
+      "model_manifest": "/shared/linqiang/agent_monitor/AgentSentinel/mobileworld_audit_handoff/g1/model_config_manifest.v1.json",
+      "model_manifest_sha256": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f",
+      "expected_task_count": 117,
+      "expected_strict_case_count": 13,
+      "expected_strict_task_count": 7,
+      "expected_clean_pool_count": 23,
+      "clean_control_target": 8,
+      "clean_control_min_tasks": 7
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "arm_catalog.schema.json",
+  "title": "G1 arm catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "curated", "deployment_prediction", "schedule", "sham_matching", "arms"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-arm-catalog/v1"},
+    "record_type": {"const": "causal_replay_arm_catalog"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["block_count", "hash_salt", "hash_input_bytes", "base_rotation_rule", "direction_rule", "order_rule", "reverse_on_alternate_repeat", "seed_rule", "unit_kind_schedules"],
+      "properties": {
+        "block_count": {"const": 6},
+        "hash_salt": {"const": "mobileworld-g1-arm-order-v1-20260826"},
+        "hash_input_bytes": {"const": "UTF-8 literal salt|model_id|unit_id"},
+        "base_rotation_rule": {"const": "sha256(input).digest[0] % arm_count"},
+        "direction_rule": {"const": "+1 if digest[1] % 2 == 0 else -1"},
+        "order_rule": {"const": "for zero-based block b and within-block position j: base_arms[(j + initial_rotation + direction*b) % arm_count]"},
+        "reverse_on_alternate_repeat": {"const": false},
+        "seed_rule": {"const": "one pre-registered replay seed fixed for all arms in the same case-repeat block"},
+        "unit_kind_schedules": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["STRICT_MHR", "CLEAN_CONTROL"],
+          "properties": {
+            "STRICT_MHR": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["unit_id_field", "base_arms", "arm_count", "base_rotation_modulus"],
+              "properties": {
+                "unit_id_field": {"const": "case_id"},
+                "base_arms": {"const": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+                "arm_count": {"const": 5},
+                "base_rotation_modulus": {"const": 5}
+              }
+            },
+            "CLEAN_CONTROL": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["unit_id_field", "base_arms", "arm_count", "base_rotation_modulus"],
+              "properties": {
+                "unit_id_field": {"const": "control_id"},
+                "base_arms": {"const": ["ORIGINAL", "SHAM_BENIGN_EDIT"]},
+                "arm_count": {"const": 2},
+                "base_rotation_modulus": {"const": 2}
+              }
+            }
+          }
+        }
+      }
+    },
+    "sham_matching": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokenizer_ref_required", "token_count_required", "location_bucket_required", "operation"],
+      "properties": {
+        "tokenizer_ref_required": {"const": true},
+        "token_count_required": {"const": true},
+        "location_bucket_required": {"const": true},
+        "operation": {"const": "DELETE"}
+      }
+    },
+    "arms": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["arm_id", "case_kinds", "edit", "operation", "allowed_deltas", "invariants", "curated", "deployment_prediction"],
+        "properties": {
+          "arm_id": {"enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+          "case_kinds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]}},
+          "edit": {"type": "string", "minLength": 1},
+          "operation": {"enum": ["NONE", "DELETE", "DELETE_THEN_INSERT", "DELETE_ALL_RELEVANT_MISLEADING_PREMISES"]},
+          "allowed_deltas": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"enum": ["REGISTERED_HISTORY_EDIT", "REPLAY_SEED", "TRANSPORT_VOLATILES"]}},
+          "invariants": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "curated": {"const": true},
+          "deployment_prediction": {"const": false}
+        }
+      },
+      "allOf": [
+        {"contains": {"properties": {"arm_id": {"const": "ORIGINAL"}, "case_kinds": {"const": ["STRICT_MHR", "CLEAN_CONTROL"]}, "operation": {"const": "NONE"}, "allowed_deltas": {"const": ["REPLAY_SEED", "TRANSPORT_VOLATILES"]}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"arm_id": {"const": "MASK"}, "case_kinds": {"const": ["STRICT_MHR"]}, "operation": {"const": "DELETE"}, "allowed_deltas": {"const": ["REGISTERED_HISTORY_EDIT", "REPLAY_SEED", "TRANSPORT_VOLATILES"]}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"arm_id": {"const": "MASK_CORRECTION"}, "case_kinds": {"const": ["STRICT_MHR"]}, "operation": {"const": "DELETE_THEN_INSERT"}, "allowed_deltas": {"const": ["REGISTERED_HISTORY_EDIT", "REPLAY_SEED", "TRANSPORT_VOLATILES"]}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"arm_id": {"const": "ORACLE_CLEAN"}, "case_kinds": {"const": ["STRICT_MHR"]}, "operation": {"const": "DELETE_ALL_RELEVANT_MISLEADING_PREMISES"}, "allowed_deltas": {"const": ["REGISTERED_HISTORY_EDIT", "REPLAY_SEED", "TRANSPORT_VOLATILES"]}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"arm_id": {"const": "SHAM_BENIGN_EDIT"}, "case_kinds": {"const": ["STRICT_MHR", "CLEAN_CONTROL"]}, "operation": {"const": "DELETE"}, "allowed_deltas": {"const": ["REGISTERED_HISTORY_EDIT", "REPLAY_SEED", "TRANSPORT_VOLATILES"]}}}, "minContains": 1, "maxContains": 1}
+      ]
+    }
+  }
+}

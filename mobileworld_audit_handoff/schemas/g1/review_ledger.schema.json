@@ -1,0 +1,357 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review_ledger.schema.json",
+  "title": "G1.6 independent curation review ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "ledger_id",
+    "curated",
+    "deployment_prediction",
+    "channel",
+    "input_policy_id",
+    "subject",
+    "curation_input_manifest_ref",
+    "independent_reviews",
+    "material_disagreement",
+    "disagreement_fields",
+    "adjudication",
+    "resolution"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-curation-review-ledger/v1"},
+    "record_type": {"const": "causal_replay_curation_review_ledger"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "ledger_id": {"type": "string", "pattern": "^g1reviewledger-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "channel": {"enum": ["ACTION_GOLD", "TRANSFORMATION"]},
+    "input_policy_id": {
+      "enum": [
+        "mobileworld.g1.action-gold-pre-cutoff-no-history/v1",
+        "mobileworld.g1.transformation-pre-cutoff-history-no-target-output/v1"
+      ]
+    },
+    "subject": {"$ref": "#/$defs/subject"},
+    "curation_input_manifest_ref": {"$ref": "#/$defs/curationInputRef"},
+    "independent_reviews": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/review"},
+            {"properties": {"review_role": {"const": "PRIMARY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/review"},
+            {"properties": {"review_role": {"const": "SECONDARY"}}}
+          ]
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "material_disagreement": {"type": "boolean"},
+    "disagreement_fields": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "DISPOSITION",
+          "ACCEPTED_ACTION_PREDICATES",
+          "ACTION_TOLERANCE",
+          "FOCAL_TARGET_SET",
+          "ORACLE_TARGET_SET",
+          "CORRECTION_BYTES",
+          "SHAM_SPAN",
+          "SHAM_MATCH",
+          "DELIMITER_REPAIR"
+        ]
+      }
+    },
+    "adjudication": {
+      "oneOf": [
+        {"$ref": "#/$defs/adjudication"},
+        {"type": "null"}
+      ]
+    },
+    "resolution": {"$ref": "#/$defs/resolution"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"channel": {"const": "ACTION_GOLD"}}},
+      "then": {
+        "properties": {
+          "input_policy_id": {
+            "const": "mobileworld.g1.action-gold-pre-cutoff-no-history/v1"
+          },
+          "subject": {
+            "properties": {
+              "resolved_payload_schema_version": {
+                "const": "mobileworld.g1.causal-replay-action-gold-bundle/v1"
+              }
+            }
+          },
+          "disagreement_fields": {
+            "items": {
+              "enum": ["DISPOSITION", "ACCEPTED_ACTION_PREDICATES", "ACTION_TOLERANCE"]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "input_policy_id": {
+            "const": "mobileworld.g1.transformation-pre-cutoff-history-no-target-output/v1"
+          },
+          "subject": {
+            "properties": {
+              "resolved_payload_schema_version": {
+                "const": "mobileworld.g1.causal-replay-transformation-plan/v1"
+              }
+            }
+          },
+          "disagreement_fields": {
+            "items": {
+              "enum": [
+                "DISPOSITION",
+                "FOCAL_TARGET_SET",
+                "ORACLE_TARGET_SET",
+                "CORRECTION_BYTES",
+                "SHAM_SPAN",
+                "SHAM_MATCH",
+                "DELIMITER_REPAIR"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"material_disagreement": {"const": false}}},
+      "then": {
+        "properties": {
+          "disagreement_fields": {"maxItems": 0},
+          "adjudication": {"type": "null"},
+          "resolution": {"properties": {"resolution_kind": {"const": "AGREEMENT"}}}
+        }
+      },
+      "else": {
+        "properties": {
+          "disagreement_fields": {"minItems": 1},
+          "adjudication": {"$ref": "#/$defs/adjudication"},
+          "resolution": {"properties": {"resolution_kind": {"const": "ADJUDICATED"}}}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "exclusionReason": {
+      "enum": [
+        "SOURCE_REFERENCE_UNRESOLVED",
+        "REQUEST_HASH_MISMATCH",
+        "STATE_HASH_MISMATCH",
+        "TARGET_SPAN_UNRESOLVED",
+        "PROVENANCE_BELOW_HIGH",
+        "NOT_REFUTED_OR_STALE",
+        "NO_EXPLICIT_UPTAKE",
+        "NOT_STRICT_MHR",
+        "ORIGINAL_ACTION_UNPARSEABLE",
+        "BACKEND_CHECKPOINT_REQUIRED_BUT_MISSING",
+        "FUTURE_EVIDENCE_LEAKAGE",
+        "NO_GOLD_CONSENSUS",
+        "NO_VALID_CORRECTION",
+        "NO_VALID_ORACLE_VIEW",
+        "NO_MATCHED_SHAM",
+        "ARM_PROTOCOL_INVALID",
+        "DUPLICATE_CAPSULE"
+      ]
+    },
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "schema_version"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "schema_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "curationInputRef": {
+      "allOf": [
+        {"$ref": "#/$defs/contentRef"},
+        {
+          "properties": {
+            "schema_version": {"const": "mobileworld.g1.curation-input-manifest/v1"}
+          }
+        }
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit_kind",
+        "unit_id",
+        "unit_record_sha256",
+        "frozen_capsule_sha256",
+        "request_cutoff_event_id",
+        "request_cutoff_event_seq",
+        "resolved_payload_schema_version"
+      ],
+      "properties": {
+        "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+        "unit_id": {"type": "string", "pattern": "^(g1case|g1control)-[0-9a-f]{24}$"},
+        "unit_record_sha256": {"$ref": "#/$defs/sha256"},
+        "frozen_capsule_sha256": {"$ref": "#/$defs/sha256"},
+        "request_cutoff_event_id": {"type": "string", "minLength": 1},
+        "request_cutoff_event_seq": {"type": "integer", "minimum": 1},
+        "resolved_payload_schema_version": {
+          "enum": [
+            "mobileworld.g1.causal-replay-action-gold-bundle/v1",
+            "mobileworld.g1.causal-replay-transformation-plan/v1"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}},
+          "then": {"properties": {"unit_id": {"pattern": "^g1case-[0-9a-f]{24}$"}}},
+          "else": {"properties": {"unit_id": {"pattern": "^g1control-[0-9a-f]{24}$"}}}
+        }
+      ]
+    },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "payload_ref", "exclusion_reason"],
+      "properties": {
+        "disposition": {"enum": ["ACCEPT", "EXCLUDE"]},
+        "payload_ref": {
+          "oneOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {"type": "null"}
+          ]
+        },
+        "exclusion_reason": {
+          "oneOf": [
+            {"$ref": "#/$defs/exclusionReason"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "disposition": {"const": "ACCEPT"},
+            "payload_ref": {"$ref": "#/$defs/contentRef"},
+            "exclusion_reason": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "disposition": {"const": "EXCLUDE"},
+            "payload_ref": {"type": "null"},
+            "exclusion_reason": {"$ref": "#/$defs/exclusionReason"}
+          }
+        }
+      ]
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_role",
+        "review_id",
+        "reviewer_identity_sha256",
+        "curation_input_manifest_sha256",
+        "review_artifact_ref",
+        "proposal"
+      ],
+      "properties": {
+        "review_role": {"enum": ["PRIMARY", "SECONDARY"]},
+        "review_id": {"type": "string", "pattern": "^g1review-[0-9a-f]{24}$"},
+        "reviewer_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "curation_input_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "review_artifact_ref": {"$ref": "#/$defs/contentRef"},
+        "proposal": {"$ref": "#/$defs/proposal"}
+      }
+    },
+    "adjudication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_role",
+        "review_id",
+        "reviewer_identity_sha256",
+        "compared_review_artifact_sha256s",
+        "adjudication_artifact_ref",
+        "proposal"
+      ],
+      "properties": {
+        "review_role": {"const": "ADJUDICATOR"},
+        "review_id": {"type": "string", "pattern": "^g1review-[0-9a-f]{24}$"},
+        "reviewer_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "compared_review_artifact_sha256s": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        },
+        "adjudication_artifact_ref": {"$ref": "#/$defs/contentRef"},
+        "proposal": {"$ref": "#/$defs/proposal"}
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resolution_kind",
+        "disposition",
+        "resolved_payload_ref",
+        "exclusion_reason"
+      ],
+      "properties": {
+        "resolution_kind": {"enum": ["AGREEMENT", "ADJUDICATED"]},
+        "disposition": {"enum": ["ACCEPT", "EXCLUDE"]},
+        "resolved_payload_ref": {
+          "oneOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {"type": "null"}
+          ]
+        },
+        "exclusion_reason": {
+          "oneOf": [
+            {"$ref": "#/$defs/exclusionReason"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "disposition": {"const": "ACCEPT"},
+            "resolved_payload_ref": {"$ref": "#/$defs/contentRef"},
+            "exclusion_reason": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "disposition": {"const": "EXCLUDE"},
+            "resolved_payload_ref": {"type": "null"},
+            "exclusion_reason": {"$ref": "#/$defs/exclusionReason"}
+          }
+        }
+      ]
+    }
+  }
+}

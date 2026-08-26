@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clean_control.schema.json",
+  "title": "G1.1 immutable pre-gold clean-control candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "control_id", "control_status", "curated", "deployment_prediction", "source_key", "study_role", "model_id", "model_config_manifest_sha256", "model_config_record_sha256", "history_family", "task", "decision", "frozen_capsule", "target_histories", "eligibility_only_refs", "action_gold_refs", "transformation_refs", "arm_eligibility"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-case/v1"},
+    "record_type": {"const": "causal_replay_clean_control"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "control_id": {"type": "string", "pattern": "^g1control-[0-9a-f]{24}$"},
+    "control_status": {"enum": ["SELECTED", "RESERVE"]},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "source_key": {"type": "string", "minLength": 1},
+    "study_role": {"enum": ["PRIMARY", "REPLICATION"]},
+    "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+    "model_config_manifest_sha256": {"const": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"},
+    "model_config_record_sha256": {"$ref": "case.schema.json#/$defs/sha256"},
+    "history_family": {"enum": ["FLAT_PROGRESS", "RAW_REPLAY"]},
+    "task": {"$ref": "case.schema.json#/$defs/task"},
+    "decision": {"$ref": "case.schema.json#/$defs/decision"},
+    "frozen_capsule": {"$ref": "case.schema.json#/$defs/capsule"},
+    "target_histories": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "case.schema.json#/$defs/targetHistory"}},
+    "eligibility_only_refs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gate_version", "facts", "review_id", "review_sha256", "candidate_id", "candidate_sha256"],
+      "properties": {
+        "gate_version": {"const": "clean-supported-explicit-no-harm/v1"}, "facts": {"$ref": "case.schema.json#/$defs/boolMap"},
+        "review_id": {"type": "string", "minLength": 1}, "review_sha256": {"$ref": "case.schema.json#/$defs/sha256"},
+        "candidate_id": {"type": "string", "minLength": 1}, "candidate_sha256": {"$ref": "case.schema.json#/$defs/sha256"}
+      }
+    },
+    "action_gold_refs": {"$ref": "case.schema.json#/$defs/pendingActionGold"},
+    "transformation_refs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["transformation_plan_ref", "review_ledger_ref", "sham_benign_edit_ref", "curator_identity_ref", "curator_view", "audited_exposure_bindings", "focal_target_set", "focal_target_set_status", "oracle_target_set_ref", "forbidden_evidence_roles", "curation_phase"],
+      "properties": {
+        "transformation_plan_ref": {"type": "null"}, "review_ledger_ref": {"type": "null"}, "sham_benign_edit_ref": {"type": "null"}, "curator_identity_ref": {"type": "null"},
+        "curator_view": {"const": "SOURCE_HISTORY_AND_PRE_CALL_GUI_NO_TARGET_DECISION"}, "audited_exposure_bindings": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "case.schema.json#/$defs/auditedExposureBinding"}},
+        "focal_target_set": {"const": []}, "focal_target_set_status": {"const": "G1_6_PENDING"}, "oracle_target_set_ref": {"type": "null"},
+        "forbidden_evidence_roles": {"const": ["later_step", "outcome", "target_action", "target_post", "target_prediction", "task_ended"]}, "curation_phase": {"const": "G1_6_PENDING"}
+      }
+    },
+    "arm_eligibility": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {"allOf": [{"$ref": "case.schema.json#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "ORIGINAL"}, "structurally_applicable": {"const": true}, "reason": {"const": "G1_6_GOLD_AND_TRANSFORMATION_PENDING"}}}]},
+        {"allOf": [{"$ref": "case.schema.json#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "MASK"}, "structurally_applicable": {"const": false}, "reason": {"const": "CASE_KIND_NOT_APPLICABLE"}}}]},
+        {"allOf": [{"$ref": "case.schema.json#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "MASK_CORRECTION"}, "structurally_applicable": {"const": false}, "reason": {"const": "CASE_KIND_NOT_APPLICABLE"}}}]},
+        {"allOf": [{"$ref": "case.schema.json#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "ORACLE_CLEAN"}, "structurally_applicable": {"const": false}, "reason": {"const": "CASE_KIND_NOT_APPLICABLE"}}}]},
+        {"allOf": [{"$ref": "case.schema.json#/$defs/armEligibility"}, {"properties": {"arm_id": {"const": "SHAM_BENIGN_EDIT"}, "structurally_applicable": {"const": true}, "reason": {"const": "G1_6_GOLD_AND_TRANSFORMATION_PENDING"}}}]}
+      ],
+      "items": false
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"model_id": {"const": "qwen3vl_8b"}}}, "then": {"properties": {"model_config_record_sha256": {"const": "5d6c5c1aa99aa13e8e153a19e6a0b1e8593cf2c32adaf8bca308fc76cea827e3"}, "study_role": {"const": "PRIMARY"}, "history_family": {"const": "FLAT_PROGRESS"}, "target_histories": {"items": {"allOf": [{"$ref": "case.schema.json#/$defs/targetHistory"}, {"properties": {"representation_type": {"const": "flat_progress"}, "transform_binding": {"const": "conclusion_span_offsets_plus_enclosing_step_span"}, "edit_span_status": {"const": "G1_1_FROZEN"}, "focal_edit_spans": {"minItems": 1, "maxItems": 1}}}]}}}}},
+    {"if": {"properties": {"model_id": {"const": "mai_ui_8b"}}}, "then": {"properties": {"model_config_record_sha256": {"const": "c633cc272bca6e14ae788d90417c909d515fe1f22abb9c0bf5e02da78c8d7682"}, "study_role": {"const": "REPLICATION"}, "history_family": {"const": "RAW_REPLAY"}, "target_histories": {"items": {"allOf": [{"$ref": "case.schema.json#/$defs/targetHistory"}, {"properties": {"representation_type": {"const": "raw_replay"}, "transform_binding": {"const": "raw_record_hash_with_g1_6_pending_edit_span"}, "edit_span_status": {"const": "G1_6_PENDING"}, "focal_edit_spans": {"maxItems": 0}}}]}}}}}
+  ]
+}

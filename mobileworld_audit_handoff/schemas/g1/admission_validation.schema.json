@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "admission_validation.schema.json",
+  "title": "G1.6 per-unit admission validation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "validation_id",
+    "curated",
+    "deployment_prediction",
+    "admission_id",
+    "unit_id",
+    "admission_status",
+    "validation_result",
+    "reason_codes",
+    "valid",
+    "checks",
+    "mechanical_failure_evidence",
+    "treatment_response_count"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-admission-validation/v1"},
+    "record_type": {"const": "causal_replay_admission_validation"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "validation_id": {"type": "string", "pattern": "^g1admissionvalidation-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "admission_id": {"type": "string", "pattern": "^g1admission-[0-9a-f]{24}$"},
+    "unit_id": {"type": "string", "pattern": "^(g1case|g1control)-[0-9a-f]{24}$"},
+    "admission_status": {"enum": ["INCLUDED", "EXCLUDED"]},
+    "validation_result": {
+      "enum": ["INCLUDED_VALIDATED", "EXCLUSION_EVIDENCE_VALIDATED"]
+    },
+    "reason_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/exclusionReason"}
+    },
+    "valid": {"const": true},
+    "checks": {"$ref": "#/$defs/checks"},
+    "mechanical_failure_evidence": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/mechanicalFailureEvidence"}
+    },
+    "treatment_response_count": {"const": 0}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "admission_status": {"const": "INCLUDED"},
+        "validation_result": {"const": "INCLUDED_VALIDATED"},
+        "reason_codes": {"maxItems": 0},
+        "mechanical_failure_evidence": {"maxItems": 0},
+        "checks": {
+          "properties": {
+            "all_refs_hash_resolved": {"const": true},
+            "payload_schemas_valid": {"const": true},
+            "evidence_cutoff_valid": {"const": true},
+            "review_ledgers_valid": {"const": true},
+            "transformations_valid": {"const": true},
+            "arm_plans_valid": {"const": true},
+            "future_evidence_leakage_zero": {"const": true},
+            "treatment_response_count_zero": {"const": true},
+            "exclusion_reason_valid": {"const": "NOT_APPLICABLE"}
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "admission_status": {"const": "EXCLUDED"},
+        "validation_result": {"const": "EXCLUSION_EVIDENCE_VALIDATED"},
+        "reason_codes": {"minItems": 1},
+        "checks": {
+          "properties": {
+            "all_refs_hash_resolved": {"enum": [true, false]},
+            "payload_schemas_valid": {"const": true},
+            "evidence_cutoff_valid": {"enum": [true, false, "NOT_APPLICABLE"]},
+            "review_ledgers_valid": {"enum": [true, "NOT_APPLICABLE"]},
+            "transformations_valid": {"enum": [false, "NOT_APPLICABLE"]},
+            "arm_plans_valid": {"enum": [false, "NOT_APPLICABLE"]},
+            "future_evidence_leakage_zero": {
+              "enum": [true, false, "NOT_APPLICABLE"]
+            },
+            "treatment_response_count_zero": {"const": true},
+            "exclusion_reason_valid": {"const": true}
+          }
+        }
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "admission_status": {"const": "EXCLUDED"},
+          "reason_codes": {
+            "contains": {"$ref": "#/$defs/mechanicalReason"}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "mechanical_failure_evidence": {"minItems": 1}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "exclusionReason": {
+      "enum": [
+        "SOURCE_REFERENCE_UNRESOLVED",
+        "REQUEST_HASH_MISMATCH",
+        "STATE_HASH_MISMATCH",
+        "TARGET_SPAN_UNRESOLVED",
+        "PROVENANCE_BELOW_HIGH",
+        "NOT_REFUTED_OR_STALE",
+        "NO_EXPLICIT_UPTAKE",
+        "NOT_STRICT_MHR",
+        "ORIGINAL_ACTION_UNPARSEABLE",
+        "BACKEND_CHECKPOINT_REQUIRED_BUT_MISSING",
+        "FUTURE_EVIDENCE_LEAKAGE",
+        "NO_GOLD_CONSENSUS",
+        "NO_VALID_CORRECTION",
+        "NO_VALID_ORACLE_VIEW",
+        "NO_MATCHED_SHAM",
+        "ARM_PROTOCOL_INVALID",
+        "DUPLICATE_CAPSULE"
+      ]
+    },
+    "mechanicalReason": {
+      "enum": [
+        "SOURCE_REFERENCE_UNRESOLVED",
+        "REQUEST_HASH_MISMATCH",
+        "STATE_HASH_MISMATCH",
+        "TARGET_SPAN_UNRESOLVED",
+        "PROVENANCE_BELOW_HIGH",
+        "NOT_REFUTED_OR_STALE",
+        "NO_EXPLICIT_UPTAKE",
+        "NOT_STRICT_MHR",
+        "ORIGINAL_ACTION_UNPARSEABLE",
+        "BACKEND_CHECKPOINT_REQUIRED_BUT_MISSING",
+        "FUTURE_EVIDENCE_LEAKAGE",
+        "ARM_PROTOCOL_INVALID",
+        "DUPLICATE_CAPSULE"
+      ]
+    },
+    "mechanicalFailureEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason_code", "validator_id", "validator_failure_code"],
+      "properties": {
+        "reason_code": {"$ref": "#/$defs/mechanicalReason"},
+        "validator_id": {
+          "enum": [
+            "SOURCE_REGISTRY_RECORD_VALIDATOR",
+            "REQUEST_VIEW_HASH_VALIDATOR",
+            "CURRENT_GUI_HASH_VALIDATOR",
+            "TARGET_SPAN_VALIDATOR",
+            "STRICT_MHR_GATE_VALIDATOR",
+            "ORIGINAL_ACTION_VALIDATOR",
+            "BACKEND_CHECKPOINT_VALIDATOR",
+            "CURATION_FUTURE_EVIDENCE_VALIDATOR",
+            "ARM_PROTOCOL_VALIDATOR",
+            "DUPLICATE_CAPSULE_VALIDATOR"
+          ]
+        },
+        "validator_failure_code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "all_refs_hash_resolved",
+        "payload_schemas_valid",
+        "evidence_cutoff_valid",
+        "review_ledgers_valid",
+        "transformations_valid",
+        "arm_plans_valid",
+        "future_evidence_leakage_zero",
+        "treatment_response_count_zero",
+        "exclusion_reason_valid"
+      ],
+      "properties": {
+        "all_refs_hash_resolved": {"enum": [true, false, "NOT_APPLICABLE"]},
+        "payload_schemas_valid": {"enum": [true, false, "NOT_APPLICABLE"]},
+        "evidence_cutoff_valid": {"enum": [true, false, "NOT_APPLICABLE"]},
+        "review_ledgers_valid": {"enum": [true, false, "NOT_APPLICABLE"]},
+        "transformations_valid": {"enum": [true, false, "NOT_APPLICABLE"]},
+        "arm_plans_valid": {"enum": [true, false, "NOT_APPLICABLE"]},
+        "future_evidence_leakage_zero": {"enum": [true, false, "NOT_APPLICABLE"]},
+        "treatment_response_count_zero": {"enum": [true, false]},
+        "exclusion_reason_valid": {"enum": [true, "NOT_APPLICABLE"]}
+      }
+    }
+  }
+}

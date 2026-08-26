@@ -1,0 +1,473 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "arm.schema.json",
+  "title": "G1.6 sealed causal replay arm plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "arm_plan_id",
+    "curated",
+    "deployment_prediction",
+    "unit_kind",
+    "case_id",
+    "model_id",
+    "arm_id",
+    "operation",
+    "unit_record_sha256",
+    "frozen_capsule_sha256",
+    "transformation_plan_sha256",
+    "action_gold_bundle_sha256",
+    "model_config_manifest_sha256",
+    "focal_target_set_sha256",
+    "oracle_target_set_sha256",
+    "selected_target_set_sha256",
+    "target_spans",
+    "insertions",
+    "delimiter_repairs",
+    "sham_match",
+    "invariants"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-arm-plan/v1"},
+    "record_type": {"const": "causal_replay_arm_plan"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "arm_plan_id": {"type": "string", "pattern": "^g1armplan-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+    "case_id": {"type": "string", "pattern": "^(g1case|g1control)-[0-9a-f]{24}$"},
+    "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+    "arm_id": {
+      "enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]
+    },
+    "operation": {
+      "enum": ["NONE", "DELETE", "DELETE_THEN_INSERT", "DELETE_ALL_RELEVANT_MISLEADING_PREMISES"]
+    },
+    "unit_record_sha256": {"$ref": "#/$defs/sha256"},
+    "frozen_capsule_sha256": {"$ref": "#/$defs/sha256"},
+    "transformation_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "action_gold_bundle_sha256": {"$ref": "#/$defs/sha256"},
+    "model_config_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "focal_target_set_sha256": {"$ref": "#/$defs/sha256"},
+    "oracle_target_set_sha256": {"$ref": "#/$defs/sha256"},
+    "selected_target_set_sha256": {
+      "oneOf": [
+        {"$ref": "#/$defs/sha256"},
+        {"type": "null"}
+      ]
+    },
+    "target_spans": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/targetSpan"}
+    },
+    "insertions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/insertion"}
+    },
+    "delimiter_repairs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/delimiterRepair"}
+    },
+    "sham_match": {
+      "oneOf": [
+        {"$ref": "#/$defs/shamMatch"},
+        {"type": "null"}
+      ]
+    },
+    "invariants": {"$ref": "#/$defs/invariants"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}},
+      "then": {
+        "properties": {
+          "case_id": {"pattern": "^g1case-[0-9a-f]{24}$"},
+          "invariants": {
+            "properties": {
+              "mask_targets_equal_focal": {"const": true},
+              "mask_correction_targets_equal_focal": {"const": true},
+              "oracle_targets_equal_oracle_set": {"const": true},
+              "oracle_is_focal_superset": {"const": true},
+              "only_original_and_sham_applicable": {"const": "NOT_APPLICABLE"}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "case_id": {"pattern": "^g1control-[0-9a-f]{24}$"},
+          "arm_id": {"enum": ["ORIGINAL", "SHAM_BENIGN_EDIT"]},
+          "invariants": {
+            "properties": {
+              "mask_targets_equal_focal": {"const": "NOT_APPLICABLE"},
+              "mask_correction_targets_equal_focal": {"const": "NOT_APPLICABLE"},
+              "oracle_targets_equal_oracle_set": {"const": "NOT_APPLICABLE"},
+              "oracle_is_focal_superset": {"const": "NOT_APPLICABLE"},
+              "only_original_and_sham_applicable": {"const": true}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"arm_id": {"const": "ORIGINAL"}}},
+      "then": {
+        "properties": {
+          "operation": {"const": "NONE"},
+          "selected_target_set_sha256": {"type": "null"},
+          "target_spans": {"maxItems": 0},
+          "insertions": {"maxItems": 0},
+          "delimiter_repairs": {"maxItems": 0},
+          "sham_match": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"arm_id": {"const": "MASK"}}},
+      "then": {
+        "properties": {
+          "operation": {"const": "DELETE"},
+          "selected_target_set_sha256": {"$ref": "#/$defs/sha256"},
+          "target_spans": {
+            "minItems": 1,
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/targetSpan"},
+                {"properties": {"target_kind": {"const": "FOCAL_MHR"}}}
+              ]
+            }
+          },
+          "insertions": {"maxItems": 0},
+          "sham_match": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"arm_id": {"const": "MASK_CORRECTION"}}},
+      "then": {
+        "properties": {
+          "operation": {"const": "DELETE_THEN_INSERT"},
+          "selected_target_set_sha256": {"$ref": "#/$defs/sha256"},
+          "target_spans": {
+            "minItems": 1,
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/targetSpan"},
+                {"properties": {"target_kind": {"const": "FOCAL_MHR"}}}
+              ]
+            }
+          },
+          "insertions": {"minItems": 1},
+          "sham_match": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"arm_id": {"const": "ORACLE_CLEAN"}}},
+      "then": {
+        "properties": {
+          "operation": {"const": "DELETE_ALL_RELEVANT_MISLEADING_PREMISES"},
+          "selected_target_set_sha256": {"$ref": "#/$defs/sha256"},
+          "target_spans": {
+            "minItems": 1,
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/targetSpan"},
+                {"properties": {"target_kind": {"const": "ORACLE_RELEVANT_MHR"}}}
+              ]
+            }
+          },
+          "insertions": {"maxItems": 0},
+          "sham_match": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"arm_id": {"const": "SHAM_BENIGN_EDIT"}}},
+      "then": {
+        "properties": {
+          "operation": {"const": "DELETE"},
+          "selected_target_set_sha256": {"$ref": "#/$defs/sha256"},
+          "target_spans": {
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/targetSpan"},
+                {"properties": {"target_kind": {"const": "BENIGN_SHAM"}}}
+              ]
+            }
+          },
+          "insertions": {"maxItems": 0},
+          "sham_match": {"$ref": "#/$defs/shamMatch"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeRelativePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "schema_version"],
+      "properties": {
+        "relative_path": {"$ref": "#/$defs/safeRelativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "schema_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "locationBucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_role", "content_item_kind", "representation_record_class", "relative_third"],
+      "properties": {
+        "message_role": {"enum": ["system", "user", "assistant", "tool"]},
+        "content_item_kind": {"enum": ["TEXT", "SCALAR_TEXT"]},
+        "representation_record_class": {
+          "enum": ["QWEN_FLAT_PROGRESS_STEP", "MAI_RAW_ASSISTANT_MESSAGE"]
+        },
+        "relative_third": {"enum": ["LEADING", "MIDDLE", "TRAILING"]}
+      }
+    },
+    "targetSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "target_id",
+        "target_kind",
+        "source_candidate_ids",
+        "record_identity_sha256",
+        "request_path",
+        "message_index",
+        "content_item_index",
+        "message_role",
+        "content_item_kind",
+        "representation_record_class",
+        "record_sha256",
+        "record_codepoint_count",
+        "record_utf8_byte_count",
+        "char_start",
+        "char_end",
+        "utf8_byte_start",
+        "utf8_byte_end",
+        "span_sha256",
+        "location_bucket"
+      ],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 0},
+        "target_id": {"type": "string", "pattern": "^g1span-[0-9a-f]{24}$"},
+        "target_kind": {"enum": ["FOCAL_MHR", "ORACLE_RELEVANT_MHR", "BENIGN_SHAM"]},
+        "source_candidate_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "record_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "request_path": {"type": "string", "minLength": 1},
+        "message_index": {"type": "integer", "minimum": 0},
+        "content_item_index": {"type": ["integer", "null"], "minimum": 0},
+        "message_role": {"enum": ["system", "user", "assistant", "tool"]},
+        "content_item_kind": {"enum": ["TEXT", "SCALAR_TEXT"]},
+        "representation_record_class": {
+          "enum": ["QWEN_FLAT_PROGRESS_STEP", "MAI_RAW_ASSISTANT_MESSAGE"]
+        },
+        "record_sha256": {"$ref": "#/$defs/sha256"},
+        "record_codepoint_count": {"type": "integer", "minimum": 1},
+        "record_utf8_byte_count": {"type": "integer", "minimum": 1},
+        "char_start": {"type": "integer", "minimum": 0},
+        "char_end": {"type": "integer", "minimum": 1},
+        "utf8_byte_start": {"type": "integer", "minimum": 0},
+        "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"},
+        "location_bucket": {"$ref": "#/$defs/locationBucket"}
+      }
+    },
+    "insertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_id",
+        "insertion_position",
+        "correction_utf8_ref",
+        "correction_sha256",
+        "token_count",
+        "utf8_byte_count",
+        "codepoint_count"
+      ],
+      "properties": {
+        "target_id": {"type": "string", "pattern": "^g1span-[0-9a-f]{24}$"},
+        "insertion_position": {"const": "DELETED_SPAN_START"},
+        "correction_utf8_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {"properties": {"schema_version": {"const": "mobileworld.g1.utf8-text/v1"}}}
+          ]
+        },
+        "correction_sha256": {"$ref": "#/$defs/sha256"},
+        "token_count": {"type": "integer", "minimum": 1},
+        "utf8_byte_count": {"type": "integer", "minimum": 1},
+        "codepoint_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "delimiterRepair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repair_id",
+        "record_identity_sha256",
+        "operation",
+        "char_start",
+        "char_end",
+        "utf8_byte_start",
+        "utf8_byte_end",
+        "span_sha256",
+        "semantic_content_added"
+      ],
+      "properties": {
+        "repair_id": {"type": "string", "pattern": "^g1repair-[0-9a-f]{24}$"},
+        "record_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "operation": {"enum": ["DELETE_EMPTY_DELIMITER", "DELETE_ORPHAN_SEPARATOR"]},
+        "char_start": {"type": "integer", "minimum": 0},
+        "char_end": {"type": "integer", "minimum": 1},
+        "utf8_byte_start": {"type": "integer", "minimum": 0},
+        "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"},
+        "semantic_content_added": {"const": false}
+      }
+    },
+    "tokenizerBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_config_manifest_sha256",
+        "model_id",
+        "tokenizer_revision",
+        "tokenizer_artifact_set_sha256",
+        "counting_call",
+        "add_special_tokens"
+      ],
+      "properties": {
+        "model_config_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+        "tokenizer_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tokenizer_artifact_set_sha256": {"$ref": "#/$defs/sha256"},
+        "counting_call": {"const": "tokenizer.encode(text, add_special_tokens=False)"},
+        "add_special_tokens": {"const": false}
+      }
+    },
+    "shamMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "matched_focal_target",
+        "benign_target",
+        "tokenizer_binding",
+        "focal_token_count",
+        "benign_token_count",
+        "absolute_token_difference",
+        "token_ratio_numerator",
+        "token_ratio_denominator",
+        "token_match_rule",
+        "focal_location_bucket",
+        "benign_location_bucket",
+        "same_request_record",
+        "focal_history_depth",
+        "benign_history_depth",
+        "history_depth_difference",
+        "same_record_unavailable_reviewed",
+        "semantic_review_ledger_sha256"
+      ],
+      "properties": {
+        "matched_focal_target": {
+          "allOf": [
+            {"$ref": "#/$defs/targetSpan"},
+            {"properties": {"target_kind": {"const": "FOCAL_MHR"}}}
+          ]
+        },
+        "benign_target": {
+          "allOf": [
+            {"$ref": "#/$defs/targetSpan"},
+            {"properties": {"target_kind": {"const": "BENIGN_SHAM"}}}
+          ]
+        },
+        "tokenizer_binding": {"$ref": "#/$defs/tokenizerBinding"},
+        "focal_token_count": {"type": "integer", "minimum": 1},
+        "benign_token_count": {"type": "integer", "minimum": 1},
+        "absolute_token_difference": {"type": "integer", "minimum": 0},
+        "token_ratio_numerator": {"type": "integer", "minimum": 1},
+        "token_ratio_denominator": {"type": "integer", "minimum": 1},
+        "token_match_rule": {
+          "const": "RATIO_80_TO_125_PERCENT_OR_ABSOLUTE_DIFFERENCE_AT_MOST_4"
+        },
+        "focal_location_bucket": {"$ref": "#/$defs/locationBucket"},
+        "benign_location_bucket": {"$ref": "#/$defs/locationBucket"},
+        "same_request_record": {"type": "boolean"},
+        "focal_history_depth": {"type": "integer", "minimum": 1},
+        "benign_history_depth": {"type": "integer", "minimum": 1},
+        "history_depth_difference": {"type": "integer", "minimum": 0, "maximum": 1},
+        "same_record_unavailable_reviewed": {"type": "boolean"},
+        "semantic_review_ledger_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"same_request_record": {"const": true}}},
+          "then": {
+            "properties": {
+              "history_depth_difference": {"const": 0},
+              "same_record_unavailable_reviewed": {"const": false}
+            }
+          },
+          "else": {
+            "properties": {"same_record_unavailable_reviewed": {"const": true}}
+          }
+        }
+      ]
+    },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targets_ordered_unique_nonoverlapping",
+        "selected_set_hash_verified",
+        "mask_targets_equal_focal",
+        "mask_correction_targets_equal_focal",
+        "oracle_targets_equal_oracle_set",
+        "oracle_is_focal_superset",
+        "insertions_bind_deleted_targets",
+        "delimiter_repairs_bind_source_syntax",
+        "sham_binds_exactly_one_benign_and_one_focal",
+        "sham_nonoverlapping_with_misleading_targets",
+        "sham_token_counts_recomputed",
+        "sham_location_buckets_recomputed",
+        "only_original_and_sham_applicable"
+      ],
+      "properties": {
+        "targets_ordered_unique_nonoverlapping": {"const": true},
+        "selected_set_hash_verified": {"const": true},
+        "mask_targets_equal_focal": {"enum": [true, "NOT_APPLICABLE"]},
+        "mask_correction_targets_equal_focal": {"enum": [true, "NOT_APPLICABLE"]},
+        "oracle_targets_equal_oracle_set": {"enum": [true, "NOT_APPLICABLE"]},
+        "oracle_is_focal_superset": {"enum": [true, "NOT_APPLICABLE"]},
+        "insertions_bind_deleted_targets": {"const": true},
+        "delimiter_repairs_bind_source_syntax": {"const": true},
+        "sham_binds_exactly_one_benign_and_one_focal": {"const": true},
+        "sham_nonoverlapping_with_misleading_targets": {"const": true},
+        "sham_token_counts_recomputed": {"const": true},
+        "sham_location_buckets_recomputed": {"const": true},
+        "only_original_and_sham_applicable": {"enum": [true, "NOT_APPLICABLE"]}
+      }
+    }
+  }
+}

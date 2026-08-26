@@ -1,0 +1,319 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "admission_seal.schema.json",
+  "title": "G1.6 curation and admission seal (not execution-ready)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "seal_id",
+    "curated",
+    "deployment_prediction",
+    "registry_phase",
+    "curation_and_admission_sealed",
+    "admission_ready",
+    "execution_ready",
+    "seal_scope",
+    "treatment_response_generation_allowed",
+    "next_required_gate",
+    "treatment_response_count_at_seal",
+    "references",
+    "coverage",
+    "included_counts",
+    "checks",
+    "seal_id_contract"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-admission-seal/v1"},
+    "record_type": {"const": "causal_replay_admission_seal"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "seal_id": {"type": "string", "pattern": "^g1admissionseal-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "registry_phase": {"const": "G1_6_FROZEN"},
+    "curation_and_admission_sealed": {"const": true},
+    "admission_ready": {"const": true},
+    "execution_ready": {"const": false},
+    "seal_scope": {"const": "G1_6_CURATION_AND_ADMISSION_ONLY"},
+    "treatment_response_generation_allowed": {"const": false},
+    "next_required_gate": {"const": "G1_7_PREFLIGHT_EXECUTION_SEAL"},
+    "treatment_response_count_at_seal": {"const": 0},
+    "references": {"$ref": "#/$defs/references"},
+    "coverage": {"$ref": "#/$defs/coverage"},
+    "included_counts": {"$ref": "#/$defs/includedCounts"},
+    "checks": {"$ref": "#/$defs/checks"},
+    "seal_id_contract": {
+      "const": "sha256(protocol_version|pre_gold_registry_manifest_sha256|admission_ledger_sha256|included_unit_index_sha256)[:24]"
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "schema_version"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "schema_version": {"type": "string", "minLength": 1}
+      }
+    },
+    "documentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "document_id"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "document_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "references": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_document_ref",
+        "analysis_plan_ref",
+        "pre_gold_registry_manifest_ref",
+        "admission_ledger_ref",
+        "action_gold_bundle_index_ref",
+        "review_ledger_index_ref",
+        "transformation_plan_index_ref",
+        "arm_plan_index_ref",
+        "included_unit_index_ref",
+        "model_config_manifest_ref",
+        "schema_catalog_ref",
+        "validation_report_ref"
+      ],
+      "properties": {
+        "protocol_document_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/documentRef"},
+            {"properties": {"document_id": {"const": "mobileworld.g1.causal-replay/protocol-v1"}}}
+          ]
+        },
+        "analysis_plan_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/documentRef"},
+            {"properties": {"document_id": {"const": "mobileworld.g1.causal-replay/analysis-v1"}}}
+          ]
+        },
+        "pre_gold_registry_manifest_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {
+                  "const": "mobileworld.g1.causal-replay-registry-manifest/v1"
+                }
+              }
+            }
+          ]
+        },
+        "admission_ledger_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {"const": "mobileworld.g1.causal-replay-admission-jsonl/v1"}
+              }
+            }
+          ]
+        },
+        "action_gold_bundle_index_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {"const": "mobileworld.g1.action-gold-bundle-index/v1"}
+              }
+            }
+          ]
+        },
+        "review_ledger_index_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {"const": "mobileworld.g1.curation-review-ledger-index/v1"}
+              }
+            }
+          ]
+        },
+        "transformation_plan_index_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {"const": "mobileworld.g1.transformation-plan-index/v1"}
+              }
+            }
+          ]
+        },
+        "arm_plan_index_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {"const": "mobileworld.g1.arm-plan-index/v1"}
+              }
+            }
+          ]
+        },
+        "included_unit_index_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {"const": "mobileworld.g1.included-unit-index/v1"}
+              }
+            }
+          ]
+        },
+        "model_config_manifest_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {"const": "mobileworld.g1.causal-replay/model-config-v1"}
+              }
+            }
+          ]
+        },
+        "schema_catalog_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {"const": "mobileworld.g1.schema-catalog/v1"}
+              }
+            }
+          ]
+        },
+        "validation_report_ref": {
+          "allOf": [
+            {"$ref": "#/$defs/contentRef"},
+            {
+              "properties": {
+                "schema_version": {"const": "mobileworld.g1.admission-seal-validation/v1"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pre_gold_strict_case_count",
+        "selected_clean_control_count",
+        "admission_record_count",
+        "included_record_count",
+        "excluded_record_count",
+        "undisposed_record_count"
+      ],
+      "properties": {
+        "pre_gold_strict_case_count": {"type": "integer", "minimum": 0},
+        "selected_clean_control_count": {"type": "integer", "minimum": 0},
+        "admission_record_count": {"type": "integer", "minimum": 0},
+        "included_record_count": {"type": "integer", "minimum": 0},
+        "excluded_record_count": {"type": "integer", "minimum": 0},
+        "undisposed_record_count": {"const": 0}
+      }
+    },
+    "stratumCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intervention_case_count",
+        "intervention_task_count",
+        "clean_control_count",
+        "clean_control_task_count"
+      ],
+      "properties": {
+        "intervention_case_count": {"type": "integer", "minimum": 0},
+        "intervention_task_count": {"type": "integer", "minimum": 0},
+        "clean_control_count": {"type": "integer", "minimum": 0},
+        "clean_control_task_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "includedCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["qwen3vl_8b", "mai_ui_8b"],
+      "properties": {
+        "qwen3vl_8b": {
+          "allOf": [
+            {"$ref": "#/$defs/stratumCounts"},
+            {
+              "properties": {
+                "intervention_case_count": {"minimum": 30},
+                "intervention_task_count": {"minimum": 25},
+                "clean_control_count": {"minimum": 30},
+                "clean_control_task_count": {"minimum": 30}
+              }
+            }
+          ]
+        },
+        "mai_ui_8b": {
+          "allOf": [
+            {"$ref": "#/$defs/stratumCounts"},
+            {
+              "properties": {
+                "intervention_case_count": {"minimum": 8},
+                "intervention_task_count": {"minimum": 5},
+                "clean_control_count": {"minimum": 8},
+                "clean_control_task_count": {"minimum": 7}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "all_strict_cases_disposed_once",
+        "all_selected_clean_controls_disposed_once",
+        "all_included_content_refs_resolved",
+        "all_content_hashes_and_byte_counts_verified",
+        "all_payload_schemas_valid",
+        "all_evidence_refs_resolved_before_cutoff",
+        "future_evidence_leakage_zero",
+        "independent_reviews_complete",
+        "material_disagreements_adjudicated",
+        "cross_channel_reviewer_identities_disjoint",
+        "oracle_target_sets_are_focal_supersets",
+        "sham_matching_valid",
+        "all_applicable_arm_plans_admission_valid",
+        "clean_controls_original_and_sham_only",
+        "minimum_sample_met",
+        "treatment_response_count_zero"
+      ],
+      "properties": {
+        "all_strict_cases_disposed_once": {"const": true},
+        "all_selected_clean_controls_disposed_once": {"const": true},
+        "all_included_content_refs_resolved": {"const": true},
+        "all_content_hashes_and_byte_counts_verified": {"const": true},
+        "all_payload_schemas_valid": {"const": true},
+        "all_evidence_refs_resolved_before_cutoff": {"const": true},
+        "future_evidence_leakage_zero": {"const": true},
+        "independent_reviews_complete": {"const": true},
+        "material_disagreements_adjudicated": {"const": true},
+        "cross_channel_reviewer_identities_disjoint": {"const": true},
+        "oracle_target_sets_are_focal_supersets": {"const": true},
+        "sham_matching_valid": {"const": true},
+        "all_applicable_arm_plans_admission_valid": {"const": true},
+        "clean_controls_original_and_sham_only": {"const": true},
+        "minimum_sample_met": {"const": true},
+        "treatment_response_count_zero": {"const": true}
+      }
+    }
+  }
+}

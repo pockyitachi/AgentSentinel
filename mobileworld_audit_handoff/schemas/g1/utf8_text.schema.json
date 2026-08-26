@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "utf8_text.schema.json",
+  "title": "G1 exact UTF-8 text artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "curated", "deployment_prediction", "text", "text_utf8_sha256", "utf8_byte_count", "codepoint_count"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.utf8-text/v1"},
+    "record_type": {"const": "causal_replay_utf8_text"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "text": {"type": "string", "minLength": 1},
+    "text_utf8_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "utf8_byte_count": {"type": "integer", "minimum": 1},
+    "codepoint_count": {"type": "integer", "minimum": 1}
+  }
+}

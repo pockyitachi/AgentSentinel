@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "curation_input_manifest.schema.json",
+  "title": "G1.6 hash-bound curator input manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "input_manifest_id",
+    "curated",
+    "deployment_prediction",
+    "channel",
+    "unit_ref",
+    "request_cutoff",
+    "evidence_refs",
+    "evidence_set_sha256",
+    "forbidden_evidence_roles",
+    "future_evidence_leakage_zero"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.curation-input-manifest/v1"},
+    "record_type": {"const": "causal_replay_curation_input_manifest"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "input_manifest_id": {"type": "string", "pattern": "^g1curationinput-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "channel": {"enum": ["ACTION_GOLD", "TRANSFORMATION"]},
+    "unit_ref": {"$ref": "action_gold_bundle.schema.json#/$defs/immutableUnitRef"},
+    "request_cutoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "event_seq", "target_step"],
+      "properties": {
+        "event_id": {"type": "string", "minLength": 1},
+        "event_seq": {"type": "integer", "minimum": 0},
+        "target_step": {"type": "integer", "minimum": 1}
+      }
+    },
+    "evidence_refs": {"type": "array", "minItems": 1, "uniqueItems": true},
+    "evidence_set_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "forbidden_evidence_roles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "future_evidence_leakage_zero": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"channel": {"const": "ACTION_GOLD"}}},
+      "then": {
+        "properties": {
+          "evidence_refs": {
+            "items": {"$ref": "action_gold_bundle.schema.json#/$defs/actionGoldEvidenceRef"},
+            "allOf": [
+              {
+                "contains": {
+                  "type": "object",
+                  "required": ["evidence_role"],
+                  "properties": {"evidence_role": {"const": "task_instruction"}}
+                },
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "type": "object",
+                  "required": ["evidence_role"],
+                  "properties": {"evidence_role": {"const": "target_pre"}}
+                },
+                "minContains": 1
+              }
+            ]
+          },
+          "forbidden_evidence_roles": {"const": ["history", "later_step", "outcome", "source_action", "source_post", "source_pre", "source_prediction", "source_result", "target_action", "target_post", "target_prediction", "target_request_history", "task_ended"]}
+        }
+      },
+      "else": {
+        "properties": {
+          "evidence_refs": {
+            "items": {"$ref": "transformation_plan.schema.json#/$defs/transformationEvidenceRef"},
+            "contains": {
+              "type": "object",
+              "required": ["evidence_role"],
+              "properties": {"evidence_role": {"const": "source_history"}}
+            },
+            "minContains": 1
+          },
+          "forbidden_evidence_roles": {"const": ["later_step", "outcome", "target_action", "target_post", "target_prediction", "task_ended"]}
+        }
+      }
+    }
+  ]
+}

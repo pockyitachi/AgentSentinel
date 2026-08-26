@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "run.schema.json",
+  "title": "G1 immutable state-frozen next-action replay run plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "curated",
+    "deployment_prediction",
+    "run_id",
+    "unit_kind",
+    "case_id",
+    "model_id",
+    "arm_id",
+    "status",
+    "unit_record_sha256",
+    "source_registry_manifest_sha256",
+    "admission_record_sha256",
+    "run_ready_seal_sha256",
+    "frozen_capsule_sha256",
+    "arm_plan_sha256",
+    "action_gold_bundle_sha256",
+    "transformation_plan_sha256",
+    "model_config_manifest_sha256",
+    "provider_codec_manifest_sha256",
+    "parser_manifest_sha256",
+    "scorer_manifest_sha256",
+    "schedule_manifest_sha256",
+    "source_request_sha256",
+    "request_sha256",
+    "request_byte_count",
+    "non_history_projection_sha256",
+    "history_projection_sha256",
+    "repeat_index",
+    "block_index",
+    "arm_order_index",
+    "replay_seed",
+    "arm_order_contract",
+    "arm_order_salt",
+    "arm_order_input_sha256",
+    "block_arm_order",
+    "block_arm_order_sha256",
+    "allowed_deltas",
+    "retry_policy",
+    "isolation"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-run/v1"},
+    "record_type": {"const": "causal_replay_run"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "run_id": {"type": "string", "pattern": "^g1run-[0-9a-f]{24}$"},
+    "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+    "case_id": {"type": "string", "pattern": "^(g1case|g1control)-[0-9a-f]{24}$"},
+    "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+    "arm_id": {
+      "enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]
+    },
+    "status": {
+      "const": "PLANNED",
+      "description": "This artifact is an immutable execution plan. Attempt and completion state live only in causal-replay outcome records."
+    },
+    "unit_record_sha256": {"$ref": "#/$defs/sha256"},
+    "source_registry_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "admission_record_sha256": {"$ref": "#/$defs/sha256"},
+    "run_ready_seal_sha256": {"$ref": "#/$defs/sha256"},
+    "frozen_capsule_sha256": {"$ref": "#/$defs/sha256"},
+    "arm_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "action_gold_bundle_sha256": {"$ref": "#/$defs/sha256"},
+    "transformation_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "model_config_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_codec_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "parser_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "scorer_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "schedule_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "source_request_sha256": {"$ref": "#/$defs/sha256"},
+    "request_sha256": {"$ref": "#/$defs/sha256"},
+    "request_byte_count": {"type": "integer", "minimum": 1},
+    "non_history_projection_sha256": {"$ref": "#/$defs/sha256"},
+    "history_projection_sha256": {"$ref": "#/$defs/sha256"},
+    "repeat_index": {"type": "integer", "minimum": 1, "maximum": 2},
+    "block_index": {"type": "integer", "minimum": 1, "maximum": 6},
+    "arm_order_index": {"type": "integer", "minimum": 0, "maximum": 4},
+    "replay_seed": {"enum": [1729, 2718, 31415]},
+    "arm_order_contract": {
+      "enum": ["STRICT_FIVE_ARM_ROTATION_V1", "CLEAN_TWO_ARM_BALANCED_V1"]
+    },
+    "arm_order_salt": {"const": "mobileworld-g1-arm-order-v1-20260826"},
+    "arm_order_input_sha256": {"$ref": "#/$defs/sha256"},
+    "block_arm_order": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]
+      }
+    },
+    "block_arm_order_sha256": {"$ref": "#/$defs/sha256"},
+    "allowed_deltas": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["REGISTERED_HISTORY_EDIT", "REPLAY_SEED", "TRANSPORT_VOLATILES"]}
+    },
+    "retry_policy": {"$ref": "#/$defs/retryPolicy"},
+    "isolation": {"$ref": "#/$defs/isolation"}
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "block_index": {"const": 1},
+            "replay_seed": {"const": 1729},
+            "repeat_index": {"const": 1}
+          }
+        },
+        {
+          "properties": {
+            "block_index": {"const": 2},
+            "replay_seed": {"const": 1729},
+            "repeat_index": {"const": 2}
+          }
+        },
+        {
+          "properties": {
+            "block_index": {"const": 3},
+            "replay_seed": {"const": 2718},
+            "repeat_index": {"const": 1}
+          }
+        },
+        {
+          "properties": {
+            "block_index": {"const": 4},
+            "replay_seed": {"const": 2718},
+            "repeat_index": {"const": 2}
+          }
+        },
+        {
+          "properties": {
+            "block_index": {"const": 5},
+            "replay_seed": {"const": 31415},
+            "repeat_index": {"const": 1}
+          }
+        },
+        {
+          "properties": {
+            "block_index": {"const": 6},
+            "replay_seed": {"const": 31415},
+            "repeat_index": {"const": 2}
+          }
+        }
+      ]
+    },
+    {
+      "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}},
+      "then": {
+        "properties": {
+          "case_id": {"pattern": "^g1case-[0-9a-f]{24}$"},
+          "arm_order_contract": {"const": "STRICT_FIVE_ARM_ROTATION_V1"},
+          "arm_order_index": {"maximum": 4},
+          "block_arm_order": {
+            "minItems": 5,
+            "maxItems": 5,
+            "enum": [
+              ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"],
+              ["MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT", "ORIGINAL"],
+              ["MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT", "ORIGINAL", "MASK"],
+              ["ORACLE_CLEAN", "SHAM_BENIGN_EDIT", "ORIGINAL", "MASK", "MASK_CORRECTION"],
+              ["SHAM_BENIGN_EDIT", "ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN"]
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "case_id": {"pattern": "^g1control-[0-9a-f]{24}$"},
+          "arm_id": {"enum": ["ORIGINAL", "SHAM_BENIGN_EDIT"]},
+          "arm_order_contract": {"const": "CLEAN_TWO_ARM_BALANCED_V1"},
+          "arm_order_index": {"maximum": 1},
+          "block_arm_order": {
+            "minItems": 2,
+            "maxItems": 2,
+            "enum": [
+              ["ORIGINAL", "SHAM_BENIGN_EDIT"],
+              ["SHAM_BENIGN_EDIT", "ORIGINAL"]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"arm_id": {"const": "ORIGINAL"}}},
+      "then": {
+        "properties": {
+          "allowed_deltas": {"const": ["REPLAY_SEED", "TRANSPORT_VOLATILES"]}
+        }
+      },
+      "else": {
+        "properties": {
+          "allowed_deltas": {
+            "const": ["REGISTERED_HISTORY_EDIT", "REPLAY_SEED", "TRANSPORT_VOLATILES"]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "retryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximum_provider_attempts",
+        "retryable_failures",
+        "request_bytes_identical_across_attempts",
+        "seed_identical_across_attempts",
+        "decoding_config_identical_across_attempts",
+        "parser_failure_retried",
+        "refusal_retried",
+        "no_op_retried"
+      ],
+      "properties": {
+        "maximum_provider_attempts": {"const": 3},
+        "retryable_failures": {"const": ["TIMEOUT", "HTTP_5XX", "CONNECTION_ERROR"]},
+        "request_bytes_identical_across_attempts": {"const": true},
+        "seed_identical_across_attempts": {"const": true},
+        "decoding_config_identical_across_attempts": {"const": true},
+        "parser_failure_retried": {"const": false},
+        "refusal_retried": {"const": false},
+        "no_op_retried": {"const": false}
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fresh_provider_conversation",
+        "conversation_carry_over",
+        "kv_cache_carry_over",
+        "response_fed_to_later_request",
+        "generated_action_executed"
+      ],
+      "properties": {
+        "fresh_provider_conversation": {"const": true},
+        "conversation_carry_over": {"const": false},
+        "kv_cache_carry_over": {"const": false},
+        "response_fed_to_later_request": {"const": false},
+        "generated_action_executed": {"const": false}
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "validation.schema.json",
+  "title": "G1 dry validation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "curated", "deployment_prediction", "valid", "pre_gold_status", "checks", "counts"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-validation/v1"},
+    "record_type": {"const": "causal_replay_dry_validation"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "valid": {"const": true},
+    "pre_gold_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gold_validation_status", "curation_and_admission_sealed", "admission_ready", "execution_ready", "run_ready", "treatment_response_generation_allowed", "pre_gold_pending_case_count", "run_ready_case_count", "unresolved_source_ref_count", "unresolved_capsule_ref_count", "pre_gold_future_leakage_case_count", "pre_gold_future_leakage_control_count"],
+      "properties": {
+        "gold_validation_status": {"const": "NOT_APPLICABLE_PRE_G1_6"},
+        "curation_and_admission_sealed": {"const": false},
+        "admission_ready": {"const": false},
+        "execution_ready": {"const": false},
+        "run_ready": {"const": false},
+        "treatment_response_generation_allowed": {"const": false},
+        "pre_gold_pending_case_count": {"type": "integer", "minimum": 0},
+        "run_ready_case_count": {"const": 0},
+        "unresolved_source_ref_count": {"const": 0},
+        "unresolved_capsule_ref_count": {"const": 0},
+        "pre_gold_future_leakage_case_count": {"const": 0},
+        "pre_gold_future_leakage_control_count": {"const": 0}
+      }
+    },
+    "checks": {"type": "object", "minProperties": 1, "additionalProperties": {"const": true}},
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict_mhr_cases", "clean_controls", "ledger_records", "included_cases", "pre_gold_pending_cases", "pre_gold_future_leakage_cases", "pre_gold_future_leakage_controls", "treatment_response_count"],
+      "properties": {
+        "strict_mhr_cases": {"type": "integer", "minimum": 0},
+        "clean_controls": {"type": "integer", "minimum": 0},
+        "ledger_records": {"type": "integer", "minimum": 0},
+        "included_cases": {"const": 0},
+        "pre_gold_pending_cases": {"type": "integer", "minimum": 0},
+        "pre_gold_future_leakage_cases": {"const": 0},
+        "pre_gold_future_leakage_controls": {"const": 0},
+        "treatment_response_count": {"const": 0}
+      }
+    }
+  }
+}

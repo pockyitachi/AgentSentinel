@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ledger.schema.json",
+  "title": "G1 selection ledger record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "ledger_id", "curated", "deployment_prediction", "source_key", "model_id", "model_config_manifest_sha256", "model_config_record_sha256", "task_name", "task_run_id", "target_step", "candidate_id", "candidate_sha256", "unit_kind", "unit_id", "disposition", "reason_codes", "gate_facts"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.causal-replay-selection-ledger/v1"},
+    "record_type": {"const": "causal_replay_selection_ledger"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "ledger_id": {"type": "string", "pattern": "^g1ledger-[0-9a-f]{24}$"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "source_key": {"type": "string", "minLength": 1},
+    "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+    "model_config_manifest_sha256": {"const": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"},
+    "model_config_record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "task_name": {"type": "string", "minLength": 1},
+    "task_run_id": {"type": "string", "minLength": 1},
+    "target_step": {"type": "integer", "minimum": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "unit_kind": {"type": ["string", "null"], "enum": ["STRICT_MHR", "CLEAN_CONTROL", null]},
+    "unit_id": {"type": ["string", "null"], "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"},
+    "disposition": {"enum": ["CANDIDATE_FROZEN", "CLEAN_CONTROL_SELECTED", "CLEAN_CONTROL_RESERVE", "EXCLUDED"]},
+    "reason_codes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["STRICT_MHR_CENSUS", "CLEAN_CONTROL_SELECTED", "CLEAN_CONTROL_RESERVE", "SOURCE_REFERENCE_UNRESOLVED", "PROVENANCE_BELOW_HIGH", "NOT_REFUTED_OR_STALE", "NO_EXPLICIT_UPTAKE", "NOT_STRICT_MHR"]}},
+    "gate_facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict_mhr", "clean_control"],
+      "properties": {
+        "strict_mhr": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "boolean"}},
+        "clean_control": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "boolean"}}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"model_id": {"const": "qwen3vl_8b"}}},
+      "then": {"properties": {"model_config_record_sha256": {"const": "5d6c5c1aa99aa13e8e153a19e6a0b1e8593cf2c32adaf8bca308fc76cea827e3"}}}
+    },
+    {
+      "if": {"properties": {"model_id": {"const": "mai_ui_8b"}}},
+      "then": {"properties": {"model_config_record_sha256": {"const": "c633cc272bca6e14ae788d90417c909d515fe1f22abb9c0bf5e02da78c8d7682"}}}
+    },
+    {
+      "if": {"properties": {"disposition": {"const": "CANDIDATE_FROZEN"}}},
+      "then": {"properties": {"unit_kind": {"const": "STRICT_MHR"}, "unit_id": {"pattern": "^g1case-[0-9a-f]{24}$"}}}
+    },
+    {
+      "if": {"properties": {"disposition": {"enum": ["CLEAN_CONTROL_SELECTED", "CLEAN_CONTROL_RESERVE"]}}},
+      "then": {"properties": {"unit_kind": {"const": "CLEAN_CONTROL"}, "unit_id": {"pattern": "^g1control-[0-9a-f]{24}$"}}}
+    },
+    {
+      "if": {"properties": {"disposition": {"const": "EXCLUDED"}}},
+      "then": {"properties": {"unit_kind": {"type": "null"}, "unit_id": {"type": "null"}}}
+    }
+  ]
+}
