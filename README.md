@@ -24,7 +24,7 @@ Status as of 2026-08-27:
 | Epic 1: motivation investigation | **Complete** | Six separately reported, integrity-validated 117-task MobileWorld datasets, exact history reconstruction, outcome-blind MHR and local-harm audits, and an outcome-aware observational failure-link review |
 | G1.1: causal-replay protocol and registry | **Complete** | CPU-only frozen protocol, schemas, model/config manifest, pre-gold case registry, controls, and locked analysis plan; no treatment response was generated |
 | G1.2: portable Sentinel contract | **Complete** | CPU-only canonical History IR/Core, codec/provider interfaces, fail-closed validation, schemas, sidecars, and six-family fixture conformance |
-| G1.3: immutable decision capsules | **Complete** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
+| G1.3: immutable decision capsules | **Complete; v1.1 corrected** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); Amendment 1 adds explicit fail-closed authorization guards; 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
 
 G1.2 is merged and accepted. ALE-321 / G1.3 formally froze and published all
 190 targets—152 strict-MHR candidates plus 38 selected clean controls—as
@@ -33,6 +33,10 @@ Collector v1 or reconstructing treatment requests. The separate 38 reserve
 clean controls remain census-only and out of capsule/exclusion scope. G1.3 was
 offline and CPU-only: no model/provider invocation, GPU, GUI/action/replay,
 automatic truth inference, intervention choice, or online Sentinel occurred.
+Contract Amendment 1 published the corrected v1.1 artifact at manifest SHA
+`8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402`.
+The former v1 publication remains immutable and historically identifiable, but
+is superseded for formal G1 use.
 ALE-322 / G1.4 remains unstarted and unapproved. The checked-in AGENTS, STATUS,
 and DECISION_LOG remain authoritative.
 
@@ -103,7 +107,9 @@ The accepted portable contract and the active capsule contract are
 [`G1_PORTABLE_SENTINEL_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_PORTABLE_SENTINEL_CONTRACT_V1.md)
 and
 [`G1_REPLAY_CAPSULE_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1.md);
-the five G1.3 machine schemas live under
+its active correction is
+[`G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`](mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md),
+and the historical plus active G1.3 machine schemas live under
 [`schemas/g1_3/`](mobileworld_audit_handoff/schemas/g1_3/).
 
 Raw collections, derived audit artifacts, screenshots, and replay outputs must
