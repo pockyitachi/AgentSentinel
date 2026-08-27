@@ -1,0 +1,38 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://agentsentinel.local/schemas/g1_4/blinded_packet_binding.schema.json",
+    "title": "G1.4 Confidential Blinded Packet Binding",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "record_type",
+        "protocol_version",
+        "blinded_packet_id",
+        "run_id",
+        "terminal_final_event_sha256",
+        "normalized_action_sha256",
+        "terminal_diagnostics_sha256",
+        "parser_diagnostics_sha256",
+        "packet_sha256",
+        "mapping_sha256",
+        "source_artifacts_valid",
+        "scorer_visible"
+    ],
+    "properties": {
+        "schema_version": {"const": "mobileworld.g1.confidential-blinded-packet-binding/v1"},
+        "record_type": {"const": "g1_confidential_blinded_packet_binding"},
+        "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+        "blinded_packet_id": {"type": "string", "pattern": "^g1blind-[0-9a-f]{24}$"},
+        "run_id": {"type": "string", "pattern": "^g1run-[0-9a-f]{24}$"},
+        "terminal_final_event_sha256": {"$ref": "#/$defs/sha256"},
+        "normalized_action_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "terminal_diagnostics_sha256": {"$ref": "#/$defs/sha256"},
+        "parser_diagnostics_sha256": {"$ref": "#/$defs/sha256"},
+        "packet_sha256": {"$ref": "#/$defs/sha256"},
+        "mapping_sha256": {"$ref": "#/$defs/sha256"},
+        "source_artifacts_valid": {"const": true},
+        "scorer_visible": {"const": false}
+    },
+    "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

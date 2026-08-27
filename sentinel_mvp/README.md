@@ -42,7 +42,9 @@ exact recorded decision inputs and visibility boundaries with
 `deployment_prediction=false`; it does not include automatic claim extraction,
 factual verification, correction generation, provider/model invocation, GPU,
 GUI/action/replay, or live runtime interception. This README is not broader
-implementation authorization. ALE-322 / G1.4 remains unstarted and unapproved.
+implementation authorization. ALE-322 / G1.4 now has a separate CPU-only build
+authorization under D-025 in `mobileworld_audit_handoff/G1_4_DECISION_LOG.md`, but this legacy package remains unchanged and is not
+part of that runner; live model/provider/GPU proof remains deferred.
 
 See the [project overview](../README.md), [current status](../mobileworld_audit_handoff/STATUS.md),
 and [G1 causal-replay protocol](../mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md).

@@ -15,6 +15,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | ALE-319 / G1.1 | **已完成** | 冻结 CPU-only causal-replay protocol、schemas、pre-gold registry、controls、model/config manifest 与 locked analysis plan；没有生成 treatment response |
 | ALE-320 / G1.2 | **已完成** | 已冻结可移植 History IR/Core、codec/provider interface、protocol validator、sidecar schemas 与六 family fixture conformance |
 | ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
+| ALE-322 / G1.4 | **CPU-only 实现已授权；live proof 延后** | 可实现 runner、invariance/diff guard、fake-provider conformance、schedule、idempotent attempt store、blinded export、schema/CLI；不得调用真实 model/provider/network/GPU/GUI/action/live replay，story 仍未完成 |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -85,9 +86,23 @@ publication `c2af8b8393e2df2da21bedcc98614e60a08b8254dc03da373ce72d67fe7c76c5`
 Collector raw layer 保持不可变、passive 和 label-free。所有 G1 label、plan、rendered
 request、response 与统计都属于 repo 外的 versioned derived/replay layer。
 
-D-023 与当前 AGENTS/STATUS 只授权并记录上述 CPU-only G1.3 capsule 物化与发布；
-ALE-322 / G1.4 及以后仍未启动、未获授权，任何 model/provider/GPU/GUI/action/replay 仍需
-新的 story 与 owner 明确授权。
+D-023/D-024 只授权并记录上述 CPU-only G1.3 capsule 物化、修正与发布。
+
+## 当前活动阶段：ALE-322 / G1.4（CPU-only 部分授权）
+
+[`G1_4_DECISION_LOG.md`](G1_4_DECISION_LOG.md) 中 D-025 允许先完成不需真实模型或外部运行时的
+runner 工程：formal v1.1 capsule
+只读加载与验证、exact-request preparation、target-only diff/invariance guard、预注册
+arm schedule、idempotent append-only attempt/resume 存储、blinded-scoring export、schema/CLI、
+in-process fake provider，以及只通过 fake SDK client 验证的 Provider Codec 边界。
+
+Formal capsule 的 `execution_ready=false`、`provider_invocation_allowed=false` 和
+`treatment_response_generation_allowed=false` 不变，不得被 wrapper、CLI、resume 或 test path
+绕过。当前不授权任何真实 model/provider/network 调用、GPU、模型加载/服务、
+GUI/tool/action、backend restore/prefix、live replay、treatment response 或 G1.5+ 工作。“约 90%”是
+调度目标而非验收比例；ALE-322 仍为 in progress，需等 owner 审核 GPU 资源并单独授权
+live proof 后，才能评估剩余验收项。无论后续是否运行 live proof，本 story 都不执行
+模型返回的 GUI action。
 
 ## 强制入口与补充导航
 
@@ -97,24 +112,26 @@ ALE-322 / G1.4 及以后仍未启动、未获授权，任何 model/provider/GPU/
 1. 本 README；
 2. [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)；
 3. [DECISION_LOG.md](DECISION_LOG.md)；
-4. [COLLECTOR_DESIGN.md](COLLECTOR_DESIGN.md)；
-5. [EVENT_CONTRACT_V1.md](EVENT_CONTRACT_V1.md)；
-6. [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)；
-7. [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md)；
-8. [SERVER_AGENT_INSTRUCTIONS.md](SERVER_AGENT_INSTRUCTIONS.md)；
-9. [STATUS.md](STATUS.md)；
-10. [G1_CAUSAL_REPLAY_PROTOCOL_V1.md](G1_CAUSAL_REPLAY_PROTOCOL_V1.md)；
-11. [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
-12. [G1_PORTABLE_SENTINEL_CONTRACT_V1.md](G1_PORTABLE_SENTINEL_CONTRACT_V1.md)；
-13. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
-14. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
-15. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
-16. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
-17. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
-18. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
-19. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
-20. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
-21. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
+4. [G1_4_DECISION_LOG.md](G1_4_DECISION_LOG.md)；
+5. [COLLECTOR_DESIGN.md](COLLECTOR_DESIGN.md)；
+6. [EVENT_CONTRACT_V1.md](EVENT_CONTRACT_V1.md)；
+7. [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)；
+8. [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md)；
+9. [SERVER_AGENT_INSTRUCTIONS.md](SERVER_AGENT_INSTRUCTIONS.md)；
+10. [STATUS.md](STATUS.md)；
+11. [G1_CAUSAL_REPLAY_PROTOCOL_V1.md](G1_CAUSAL_REPLAY_PROTOCOL_V1.md)；
+12. [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
+13. [G1_PORTABLE_SENTINEL_CONTRACT_V1.md](G1_PORTABLE_SENTINEL_CONTRACT_V1.md)；
+14. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
+15. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
+16. [G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md)；
+17. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
+18. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
+19. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
+20. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
+21. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
+22. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
+23. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
 
 三个无 `_v1_1` 后缀的 capsule/manifest/integrity schema 是 byte-frozen 历史 v1，
 不得作为当前 formal G1 contract 使用。
@@ -148,6 +165,7 @@ mobileworld_audit_handoff/
 ├── G1_SENTINEL_MVP_MIGRATION.md
 ├── G1_REPLAY_CAPSULE_CONTRACT_V1.md
 ├── G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md
+├── G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md
 ├── g1/
 │   └── frozen registry inputs, model/config manifest, publication lock
 ├── schemas/g1/
@@ -156,6 +174,8 @@ mobileworld_audit_handoff/
 │   └── versioned G1.2 portable-contract schemas
 ├── schemas/g1_3/
 │   └── five historical v1 contracts plus three active v1.1 corrected schemas
+├── schemas/g1_4/
+│   └── CPU replay plan, invariance, exchange, attempt, terminal, blinding, and readiness contracts
 └── examples/
     └── label-free raw event example
 ~~~

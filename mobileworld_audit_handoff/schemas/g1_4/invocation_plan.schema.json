@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/invocation_plan.schema.json",
+  "title": "G1.4 CPU-only immutable replay invocation plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "protocol_version", "runner_contract_version",
+    "run_id", "execution_domain", "schedule", "capsule_binding", "plan_set_sha256",
+    "selected_plan_sha256", "history_codec_id", "history_codec_contract_version",
+    "provider_codec_id", "provider_contract_version", "endpoint_revision",
+    "captured_parser_descriptor_sha256", "parser_binding_sha256", "model_binding_sha256", "provider_binding_sha256",
+    "history_codec_sha256", "provider_codec_sha256", "model_parameters_sha256",
+    "code_sha256", "config_sha256",
+    "live_run_ready_seal_sha256", "provider_invocation_allowed",
+    "treatment_response_generation_allowed"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.replay-invocation-plan/v1"},
+    "record_type": {"const": "g1_replay_invocation_plan"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "runner_contract_version": {"const": "mobileworld.g1.exact-request-replay/contract-v1"},
+    "run_id": {"type": "string", "pattern": "^g1run-[0-9a-f]{24}$"},
+    "execution_domain": {"const": "FAKE_CONFORMANCE"},
+    "schedule": {"$ref": "#/$defs/schedule"},
+    "capsule_binding": {"$ref": "#/$defs/capsuleBinding"},
+    "plan_set_sha256": {"$ref": "#/$defs/sha256"},
+    "selected_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "history_codec_id": {"type": "string", "minLength": 1},
+    "history_codec_contract_version": {"type": "string", "minLength": 1},
+    "provider_codec_id": {"const": "mobileworld.g1.provider.fake-conformance/v1"},
+    "provider_contract_version": {"const": "v1"},
+    "endpoint_revision": {"const": "fake://network-forbidden/v1"},
+    "captured_parser_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+    "parser_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "model_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "history_codec_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_codec_sha256": {"$ref": "#/$defs/sha256"},
+    "model_parameters_sha256": {"$ref": "#/$defs/sha256"},
+    "code_sha256": {"$ref": "#/$defs/sha256"},
+    "config_sha256": {"$ref": "#/$defs/sha256"},
+    "live_run_ready_seal_sha256": {"type": "null"},
+    "provider_invocation_allowed": {"const": false},
+    "treatment_response_generation_allowed": {"const": false}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "arm": {"enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+    "capsuleBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capsule_id", "unit_kind", "unit_id", "model_id", "history_family", "publication_manifest_sha256", "capsule_file_sha256", "capsule_body_sha256", "semantic_request_sha256", "non_history_projection_sha256"],
+      "properties": {
+        "capsule_id": {"type": "string", "pattern": "^g1capsule-[0-9a-f]{24}$"},
+        "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+        "unit_id": {"type": "string", "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"},
+        "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+        "history_family": {"enum": ["flat_progress", "raw_replay"]},
+        "publication_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "capsule_file_sha256": {"$ref": "#/$defs/sha256"},
+        "capsule_body_sha256": {"$ref": "#/$defs/sha256"},
+        "semantic_request_sha256": {"$ref": "#/$defs/sha256"},
+        "non_history_projection_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "schedule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["unit_kind", "unit_id", "model_id", "block_index", "repeat_index", "replay_seed", "arm_order_index", "arm_id", "block_arm_order", "arm_order_contract", "arm_order_salt", "arm_order_input_sha256", "block_arm_order_sha256", "schedule_id"],
+      "properties": {
+        "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+        "unit_id": {"type": "string", "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"},
+        "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+        "block_index": {"type": "integer", "minimum": 1, "maximum": 6},
+        "repeat_index": {"type": "integer", "minimum": 1, "maximum": 2},
+        "replay_seed": {"enum": [1729, 2718, 31415]},
+        "arm_order_index": {"type": "integer", "minimum": 0, "maximum": 4},
+        "arm_id": {"$ref": "#/$defs/arm"},
+        "block_arm_order": {"type": "array", "minItems": 2, "maxItems": 5, "uniqueItems": true, "items": {"$ref": "#/$defs/arm"}},
+        "arm_order_contract": {"enum": ["STRICT_FIVE_ARM_ROTATION_V1", "CLEAN_TWO_ARM_BALANCED_V1"]},
+        "arm_order_salt": {"const": "mobileworld-g1-arm-order-v1-20260826"},
+        "arm_order_input_sha256": {"$ref": "#/$defs/sha256"},
+        "block_arm_order_sha256": {"$ref": "#/$defs/sha256"},
+        "schedule_id": {"type": "string", "pattern": "^g1schedule-[0-9a-f]{24}$"}
+      }
+    }
+  }
+}

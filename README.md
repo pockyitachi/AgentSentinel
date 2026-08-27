@@ -25,6 +25,7 @@ Status as of 2026-08-27:
 | G1.1: causal-replay protocol and registry | **Complete** | CPU-only frozen protocol, schemas, model/config manifest, pre-gold case registry, controls, and locked analysis plan; no treatment response was generated |
 | G1.2: portable Sentinel contract | **Complete** | CPU-only canonical History IR/Core, codec/provider interfaces, fail-closed validation, schemas, sidecars, and six-family fixture conformance |
 | G1.3: immutable decision capsules | **Complete; v1.1 corrected** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); Amendment 1 adds explicit fail-closed authorization guards; 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
+| G1.4: exact-request replay runner | **CPU-only build authorized; live proof deferred** | Runner, invariant/diff guards, fake-provider conformance, scheduling, idempotent attempt storage, blinded export, schemas, and CLI may be built without network/model/GPU/GUI/action execution; story remains incomplete pending separately authorized live/GPU proof |
 
 G1.2 is merged and accepted. ALE-321 / G1.3 formally froze and published all
 190 targets—152 strict-MHR candidates plus 38 selected clean controls—as
@@ -37,8 +38,12 @@ Contract Amendment 1 published the corrected v1.1 artifact at manifest SHA
 `8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402`.
 The former v1 publication remains immutable and historically identifiable, but
 is superseded for formal G1 use.
-ALE-322 / G1.4 remains unstarted and unapproved. The checked-in AGENTS, STATUS,
-and DECISION_LOG remain authoritative.
+ALE-322 / G1.4 is now active only for its CPU implementation tranche. Real
+model/provider/network calls, GPU use, GUI/action/live replay, treatment-response
+generation, and G1.5+ remain unauthorized; formal capsules retain all three
+false safety guards. Passing CPU and fake-provider tests must not be reported as
+ALE-322 completion. The checked-in AGENTS, STATUS, and DECISION_LOG remain
+authoritative.
 
 ## Epic 1 results
 

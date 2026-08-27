@@ -5,24 +5,26 @@
 1. `README.md`
 2. `PROJECT_CONTEXT.md`
 3. `DECISION_LOG.md`
-4. `COLLECTOR_DESIGN.md`
-5. `EVENT_CONTRACT_V1.md`
-6. `IMPLEMENTATION_GUIDE.md`
-7. `TEST_AND_ACCEPTANCE.md`
-8. `SERVER_AGENT_INSTRUCTIONS.md`
-9. `STATUS.md`
-10. `G1_CAUSAL_REPLAY_PROTOCOL_V1.md`
-11. `G1_LOCKED_ANALYSIS_PLAN_V1.md`
-12. `G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
-13. `G1_REPLAY_CAPSULE_CONTRACT_V1.md`
-14. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
-15. `G1_SENTINEL_MVP_MIGRATION.md`
-16. `g1/registry.lock.v1.json`
-17. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-18. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-19. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-20. `schemas/g1_3/field_visibility.schema.json`
-21. `schemas/g1_3/capsule_exclusion.schema.json`
+4. `G1_4_DECISION_LOG.md`
+5. `COLLECTOR_DESIGN.md`
+6. `EVENT_CONTRACT_V1.md`
+7. `IMPLEMENTATION_GUIDE.md`
+8. `TEST_AND_ACCEPTANCE.md`
+9. `SERVER_AGENT_INSTRUCTIONS.md`
+10. `STATUS.md`
+11. `G1_CAUSAL_REPLAY_PROTOCOL_V1.md`
+12. `G1_LOCKED_ANALYSIS_PLAN_V1.md`
+13. `G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
+14. `G1_REPLAY_CAPSULE_CONTRACT_V1.md`
+15. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
+16. `G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
+17. `G1_SENTINEL_MVP_MIGRATION.md`
+18. `g1/registry.lock.v1.json`
+19. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+20. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+21. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+22. `schemas/g1_3/field_visibility.schema.json`
+23. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -35,10 +37,20 @@
 selected clean controls）全部生成 capsule；另 38 个 reserve clean controls 只进入 census，
 没有生成 capsule 或 exclusion。输入仅限冻结的 G1.1 registry、Collector v1 raw
 events/blobs/integrity artifacts 和已冻结的只读定位引用；真实 capsule 已写入 repo 外的
-content-addressed、write-once derived data root。ALE-322 / G1.4 及以后仍未启动、未获授权。
+content-addressed、write-once derived data root。
 G1.3 Contract Amendment 1 已以兼容 v1.1 publication 修正三项显式 fail-closed
 authorization/readiness guard；旧 v1 publication 保持不可变，仅作为历史版本，并已被
 v1.1 publication supersede for formal G1 use。
+
+当前活动范围是 `G1_4_DECISION_LOG.md` 中 D-025 限定的
+**ALE-322 / G1.4 CPU-only 实现阶段**。可实现
+exact-request runner、invariance/target-only diff guard、确定性 arm scheduling、idempotent
+append-only attempt/resume 存储、blinded export、schema/CLI、in-process fake provider，以及仅通过
+fake SDK client 测试的可注入 OpenAI-compatible Provider Codec。Formal v1.1 capsule 仍是只读
+输入，且必须保持 `execution_ready=false`、`provider_invocation_allowed=false` 和
+`treatment_response_generation_allowed=false`；本阶段对 formal capsule 的路径必须在任何
+外部调用前 fail closed。“约 90%”只是排期目标，ALE-322 仍处于 in progress，
+live/GPU proof 延后并需新授权。
 
 必须：
 
@@ -68,8 +80,9 @@ v1.1 publication supersede for formal G1 use。
 - 用 HTTP 200、截图变化或 task failure 自动等同动作语义失败；
 - 把 API key、Authorization header 或其他 secrets 写入日志；
 - 为了匹配本设计而破坏服务器已有用户修改或强制 reset 工作树。
-- 调用任何 model/provider、使用 GPU、执行 GUI/action/replay、生成 treatment response、
-  自动推断 claim validity、选择/生成 intervention，或开始 G1.4+；
+- 调用任何真实/外部 model 或 provider、发起网络请求、使用 GPU、加载/服务模型权重、
+  执行 GUI/tool/action、backend restore、prefix 或 live replay、生成 treatment response、自动推断
+  claim validity、选择/生成 intervention，或开始 G1.5+；只允许无网络的确定性 fake-provider conformance；
 - 将 G1 label、capsule metadata、visibility classification 或 transformation decision 写回
   raw Collector event。
 
@@ -87,5 +100,6 @@ captured natural action 当作 replay 必须复现的结果，也不得将 futur
 
 只有通过 ALE-321 的 capsule 一一对应、rehydration/hash、exact-request、target resolution、
 visibility/future-leakage、稳定 exclusion 和 deterministic double-build 验收，并在 `STATUS.md`
-记录 commit、命令、测试结果、外部 publication 与已知限制后，才可宣称 G1.3 完成。任何真实
-model/provider/GPU/GUI/action/replay 仍需另行授权；不得把凭据写入代码或本目录。
+记录 commit、命令、测试结果、外部 publication 与已知限制后，才可宣称 G1.3 完成。
+G1.4 CPU checkpoint 必须单独记录未完成的 live/GPU 验收项，不得将 ALE-322 标记为完成。
+任何真实 model/provider/network/GPU/GUI/action/live-replay 仍需另行授权；不得把凭据写入代码或本目录。

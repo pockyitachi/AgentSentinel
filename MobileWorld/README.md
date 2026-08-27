@@ -54,10 +54,13 @@
 > remain census-only and out of capsule/exclusion scope. Contract Amendment 1
 > corrected the explicit fail-closed authorization guards in the v1.1
 > content-addressed publication; the former v1 publication remains immutable
-> and is superseded for formal G1 use. ALE-322 / G1.4 remains
-> unstarted and unapproved; model/provider calls, GPU use, GUI/action execution,
-> replay, and an automatic runtime Sentinel remain unauthorized. Follow the
-> checked-in handoff scope files.
+> and is superseded for formal G1 use. ALE-322 / G1.4 is now authorized only for
+> the CPU runner, invariant/diff guards, deterministic fake-provider tests,
+> scheduling, idempotent attempt storage, blinded export, schemas, and CLI.
+> Real model/provider/network calls, GPU use, GUI/action/live replay,
+> treatment-response generation, and G1.5+ remain unauthorized. Formal capsules
+> retain their three false safety guards, and ALE-322 remains incomplete pending
+> separately authorized live/GPU proof. Follow the checked-in handoff scope files.
 >
 > See the [six-model audit](docs/misleading_history_audit_report.md),
 > [project status](../mobileworld_audit_handoff/STATUS.md), and

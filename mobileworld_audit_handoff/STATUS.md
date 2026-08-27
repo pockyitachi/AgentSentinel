@@ -22,8 +22,13 @@ Epic 1 motivation validation、ALE-319 / G1.1、ALE-320 / G1.2 与 ALE-321 / G1.
 通过 CPU-only 验证。**G1.3 Contract Amendment 1 已修正显式 fail-closed authorization
 guards，并从同一冻结来源正式发布 190 个 v1.1 immutable、self-validating decision capsules，
 0 个 exclusion。** 旧 v1 publication 保持不可变和历史可识别，但已被 v1.1 supersede for
-formal G1 use。没有运行模型、调用 provider、使用 GPU、执行 GUI/action/replay、选择
-intervention 或实现自动 Sentinel；ALE-322 / G1.4 及以后仍未启动、未获本次授权。
+formal G1 use。
+
+**ALE-322 / G1.4 现已按 `G1_4_DECISION_LOG.md` 中 D-025 进入 CPU-only 实现阶段；可构建
+runner、invariance/diff guard、fake-provider conformance、schedule、idempotent attempt store、
+blinded export、schema 与 CLI，但 story 仍为 in progress，live/GPU proof 延后。** 目前没有
+运行真实模型、调用外部 provider、使用网络/GPU、执行 GUI/action/live replay、生成
+treatment response、选择 intervention 或实现自动 Sentinel；G1.5+ 仍未获授权。
 
 已确认的工程决策：
 
@@ -692,6 +697,17 @@ Validation commands and results: `.venv/bin/pytest tests/offline/test_replay_cap
 Supersession and immutability: the former publication `/shared/linqiang/mobileworld_causal_replay_data/g1_3/capsules/sha256/c2af8b8393e2df2da21bedcc98614e60a08b8254dc03da373ce72d67fe7c76c5` was never modified, chmodded, repaired, deleted, or overwritten. It remains exactly 1,600 files / 116,152,594 bytes with manifest `c2af8b...76c5`, capsule-set `c44137ab...aad9`, 0555/0444 modes, and complete filename-to-content-hash map SHA-256 `1b8976e20e9f5ea6ae7dfdbbe8e8c5b65328ece0a55dc909eff290529b29d56d`. It is structurally identifiable as `LEGACY_V1` and `superseded_for_formal_g1=true`, but cannot receive current SOURCE_BOUND/formal acceptance. G1.1 lock/source/registry hashes remain `1e038ffe...57944`, `c8235705...cb59`, and `dbec86f...93bc6`; the accepted 17-file G1.2 set remains byte-unchanged with canonical map SHA-256 `444e3cd0fe343668f895a619c25094bc6eee118a7b6a69fac96e832b8e446dda`.
 Scope and safety: provider/model calls=0, GPU=0, GUI/action execution=0, network replay=0, treatment responses=0, automatic semantic inference=0, runtime Sentinel=0, raw mutation=0. ALE-322 / G1.4 and later work remain unstarted and unauthorized. Remaining deviation from the accepted corrected G1.3 contract: none.
 Owner approval required: no (the owner explicitly authorized this narrow ALE-321/G1.3 correction and new write-once publication); yes for any model/provider/GPU/GUI/action/replay or G1.4+ work.
+```
+
+```text
+Date: 2026-08-27 UTC
+ALE-322 / G1.4 phased authorization and pre-start scope synchronization: the owner explicitly authorized the CPU-only engineering tranche, described informally as approximately 90% of the story, while deferring every live/GPU proof until a separate resource review and authorization. The active branch is `linqg327/ale-322-g14-build-the-state-frozen-exact-request-replay-runner`, created from local corrected-G1.3 tip `18a13ce66e9da9409d5b6b8028656f33f5c8db27`. D-025 in `G1_4_DECISION_LOG.md` is the controlling authorization; the percentage is a scheduling target, not an acceptance metric or a completion claim.
+Authorized CPU scope: read-only formal-v1.1 capsule loading and structural/source binding; acceptance of already supplied curated `deployment_prediction=false` plans without semantic inference or curation; exact-request preparation; state-access admission; machine-enforced target-only diff and non-history invariance; preregistered arm scheduling; idempotent append-only run/attempt/resume records; blinded-scoring exports; versioned schemas and CLI; deterministic in-process fake-provider coverage; and an injectable OpenAI-compatible Provider Codec exercised only through fake SDK clients. Synthetic or redacted test-only plan/authorization fixtures may cover success, malformed response, refusal, timeout, visible retry, streaming, parser failure, unsupported capability, and explicit fail-open without becoming a scientific treatment response.
+Formal-capsule guard: every corrected G1.3 capsule remains `execution_ready=false`, `provider_invocation_allowed=false`, and `treatment_response_generation_allowed=false`. The G1.4 CPU harness may inspect and enforce those values but may not flip, wrap around, or silently override them. A formal-capsule path must terminate before any external provider/model method. The deterministic fake is a no-network, no-model conformance double and is never reported as provider invocation, treatment response, or live evidence.
+Frozen boundaries at start: G1.1 registry lock SHA-256 remains `1e038ffe604acf0eae2af1e45ec0e856e2f105353b0c5a1dbea0da9b15657944`; the accepted G1.2 17-file map remains `444e3cd0fe343668f895a619c25094bc6eee118a7b6a69fac96e832b8e446dda`; the active G1.3 publication remains `/shared/linqiang/mobileworld_causal_replay_data/g1_3/capsules/sha256/8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402` with capsule-set SHA-256 `7d0e85c523c2b20b3f0b820c2e846cbb84957d4ae78e46d7090c6ce78ae9fbed`; the historical v1 publication `c2af8b8393e2df2da21bedcc98614e60a08b8254dc03da373ce72d67fe7c76c5` also remains immutable. Collector v1/raw bytes, both G1.3 publications, G1.1 frozen files, and the accepted G1.2 set must remain byte-unchanged. Because the active G1.3 builder contract byte-binds historical `DECISION_LOG.md`, D-025 is append-only in the separate `G1_4_DECISION_LOG.md`; the frozen historical log remains byte-identical.
+Explicitly deferred and prohibited: any real/external model or provider call, network request, credential use, model-weight load or service, GPU allocation/use, Qwen/MAI live endpoint proof, treatment-response generation from a formal capsule, GUI/tool/action execution, backend restore, deterministic prefix or live replay, formal run publication, G1.5+ work, automatic semantic inference, and runtime Sentinel behavior. Returned GUI actions are never executed in ALE-322, including after a future live-proof authorization.
+Completion semantics: this entry authorizes a pre-start CPU tranche only. ALE-322 must remain `IN_PROGRESS_LIVE_PROOF_DEFERRED` after CPU/fake conformance and cannot be called complete until the owner separately approves the live/GPU phase and the remaining live Provider Codec acceptance evidence passes. No such approval or evidence exists at this checkpoint.
+Owner approval required: no for the CPU-only scope above; yes for any real model/provider/network/GPU/GUI/action/live replay, treatment response, G1.5+, or ALE-322 completion claim.
 ```
 
 ## 12. Implementation checklist

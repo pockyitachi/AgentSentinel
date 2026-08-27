@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/terminal_attempt.schema.json",
+  "title": "G1.4 fake-conformance terminal attempt receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "run_id", "status", "provider_attempt_count", "final_event_sha256", "provider_result", "parser_diagnostics", "retry_reason", "idempotent_reuse", "generated_action_executed", "response_fed_to_later_request", "scientific_count_eligible"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.replay-terminal-attempt/v1"},
+    "record_type": {"const": "g1_replay_terminal_attempt"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "run_id": {"type": "string", "pattern": "^g1run-[0-9a-f]{24}$"},
+    "status": {"enum": ["SUCCESS", "PARSE_ERROR", "REFUSAL", "EMPTY_RESPONSE", "NO_OP", "RETRY_EXHAUSTED"]},
+    "provider_attempt_count": {"type": "integer", "minimum": 0, "maximum": 3},
+    "final_event_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_result": {"oneOf": [{"$ref": "#/$defs/fakeProviderResult"}, {"type": "null"}]},
+    "parser_diagnostics": {
+      "oneOf": [
+        {"$ref": "#/$defs/parsedDiagnostics"},
+        {"$ref": "#/$defs/parserFailureDiagnostics"},
+        {"$ref": "#/$defs/refusalDiagnostics"},
+        {"$ref": "#/$defs/emptyResponseDiagnostics"},
+        {"$ref": "#/$defs/notRunDiagnostics"}
+      ]
+    },
+    "retry_reason": {"type": ["string", "null"]},
+    "idempotent_reuse": {"type": "boolean"},
+    "generated_action_executed": {"const": false},
+    "response_fed_to_later_request": {"const": false},
+    "scientific_count_eligible": {"const": false}
+  },
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "RETRY_EXHAUSTED"}}}, "then": {"properties": {"provider_attempt_count": {"const": 3}, "provider_result": {"type": "null"}, "parser_diagnostics": {"$ref": "#/$defs/notRunDiagnostics"}, "retry_reason": {"enum": ["TIMEOUT", "HTTP_5XX", "CONNECTION_ERROR"]}}}, "else": {"properties": {"provider_attempt_count": {"type": "integer", "minimum": 1, "maximum": 3}, "provider_result": {"$ref": "#/$defs/fakeProviderResult"}, "retry_reason": {"type": "null"}}}},
+    {"if": {"properties": {"status": {"const": "SUCCESS"}}}, "then": {"properties": {"provider_result": {"type": "object", "properties": {"status": {"const": "RETURNED"}, "normalized_action": {"type": "object", "not": {"$ref": "#/$defs/noOpActionMarker"}}, "error": {"type": "null"}}}, "parser_diagnostics": {"$ref": "#/$defs/parsedDiagnostics"}}}},
+    {"if": {"properties": {"status": {"const": "NO_OP"}}}, "then": {"properties": {"provider_result": {"type": "object", "properties": {"status": {"const": "RETURNED"}, "normalized_action": {"$ref": "#/$defs/noOpActionMarker"}, "error": {"type": "null"}}}, "parser_diagnostics": {"$ref": "#/$defs/parsedDiagnostics"}}}},
+    {"if": {"properties": {"status": {"const": "PARSE_ERROR"}}}, "then": {"properties": {"provider_result": {"type": "object", "properties": {"status": {"const": "PARSE_ERROR"}, "error": {"type": "object", "properties": {"code": {"enum": ["MALFORMED_RESPONSE", "PARSER_FAILURE"]}, "retryable": {"const": false}}}}}, "parser_diagnostics": {"$ref": "#/$defs/parserFailureDiagnostics"}}, "oneOf": [{"properties": {"provider_result": {"properties": {"error": {"properties": {"code": {"const": "MALFORMED_RESPONSE"}}}}}, "parser_diagnostics": {"properties": {"error_code": {"const": "MALFORMED_RESPONSE"}}}}}, {"properties": {"provider_result": {"properties": {"error": {"properties": {"code": {"const": "PARSER_FAILURE"}}}}}, "parser_diagnostics": {"properties": {"error_code": {"const": "PARSER_FAILURE"}}}}}]}},
+    {"if": {"properties": {"status": {"const": "REFUSAL"}}}, "then": {"properties": {"provider_result": {"type": "object", "properties": {"status": {"const": "PROVIDER_ERROR"}, "error": {"type": "object", "properties": {"code": {"const": "REFUSAL"}, "retryable": {"const": false}}}}}, "parser_diagnostics": {"$ref": "#/$defs/refusalDiagnostics"}}}},
+    {"if": {"properties": {"status": {"const": "EMPTY_RESPONSE"}}}, "then": {"properties": {"provider_result": {"type": "object", "properties": {"status": {"const": "PARSE_ERROR"}, "error": {"type": "object", "properties": {"code": {"const": "EMPTY_RESPONSE"}, "retryable": {"const": false}}}}}, "parser_diagnostics": {"$ref": "#/$defs/emptyResponseDiagnostics"}}}}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "binaryArtifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "media_type", "schema_version"],
+      "properties": {
+        "relative_path": {"type": "string", "pattern": "^objects/sha256/[0-9a-f]{2}/[0-9a-f]{64}$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 0},
+        "media_type": {"const": "application/octet-stream"},
+        "schema_version": {"type": "null"}
+      }
+    },
+    "fakeProviderResult": {
+      "allOf": [
+        {"$ref": "../g1_2/provider_result.schema.json"},
+        {
+          "type": "object",
+          "properties": {
+            "provider_codec_id": {"const": "mobileworld.g1.provider.fake-conformance/v1"},
+            "provider_contract_version": {"const": "v1"},
+            "endpoint_revision": {"const": "fake://network-forbidden/v1"},
+            "response_sha256": {"$ref": "#/$defs/sha256"},
+            "raw_response_ref": {"$ref": "#/$defs/binaryArtifactRef"}
+          }
+        }
+      ]
+    },
+    "noOpActionMarker": {
+      "type": "object",
+      "anyOf": [
+        {"required": ["type"], "properties": {"type": {"enum": ["wait", "noop", "no_op"]}}},
+        {"required": ["action_type"], "properties": {"action_type": {"enum": ["wait", "noop", "no_op"]}}}
+      ]
+    },
+    "parsedDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parser_binding_id", "parse_outcome", "action_count", "action_sha256"],
+      "properties": {
+        "parser_binding_id": {"const": "mobileworld.g1.fixture-json-action-parser/v1"},
+        "parse_outcome": {"const": "PARSED"},
+        "action_count": {"const": 1},
+        "action_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "parserFailureDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parser_binding_id", "parse_outcome", "action_count", "error_code"],
+      "properties": {
+        "parser_binding_id": {"const": "mobileworld.g1.fixture-json-action-parser/v1"},
+        "parse_outcome": {"const": "FAILED"},
+        "action_count": {"const": 0},
+        "error_code": {"enum": ["MALFORMED_RESPONSE", "PARSER_FAILURE"]}
+      }
+    },
+    "refusalDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parser_binding_id", "parse_outcome", "action_count", "error_code"],
+      "properties": {
+        "parser_binding_id": {"const": "mobileworld.g1.fixture-json-action-parser/v1"},
+        "parse_outcome": {"const": "REFUSAL"},
+        "action_count": {"const": 0},
+        "error_code": {"const": "REFUSAL"}
+      }
+    },
+    "emptyResponseDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parser_binding_id", "parse_outcome", "action_count", "error_code"],
+      "properties": {
+        "parser_binding_id": {"const": "mobileworld.g1.fixture-json-action-parser/v1"},
+        "parse_outcome": {"const": "EMPTY_RESPONSE"},
+        "action_count": {"const": 0},
+        "error_code": {"const": "EMPTY_RESPONSE"}
+      }
+    },
+    "notRunDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parse_outcome"],
+      "properties": {"parse_outcome": {"const": "NOT_RUN"}}
+    }
+  }
+}
