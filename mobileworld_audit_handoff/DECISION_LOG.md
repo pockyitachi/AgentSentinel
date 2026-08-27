@@ -371,6 +371,38 @@ model/provider invocation、GUI action、live prompt interception、natural-task
 
 ---
 
+## D-023 — G1.3 只物化不可变 Decision Capsule，不执行 replay
+
+**状态：Locked（owner 于 2026-08-27 明确授权 ALE-321 / G1.3）**
+
+G1.1 与 G1.2 已合并并完成 CPU-only 验证，因此允许从冻结的 G1.1 registry、Collector v1
+raw event/blob/integrity artifacts、exact application-layer requests，以及仅用于定位的冻结
+review/card references，离线派生 immutable、self-validating Replay Capsules。每个 capsule
+必须绑定稳定 case/source/task/stream/step/model/config identity，精确 pre-call request 与
+system/tools/task/history/current-observation/non-history 分区，目标 record/span/exposure，当前
+GUI/state/cutoff provenance，以及严格三选一的 `SERIALIZED_REQUEST_ONLY` 证明、
+`EXACT_CHECKPOINT` descriptor 或 `DETERMINISTIC_PREFIX_REPLAY` recipe。物化目标严格限定为
+190 个冻结单元（152 个 strict-MHR candidates 加 38 个 selected clean controls）；另 38 个
+reserve clean controls 只进入 census，既不生成 capsule，也不生成 exclusion。
+
+Capsule 必须把字段机械区分为 frozen model-visible、frozen non-history envelope、mutable
+history treatment、curator-only 和 post-action/audit-only。Captured natural response、parsed
+action、executor result、post-state 与 outcome 只可作为 sealed audit-only reference；它们不是
+replay 必须复现的结果，也不得到达 runtime-visible、treatment-renderer、`ACTION_GOLD` 或
+`TRANSFORMATION` 输入。在 sealed audit suffix 中合法保留 future/audit evidence 本身不构成
+exclusion；只有其值、可解引用引用或派生字段泄漏到上述受限输入时，才以稳定
+future-leakage reason code 排除。缺失 Blob、hash mismatch、span/partition 歧义或不可满足的
+state-access descriptor 也必须以稳定 reason code 排除，不能推测、搬移或静默修复。
+
+本授权只包含 CPU-only deterministic builder/validator/schema、双构建、repo 外
+content-addressed write-once publication、integrity/visibility report 与 excluded-case ledger。
+Collector v1、全部 raw bytes、G1.1 冻结 25-file contract/外部 registry、D-022 和已验收 G1.2
+contract/package/schema 必须保持不变。明确不授权 model/provider invocation、GPU、GUI/action
+execution、network replay、treatment response、intervention/gold 选择或生成、自动语义推断、
+runtime Sentinel，或任何 G1.4+ 工作；这些仍需独立 story 与 owner 新授权。
+
+---
+
 ## 尚未锁定、留给后续实验设计的问题
 
 以下内容不要在 collector 中写死：

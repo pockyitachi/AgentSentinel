@@ -1,6 +1,6 @@
 # Project Status：GUI Agent Previous-Step Misleading Motivation Study
 
-Last updated: 2026-08-26 (UTC)
+Last updated: 2026-08-27 (UTC)
 
 ## 1. Project objective
 
@@ -18,12 +18,11 @@ Last updated: 2026-08-26 (UTC)
 
 ## 2. Current stage and decision
 
-Epic 1 motivation validation 已完成。**ALE-320 / G1.2 已完成并通过 CPU-only 验证；
-ALE-321 / G1.3 尚未启动且未获本次授权。** G1.2 在已合并、已验证的 G1.1
-protocol/candidate registry 之上冻结了可移植 Sentinel Core / History IR / History Codec /
-Provider Codec / protocol-validator / sidecar 契约，并为六种 history family 提供
-fixture-level conformance；没有运行模型、调用 provider、使用 GPU、执行 GUI action 或实现
-自动 Sentinel。
+Epic 1 motivation validation、ALE-319 / G1.1、ALE-320 / G1.2 与 ALE-321 / G1.3 已完成并
+通过 CPU-only 验证。**G1.3 已从冻结 G1.1 registry 与 Collector v1 只读 artifacts 正式发布
+190 个 immutable、self-validating decision capsules，0 个 exclusion。** 没有运行模型、调用
+provider、使用 GPU、执行 GUI/action/replay、选择 intervention 或实现自动 Sentinel；
+ALE-322 / G1.4 及以后仍未启动、未获本次授权。
 
 已确认的工程决策：
 
@@ -660,6 +659,26 @@ Validation: the portable-contract focused suite passed 53 tests; the full Mobile
 Frozen-boundary audit: all 25 G1.1 contract files still match source config SHA-256 `c8235705c575e134c11bc00896f31ec95243af4ffd2ffd47a3e6ecf64ce5cb59` and contract aggregate `f1e23239896eb7f6487e337ec391df73d19c84fababecae996c0a2e752f156d8`. Registry lock SHA-256 remains `1e038ffe604acf0eae2af1e45ec0e856e2f105353b0c5a1dbea0da9b15657944`; the external six-file publication remains 3,103,332 bytes with aggregate SHA-256 `dbec86f012b1cb9a11f94123cb302a62ffc6a04a33422121d190f28edf793bc6` and content address `dd3dad4f94c66dce6999d3cc2743cd75c37688788754e95b27531cfd00d733f4`.
 Scope and safety: Collector v1, raw events, `sentinel_mvp`, actor/runtime code, all G1.1 frozen contract files, and the published registry were not modified. No model/provider invocation, network replay, GPU use, GUI action, natural-task intervention, decision-capsule materialization, treatment response, or G1.3+ execution occurred. ALE-321 / G1.3 remains unstarted and requires its own authorization; any GPU/model/provider/replay/action execution also requires separate explicit owner approval.
 Owner approval required: no (this records completion of the explicitly authorized CPU-only ALE-320 implementation); yes for any GPU/model/provider/replay/action execution or G1.3+ work.
+```
+
+```text
+Date: 2026-08-27 UTC
+ALE-321 / G1.3 authorization and pre-start scope synchronization: the owner explicitly requested ALE-321. D-023 authorizes only CPU-only, offline derivation of immutable Replay Capsules from the frozen G1.1 registry and read-only Collector v1 artifacts. The root/handoff AGENTS and four repository entry READMEs now identify G1.2 as complete and G1.3 as the active bounded story before any G1.3 implementation or capsule publication begins.
+Frozen population: exactly 190 targets (152 strict-MHR candidates plus 38 selected clean controls) must each produce one capsule or one stable exclusion. The separate 38 reserve clean controls are census-only and out of capsule/exclusion scope.
+Locked boundary: Collector v1 events/blobs, all G1.1 frozen contract/publication bytes, D-022, and the accepted G1.2 contract/package/schemas remain unchanged. Capsules may bind exact requests, state provenance, target spans, exactly one of `SERIALIZED_REQUEST_ONLY`, `EXACT_CHECKPOINT`, or `DETERMINISTIC_PREFIX_REPLAY`, and sealed audit-only natural outputs. A legal sealed audit suffix is not itself an exclusion, but no post-target/outcome/checker/audit-only value, resolvable reference, or derived field may reach runtime, treatment, `ACTION_GOLD`, or `TRANSFORMATION` inputs.
+Scope and safety: no model/provider invocation, GPU use, GUI/action execution, network replay, treatment response, intervention/gold generation, automatic semantic inference, runtime Sentinel, or G1.4+ work is authorized. Real capsule artifacts must remain repo-external and write-once; missing, ambiguous, future-leaking, or integrity-invalid inputs must be excluded with stable reason codes.
+Owner approval required: no (this entry records the owner's explicit ALE-321 / G1.3 authorization); yes for any model/provider/GPU/GUI/action/replay or G1.4+ work.
+```
+
+```text
+Date: 2026-08-27 UTC
+ALE-321 / G1.3 completion: the CPU-only offline builder and validator formally materialized every frozen in-scope unit as an immutable, self-validating Replay Capsule. The final disposition is exactly 190 capsules and 0 exclusions: 152 strict-MHR candidates plus 38 selected clean controls. The separate 38 reserve clean controls remain census-only and produced neither capsules nor exclusions. Qwen contributes 169 capsules and MAI contributes 21; all 190 source chains are valid. Of the natural source suffixes, 172 contain completed transitions and 18 terminate before action execution.
+Repository implementation commit: `b34fd80be32767a597e373ecee759e371522af80` (`feat(g1): materialize ALE-321 replay capsules`). This completion-record update is intentionally a later documentation-only commit and is outside the self-hashed G1.3 publication contract.
+Formal external publication: `/shared/linqiang/mobileworld_causal_replay_data/g1_3/capsules/sha256/c2af8b8393e2df2da21bedcc98614e60a08b8254dc03da373ce72d67fe7c76c5`. The directory basename and exact canonical `capsule_manifest.json` SHA-256 are both `c2af8b8393e2df2da21bedcc98614e60a08b8254dc03da373ce72d67fe7c76c5`. The publication contains exactly 1,600 declared regular files totaling 116,152,594 bytes; root mode is 0555, file mode is 0444, owner/group are uid/gid 1035, every regular file has link count 1, and no symlink is present. The capsule-set SHA-256 is `c44137ab964e9561300c98bea182563133faed4e9de3d04e7532233ddc12aad9`. Independent `SOURCE_BOUND` readback rebuilt the formal artifact set from the immutable sources and returned byte-identical equality. The before/after raw-source closure SHA-256 is `06ad6b6ae46d43f9e2093708cffb8e743a3bfeee8c60b8df001e807602adfca7`.
+Capsule limits recorded rather than inferred: all 190 state-access descriptors are `SERIALIZED_REQUEST_ONLY`; all captured UI trees are null/unavailable; no replay seed was captured. The 21 MAI units remain `G1_6_PENDING` and contain no focal edit span. Six MAI current-screenshot digests also occur at earlier request coordinates and are disambiguated by exact current-block coordinates rather than digest uniqueness.
+Validation: `MobileWorld/tests/offline/test_replay_capsules.py` passed 72 focused tests; the G1.1/G1.2 regression files `test_causal_replay_registry.py` and `test_portable_causal_replay_contract.py` passed 93 tests; the full MobileWorld suite passed 896 tests. Draft 2020-12 meta-validation passed for all five G1.3 schemas. Ruff check, Ruff format check, Python byte-compilation, and `git diff --check` all passed. Final implementation SHA-256 values are `28c5c87e483a8fe3bf29984c1d81975a0d27a27db1c6321ee6e81f8067507959` for `replay_capsules.py`, `54ee7c7f5468612efe7516336b5aacc299636a71f010ed3ebfccf377d334cf7e` for `test_replay_capsules.py`, and `e51a10bb76f5d6b864390f3bbd5e75eb9237c88066752712f626f93bce3ea73a` for `build_g1_replay_capsules.py`.
+Scope and safety: all provider/model/GPU/GUI/action/replay/raw-mutation, runtime-Sentinel, label-addition, automatic-semantic-inference, treatment-response, and execution-readiness safety flags are false or zero. Collector v1, all raw bytes, the G1.1 frozen contract/publication, D-022/D-023, and the accepted G1.2 contract/package/schemas remain unchanged. ALE-322 / G1.4 and all later work remain unstarted and unapproved; they require a separate story and explicit owner authorization.
+Owner approval required: no (this records completion of the explicitly authorized CPU-only ALE-321 publication); yes for any model/provider/GPU/GUI/action/replay or G1.4+ work.
 ```
 
 ## 12. Implementation checklist

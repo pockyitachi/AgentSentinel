@@ -10,10 +10,27 @@
 6. `IMPLEMENTATION_GUIDE.md`
 7. `TEST_AND_ACCEPTANCE.md`
 8. `SERVER_AGENT_INSTRUCTIONS.md`
+9. `STATUS.md`
+10. `G1_CAUSAL_REPLAY_PROTOCOL_V1.md`
+11. `G1_LOCKED_ANALYSIS_PLAN_V1.md`
+12. `G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
+13. `G1_REPLAY_CAPSULE_CONTRACT_V1.md`
+14. `G1_SENTINEL_MVP_MIGRATION.md`
+15. `g1/registry.lock.v1.json`
+16. `schemas/g1_3/replay_capsule.schema.json`
+17. `schemas/g1_3/field_visibility.schema.json`
+18. `schemas/g1_3/capsule_exclusion.schema.json`
+19. `schemas/g1_3/capsule_manifest.schema.json`
+20. `schemas/g1_3/capsule_integrity.schema.json`
 
 ## 强制范围
 
-当前只实现 **event-sourced、lossless、label-free audit collector**。
+最近完成 **ALE-321 / G1.3 的 CPU-only、offline、derived Replay Capsule
+物化、验证与正式发布**。严格限定的 190 个冻结单元（152 个 strict-MHR candidates 加 38 个
+selected clean controls）全部生成 capsule；另 38 个 reserve clean controls 只进入 census，
+没有生成 capsule 或 exclusion。输入仅限冻结的 G1.1 registry、Collector v1 raw
+events/blobs/integrity artifacts 和已冻结的只读定位引用；真实 capsule 已写入 repo 外的
+content-addressed、write-once derived data root。ALE-322 / G1.4 及以后仍未启动、未获授权。
 
 必须：
 
@@ -23,6 +40,16 @@
 - 使用稳定 ID、版本 manifest 和 content-addressed binary artifacts；
 - 通过 feature flag 完全关闭；
 - 关闭时保持原行为；开启时也不得修改传给模型的 request 或 agent action。
+- 保持 Collector v1、G1.1 的 25-file contract/外部 registry 以及已验收 G1.2
+  contract/package/schema 字节不变；
+- 对每个 capsule 重新解析并校验 exact pre-call request、blob、target span、因果 cutoff、
+  visibility channel 和全部 hash；缺失、歧义或完整性失败必须稳定排除，不能修补；
+- 每个 capsule 的 state-access descriptor 必须且只能是 `SERIALIZED_REQUEST_ONLY`、
+  `EXACT_CHECKPOINT` 或 `DETERMINISTIC_PREFIX_REPLAY` 之一；G1.3 只记录并验证 descriptor，
+  不执行 restore 或 prefix；
+- 将 captured response/action/result/post-state 限定为 sealed audit-only reference，绝不能
+  进入 runtime-visible、treatment-renderer、`ACTION_GOLD` 或 `TRANSFORMATION` 输入；
+- 保证从同一不可变源重复构建得到 byte-identical manifest 与语义相同的 capsule。
 
 禁止：
 
@@ -33,13 +60,24 @@
 - 用 HTTP 200、截图变化或 task failure 自动等同动作语义失败；
 - 把 API key、Authorization header 或其他 secrets 写入日志；
 - 为了匹配本设计而破坏服务器已有用户修改或强制 reset 工作树。
+- 调用任何 model/provider、使用 GPU、执行 GUI/action/replay、生成 treatment response、
+  自动推断 claim validity、选择/生成 intervention，或开始 G1.4+；
+- 将 G1 label、capsule metadata、visibility classification 或 transformation decision 写回
+  raw Collector event。
 
 ## 数据原则
 
 Raw collection 是不可变事实层；所有 claim extraction、错误分类、weak/strong uptake 和统计均属于可版本化的 offline derived layer。若实现选择与文档冲突，先更新设计并说明理由，不要静默偏离。
 
+G1.3 的 capsule 也是 derived layer：它只冻结已记录的因果单元与可见性边界，不得把
+captured natural action 当作 replay 必须复现的结果，也不得将 future/post-action evidence
+提升为模型可见输入。
+
 `EVENT_CONTRACT_V1.md` 是 event 名称、字段和终态规则的唯一权威；“完整 request”指 MobileWorld 在 SDK invocation 前传入的 application-layer arguments，不声称是 SDK 内部最终 HTTP wire body。
 
 ## 完成要求
 
-只有通过 `TEST_AND_ACCEPTANCE.md` 的 P0 验收，并在 `STATUS.md` 记录 commit、命令、测试结果和已知限制后，才可宣称 collector 完成。真实模型 smoke run 需要服务器凭据和运行授权，不得把凭据写入代码或本目录。
+只有通过 ALE-321 的 capsule 一一对应、rehydration/hash、exact-request、target resolution、
+visibility/future-leakage、稳定 exclusion 和 deterministic double-build 验收，并在 `STATUS.md`
+记录 commit、命令、测试结果、外部 publication 与已知限制后，才可宣称 G1.3 完成。任何真实
+model/provider/GPU/GUI/action/replay 仍需另行授权；不得把凭据写入代码或本目录。

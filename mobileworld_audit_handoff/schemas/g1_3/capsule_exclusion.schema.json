@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_3/capsule_exclusion.schema.json",
+  "title": "G1.3 Replay Capsule Exclusion Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "issue",
+    "story",
+    "curated",
+    "deployment_prediction",
+    "unit_kind",
+    "unit_id",
+    "original_registry_state",
+    "source_registry_record_ref",
+    "capsule_status",
+    "capsule_emitted",
+    "primary_stage",
+    "primary_reason_code",
+    "failures",
+    "failure_ordering",
+    "retry_behavior",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.replay-capsule-exclusion/v1"},
+    "record_type": {"const": "g1_replay_capsule_exclusion"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "issue": {"const": "ALE-321"},
+    "story": {"const": "G1.3"},
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+    "unit_id": {
+      "type": "string",
+      "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"
+    },
+    "original_registry_state": {"enum": ["CANDIDATE_FROZEN", "SELECTED"]},
+    "source_registry_record_ref": {"$ref": "#/$defs/registryRecordRef"},
+    "capsule_status": {"const": "EXCLUDED_FROM_G1_3_CAPSULE_SET"},
+    "capsule_emitted": {"const": false},
+    "primary_stage": {"$ref": "#/$defs/stage"},
+    "primary_reason_code": {"$ref": "#/$defs/reasonCode"},
+    "failures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/failure"}
+    },
+    "failure_ordering": {
+      "const": "STAGE_PRIORITY_THEN_REASON_CODE_THEN_AFFECTED_JSON_POINTER"
+    },
+    "retry_behavior": {"const": "FAIL_CLOSED_NO_CAPSULE"},
+    "safety": {"$ref": "#/$defs/safety"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}},
+      "then": {
+        "properties": {
+          "unit_id": {"pattern": "^g1case-[0-9a-f]{24}$"},
+          "original_registry_state": {"const": "CANDIDATE_FROZEN"},
+          "source_registry_record_ref": {
+            "properties": {
+              "registry_file_relative_path": {
+                "const": "case_registry.pre_gold.jsonl"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "unit_id": {"pattern": "^g1control-[0-9a-f]{24}$"},
+          "original_registry_state": {"const": "SELECTED"},
+          "source_registry_record_ref": {
+            "properties": {
+              "registry_file_relative_path": {
+                "const": "clean_control_pool.jsonl"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "registryRecordRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry_manifest_sha256",
+        "registry_file_relative_path",
+        "registry_file_sha256",
+        "registry_file_byte_count",
+        "record_index",
+        "record_id",
+        "record_sha256"
+      ],
+      "properties": {
+        "registry_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "registry_file_relative_path": {
+          "enum": ["case_registry.pre_gold.jsonl", "clean_control_pool.jsonl"]
+        },
+        "registry_file_sha256": {"$ref": "#/$defs/sha256"},
+        "registry_file_byte_count": {"type": "integer", "minimum": 1},
+        "record_index": {"type": "integer", "minimum": 0},
+        "record_id": {
+          "type": "string",
+          "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"
+        },
+        "record_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "stage": {
+      "enum": [
+        "REGISTRY",
+        "SOURCE",
+        "EVENT_CHAIN",
+        "ARTIFACT",
+        "REQUEST",
+        "PARTITION",
+        "STATE",
+        "TARGET",
+        "AUDIT_SUFFIX",
+        "BACKEND",
+        "VISIBILITY",
+        "SCHEMA",
+        "DETERMINISM"
+      ]
+    },
+    "reasonCode": {
+      "enum": [
+        "REGISTRY_BINDING_INVALID",
+        "SOURCE_REFERENCE_UNRESOLVED",
+        "SOURCE_HASH_MISMATCH",
+        "RAW_EVENT_CHAIN_INVALID",
+        "BLOB_REFERENCE_INVALID",
+        "BLOB_MISSING",
+        "BLOB_HASH_MISMATCH",
+        "ARTIFACT_REHYDRATION_FAILED",
+        "REQUEST_HASH_MISMATCH",
+        "REQUEST_VIEW_MISMATCH",
+        "REQUEST_PARTITION_AMBIGUOUS",
+        "REQUEST_PARTITION_INCOMPLETE",
+        "NON_HISTORY_REGION_UNRECOVERABLE",
+        "STATE_HASH_MISMATCH",
+        "CURRENT_OBSERVATION_UNRESOLVED",
+        "CURRENT_SCREENSHOT_EXPOSURE_UNRESOLVED",
+        "TARGET_SPAN_UNRESOLVED",
+        "TARGET_SPAN_AMBIGUOUS",
+        "TARGET_SPAN_HASH_MISMATCH",
+        "TARGET_SPAN_COORDINATE_MISMATCH",
+        "TARGET_SET_OVERLAP",
+        "ORIGINAL_RESPONSE_UNRESOLVED",
+        "ORIGINAL_ACTION_UNRESOLVED",
+        "ORIGINAL_TRANSITION_UNRESOLVED",
+        "BACKEND_DEPENDENCY_UNPROVEN",
+        "BACKEND_CHECKPOINT_REQUIRED_BUT_MISSING",
+        "PREFIX_REPLAY_RECIPE_INVALID",
+        "FUTURE_EVIDENCE_LEAKAGE",
+        "FIELD_VISIBILITY_INVALID",
+        "CURATOR_CHANNEL_VIOLATION",
+        "SCHEMA_VALIDATION_FAILED",
+        "DUPLICATE_CAPSULE",
+        "CAPSULE_HASH_MISMATCH",
+        "NONDETERMINISTIC_BUILD"
+      ]
+    },
+    "jsonPointer": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "string",
+          "pattern": "^(?:|/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])+)*)$"
+        }
+      ]
+    },
+    "contextValue": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "integer"},
+        {"type": "boolean"},
+        {"type": "null"}
+      ]
+    },
+    "contextEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "value"],
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "value": {"$ref": "#/$defs/contextValue"}
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stage",
+        "reason_code",
+        "affected_json_pointer",
+        "expected_sha256",
+        "observed_sha256",
+        "stable_context"
+      ],
+      "properties": {
+        "stage": {"$ref": "#/$defs/stage"},
+        "reason_code": {"$ref": "#/$defs/reasonCode"},
+        "affected_json_pointer": {"$ref": "#/$defs/jsonPointer"},
+        "expected_sha256": {
+          "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "observed_sha256": {
+          "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "stable_context": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/contextEntry"}
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_invocation_attempted",
+        "gpu_used",
+        "gui_action_executed",
+        "generated_action_executed",
+        "raw_collector_mutated",
+        "collector_labels_added",
+        "g1_1_registry_state_mutated",
+        "automatic_semantic_inference_performed",
+        "runtime_sentinel_enabled"
+      ],
+      "properties": {
+        "provider_invocation_attempted": {"const": false},
+        "gpu_used": {"const": false},
+        "gui_action_executed": {"const": false},
+        "generated_action_executed": {"const": false},
+        "raw_collector_mutated": {"const": false},
+        "collector_labels_added": {"const": false},
+        "g1_1_registry_state_mutated": {"const": false},
+        "automatic_semantic_inference_performed": {"const": false},
+        "runtime_sentinel_enabled": {"const": false}
+      }
+    }
+  }
+}
