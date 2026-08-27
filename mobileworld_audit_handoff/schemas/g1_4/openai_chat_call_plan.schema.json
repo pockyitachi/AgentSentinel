@@ -1,0 +1,427 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/openai_chat_call_plan.schema.json",
+  "title": "G1.4 inert OpenAI-compatible chat call plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "contract_version",
+    "status",
+    "model_id",
+    "live_preparation_receipt_sha256",
+    "model_config_manifest_sha256",
+    "model_config_record_sha256",
+    "formal_request_sha256",
+    "endpoint",
+    "sdk",
+    "application_request_sha256",
+    "application_request_byte_count",
+    "application_delta",
+    "source_invariance_validated",
+    "kwargs",
+    "kwargs_canonical_sha256",
+    "kwargs_canonical_byte_count",
+    "readiness",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.g1.inert-openai-chat-call-descriptor/v1"
+    },
+    "record_type": {
+      "const": "inert_openai_chat_call_descriptor"
+    },
+    "contract_version": {
+      "const": "mobileworld.g1.exact-request-replay-live-preparation/contract-v1"
+    },
+    "status": {
+      "const": "CODE_ONLY_NOT_OBSERVED"
+    },
+    "model_id": {
+      "enum": [
+        "qwen3vl_8b",
+        "mai_ui_8b"
+      ]
+    },
+    "live_preparation_receipt_sha256": {
+      "const": "4f3cbd2d0369288c7507b77c54766bf536b620156196df770c428891280b9819"
+    },
+    "model_config_manifest_sha256": {
+      "const": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"
+    },
+    "model_config_record_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "formal_request_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "path"
+      ],
+      "properties": {
+        "origin": {
+          "const": "http://127.0.0.1:18007"
+        },
+        "path": {
+          "const": "/v1/chat/completions"
+        }
+      }
+    },
+    "sdk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "version",
+        "timeout_seconds",
+        "max_retries",
+        "stream"
+      ],
+      "properties": {
+        "method": {
+          "const": "openai.chat.completions.create"
+        },
+        "version": {
+          "const": "1.106.1"
+        },
+        "timeout_seconds": {
+          "const": 120.0
+        },
+        "max_retries": {
+          "const": 0
+        },
+        "stream": {
+          "const": false
+        }
+      }
+    },
+    "application_request_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "application_request_byte_count": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "application_delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "json_pointer",
+        "value",
+        "only_application_delta"
+      ],
+      "properties": {
+        "json_pointer": {
+          "const": "/seed"
+        },
+        "value": {
+          "enum": [
+            1729,
+            2718,
+            31415
+          ]
+        },
+        "only_application_delta": {
+          "const": true
+        }
+      }
+    },
+    "source_invariance_validated": {
+      "const": false
+    },
+    "kwargs": {
+      "type": "object",
+      "required": [
+        "messages",
+        "seed",
+        "model"
+      ],
+      "propertyNames": {
+        "not": {
+          "pattern": "^(?:[Aa][Pp][Ii](?:_|-)?[Kk][Ee][Yy]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn](?:[_-][Hh][Ee][Aa][Dd][Ee][Rr])?|[Aa][Cc][Cc][Ee][Ss][Ss](?:_|-)?[Tt][Oo][Kk][Ee][Nn]|[Bb][Ee][Aa][Rr][Ee][Rr](?:_|-)?[Tt][Oo][Kk][Ee][Nn]|[Bb][Aa][Ss][Ee](?:_|-)[Uu][Rr][Ll]|[Cc][Aa][Ll][Ll][Bb][Aa][Cc][Kk]|[Cc][Ll][Ii][Ee][Nn][Tt](?:[_-](?:[Ff][Aa][Cc][Tt][Oo][Rr][Yy]|[Ss][Ee][Cc][Rr][Ee][Tt]))?|[Cc][Oo][Oo][Kk][Ii][Ee][Ss]?|[Hh][Ee][Aa][Dd][Ee][Rr][Ss]|[Hh][Tt][Tt][Pp](?:_|-)[Cc][Ll][Ii][Ee][Nn][Tt]|[Dd][Ee][Ff][Aa][Uu][Ll][Tt](?:_|-)[Hh][Ee][Aa][Dd][Ee][Rr][Ss]|[Ee][Xx][Tt][Rr][Aa](?:_|-)[Hh][Ee][Aa][Dd][Ee][Rr][Ss]|[Mm][Aa][Xx](?:_|-)[Rr][Ee][Tt][Rr][Ii][Ee][Ss]|[Rr][Ee][Qq][Uu][Ee][Ss][Tt](?:_|-)[Oo][Pp][Tt][Ii][Oo][Nn][Ss]|[Tt][Ii][Mm][Ee][Oo][Uu][Tt]|[Tt][Rr][Aa][Nn][Ss][Pp][Oo][Rr][Tt])$"
+        }
+      },
+      "properties": {
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object"
+          }
+        },
+        "seed": {
+          "enum": [
+            1729,
+            2718,
+            31415
+          ]
+        },
+        "model": {
+          "enum": [
+            "Qwen3-VL-8B-Instruct",
+            "MAI-UI-8B"
+          ]
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "top_p": {
+          "type": "number"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stream": {
+          "const": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "kwargs_canonical_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "kwargs_canonical_byte_count": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "readiness": {
+      "$ref": "#/$defs/readinessFalseState"
+    },
+    "safety": {
+      "$ref": "#/$defs/safetyFalseState"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "model_id": {
+            "const": "qwen3vl_8b"
+          }
+        },
+        "required": [
+          "model_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "model_config_record_sha256": {
+            "const": "5d6c5c1aa99aa13e8e153a19e6a0b1e8593cf2c32adaf8bca308fc76cea827e3"
+          },
+          "formal_request_sha256": {
+            "const": "da78559b8c9875c912573ebffa673df0454b6b994a5115fb9e8b0ebbe3e79944"
+          },
+          "kwargs": {
+            "required": [
+              "temperature"
+            ],
+            "properties": {
+              "model": {
+                "const": "Qwen3-VL-8B-Instruct"
+              },
+              "temperature": {
+                "const": 0.0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "model_id": {
+            "const": "mai_ui_8b"
+          }
+        },
+        "required": [
+          "model_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "model_config_record_sha256": {
+            "const": "c633cc272bca6e14ae788d90417c909d515fe1f22abb9c0bf5e02da78c8d7682"
+          },
+          "formal_request_sha256": {
+            "const": "e33b22040b9c21aafe8b478db7b048e0e30e5737f082a8eec4aec5755f52ce67"
+          },
+          "kwargs": {
+            "required": [
+              "temperature",
+              "top_p",
+              "max_tokens"
+            ],
+            "properties": {
+              "model": {
+                "const": "MAI-UI-8B"
+              },
+              "temperature": {
+                "const": 0.0
+              },
+              "top_p": {
+                "const": 1.0
+              },
+              "max_tokens": {
+                "const": 2048
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "application_delta": {
+            "properties": {
+              "value": {
+                "const": 1729
+              }
+            },
+            "required": [
+              "value"
+            ]
+          }
+        },
+        "required": [
+          "application_delta"
+        ]
+      },
+      "then": {
+        "properties": {
+          "kwargs": {
+            "properties": {
+              "seed": {
+                "const": 1729
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "application_delta": {
+            "properties": {
+              "value": {
+                "const": 2718
+              }
+            },
+            "required": [
+              "value"
+            ]
+          }
+        },
+        "required": [
+          "application_delta"
+        ]
+      },
+      "then": {
+        "properties": {
+          "kwargs": {
+            "properties": {
+              "seed": {
+                "const": 2718
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "application_delta": {
+            "properties": {
+              "value": {
+                "const": 31415
+              }
+            },
+            "required": [
+              "value"
+            ]
+          }
+        },
+        "required": [
+          "application_delta"
+        ]
+      },
+      "then": {
+        "properties": {
+          "kwargs": {
+            "properties": {
+              "seed": {
+                "const": 31415
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "readinessFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_ready",
+        "live_transport_validation_complete",
+        "live_history_codec_ready",
+        "curated_transformations_ready",
+        "run_ready_seal_present",
+        "provider_invocation_allowed",
+        "treatment_response_generation_allowed",
+        "formal_replay_ready"
+      ],
+      "properties": {
+        "execution_ready": {"const": false},
+        "live_transport_validation_complete": {"const": false},
+        "live_history_codec_ready": {"const": false},
+        "curated_transformations_ready": {"const": false},
+        "run_ready_seal_present": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "treatment_response_generation_allowed": {"const": false},
+        "formal_replay_ready": {"const": false}
+      }
+    },
+    "safetyFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "client_factory_invoked",
+        "network_used",
+        "subprocess_started",
+        "gpu_probed",
+        "gpu_used",
+        "model_loaded",
+        "provider_invoked",
+        "replay_executed",
+        "generated_action_executed"
+      ],
+      "properties": {
+        "client_factory_invoked": {"const": false},
+        "network_used": {"const": false},
+        "subprocess_started": {"const": false},
+        "gpu_probed": {"const": false},
+        "gpu_used": {"const": false},
+        "model_loaded": {"const": false},
+        "provider_invoked": {"const": false},
+        "replay_executed": {"const": false},
+        "generated_action_executed": {"const": false}
+      }
+    }
+  }
+}

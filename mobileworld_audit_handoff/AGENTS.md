@@ -18,13 +18,14 @@
 14. `G1_REPLAY_CAPSULE_CONTRACT_V1.md`
 15. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
 16. `G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
-17. `G1_SENTINEL_MVP_MIGRATION.md`
-18. `g1/registry.lock.v1.json`
-19. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-20. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-21. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-22. `schemas/g1_3/field_visibility.schema.json`
-23. `schemas/g1_3/capsule_exclusion.schema.json`
+17. `G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
+18. `G1_SENTINEL_MVP_MIGRATION.md`
+19. `g1/registry.lock.v1.json`
+20. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+21. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+22. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+23. `schemas/g1_3/field_visibility.schema.json`
+24. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -52,6 +53,12 @@ fake SDK client 测试的可注入 OpenAI-compatible Provider Codec。Formal v1.
 `treatment_response_generation_allowed=false`；本阶段对 formal capsule 的路径必须在任何
 外部调用前 fail closed。“约 90%”只是排期目标，ALE-322 仍处于 in progress，
 live/GPU proof 延后并需新授权。
+
+`G1_4_DECISION_LOG.md` D-026 只额外授权未来 live/GPU proof 所需的 inert/code-only
+准备：静态冻结模型绑定、纯 call/block/launch 与 caller-injected response 数据记录、仅注入式
+容量评估、schema 和 CPU tests。它不授权 client、network、subprocess、GPU probe/use、模型
+加载、provider send、replay 或 action；所有 live entrypoint 在 owner 新授权与 downstream seal
+齐备前继续机械禁用。
 
 必须：
 

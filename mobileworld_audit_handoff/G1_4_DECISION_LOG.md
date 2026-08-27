@@ -34,3 +34,34 @@ Owner 所说“约 90% CPU 工作”是分阶段调度目标，不是验收指�
 ALE-322 在 CPU 实现和 fake conformance 通过后仍必须标记为
 **IN_PROGRESS_LIVE_PROOF_DEFERRED**；只有 owner 审核 GPU 资源并单独授权 live 路径，
 且剩余 live Provider Codec 验收证据通过后，才能判断该 story 是否完成。
+
+## D-026 — G1.4 live/GPU 只准备代码，不启动任何资源或调用
+
+**状态：Locked（owner 于 2026-08-27 明确授权 inert/code-only preparation）**
+
+GPU 当前没有可用空间。owner 明确要求先准备 G1.4 中未来 live/GPU proof 所需的代码，
+等待 owner 通知后再考虑资源，并强调不得擅自启动。本条仅授权
+`mobileworld.g1.exact-request-replay-live-preparation/contract-v1` 规定的静态模型配置绑定、
+SDK call/paired-block/launch plan 的纯数据渲染、caller-injected response envelope 的纯投影、
+注入式资源快照评估，以及相应 CPU-only schema/fixture/test/inspection 工作。Response 投影只
+保留精确 SDK content 并派生 pinned host `str.strip()` parser input，不调用 provider 或 host
+parser，也不构成 observed response。
+
+该准备阶段不得调用或创建 provider client/client factory，不得打开 socket、发起网络请求、
+启动 subprocess/tmux/Docker/service、探测或使用 GPU、加载或服务模型权重、运行 endpoint
+health/seed canary、发送 provider request、生成 treatment response、执行 prefix/live replay、
+restore backend，或执行任何 GUI/tool/action。现有
+`OpenAICompatibleProviderCodec.send` 与 `execute_live_arm` 必须继续机械 fail-only；当前 CLI
+不得获得可启用 transport 的 flag、environment variable 或 caller assertion。
+
+Formal G1.3 v1.1 capsule 的 `execution_ready=false`、
+`provider_invocation_allowed=false` 和
+`treatment_response_generation_allowed=false` 保持不可变。所有 preparation/readiness aggregate
+继续将 live transport validation、run-ready seal、provider invocation、treatment generation 和
+formal replay readiness 标为 false。代码准备完成不等于 live 验收，也不改变 ALE-322 的
+`IN_PROGRESS_LIVE_PROOF_DEFERRED` 状态。
+
+本授权不包含 G1.5 live History Codec、G1.6 curation/gold/admission 或 G1.7 serving image、
+seed/isolation/backend/scorer/restorer/run-ready/execution seals。未来只有在这些前置物存在、owner
+另行明确授权 GPU/live 资源，并采用新的版本化 live-execution authority 后，才能把准备代码接入
+真实 transport。即使未来获得该授权，ALE-322 仍绝不执行返回的 GUI action。

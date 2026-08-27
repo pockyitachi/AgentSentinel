@@ -5119,11 +5119,24 @@ def test_cli_live_status_is_no_send_and_hard_deferred(capsys: pytest.CaptureFixt
     assert cli_main(["live-status"]) == 0
     output = json.loads(capsys.readouterr().out)
     assert output == {
+        "client_factory_invoked": False,
         "curated_transformations_ready": False,
+        "execution_ready": False,
+        "formal_replay_ready": False,
+        "generated_action_executed": False,
+        "gpu_probed": False,
         "gpu_used": False,
+        "live_code_prepared": True,
         "live_history_codec_ready": False,
+        "live_transport_validation_complete": False,
+        "model_loaded": False,
+        "network_used": False,
+        "provider_invoked": False,
         "provider_invocation_allowed": False,
+        "replay_executed": False,
         "run_ready_seal_present": False,
+        "static_model_configuration_validated": False,
         "status": "DEFERRED_PENDING_OWNER_GPU_RESOURCE_REVIEW",
+        "subprocess_started": False,
         "treatment_response_generation_allowed": False,
     }

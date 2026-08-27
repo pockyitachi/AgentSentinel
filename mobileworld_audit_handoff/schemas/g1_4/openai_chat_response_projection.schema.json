@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/openai_chat_response_projection.schema.json",
+  "title": "G1.4 OpenAI-compatible response projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "contract_version",
+    "status",
+    "response_source",
+    "content",
+    "host_parser_input",
+    "host_parser_input_normalization",
+    "finish_reason",
+    "usage",
+    "envelope_sha256",
+    "projection_sha256",
+    "readiness",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.g1.openai-chat-response-projection/v1"
+    },
+    "record_type": {
+      "const": "openai_chat_response_projection"
+    },
+    "contract_version": {
+      "const": "mobileworld.g1.exact-request-replay-live-preparation/contract-v1"
+    },
+    "status": {
+      "const": "CODE_ONLY_NOT_OBSERVED"
+    },
+    "response_source": {
+      "const": "CALLER_INJECTED_NOT_PROVIDER_OBSERVED"
+    },
+    "content": {
+      "type": "string"
+    },
+    "host_parser_input": {
+      "type": "string"
+    },
+    "host_parser_input_normalization": {
+      "const": "PYTHON_STRIP_MATCHES_MOBILE_WORLD_BASE_AGENT_V1"
+    },
+    "finish_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "usage": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens"
+          ],
+          "properties": {
+            "prompt_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "completion_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total_tokens": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      ]
+    },
+    "envelope_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "projection_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "readiness": {
+      "$ref": "#/$defs/readinessFalseState"
+    },
+    "safety": {
+      "$ref": "#/$defs/safetyFalseState"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "readinessFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_ready",
+        "live_transport_validation_complete",
+        "live_history_codec_ready",
+        "curated_transformations_ready",
+        "run_ready_seal_present",
+        "provider_invocation_allowed",
+        "treatment_response_generation_allowed",
+        "formal_replay_ready"
+      ],
+      "properties": {
+        "execution_ready": {"const": false},
+        "live_transport_validation_complete": {"const": false},
+        "live_history_codec_ready": {"const": false},
+        "curated_transformations_ready": {"const": false},
+        "run_ready_seal_present": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "treatment_response_generation_allowed": {"const": false},
+        "formal_replay_ready": {"const": false}
+      }
+    },
+    "safetyFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "client_factory_invoked",
+        "network_used",
+        "subprocess_started",
+        "gpu_probed",
+        "gpu_used",
+        "model_loaded",
+        "provider_invoked",
+        "replay_executed",
+        "generated_action_executed"
+      ],
+      "properties": {
+        "client_factory_invoked": {"const": false},
+        "network_used": {"const": false},
+        "subprocess_started": {"const": false},
+        "gpu_probed": {"const": false},
+        "gpu_used": {"const": false},
+        "model_loaded": {"const": false},
+        "provider_invoked": {"const": false},
+        "replay_executed": {"const": false},
+        "generated_action_executed": {"const": false}
+      }
+    }
+  }
+}
