@@ -15,13 +15,18 @@
 11. `G1_LOCKED_ANALYSIS_PLAN_V1.md`
 12. `G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
 13. `G1_REPLAY_CAPSULE_CONTRACT_V1.md`
-14. `G1_SENTINEL_MVP_MIGRATION.md`
-15. `g1/registry.lock.v1.json`
-16. `schemas/g1_3/replay_capsule.schema.json`
-17. `schemas/g1_3/field_visibility.schema.json`
-18. `schemas/g1_3/capsule_exclusion.schema.json`
-19. `schemas/g1_3/capsule_manifest.schema.json`
-20. `schemas/g1_3/capsule_integrity.schema.json`
+14. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
+15. `G1_SENTINEL_MVP_MIGRATION.md`
+16. `g1/registry.lock.v1.json`
+17. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+18. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+19. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+20. `schemas/g1_3/field_visibility.schema.json`
+21. `schemas/g1_3/capsule_exclusion.schema.json`
+
+历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
+`capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
+`v1_1` schema。
 
 ## 强制范围
 
@@ -31,6 +36,9 @@ selected clean controls）全部生成 capsule；另 38 个 reserve clean contro
 没有生成 capsule 或 exclusion。输入仅限冻结的 G1.1 registry、Collector v1 raw
 events/blobs/integrity artifacts 和已冻结的只读定位引用；真实 capsule 已写入 repo 外的
 content-addressed、write-once derived data root。ALE-322 / G1.4 及以后仍未启动、未获授权。
+G1.3 Contract Amendment 1 已以兼容 v1.1 publication 修正三项显式 fail-closed
+authorization/readiness guard；旧 v1 publication 保持不可变，仅作为历史版本，并已被
+v1.1 publication supersede for formal G1 use。
 
 必须：
 

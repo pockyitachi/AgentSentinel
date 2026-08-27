@@ -403,6 +403,30 @@ runtime Sentinel，或任何 G1.4+ 工作；这些仍需独立 story 与 owner �
 
 ---
 
+## D-024 — G1.3 授权守卫以兼容 v1.1 修正，不改写既有发布
+
+**状态：Locked（owner 于 2026-08-27 明确授权 ALE-321 / G1.3 corrective work only）**
+
+G1.3 Replay Capsule 的规范要求每个有效 capsule 同时显式携带
+`execution_ready=false`、`provider_invocation_allowed=false` 与
+`treatment_response_generation_allowed=false`。其中 `provider_invoked=false` 只记录物化期间
+没有调用 provider 的历史事实，不能代替 downstream provider 调用权限；同理，零条 treatment
+response 不能代替禁止生成 treatment response 的授权守卫。
+
+已发布的 v1 schema 与 content-addressed publication 是不可变历史记录，不得原地修改、chmod、
+修补、删除或覆盖。本修正必须新增明确的 compatible contract amendment 与 v1.1 capsule、manifest、
+integrity schema，令 builder、structural validator、SOURCE_BOUND validator、manifest/readiness 和
+测试机械拒绝缺失、为 true 或非布尔类型的上述授权字段。只有从同一冻结来源独立双构建得到逐字节
+一致的 190-unit formal artifact set，才可发布到新的 manifest-SHA content address；旧发布保留，
+但在正式 G1 使用中由新发布 supersede。
+
+冻结人口与科学边界不变：152 个 strict-MHR candidates 加 38 个 selected clean controls；另 38 个
+reserve clean controls 仍只进 census。Collector v1、raw bytes、G1.1/G1.2 冻结 artifacts 与旧 G1.3
+publication 必须保持 byte-unchanged。本授权不包含 model/provider invocation、GPU、GUI/action、
+network replay、treatment generation、automatic semantic inference、runtime Sentinel 或 G1.4+ 工作。
+
+---
+
 ## 尚未锁定、留给后续实验设计的问题
 
 以下内容不要在 collector 中写死：

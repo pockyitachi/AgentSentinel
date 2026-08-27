@@ -38,12 +38,17 @@ from mobile_world.runtime.audit.serializer import (
 
 PROTOCOL_VERSION = "mobileworld.g1.causal-replay/protocol-v1"
 PORTABLE_CONTRACT_VERSION = "mobileworld.g1.portable-sentinel/contract-v1"
-BUILDER_VERSION = "mobileworld.g1.replay-capsule-builder/v1"
-CAPSULE_SCHEMA_VERSION = "mobileworld.g1.replay-capsule/v1"
-MANIFEST_SCHEMA_VERSION = "mobileworld.g1.replay-capsule-manifest/v1"
-INTEGRITY_SCHEMA_VERSION = "mobileworld.g1.replay-capsule-integrity/v1"
+CONTRACT_AMENDMENT_VERSION = "mobileworld.g1.replay-capsule/contract-v1-amendment-1"
+BUILDER_VERSION = "mobileworld.g1.replay-capsule-builder/v1.1"
+CAPSULE_SCHEMA_VERSION = "mobileworld.g1.replay-capsule/v1.1"
+MANIFEST_SCHEMA_VERSION = "mobileworld.g1.replay-capsule-manifest/v1.1"
+INTEGRITY_SCHEMA_VERSION = "mobileworld.g1.replay-capsule-integrity/v1.1"
 EXCLUSION_SCHEMA_VERSION = "mobileworld.g1.replay-capsule-exclusion/v1"
 VISIBILITY_SCHEMA_VERSION = "mobileworld.g1.replay-capsule.field-visibility/v1"
+
+LEGACY_CAPSULE_SCHEMA_VERSION = "mobileworld.g1.replay-capsule/v1"
+LEGACY_MANIFEST_SCHEMA_VERSION = "mobileworld.g1.replay-capsule-manifest/v1"
+LEGACY_INTEGRITY_SCHEMA_VERSION = "mobileworld.g1.replay-capsule-integrity/v1"
 
 G1_REGISTRY_LOCK_SHA256 = "1e038ffe604acf0eae2af1e45ec0e856e2f105353b0c5a1dbea0da9b15657944"
 G1_REGISTRY_MANIFEST_SHA256 = "dd3dad4f94c66dce6999d3cc2743cd75c37688788754e95b27531cfd00d733f4"
@@ -73,6 +78,7 @@ CONTRACT_RELATIVE_PATHS = (
     "MobileWorld/src/mobile_world/offline/replay_capsules.py",
     "MobileWorld/tests/offline/test_replay_capsules.py",
     "mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1.md",
+    "mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md",
     "mobileworld_audit_handoff/DECISION_LOG.md",
     "mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md",
     "mobileworld_audit_handoff/G1_LOCKED_ANALYSIS_PLAN_V1.md",
@@ -80,8 +86,11 @@ CONTRACT_RELATIVE_PATHS = (
     "mobileworld_audit_handoff/g1/model_config_manifest.v1.json",
     "mobileworld_audit_handoff/g1/registry.lock.v1.json",
     "mobileworld_audit_handoff/schemas/g1_3/replay_capsule.schema.json",
+    "mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json",
     "mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.schema.json",
+    "mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json",
     "mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.schema.json",
+    "mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json",
     "mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json",
     "mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json",
 )
@@ -687,6 +696,11 @@ def _builder_contract(
     contract_files: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     return {
+        "builder_version": BUILDER_VERSION,
+        "capsule_schema_version": CAPSULE_SCHEMA_VERSION,
+        "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
+        "integrity_schema_version": INTEGRITY_SCHEMA_VERSION,
+        "contract_amendment_version": CONTRACT_AMENDMENT_VERSION,
         "canonicalization": "mobileworld.canonical-json/sorted-keys-utf8-no-nan/v1",
         "capsule_body_hash_subject": "CANONICAL_INNER_CAPSULE_OBJECT",
         "unit_order": "UNIT_KIND_THEN_UNIT_ID_THEN_REGISTRY_FILE_THEN_RECORD_INDEX",
@@ -997,6 +1011,7 @@ def _build_manifest(
             "all_target_units_capsuled": all_capsuled,
             "formal_acceptance_ready": formal and all_capsuled,
             "execution_ready": False,
+            "provider_invocation_allowed": False,
             "run_ready": False,
             "provider_codec_ready": False,
             "live_history_codec_ready": False,
@@ -1261,6 +1276,7 @@ def validate_capsule_directory(
         "file_payloads": payloads,
     }
     _validate_artifacts_against_schemas(validation_repo, artifacts)
+    artifact_schema_generation = _artifact_schema_generation(artifacts)
     source_rebuild_requested = any(
         value is not None for value in (repo_root, registry_root, source_base)
     )
@@ -1297,7 +1313,14 @@ def validate_capsule_directory(
     )
     return {
         "valid": True,
-        "schema_version": "mobileworld.g1.replay-capsule-directory-validation/v1",
+        "schema_version": "mobileworld.g1.replay-capsule-directory-validation/v1.1",
+        "artifact_schema_generation": artifact_schema_generation,
+        "capsule_schema_version": (
+            CAPSULE_SCHEMA_VERSION
+            if artifact_schema_generation == "ACTIVE_V1_1"
+            else LEGACY_CAPSULE_SCHEMA_VERSION
+        ),
+        "superseded_for_formal_g1": artifact_schema_generation == "LEGACY_V1",
         "validation_scope": ("SOURCE_BOUND" if source_rebuild_performed else "STRUCTURAL_ONLY"),
         "structural_valid": True,
         "source_bound_valid": source_rebuild_performed,
@@ -1313,6 +1336,9 @@ def validate_capsule_directory(
         "source_rebuild_performed": source_rebuild_performed,
         "source_rebuild_byte_identical": source_rebuild_performed,
         "provider_invoked": False,
+        "provider_invocation_allowed": False,
+        "treatment_response_generation_allowed": False,
+        "execution_ready": False,
         "gpu_used": False,
         "gui_action_executed": False,
         "raw_collector_mutated": False,
@@ -1362,6 +1388,7 @@ def write_capsule_artifacts(
         "only a double-build-verified formal artifact set may be published",
         stage="SCHEMA",
     )
+    _require_active_artifact_generation(artifacts)
     payloads = artifacts.get("file_payloads")
     _require(
         isinstance(payloads, Mapping)
@@ -3956,9 +3983,12 @@ def _validate_exact_regular_file_set(root: Path, expected: set[str]) -> None:
 
 def _schema_validators(repo: Path) -> dict[str, Draft202012Validator]:
     names = {
-        "capsule": "replay_capsule.schema.json",
-        "manifest": "capsule_manifest.schema.json",
-        "integrity": "capsule_integrity.schema.json",
+        "capsule": "replay_capsule.v1_1.schema.json",
+        "legacy_capsule": "replay_capsule.schema.json",
+        "manifest": "capsule_manifest.v1_1.schema.json",
+        "legacy_manifest": "capsule_manifest.schema.json",
+        "integrity": "capsule_integrity.v1_1.schema.json",
+        "legacy_integrity": "capsule_integrity.schema.json",
         "exclusion": "capsule_exclusion.schema.json",
         "visibility": "field_visibility.schema.json",
     }
@@ -3993,6 +4023,171 @@ def _schema_validators(repo: Path) -> dict[str, Draft202012Validator]:
         )
         for key, schema in schemas.items()
     }
+
+
+def _versioned_validator(
+    validators: Mapping[str, Draft202012Validator],
+    *,
+    artifact_kind: str,
+    instance: Mapping[str, Any],
+) -> Draft202012Validator:
+    """Select a frozen schema by its declared version without reinterpretation."""
+
+    active_and_legacy = {
+        "capsule": (CAPSULE_SCHEMA_VERSION, LEGACY_CAPSULE_SCHEMA_VERSION),
+        "manifest": (MANIFEST_SCHEMA_VERSION, LEGACY_MANIFEST_SCHEMA_VERSION),
+        "integrity": (INTEGRITY_SCHEMA_VERSION, LEGACY_INTEGRITY_SCHEMA_VERSION),
+    }
+    _require(
+        artifact_kind in active_and_legacy,
+        "SCHEMA_VALIDATION_FAILED",
+        "unknown versioned G1.3 artifact kind",
+        stage="SCHEMA",
+    )
+    active_version, legacy_version = active_and_legacy[artifact_kind]
+    version = instance.get("schema_version")
+    if version == active_version:
+        return validators[artifact_kind]
+    if version == legacy_version:
+        return validators[f"legacy_{artifact_kind}"]
+    raise ReplayCapsuleError(
+        "SCHEMA_VALIDATION_FAILED",
+        f"unsupported {artifact_kind} schema version",
+        stage="SCHEMA",
+        json_path="/schema_version",
+    )
+
+
+def _artifact_schema_generation(artifacts: Mapping[str, Any]) -> str:
+    """Require one coherent legacy-v1 or active-v1.1 publication generation."""
+
+    manifest = artifacts["manifest"]
+    integrity = artifacts["integrity"]
+    capsules = artifacts["capsules"]
+    _require(
+        isinstance(manifest, Mapping)
+        and isinstance(integrity, Mapping)
+        and isinstance(capsules, Sequence)
+        and not isinstance(capsules, (str, bytes, bytearray)),
+        "SCHEMA_VALIDATION_FAILED",
+        "G1.3 artifact generation inputs have invalid container types",
+        stage="SCHEMA",
+    )
+    manifest_version = manifest.get("schema_version")
+    if manifest_version == MANIFEST_SCHEMA_VERSION:
+        expected_integrity = INTEGRITY_SCHEMA_VERSION
+        expected_capsule = CAPSULE_SCHEMA_VERSION
+        generation = "ACTIVE_V1_1"
+    elif manifest_version == LEGACY_MANIFEST_SCHEMA_VERSION:
+        expected_integrity = LEGACY_INTEGRITY_SCHEMA_VERSION
+        expected_capsule = LEGACY_CAPSULE_SCHEMA_VERSION
+        generation = "LEGACY_V1"
+    else:
+        raise ReplayCapsuleError(
+            "SCHEMA_VALIDATION_FAILED",
+            "unsupported manifest schema version",
+            stage="SCHEMA",
+            json_path="/schema_version",
+        )
+    _require(
+        integrity.get("schema_version") == expected_integrity,
+        "SCHEMA_VALIDATION_FAILED",
+        "manifest and integrity schema generations differ",
+        stage="SCHEMA",
+        json_path="/schema_version",
+    )
+    for index, envelope in enumerate(capsules):
+        _require(
+            isinstance(envelope, Mapping) and envelope.get("schema_version") == expected_capsule,
+            "SCHEMA_VALIDATION_FAILED",
+            "manifest and capsule schema generations differ",
+            stage="SCHEMA",
+            json_path=f"/capsules/{index}/schema_version",
+        )
+    return generation
+
+
+def _require_exact_false(value: Any, *, json_path: str) -> None:
+    _require(
+        type(value) is bool and value is False,
+        "SCHEMA_VALIDATION_FAILED",
+        "G1.3 authorization guard must be the boolean false",
+        stage="SCHEMA",
+        json_path=json_path,
+    )
+
+
+def _validate_active_authorization_guards(artifacts: Mapping[str, Any]) -> None:
+    """Independently enforce v1.1 authorization guards beyond JSON Schema."""
+
+    if _artifact_schema_generation(artifacts) == "LEGACY_V1":
+        return
+    for index, envelope in enumerate(artifacts["capsules"]):
+        body = envelope.get("capsule")
+        safety = body.get("safety") if isinstance(body, Mapping) else None
+        if not isinstance(safety, Mapping):
+            safety = {}
+        for field in (
+            "execution_ready",
+            "provider_invocation_allowed",
+            "treatment_response_generation_allowed",
+        ):
+            _require_exact_false(
+                safety.get(field),
+                json_path=f"/capsules/{index}/capsule/safety/{field}",
+            )
+    manifest = artifacts["manifest"]
+    integrity = artifacts["integrity"]
+    readiness = manifest.get("readiness")
+    if not isinstance(readiness, Mapping):
+        readiness = {}
+    for field in (
+        "execution_ready",
+        "provider_invocation_allowed",
+        "treatment_response_generation_allowed",
+    ):
+        _require_exact_false(
+            readiness.get(field),
+            json_path=f"/manifest/readiness/{field}",
+        )
+    for container_name, safety in (
+        ("manifest", manifest.get("safety")),
+        ("integrity", integrity.get("safety")),
+    ):
+        if not isinstance(safety, Mapping):
+            safety = {}
+        for field in (
+            "provider_invocation_allowed",
+            "treatment_response_generation_allowed",
+        ):
+            _require_exact_false(
+                safety.get(field),
+                json_path=f"/{container_name}/safety/{field}",
+            )
+    integrity_safety = integrity.get("safety")
+    if not isinstance(integrity_safety, Mapping):
+        integrity_safety = {}
+    _require_exact_false(
+        integrity_safety.get("execution_ready"),
+        json_path="/integrity/safety/execution_ready",
+    )
+
+
+def _require_active_artifact_generation(artifacts: Mapping[str, Any]) -> None:
+    _require(
+        all(key in artifacts for key in ("manifest", "integrity", "capsules")),
+        "SCHEMA_VALIDATION_FAILED",
+        "formal artifact set is missing a versioned root",
+        stage="SCHEMA",
+        json_path="/",
+    )
+    _require(
+        _artifact_schema_generation(artifacts) == "ACTIVE_V1_1",
+        "SCHEMA_VALIDATION_FAILED",
+        "formal writes require the active amended G1.3 artifact generation",
+        stage="SCHEMA",
+        json_path="/manifest/schema_version",
+    )
 
 
 def _validate_instance(validator: Draft202012Validator, instance: Any, *, label: str) -> None:
@@ -4126,11 +4321,37 @@ def _validate_artifacts_against_schemas(repo: Path, artifacts: Mapping[str, Any]
     integrity = artifacts["integrity"]
     manifest = artifacts["manifest"]
     payloads = artifacts["file_payloads"]
+    generation = _artifact_schema_generation(artifacts)
+    _validate_active_authorization_guards(artifacts)
     _validate_instance(validators["visibility"], visibility, label="visibility policy")
-    _validate_instance(validators["integrity"], integrity, label="integrity report")
-    _validate_instance(validators["manifest"], manifest, label="publication manifest")
+    _validate_instance(
+        _versioned_validator(
+            validators,
+            artifact_kind="integrity",
+            instance=integrity,
+        ),
+        integrity,
+        label="integrity report",
+    )
+    _validate_instance(
+        _versioned_validator(
+            validators,
+            artifact_kind="manifest",
+            instance=manifest,
+        ),
+        manifest,
+        label="publication manifest",
+    )
     for record in capsules:
-        _validate_instance(validators["capsule"], record, label="replay capsule")
+        _validate_instance(
+            _versioned_validator(
+                validators,
+                artifact_kind="capsule",
+                instance=record,
+            ),
+            record,
+            label="replay capsule",
+        )
         _require(
             record["capsule_body_sha256"] == canonical_sha256(record["capsule"]),
             "CAPSULE_HASH_MISMATCH",
@@ -4391,20 +4612,21 @@ def _validate_artifacts_against_schemas(repo: Path, artifacts: Mapping[str, Any]
             "formal double-build receipt is not bound to this core file set",
             stage="DETERMINISM",
         )
-    current_contract_files = [
-        {
-            "relative_path": record["path"],
-            "sha256": record["sha256"],
-            "byte_count": record["byte_count"],
-        }
-        for record in _contract_file_summaries(repo)
-    ]
-    _require(
-        manifest["builder_contract"]["contract_files"] == current_contract_files,
-        "SOURCE_HASH_MISMATCH",
-        "manifest builder contract no longer matches repository bytes",
-        stage="SCHEMA",
-    )
+    if generation == "ACTIVE_V1_1":
+        current_contract_files = [
+            {
+                "relative_path": record["path"],
+                "sha256": record["sha256"],
+                "byte_count": record["byte_count"],
+            }
+            for record in _contract_file_summaries(repo)
+        ]
+        _require(
+            manifest["builder_contract"]["contract_files"] == current_contract_files,
+            "SOURCE_HASH_MISMATCH",
+            "manifest builder contract no longer matches repository bytes",
+            stage="SCHEMA",
+        )
     if "capsule_manifest.json" in payloads:
         _require(
             payloads["capsule_manifest.json"] == canonical_json_line(manifest),
@@ -4507,7 +4729,16 @@ def _validate_publication_file_set(root: Path, repo: Path) -> dict[str, bytes]:
     manifest = _load_canonical_object_bytes(
         initial["capsule_manifest.json"], Path("capsule_manifest.json")
     )
-    _validate_instance(_schema_validators(repo)["manifest"], manifest, label="publication manifest")
+    validators = _schema_validators(repo)
+    _validate_instance(
+        _versioned_validator(
+            validators,
+            artifact_kind="manifest",
+            instance=manifest,
+        ),
+        manifest,
+        label="publication manifest",
+    )
     references = _manifest_payload_refs(manifest)
     expected = set(references) | {"capsule_manifest.json"}
     _require(
@@ -5520,8 +5751,11 @@ def _verified_blob_summaries(
 
 
 def _safety_flags() -> dict[str, Any]:
+    """Return telemetry and distinct downstream authorization guards."""
+
     return {
         "provider_invoked": False,
+        "provider_invocation_allowed": False,
         "gpu_used": False,
         "gui_action_executed": False,
         "generated_action_executed": False,
@@ -5530,6 +5764,7 @@ def _safety_flags() -> dict[str, Any]:
         "automatic_semantic_inference_performed": False,
         "runtime_sentinel_enabled": False,
         "treatment_response_count": 0,
+        "treatment_response_generation_allowed": False,
         "execution_ready": False,
     }
 
@@ -7082,6 +7317,11 @@ def _cli_summary(artifacts: Mapping[str, Any]) -> dict[str, Any]:
     manifest_bytes = artifacts["file_payloads"]["capsule_manifest.json"]
     return {
         "valid": True,
+        "builder_version": BUILDER_VERSION,
+        "contract_amendment_version": CONTRACT_AMENDMENT_VERSION,
+        "capsule_schema_version": CAPSULE_SCHEMA_VERSION,
+        "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
+        "integrity_schema_version": INTEGRITY_SCHEMA_VERSION,
         "publication_phase": artifacts["manifest"]["publication_phase"],
         "manifest_sha256": sha256_bytes(manifest_bytes),
         "capsule_set_sha256": artifacts["manifest"]["capsule_set_sha256"],
@@ -7090,6 +7330,9 @@ def _cli_summary(artifacts: Mapping[str, Any]) -> dict[str, Any]:
         "file_count": len(artifacts["file_payloads"]),
         "total_byte_count": sum(len(data) for data in artifacts["file_payloads"].values()),
         "provider_invoked": False,
+        "provider_invocation_allowed": False,
+        "treatment_response_generation_allowed": False,
+        "execution_ready": False,
         "gpu_used": False,
         "gui_action_executed": False,
         "raw_collector_mutated": False,
@@ -7173,6 +7416,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "stage": _normalized_exclusion_stage(error.stage),
             "affected_json_pointer": (_stable_error_pointer(error)),
             "provider_invoked": False,
+            "provider_invocation_allowed": False,
+            "treatment_response_generation_allowed": False,
+            "execution_ready": False,
             "gpu_used": False,
             "gui_action_executed": False,
         }

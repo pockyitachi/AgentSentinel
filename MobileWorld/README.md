@@ -51,7 +51,10 @@
 > capsules are complete. ALE-321 / G1.3 formally published 190 CPU-only capsules
 > (152 strict-MHR candidates plus 38 selected clean controls) with zero
 > exclusions from Collector v1 artifacts. The separate 38 reserve controls
-> remain census-only and out of capsule/exclusion scope. ALE-322 / G1.4 remains
+> remain census-only and out of capsule/exclusion scope. Contract Amendment 1
+> corrected the explicit fail-closed authorization guards in the v1.1
+> content-addressed publication; the former v1 publication remains immutable
+> and is superseded for formal G1 use. ALE-322 / G1.4 remains
 > unstarted and unapproved; model/provider calls, GPU use, GUI/action execution,
 > replay, and an automatic runtime Sentinel remain unauthorized. Follow the
 > checked-in handoff scope files.

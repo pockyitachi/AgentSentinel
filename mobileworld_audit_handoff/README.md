@@ -14,7 +14,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | Epic 1：Motivation Investigation | **已完成** | 六模型各 117 tasks，共 702 个 model-task cases；完成 exact history reconstruction、outcome-blind MHR 与 local-harm 审核和 outcome-aware failure-link 审核 |
 | ALE-319 / G1.1 | **已完成** | 冻结 CPU-only causal-replay protocol、schemas、pre-gold registry、controls、model/config manifest 与 locked analysis plan；没有生成 treatment response |
 | ALE-320 / G1.2 | **已完成** | 已冻结可移植 History IR/Core、codec/provider interface、protocol validator、sidecar schemas 与六 family fixture conformance |
-| ALE-321 / G1.3 | **已完成** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
+| ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -74,6 +74,14 @@ reference。
 live prompt interception、intervention 选择/生成、treatment response 或自动 runtime Sentinel。
 所有 190 个目标均通过完整性验证，无需稳定排除。
 
+Contract Amendment 1 在不改变 protocol、人口或来源的前提下，新增
+`provider_invocation_allowed=false` 与
+`treatment_response_generation_allowed=false`，并保留原有
+`execution_ready=false`。当前正式 v1.1 publication 的 manifest/content address 是
+`8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402`；旧 v1
+publication `c2af8b8393e2df2da21bedcc98614e60a08b8254dc03da373ce72d67fe7c76c5`
+保持不可变和历史可识别，但已被 supersede for formal G1 use。
+
 Collector raw layer 保持不可变、passive 和 label-free。所有 G1 label、plan、rendered
 request、response 与统计都属于 repo 外的 versioned derived/replay layer。
 
@@ -99,13 +107,17 @@ ALE-322 / G1.4 及以后仍未启动、未获授权，任何 model/provider/GPU/
 11. [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
 12. [G1_PORTABLE_SENTINEL_CONTRACT_V1.md](G1_PORTABLE_SENTINEL_CONTRACT_V1.md)；
 13. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
-14. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
-15. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
-16. [schemas/g1_3/replay_capsule.schema.json](schemas/g1_3/replay_capsule.schema.json)；
-17. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
-18. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)；
-19. [schemas/g1_3/capsule_manifest.schema.json](schemas/g1_3/capsule_manifest.schema.json)；
-20. [schemas/g1_3/capsule_integrity.schema.json](schemas/g1_3/capsule_integrity.schema.json)。
+14. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
+15. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
+16. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
+17. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
+18. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
+19. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
+20. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
+21. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
+
+三个无 `_v1_1` 后缀的 capsule/manifest/integrity schema 是 byte-frozen 历史 v1，
+不得作为当前 formal G1 contract 使用。
 
 以下是补充研究结果导航，不替代上述强制顺序：
 
@@ -135,6 +147,7 @@ mobileworld_audit_handoff/
 ├── G1_PORTABLE_SENTINEL_CONTRACT_V1.md
 ├── G1_SENTINEL_MVP_MIGRATION.md
 ├── G1_REPLAY_CAPSULE_CONTRACT_V1.md
+├── G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md
 ├── g1/
 │   └── frozen registry inputs, model/config manifest, publication lock
 ├── schemas/g1/
@@ -142,7 +155,7 @@ mobileworld_audit_handoff/
 ├── schemas/g1_2/
 │   └── versioned G1.2 portable-contract schemas
 ├── schemas/g1_3/
-│   └── five versioned G1.3 capsule/publication contracts
+│   └── five historical v1 contracts plus three active v1.1 corrected schemas
 └── examples/
     └── label-free raw event example
 ~~~

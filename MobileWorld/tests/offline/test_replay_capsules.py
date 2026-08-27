@@ -21,6 +21,10 @@ FROZEN_REGISTRY_ROOT = Path(
     + replay_capsules.G1_REGISTRY_MANIFEST_SHA256
 )
 FROZEN_SOURCE_BASE = Path("/shared/linqiang/mobileworld_audit_data")
+LEGACY_G1_3_PUBLICATION = Path(
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_3/capsules/sha256/"
+    "c2af8b8393e2df2da21bedcc98614e60a08b8254dc03da373ce72d67fe7c76c5"
+)
 
 
 def _sha256(data: bytes) -> str:
@@ -1045,6 +1049,23 @@ def test_real_formal_phase_capsules_all_190_units(
     assert manifest["readiness"]["all_target_units_capsuled"] is True
     assert manifest["readiness"]["formal_acceptance_ready"] is True
     assert manifest["readiness"]["execution_ready"] is False
+    assert manifest["readiness"]["provider_invocation_allowed"] is False
+    assert manifest["readiness"]["treatment_response_generation_allowed"] is False
+    assert manifest["schema_version"] == replay_capsules.MANIFEST_SCHEMA_VERSION
+    assert integrity["schema_version"] == replay_capsules.INTEGRITY_SCHEMA_VERSION
+    assert manifest["builder_contract"]["builder_version"] == replay_capsules.BUILDER_VERSION
+    assert manifest["builder_contract"]["capsule_schema_version"] == (
+        replay_capsules.CAPSULE_SCHEMA_VERSION
+    )
+    assert manifest["builder_contract"]["manifest_schema_version"] == (
+        replay_capsules.MANIFEST_SCHEMA_VERSION
+    )
+    assert manifest["builder_contract"]["integrity_schema_version"] == (
+        replay_capsules.INTEGRITY_SCHEMA_VERSION
+    )
+    assert manifest["builder_contract"]["contract_amendment_version"] == (
+        replay_capsules.CONTRACT_AMENDMENT_VERSION
+    )
     assert integrity["report_phase"] == "FORMAL_PUBLICATION_READY"
     assert integrity["double_build"]["status"] == "PASSED"
     assert integrity["double_build"]["performed"] is True
@@ -1069,8 +1090,21 @@ def test_real_formal_phase_capsules_all_190_units(
         parser_bytes = real_formal_artifacts["file_payloads"][reference["relative_path"]]
         replay_capsules._verify_file_summary(parser_bytes, reference, reference["relative_path"])
     assert manifest["safety"]["provider_invoked"] is False
+    assert manifest["safety"]["provider_invocation_allowed"] is False
+    assert manifest["safety"]["treatment_response_generation_allowed"] is False
     assert manifest["safety"]["gpu_used"] is False
     assert manifest["safety"]["raw_collector_mutated"] is False
+    assert integrity["safety"]["provider_invoked"] is False
+    assert integrity["safety"]["provider_invocation_allowed"] is False
+    assert integrity["safety"]["treatment_response_generation_allowed"] is False
+    assert integrity["safety"]["execution_ready"] is False
+    assert all(
+        envelope["schema_version"] == replay_capsules.CAPSULE_SCHEMA_VERSION
+        and envelope["capsule"]["safety"]["execution_ready"] is False
+        and envelope["capsule"]["safety"]["provider_invocation_allowed"] is False
+        and envelope["capsule"]["safety"]["treatment_response_generation_allowed"] is False
+        for envelope in real_formal_artifacts["capsules"]
+    )
 
 
 def test_real_formal_index_set_and_outer_body_hashes_are_exact(
@@ -1129,6 +1163,109 @@ def test_real_formal_artifacts_validate_with_offline_schema_store(
         forbid_remote_resolution,
     )
     replay_capsules._validate_artifacts_against_schemas(REPOSITORY_ROOT, real_formal_artifacts)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        pytest.param("provider_invocation_allowed", None, id="provider-missing"),
+        pytest.param("provider_invocation_allowed", True, id="provider-true"),
+        pytest.param("provider_invocation_allowed", 0, id="provider-integer-zero"),
+        pytest.param("provider_invocation_allowed", "false", id="provider-non-boolean"),
+        pytest.param(
+            "treatment_response_generation_allowed",
+            None,
+            id="treatment-missing",
+        ),
+        pytest.param(
+            "treatment_response_generation_allowed",
+            True,
+            id="treatment-true",
+        ),
+        pytest.param(
+            "treatment_response_generation_allowed",
+            0,
+            id="treatment-integer-zero",
+        ),
+        pytest.param(
+            "treatment_response_generation_allowed",
+            "false",
+            id="treatment-non-boolean",
+        ),
+    ],
+)
+def test_active_capsule_rejects_missing_true_or_non_boolean_authorization_guard(
+    real_formal_artifacts: dict[str, Any],
+    field: str,
+    invalid_value: Any,
+) -> None:
+    envelope = deepcopy(real_formal_artifacts["capsules"][0])
+    safety = envelope["capsule"]["safety"]
+    if invalid_value is None:
+        safety.pop(field)
+    else:
+        safety[field] = invalid_value
+    envelope["capsule_body_sha256"] = replay_capsules.canonical_sha256(envelope["capsule"])
+    validators = replay_capsules._schema_validators(REPOSITORY_ROOT)
+
+    with pytest.raises(replay_capsules.ReplayCapsuleError) as schema_error:
+        replay_capsules._validate_instance(
+            validators["capsule"],
+            envelope,
+            label="tampered active replay capsule",
+        )
+    assert schema_error.value.code == "SCHEMA_VALIDATION_FAILED"
+
+    tampered_artifacts = dict(real_formal_artifacts)
+    tampered_artifacts["capsules"] = [envelope, *real_formal_artifacts["capsules"][1:]]
+    with pytest.raises(replay_capsules.ReplayCapsuleError) as guard_error:
+        replay_capsules._validate_active_authorization_guards(tampered_artifacts)
+    assert guard_error.value.code == "SCHEMA_VALIDATION_FAILED"
+    assert guard_error.value.json_path.endswith(f"/capsule/safety/{field}")
+
+
+def test_safety_telemetry_and_authorization_guards_are_distinct() -> None:
+    safety = replay_capsules._safety_flags()
+
+    assert safety["provider_invoked"] is False
+    assert safety["provider_invocation_allowed"] is False
+    assert safety["treatment_response_generation_allowed"] is False
+    assert safety["execution_ready"] is False
+    assert "provider_invoked" != "provider_invocation_allowed"
+
+
+def test_schema_dispatch_preserves_legacy_v1_without_reinterpreting_it(
+    real_formal_artifacts: dict[str, Any],
+) -> None:
+    active = deepcopy(real_formal_artifacts["capsules"][0])
+    legacy = deepcopy(active)
+    legacy["schema_version"] = replay_capsules.LEGACY_CAPSULE_SCHEMA_VERSION
+    legacy["capsule"]["safety"].pop("provider_invocation_allowed")
+    legacy["capsule"]["safety"].pop("treatment_response_generation_allowed")
+    legacy["capsule_body_sha256"] = replay_capsules.canonical_sha256(legacy["capsule"])
+    validators = replay_capsules._schema_validators(REPOSITORY_ROOT)
+
+    replay_capsules._validate_instance(
+        replay_capsules._versioned_validator(
+            validators,
+            artifact_kind="capsule",
+            instance=legacy,
+        ),
+        legacy,
+        label="legacy replay capsule",
+    )
+    with pytest.raises(replay_capsules.ReplayCapsuleError):
+        replay_capsules._validate_instance(
+            validators["capsule"],
+            legacy,
+            label="legacy capsule under active schema",
+        )
+    with pytest.raises(replay_capsules.ReplayCapsuleError):
+        replay_capsules._validate_instance(
+            validators["legacy_capsule"],
+            active,
+            label="active capsule under legacy schema",
+        )
 
 
 def test_real_capsule_body_tamper_is_rejected(
@@ -1334,6 +1471,9 @@ def test_real_writer_and_source_bound_directory_validation(
             source_base=FROZEN_SOURCE_BASE,
         )
         assert write_receipt["valid"] is True
+        assert write_receipt["artifact_schema_generation"] == "ACTIVE_V1_1"
+        assert write_receipt["capsule_schema_version"] == replay_capsules.CAPSULE_SCHEMA_VERSION
+        assert write_receipt["superseded_for_formal_g1"] is False
         assert write_receipt["validation_scope"] == "SOURCE_BOUND"
         assert write_receipt["structural_valid"] is True
         assert write_receipt["source_bound_valid"] is True
@@ -1368,10 +1508,56 @@ def test_real_writer_and_source_bound_directory_validation(
         assert structural_receipt["zero_symlinks"] is True
         assert structural_receipt["read_only"] is True
         assert structural_receipt["provider_invoked"] is False
+        assert structural_receipt["provider_invocation_allowed"] is False
+        assert structural_receipt["treatment_response_generation_allowed"] is False
+        assert structural_receipt["execution_ready"] is False
         assert structural_receipt["gpu_used"] is False
     finally:
         if destination.exists():
             os.chmod(destination, 0o755)
+
+
+def test_legacy_publication_is_structurally_identified_but_cannot_be_source_bound_formal(
+    real_formal_artifacts: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not LEGACY_G1_3_PUBLICATION.is_dir():
+        pytest.skip("immutable legacy G1.3 publication is not mounted")
+    manifest_path = LEGACY_G1_3_PUBLICATION / "capsule_manifest.json"
+    before = (
+        manifest_path.read_bytes(),
+        LEGACY_G1_3_PUBLICATION.stat().st_mode,
+        manifest_path.stat().st_mode,
+    )
+
+    receipt = replay_capsules.validate_capsule_directory(LEGACY_G1_3_PUBLICATION)
+
+    assert receipt["valid"] is True
+    assert receipt["validation_scope"] == "STRUCTURAL_ONLY"
+    assert receipt["artifact_schema_generation"] == "LEGACY_V1"
+    assert receipt["capsule_schema_version"] == replay_capsules.LEGACY_CAPSULE_SCHEMA_VERSION
+    assert receipt["superseded_for_formal_g1"] is True
+    assert receipt["source_bound_valid"] is False
+    assert receipt["formal_publication_valid"] is False
+
+    monkeypatch.setattr(
+        replay_capsules,
+        "build_verified_capsule_artifacts",
+        lambda **_kwargs: real_formal_artifacts,
+    )
+    with pytest.raises(replay_capsules.ReplayCapsuleError) as raised:
+        replay_capsules.validate_capsule_directory(
+            LEGACY_G1_3_PUBLICATION,
+            repo_root=REPOSITORY_ROOT,
+            registry_root=FROZEN_REGISTRY_ROOT,
+            source_base=FROZEN_SOURCE_BASE,
+        )
+    assert raised.value.code == "NONDETERMINISTIC_BUILD"
+    assert (
+        manifest_path.read_bytes(),
+        LEGACY_G1_3_PUBLICATION.stat().st_mode,
+        manifest_path.stat().st_mode,
+    ) == before
 
 
 @pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf")])
@@ -1616,9 +1802,12 @@ def test_writer_rejects_wrong_content_address_basename(
     payloads = {name: b"payload\n" for name in replay_capsules.BASE_OUTPUT_FILE_NAMES}
     artifacts = {
         "manifest": {
+            "schema_version": replay_capsules.MANIFEST_SCHEMA_VERSION,
             "publication_phase": "FORMAL_PUBLICATION_READY",
             "finalization": {"formal_publication_allowed": True},
         },
+        "integrity": {"schema_version": replay_capsules.INTEGRITY_SCHEMA_VERSION},
+        "capsules": [],
         "file_payloads": payloads,
     }
     monkeypatch.setattr(replay_capsules, "_validate_artifacts_against_schemas", lambda *_: None)
@@ -1773,6 +1962,11 @@ def test_cli_summary_is_truthful_and_safety_explicit() -> None:
 
     assert summary == {
         "valid": True,
+        "builder_version": replay_capsules.BUILDER_VERSION,
+        "contract_amendment_version": replay_capsules.CONTRACT_AMENDMENT_VERSION,
+        "capsule_schema_version": replay_capsules.CAPSULE_SCHEMA_VERSION,
+        "manifest_schema_version": replay_capsules.MANIFEST_SCHEMA_VERSION,
+        "integrity_schema_version": replay_capsules.INTEGRITY_SCHEMA_VERSION,
         "publication_phase": "BUILD_CANDIDATE",
         "manifest_sha256": _sha256(b"manifest\n"),
         "capsule_set_sha256": "2" * 64,
@@ -1781,6 +1975,9 @@ def test_cli_summary_is_truthful_and_safety_explicit() -> None:
         "file_count": 2,
         "total_byte_count": len(b"manifest\n") + len(b"index\n"),
         "provider_invoked": False,
+        "provider_invocation_allowed": False,
+        "treatment_response_generation_allowed": False,
+        "execution_ready": False,
         "gpu_used": False,
         "gui_action_executed": False,
         "raw_collector_mutated": False,
@@ -1815,6 +2012,9 @@ def test_candidate_cli_emits_one_canonical_json_summary(
     assert summary["valid"] is True
     assert summary["publication_phase"] == "BUILD_CANDIDATE"
     assert summary["provider_invoked"] is False
+    assert summary["provider_invocation_allowed"] is False
+    assert summary["treatment_response_generation_allowed"] is False
+    assert summary["execution_ready"] is False
     assert summary["gpu_used"] is False
 
 
@@ -1847,6 +2047,9 @@ def test_verify_cli_reports_formal_phase(
     assert summary["capsuled_count"] == 190
     assert summary["excluded_count"] == 0
     assert summary["provider_invoked"] is False
+    assert summary["provider_invocation_allowed"] is False
+    assert summary["treatment_response_generation_allowed"] is False
+    assert summary["execution_ready"] is False
 
 
 def test_validate_cli_structural_only_never_claims_formal_publication(
@@ -1862,6 +2065,9 @@ def test_validate_cli_structural_only_never_claims_formal_publication(
         "source_rebuild_performed": False,
         "source_rebuild_byte_identical": False,
         "provider_invoked": False,
+        "provider_invocation_allowed": False,
+        "treatment_response_generation_allowed": False,
+        "execution_ready": False,
         "gpu_used": False,
     }
 
@@ -1913,6 +2119,9 @@ def test_cli_failure_is_machine_readable_and_never_claims_invocation(
         "stage": "DETERMINISM",
         "affected_json_pointer": "/units/0",
         "provider_invoked": False,
+        "provider_invocation_allowed": False,
+        "treatment_response_generation_allowed": False,
+        "execution_ready": False,
         "gpu_used": False,
         "gui_action_executed": False,
     }

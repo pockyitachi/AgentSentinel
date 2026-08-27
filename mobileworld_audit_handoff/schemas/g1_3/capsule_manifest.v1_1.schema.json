@@ -1,0 +1,523 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_3/capsule_manifest.v1_1.schema.json",
+  "title": "G1.3 Replay Capsule Publication Manifest v1.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "protocol_version",
+    "portable_contract_version",
+    "issue",
+    "story",
+    "publication_phase",
+    "curated",
+    "deployment_prediction",
+    "source_registry",
+    "population",
+    "builder_contract",
+    "capsule_set_sha256",
+    "capsule_set_hash_subject",
+    "units",
+    "files",
+    "counts",
+    "finalization",
+    "readiness",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.replay-capsule-manifest/v1.1"},
+    "record_type": {"const": "g1_replay_capsule_publication_manifest"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "portable_contract_version": {
+      "const": "mobileworld.g1.portable-sentinel/contract-v1"
+    },
+    "issue": {"const": "ALE-321"},
+    "story": {"const": "G1.3"},
+    "publication_phase": {
+      "enum": ["BUILD_CANDIDATE", "FORMAL_PUBLICATION_READY"]
+    },
+    "curated": {"const": true},
+    "deployment_prediction": {"const": false},
+    "source_registry": {"$ref": "#/$defs/sourceRegistry"},
+    "population": {"$ref": "#/$defs/population"},
+    "builder_contract": {"$ref": "#/$defs/builderContract"},
+    "capsule_set_sha256": {"$ref": "#/$defs/sha256"},
+    "capsule_set_hash_subject": {
+      "const": "CANONICAL_ORDERED_190_UNIT_DISPOSITIONS_WITH_CAPSULE_OR_EXCLUSION_HASH"
+    },
+    "units": {
+      "type": "array",
+      "minItems": 190,
+      "maxItems": 190,
+      "items": {"$ref": "#/$defs/unitEntry"}
+    },
+    "files": {"$ref": "#/$defs/files"},
+    "counts": {"$ref": "#/$defs/counts"},
+    "finalization": {"$ref": "#/$defs/finalization"},
+    "readiness": {"$ref": "#/$defs/readiness"},
+    "safety": {"$ref": "#/$defs/safety"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"publication_phase": {"const": "BUILD_CANDIDATE"}}},
+      "then": {
+        "properties": {
+          "finalization": {
+            "properties": {
+              "integrity_report_phase": {"const": "BUILD_CANDIDATE"},
+              "double_build_status": {"const": "NOT_PERFORMED"},
+              "formal_publication_allowed": {"const": false}
+            }
+          },
+          "readiness": {
+            "properties": {"formal_acceptance_ready": {"const": false}}
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "finalization": {
+            "properties": {
+              "integrity_report_phase": {"const": "FORMAL_PUBLICATION_READY"},
+              "double_build_status": {"const": "PASSED"},
+              "formal_publication_allowed": {"const": true}
+            }
+          },
+          "counts": {
+            "properties": {
+              "capsuled_count": {"const": 190},
+              "excluded_count": {"const": 0}
+            }
+          },
+          "readiness": {
+            "properties": {
+              "all_target_units_capsuled": {"const": true},
+              "formal_acceptance_ready": {"const": true}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$"
+    },
+    "fileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "media_type"],
+      "properties": {
+        "relative_path": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1}
+      }
+    },
+    "nullableFileRef": {
+      "oneOf": [{"$ref": "#/$defs/fileRef"}, {"type": "null"}]
+    },
+    "registryRecordRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry_file_relative_path",
+        "registry_file_sha256",
+        "registry_file_byte_count",
+        "record_index",
+        "record_id",
+        "record_sha256"
+      ],
+      "properties": {
+        "registry_file_relative_path": {
+          "enum": ["case_registry.pre_gold.jsonl", "clean_control_pool.jsonl"]
+        },
+        "registry_file_sha256": {"$ref": "#/$defs/sha256"},
+        "registry_file_byte_count": {"type": "integer", "minimum": 1},
+        "record_index": {"type": "integer", "minimum": 0},
+        "record_id": {
+          "type": "string",
+          "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"
+        },
+        "record_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registry_id",
+        "registry_manifest_sha256",
+        "registry_lock_ref",
+        "registry_lock_sha256",
+        "external_file_set_aggregate_sha256",
+        "source_config_sha256",
+        "g1_1_included_count",
+        "selection_policy"
+      ],
+      "properties": {
+        "registry_id": {
+          "const": "sha256:dd3dad4f94c66dce6999d3cc2743cd75c37688788754e95b27531cfd00d733f4"
+        },
+        "registry_manifest_sha256": {
+          "const": "dd3dad4f94c66dce6999d3cc2743cd75c37688788754e95b27531cfd00d733f4"
+        },
+        "registry_lock_ref": {"$ref": "#/$defs/fileRef"},
+        "registry_lock_sha256": {
+          "const": "1e038ffe604acf0eae2af1e45ec0e856e2f105353b0c5a1dbea0da9b15657944"
+        },
+        "external_file_set_aggregate_sha256": {
+          "const": "dbec86f012b1cb9a11f94123cb302a62ffc6a04a33422121d190f28edf793bc6"
+        },
+        "source_config_sha256": {
+          "const": "c8235705c575e134c11bc00896f31ec95243af4ffd2ffd47a3e6ecf64ce5cb59"
+        },
+        "g1_1_included_count": {"const": 0},
+        "selection_policy": {
+          "const": "STRICT_MHR_CANDIDATE_FROZEN_PLUS_SELECTED_CLEAN_CONTROL_NOT_G1_1_INCLUDED"
+        }
+      }
+    },
+    "population": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strict_mhr_candidate_frozen_count",
+        "selected_clean_control_count",
+        "target_unit_count",
+        "reserve_clean_control_out_of_scope_count",
+        "qwen_target_count",
+        "mai_target_count",
+        "other_four_history_families_live_capsule_count"
+      ],
+      "properties": {
+        "strict_mhr_candidate_frozen_count": {"const": 152},
+        "selected_clean_control_count": {"const": 38},
+        "target_unit_count": {"const": 190},
+        "reserve_clean_control_out_of_scope_count": {"const": 38},
+        "qwen_target_count": {"const": 169},
+        "mai_target_count": {"const": 21},
+        "other_four_history_families_live_capsule_count": {"const": 0}
+      }
+    },
+    "contractFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count"],
+      "properties": {
+        "relative_path": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "builderContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builder_version",
+        "capsule_schema_version",
+        "manifest_schema_version",
+        "integrity_schema_version",
+        "contract_amendment_version",
+        "canonicalization",
+        "capsule_body_hash_subject",
+        "unit_order",
+        "artifact_order",
+        "failure_order",
+        "contract_files",
+        "build_timestamp_in_identity",
+        "absolute_output_path_in_identity"
+      ],
+      "properties": {
+        "builder_version": {
+          "const": "mobileworld.g1.replay-capsule-builder/v1.1"
+        },
+        "capsule_schema_version": {
+          "const": "mobileworld.g1.replay-capsule/v1.1"
+        },
+        "manifest_schema_version": {
+          "const": "mobileworld.g1.replay-capsule-manifest/v1.1"
+        },
+        "integrity_schema_version": {
+          "const": "mobileworld.g1.replay-capsule-integrity/v1.1"
+        },
+        "contract_amendment_version": {
+          "const": "mobileworld.g1.replay-capsule/contract-v1-amendment-1"
+        },
+        "canonicalization": {
+          "const": "mobileworld.canonical-json/sorted-keys-utf8-no-nan/v1"
+        },
+        "capsule_body_hash_subject": {"const": "CANONICAL_INNER_CAPSULE_OBJECT"},
+        "unit_order": {
+          "const": "UNIT_KIND_THEN_UNIT_ID_THEN_REGISTRY_FILE_THEN_RECORD_INDEX"
+        },
+        "artifact_order": {"const": "STORE_ID_THEN_RELATIVE_PATH_THEN_SHA256"},
+        "failure_order": {
+          "const": "STAGE_PRIORITY_THEN_REASON_CODE_THEN_AFFECTED_JSON_POINTER"
+        },
+        "contract_files": {
+          "type": "array",
+          "minItems": 6,
+          "items": {"$ref": "#/$defs/contractFile"}
+        },
+        "build_timestamp_in_identity": {"const": false},
+        "absolute_output_path_in_identity": {"const": false}
+      }
+    },
+    "unitEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit_kind",
+        "unit_id",
+        "registry_record_ref",
+        "source_key",
+        "model_id",
+        "history_family",
+        "disposition",
+        "capsule_ref",
+        "capsule_body_sha256",
+        "exclusion_record_index",
+        "exclusion_record_sha256"
+      ],
+      "properties": {
+        "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+        "unit_id": {
+          "type": "string",
+          "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"
+        },
+        "registry_record_ref": {"$ref": "#/$defs/registryRecordRef"},
+        "source_key": {"enum": ["qwen", "mai"]},
+        "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+        "history_family": {"enum": ["flat_progress", "raw_replay"]},
+        "disposition": {"enum": ["CAPSULED", "EXCLUDED"]},
+        "capsule_ref": {"$ref": "#/$defs/nullableFileRef"},
+        "capsule_body_sha256": {
+          "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "exclusion_record_index": {"type": ["integer", "null"], "minimum": 0},
+        "exclusion_record_sha256": {
+          "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}}},
+          "then": {
+            "properties": {
+              "unit_id": {"pattern": "^g1case-[0-9a-f]{24}$"},
+              "registry_record_ref": {
+                "properties": {
+                  "registry_file_relative_path": {
+                    "const": "case_registry.pre_gold.jsonl"
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "unit_id": {"pattern": "^g1control-[0-9a-f]{24}$"},
+              "registry_record_ref": {
+                "properties": {
+                  "registry_file_relative_path": {
+                    "const": "clean_control_pool.jsonl"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"source_key": {"const": "qwen"}}},
+          "then": {
+            "properties": {
+              "model_id": {"const": "qwen3vl_8b"},
+              "history_family": {"const": "flat_progress"}
+            }
+          },
+          "else": {
+            "properties": {
+              "model_id": {"const": "mai_ui_8b"},
+              "history_family": {"const": "raw_replay"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"disposition": {"const": "CAPSULED"}}},
+          "then": {
+            "properties": {
+              "capsule_ref": {"$ref": "#/$defs/fileRef"},
+              "capsule_body_sha256": {"$ref": "#/$defs/sha256"},
+              "exclusion_record_index": {"type": "null"},
+              "exclusion_record_sha256": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "capsule_ref": {"type": "null"},
+              "capsule_body_sha256": {"type": "null"},
+              "exclusion_record_index": {"type": "integer", "minimum": 0},
+              "exclusion_record_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        }
+      ]
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field_visibility_policy",
+        "capsule_index",
+        "capsule_files",
+        "artifact_files",
+        "exclusion_ledger",
+        "integrity_report",
+        "payload_file_count_excluding_manifest",
+        "final_root_file_count",
+        "payload_file_set_aggregate_sha256",
+        "payload_file_set_aggregate_subject"
+      ],
+      "properties": {
+        "field_visibility_policy": {"$ref": "#/$defs/fileRef"},
+        "capsule_index": {"$ref": "#/$defs/fileRef"},
+        "capsule_files": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/fileRef"}
+        },
+        "artifact_files": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/fileRef"}
+        },
+        "exclusion_ledger": {"$ref": "#/$defs/fileRef"},
+        "integrity_report": {"$ref": "#/$defs/fileRef"},
+        "payload_file_count_excluding_manifest": {
+          "type": "integer",
+          "minimum": 4
+        },
+        "final_root_file_count": {"type": "integer", "minimum": 5},
+        "payload_file_set_aggregate_sha256": {"$ref": "#/$defs/sha256"},
+        "payload_file_set_aggregate_subject": {
+          "const": "CANONICAL_FILENAME_TO_SHA256_MAP_EXCLUDING_MANIFEST"
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_unit_count",
+        "capsuled_count",
+        "excluded_count",
+        "manifest_unit_count",
+        "unaccounted_unit_count",
+        "duplicate_unit_count",
+        "reserve_unit_capsule_count",
+        "g1_1_source_record_mutation_count"
+      ],
+      "properties": {
+        "target_unit_count": {"const": 190},
+        "capsuled_count": {"type": "integer", "minimum": 0, "maximum": 190},
+        "excluded_count": {"type": "integer", "minimum": 0, "maximum": 190},
+        "manifest_unit_count": {"const": 190},
+        "unaccounted_unit_count": {"const": 0},
+        "duplicate_unit_count": {"const": 0},
+        "reserve_unit_capsule_count": {"const": 0},
+        "g1_1_source_record_mutation_count": {"const": 0}
+      }
+    },
+    "finalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "integrity_report_phase",
+        "double_build_status",
+        "manifest_hash_subject",
+        "publication_install_status",
+        "formal_publication_allowed",
+        "post_install_facts_location"
+      ],
+      "properties": {
+        "integrity_report_phase": {
+          "enum": ["BUILD_CANDIDATE", "FORMAL_PUBLICATION_READY"]
+        },
+        "double_build_status": {"enum": ["NOT_PERFORMED", "PASSED"]},
+        "manifest_hash_subject": {"const": "EXACT_CANONICAL_MANIFEST_FILE_BYTES"},
+        "publication_install_status": {"const": "PREINSTALL_NOT_PUBLISHED"},
+        "formal_publication_allowed": {"type": "boolean"},
+        "post_install_facts_location": {
+          "const": "EXTERNAL_READ_ONLY_DIRECTORY_VALIDATION_RECEIPT"
+        }
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capsule_materialization_complete",
+        "capsule_validation_complete",
+        "all_target_units_capsuled",
+        "formal_acceptance_ready",
+        "execution_ready",
+        "provider_invocation_allowed",
+        "run_ready",
+        "provider_codec_ready",
+        "live_history_codec_ready",
+        "gold_and_transformations_ready",
+        "treatment_response_generation_allowed"
+      ],
+      "properties": {
+        "capsule_materialization_complete": {"const": true},
+        "capsule_validation_complete": {"const": true},
+        "all_target_units_capsuled": {"type": "boolean"},
+        "formal_acceptance_ready": {"type": "boolean"},
+        "execution_ready": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "run_ready": {"const": false},
+        "provider_codec_ready": {"const": false},
+        "live_history_codec_ready": {"const": false},
+        "gold_and_transformations_ready": {"const": false},
+        "treatment_response_generation_allowed": {"const": false}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_invoked",
+        "provider_invocation_allowed",
+        "gpu_used",
+        "gui_action_executed",
+        "generated_action_executed",
+        "raw_collector_mutated",
+        "collector_labels_added",
+        "g1_1_artifacts_mutated",
+        "g1_2_artifacts_mutated",
+        "automatic_semantic_inference_performed",
+        "runtime_sentinel_enabled",
+        "treatment_response_count",
+        "treatment_response_generation_allowed"
+      ],
+      "properties": {
+        "provider_invoked": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "gpu_used": {"const": false},
+        "gui_action_executed": {"const": false},
+        "generated_action_executed": {"const": false},
+        "raw_collector_mutated": {"const": false},
+        "collector_labels_added": {"const": false},
+        "g1_1_artifacts_mutated": {"const": false},
+        "g1_2_artifacts_mutated": {"const": false},
+        "automatic_semantic_inference_performed": {"const": false},
+        "runtime_sentinel_enabled": {"const": false},
+        "treatment_response_count": {"const": 0},
+        "treatment_response_generation_allowed": {"const": false}
+      }
+    }
+  }
+}
