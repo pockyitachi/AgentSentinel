@@ -54,9 +54,10 @@
 > remain census-only and out of capsule/exclusion scope. Contract Amendment 1
 > corrected the explicit fail-closed authorization guards in the v1.1
 > content-addressed publication; the former v1 publication remains immutable
-> and is superseded for formal G1 use. ALE-322 / G1.4 is now authorized only for
-> the CPU runner, invariant/diff guards, deterministic fake-provider tests,
-> scheduling, idempotent attempt storage, blinded export, schemas, and CLI.
+> and is superseded for formal G1 use. ALE-322 / G1.4 now has a validated
+> CPU/fake runner checkpoint at commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`,
+> covering invariant/diff guards, deterministic fake-provider tests, scheduling,
+> idempotent attempt storage, blinded export, schemas, and CLI.
 > Real model/provider/network calls, GPU use, GUI/action/live replay,
 > treatment-response generation, and G1.5+ remain unauthorized. Formal capsules
 > retain their three false safety guards, and ALE-322 remains incomplete pending

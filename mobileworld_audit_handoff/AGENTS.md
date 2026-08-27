@@ -43,8 +43,9 @@ authorization/readiness guard；旧 v1 publication 保持不可变，仅作为�
 v1.1 publication supersede for formal G1 use。
 
 当前活动范围是 `G1_4_DECISION_LOG.md` 中 D-025 限定的
-**ALE-322 / G1.4 CPU-only 实现阶段**。可实现
-exact-request runner、invariance/target-only diff guard、确定性 arm scheduling、idempotent
+**ALE-322 / G1.4 CPU/fake checkpoint 后续阶段**。commit
+`bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c` 已实现并验证 exact-request runner、
+invariance/target-only diff guard、确定性 arm scheduling、idempotent
 append-only attempt/resume 存储、blinded export、schema/CLI、in-process fake provider，以及仅通过
 fake SDK client 测试的可注入 OpenAI-compatible Provider Codec。Formal v1.1 capsule 仍是只读
 输入，且必须保持 `execution_ready=false`、`provider_invocation_allowed=false` 和

@@ -40,7 +40,8 @@ scope. Contract Amendment 1 corrected the explicit fail-closed authorization
 guards in a v1.1 content-addressed publication; the former v1 publication is
 immutable and superseded for formal G1 use.
 
-Active authorized scope: ALE-322 / G1.4 may implement the CPU-only exact-request
+Active authorized scope: ALE-322 / G1.4 has a validated CPU/fake checkpoint at
+commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`, covering the exact-request
 runner, invariant/diff guards, deterministic scheduling and idempotent derived
 attempt storage, blinded exports, versioned schemas/CLI, an in-process fake
 provider, and an injectable OpenAI-compatible Provider Codec exercised only

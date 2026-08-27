@@ -15,7 +15,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | ALE-319 / G1.1 | **已完成** | 冻结 CPU-only causal-replay protocol、schemas、pre-gold registry、controls、model/config manifest 与 locked analysis plan；没有生成 treatment response |
 | ALE-320 / G1.2 | **已完成** | 已冻结可移植 History IR/Core、codec/provider interface、protocol validator、sidecar schemas 与六 family fixture conformance |
 | ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
-| ALE-322 / G1.4 | **CPU-only 实现已授权；live proof 延后** | 可实现 runner、invariance/diff guard、fake-provider conformance、schedule、idempotent attempt store、blinded export、schema/CLI；不得调用真实 model/provider/network/GPU/GUI/action/live replay，story 仍未完成 |
+| ALE-322 / G1.4 | **CPU/fake checkpoint 已实现；live proof 延后** | commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c` 已验证 runner、invariance/diff guard、fake-provider conformance、schedule、idempotent attempt store、blinded export、schema/CLI；不得调用真实 model/provider/network/GPU/GUI/action/live replay，story 仍未完成 |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -88,7 +88,7 @@ request、response 与统计都属于 repo 外的 versioned derived/replay layer
 
 D-023/D-024 只授权并记录上述 CPU-only G1.3 capsule 物化、修正与发布。
 
-## 当前活动阶段：ALE-322 / G1.4（CPU-only 部分授权）
+## 当前活动阶段：ALE-322 / G1.4（CPU/fake checkpoint 已实现）
 
 [`G1_4_DECISION_LOG.md`](G1_4_DECISION_LOG.md) 中 D-025 允许先完成不需真实模型或外部运行时的
 runner 工程：formal v1.1 capsule
@@ -103,6 +103,10 @@ GUI/tool/action、backend restore/prefix、live replay、treatment response 或 
 调度目标而非验收比例；ALE-322 仍为 in progress，需等 owner 审核 GPU 资源并单独授权
 live proof 后，才能评估剩余验收项。无论后续是否运行 live proof，本 story 都不执行
 模型返回的 GUI action。
+
+CPU/fake checkpoint 的实现提交是
+`bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`。它不是正式 replay publication，也不包含
+任何 treatment response；精确回归、冻结输入与剩余 live gate 记录在 [STATUS.md](STATUS.md)。
 
 ## 强制入口与补充导航
 
