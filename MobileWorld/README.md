@@ -58,13 +58,24 @@
 > CPU/fake runner checkpoint at commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`,
 > covering invariant/diff guards, deterministic fake-provider tests, scheduling,
 > idempotent attempt storage, blinded export, schemas, and CLI.
+> D-026 additionally prepared inert live-proof code at commit
+> `74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d`: static frozen-model bindings,
+> no-send OpenAI call/paired-block descriptors, caller-injected response
+> projection, an inert vLLM launch plan, and injected-only GPU assessment. This
+> inspection-only tranche creates no client, starts no service, performs no
+> production network access or GPU probe/use, loads no model, and executes no
+> replay or action. All eight readiness/authorization fields and all nine safety
+> fields remain false, `live_code_prepared=true` is not readiness, and no formal
+> run publication exists.
 > Real model/provider/network calls, GPU use, GUI/action/live replay,
 > treatment-response generation, and G1.5+ remain unauthorized. Formal capsules
 > retain their three false safety guards, and ALE-322 remains incomplete pending
-> separately authorized live/GPU proof. Follow the checked-in handoff scope files.
+> separately authorized live/GPU proof; its exact state is
+> `IN_PROGRESS_LIVE_PROOF_DEFERRED`. Follow the
+> [inert-preparation contract](../mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)
+> and [project status](../mobileworld_audit_handoff/STATUS.md).
 >
 > See the [six-model audit](docs/misleading_history_audit_report.md),
-> [project status](../mobileworld_audit_handoff/STATUS.md), and
 > [workspace overview](../README.md).
 
 

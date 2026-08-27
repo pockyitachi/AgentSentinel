@@ -25,7 +25,7 @@ Status as of 2026-08-27:
 | G1.1: causal-replay protocol and registry | **Complete** | CPU-only frozen protocol, schemas, model/config manifest, pre-gold case registry, controls, and locked analysis plan; no treatment response was generated |
 | G1.2: portable Sentinel contract | **Complete** | CPU-only canonical History IR/Core, codec/provider interfaces, fail-closed validation, schemas, sidecars, and six-family fixture conformance |
 | G1.3: immutable decision capsules | **Complete; v1.1 corrected** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); Amendment 1 adds explicit fail-closed authorization guards; 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
-| G1.4: exact-request replay runner | **CPU/fake checkpoint implemented; live proof deferred** | CPU-only runner, invariant/diff guards, deterministic fake-provider conformance, scheduling, idempotent attempt storage, blinded export, schemas, and CLI are validated; story remains incomplete pending separately authorized live/GPU proof |
+| G1.4: exact-request replay runner | **CPU/fake checkpoint and inert live-proof code prepared; live proof deferred** | The validated CPU/fake runner now has additive D-026 no-execution preparation for static bindings, no-send descriptors, caller-injected response projection, inert launch plans, and injected-only GPU assessment; all readiness/authorization fields remain false and the story remains incomplete |
 
 G1.2 is merged and accepted. ALE-321 / G1.3 formally froze and published all
 190 targets—152 strict-MHR candidates plus 38 selected clean controls—as
@@ -38,13 +38,20 @@ Contract Amendment 1 published the corrected v1.1 artifact at manifest SHA
 `8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402`.
 The former v1 publication remains immutable and historically identifiable, but
 is superseded for formal G1 use.
-ALE-322 / G1.4 now has a validated CPU/fake implementation checkpoint at
-commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`. Real
-model/provider/network calls, GPU use, GUI/action/live replay, treatment-response
-generation, and G1.5+ remain unauthorized; formal capsules retain all three
-false safety guards. Passing CPU and fake-provider tests must not be reported as
-ALE-322 completion. The checked-in AGENTS, STATUS, and DECISION_LOG remain
-authoritative.
+ALE-322 / G1.4 has a validated CPU/fake implementation checkpoint at commit
+`bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c` and additive D-026 inert live-proof
+code preparation at commit `74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d`.
+The additive tranche statically binds frozen model/config declarations, renders
+no-send OpenAI call and paired-block descriptors, projects only caller-injected
+response envelopes, renders an inert vLLM launch plan, and assesses only an
+injected GPU inventory. It creates no client, performs no production network
+access, starts no process, probes or uses no GPU, loads no model, and executes no
+replay or action. All eight readiness/authorization fields and all nine safety
+fields remain false, no formal run publication exists, and the story state is
+`IN_PROGRESS_LIVE_PROOF_DEFERRED`. G1.5/G1.6/G1.7 and owner authorization for
+any live/GPU proof remain outstanding. Passing CPU or fake-provider tests must
+not be reported as ALE-322 completion. The checked-in AGENTS, STATUS, and G1.4
+decision log remain authoritative.
 
 ## Epic 1 results
 
@@ -104,7 +111,9 @@ Before changing implementation code, follow
 [`mobileworld_audit_handoff/AGENTS.md`](mobileworld_audit_handoff/AGENTS.md).
 The current authoritative state and locked decisions are in
 [`STATUS.md`](mobileworld_audit_handoff/STATUS.md) and
-[`DECISION_LOG.md`](mobileworld_audit_handoff/DECISION_LOG.md). The G1.1 causal
+[`DECISION_LOG.md`](mobileworld_audit_handoff/DECISION_LOG.md); current G1.4
+authorization is append-only in
+[`G1_4_DECISION_LOG.md`](mobileworld_audit_handoff/G1_4_DECISION_LOG.md). The G1.1 causal
 protocol and locked analysis plan are
 [`G1_CAUSAL_REPLAY_PROTOCOL_V1.md`](mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md)
 and
@@ -116,7 +125,13 @@ and
 its active correction is
 [`G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`](mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md),
 and the historical plus active G1.3 machine schemas live under
-[`schemas/g1_3/`](mobileworld_audit_handoff/schemas/g1_3/).
+[`schemas/g1_3/`](mobileworld_audit_handoff/schemas/g1_3/). The G1.4 CPU/fake
+runner and additive inert-preparation contracts are
+[`G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md)
+and
+[`G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md);
+their nine original plus six additive schemas live under
+[`schemas/g1_4/`](mobileworld_audit_handoff/schemas/g1_4/).
 
 Raw collections, derived audit artifacts, screenshots, and replay outputs must
 remain outside the Git repository in restricted, versioned data roots. Git

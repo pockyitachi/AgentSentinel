@@ -15,7 +15,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | ALE-319 / G1.1 | **已完成** | 冻结 CPU-only causal-replay protocol、schemas、pre-gold registry、controls、model/config manifest 与 locked analysis plan；没有生成 treatment response |
 | ALE-320 / G1.2 | **已完成** | 已冻结可移植 History IR/Core、codec/provider interface、protocol validator、sidecar schemas 与六 family fixture conformance |
 | ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
-| ALE-322 / G1.4 | **CPU/fake checkpoint 已实现；live proof 延后** | commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c` 已验证 runner、invariance/diff guard、fake-provider conformance、schedule、idempotent attempt store、blinded export、schema/CLI；不得调用真实 model/provider/network/GPU/GUI/action/live replay，story 仍未完成 |
+| ALE-322 / G1.4 | **CPU/fake checkpoint 与 inert live-proof code preparation 已实现；live proof 延后** | commits `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`、`74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d` 已验证 runner/fake path 和 D-026 no-execution preparation；全部 readiness/authorization 与 safety fields 仍为 false，无 formal publication，story 仍未完成 |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -88,7 +88,7 @@ request、response 与统计都属于 repo 外的 versioned derived/replay layer
 
 D-023/D-024 只授权并记录上述 CPU-only G1.3 capsule 物化、修正与发布。
 
-## 当前活动阶段：ALE-322 / G1.4（CPU/fake checkpoint 已实现）
+## 当前活动阶段：ALE-322 / G1.4（CPU/fake checkpoint 与 inert live-proof code preparation 已实现）
 
 [`G1_4_DECISION_LOG.md`](G1_4_DECISION_LOG.md) 中 D-025 允许先完成不需真实模型或外部运行时的
 runner 工程：formal v1.1 capsule
@@ -96,13 +96,24 @@ runner 工程：formal v1.1 capsule
 arm schedule、idempotent append-only attempt/resume 存储、blinded-scoring export、schema/CLI、
 in-process fake provider，以及只通过 fake SDK client 验证的 Provider Codec 边界。
 
+D-026 与
+[`G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`](G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)
+在该 checkpoint 上只增加未来 live/GPU proof 所需的 inert、CPU-only 代码准备：静态冻结
+model/config binding、no-send OpenAI SDK call 与 paired-block descriptor、caller-injected
+response envelope 的纯投影、未执行的 vLLM launch plan、只消费 caller-injected snapshot 的
+GPU capacity assessment，以及 no-send `prepare-live-code` CLI inspection。实现提交是
+`74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d`。`live_code_prepared=true` 只表示代码准备状态，
+不表示 resource、transport、run 或 formal replay readiness；全部 8 个 readiness/authorization
+fields 与 9 个 safety fields 仍为 false，也没有 formal run publication。
+
 Formal capsule 的 `execution_ready=false`、`provider_invocation_allowed=false` 和
 `treatment_response_generation_allowed=false` 不变，不得被 wrapper、CLI、resume 或 test path
 绕过。当前不授权任何真实 model/provider/network 调用、GPU、模型加载/服务、
 GUI/tool/action、backend restore/prefix、live replay、treatment response 或 G1.5+ 工作。“约 90%”是
-调度目标而非验收比例；ALE-322 仍为 in progress，需等 owner 审核 GPU 资源并单独授权
-live proof 后，才能评估剩余验收项。无论后续是否运行 live proof，本 story 都不执行
-模型返回的 GUI action。
+调度目标而非验收比例，不能用作完成度声明；ALE-322 的精确状态仍是
+`IN_PROGRESS_LIVE_PROOF_DEFERRED`。G1.5 live History Codec、G1.6 curation/gold/admission、
+G1.7 serving/seed/isolation/backend/scorer/restorer/run-ready/execution seals 与 owner 的 live/GPU
+授权均未完成。无论后续是否运行 live proof，本 story 都不执行模型返回的 GUI action。
 
 CPU/fake checkpoint 的实现提交是
 `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`。它不是正式 replay publication，也不包含
@@ -129,13 +140,14 @@ CPU/fake checkpoint 的实现提交是
 14. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
 15. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
 16. [G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md)；
-17. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
-18. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
-19. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
-20. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
-21. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
-22. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
-23. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
+17. [G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)；
+18. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
+19. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
+20. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
+21. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
+22. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
+23. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
+24. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
 
 三个无 `_v1_1` 后缀的 capsule/manifest/integrity schema 是 byte-frozen 历史 v1，
 不得作为当前 formal G1 contract 使用。
@@ -145,10 +157,11 @@ CPU/fake checkpoint 的实现提交是
 - [OFFLINE_EVALUATION_DESIGN.md](OFFLINE_EVALUATION_DESIGN.md)；
 - [六模型正式报告](../MobileWorld/docs/misleading_history_audit_report.md)；
 - [schemas/g1/](schemas/g1/) 中的 G1.1 machine contracts；
-- [schemas/g1_2/](schemas/g1_2/) 中的 G1.2 machine contracts。
+- [schemas/g1_2/](schemas/g1_2/) 中的 G1.2 machine contracts；
+- [schemas/g1_4/](schemas/g1_4/) 中的 9 个 CPU/fake runner schemas 与 6 个 additive inert-preparation schemas。
 
 其中 Collector 文档保留其设计时状态与验收原则；完成记录以 STATUS.md 为准，工程授权
-以 AGENTS.md 与 DECISION_LOG.md 为准。本 README 不能覆盖它们。
+以 AGENTS.md、DECISION_LOG.md 与 G1_4_DECISION_LOG.md 为准。本 README 不能覆盖它们。
 
 ## 目录职责
 
@@ -156,7 +169,7 @@ CPU/fake checkpoint 的实现提交是
 mobileworld_audit_handoff/
 ├── AGENTS.md, SERVER_AGENT_INSTRUCTIONS.md
 │   └── agent 工作范围与服务器操作规则
-├── PROJECT_CONTEXT.md, DECISION_LOG.md, STATUS.md
+├── PROJECT_CONTEXT.md, DECISION_LOG.md, G1_4_DECISION_LOG.md, STATUS.md
 │   └── 研究语义、locked decisions 与 append-only execution record
 ├── COLLECTOR_DESIGN.md, EVENT_CONTRACT_V1.md
 ├── IMPLEMENTATION_GUIDE.md, TEST_AND_ACCEPTANCE.md
@@ -170,6 +183,7 @@ mobileworld_audit_handoff/
 ├── G1_REPLAY_CAPSULE_CONTRACT_V1.md
 ├── G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md
 ├── G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md
+├── G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md
 ├── g1/
 │   └── frozen registry inputs, model/config manifest, publication lock
 ├── schemas/g1/
@@ -179,7 +193,7 @@ mobileworld_audit_handoff/
 ├── schemas/g1_3/
 │   └── five historical v1 contracts plus three active v1.1 corrected schemas
 ├── schemas/g1_4/
-│   └── CPU replay plan, invariance, exchange, attempt, terminal, blinding, and readiness contracts
+│   └── nine CPU/fake runner schemas plus six additive inert-preparation schemas
 └── examples/
     └── label-free raw event example
 ~~~
