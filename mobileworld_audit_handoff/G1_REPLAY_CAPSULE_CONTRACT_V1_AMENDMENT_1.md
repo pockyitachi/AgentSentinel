@@ -1,12 +1,12 @@
 # G1 Replay Capsule Contract v1 — Amendment 1
 
-Status: **ACCEPTED corrective amendment for ALE-321 / G1.3**  
-Document type: Normative compatible schema and publication correction  
-Amendment ID: `mobileworld.g1.replay-capsule/contract-v1-amendment-1`  
-Amends: `mobileworld.g1.replay-capsule/contract-v1`  
-Authorization: `DECISION_LOG.md` D-024  
-Protocol: `mobileworld.g1.causal-replay/protocol-v1` (unchanged)  
-Portable contract: `mobileworld.g1.portable-sentinel/contract-v1` (unchanged)  
+Status: **ACCEPTED corrective amendment for ALE-321 / G1.3**
+Document type: Normative compatible schema and publication correction
+Amendment ID: `mobileworld.g1.replay-capsule/contract-v1-amendment-1`
+Amends: `mobileworld.g1.replay-capsule/contract-v1`
+Authorization: `DECISION_LOG.md` D-024
+Protocol: `mobileworld.g1.causal-replay/protocol-v1` (unchanged)
+Portable contract: `mobileworld.g1.portable-sentinel/contract-v1` (unchanged)
 Decision date: 2026-08-27 UTC
 
 ## 1. Correction
