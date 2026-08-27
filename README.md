@@ -16,21 +16,25 @@ gate and rubric tracker are proposed work; they are not implemented results.
 
 ## Project status
 
-Status as of 2026-08-26:
+Status as of 2026-08-27:
 
 | Workstream | Status | Scope |
 | --- | --- | --- |
 | Runtime audit collector | Implemented and validated for the completed studies | Default-off, passive, fail-open, event-sourced, append-only, and label-free capture of exact application-layer model I/O and `S_t -> I_t -> P_t -> A_t -> R_t -> S_{t+1}` |
 | Epic 1: motivation investigation | **Complete** | Six separately reported, integrity-validated 117-task MobileWorld datasets, exact history reconstruction, outcome-blind MHR and local-harm audits, and an outcome-aware observational failure-link review |
 | G1.1: causal-replay protocol and registry | **Complete** | CPU-only frozen protocol, schemas, model/config manifest, pre-gold case registry, controls, and locked analysis plan; no treatment response was generated |
-| G1.2: portable Sentinel contract | **Next; being prepared separately** | Planned canonical History IR/Core, history-family codecs, provider-codec interface, protocol validation, and derived sidecar contracts for curated transformations |
+| G1.2: portable Sentinel contract | **Complete** | CPU-only canonical History IR/Core, codec/provider interfaces, fail-closed validation, schemas, sidecars, and six-family fixture conformance |
+| G1.3: immutable decision capsules | **Complete** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
 
-The intended G1.2 scope is contract and feasibility work, not model/provider
-invocation, GPU use, GUI action execution, automatic truth inference, or an
-online Sentinel. Its phase decision and implementation-scope updates are being
-prepared in a separate change. This README records project direction but does
-not authorize G1.2 work; until those authoritative files land, the checked-in
-AGENTS, STATUS, and DECISION_LOG boundaries apply.
+G1.2 is merged and accepted. ALE-321 / G1.3 formally froze and published all
+190 targets—152 strict-MHR candidates plus 38 selected clean controls—as
+deterministic, self-validating capsules with zero exclusions, without changing
+Collector v1 or reconstructing treatment requests. The separate 38 reserve
+clean controls remain census-only and out of capsule/exclusion scope. G1.3 was
+offline and CPU-only: no model/provider invocation, GPU, GUI/action/replay,
+automatic truth inference, intervention choice, or online Sentinel occurred.
+ALE-322 / G1.4 remains unstarted and unapproved. The checked-in AGENTS, STATUS,
+and DECISION_LOG remain authoritative.
 
 ## Epic 1 results
 
@@ -78,10 +82,11 @@ AgentSentinel/
 └── proposal-*.md                # long-term method proposal and presentation material
 ```
 
-The intended portable G1 implementation is planned as a separate package rather
-than an extension of `sentinel_mvp`; that directory is retained only as a
-legacy reference for curated transformation semantics. The authoritative phase
-decision will lock the import boundary when the separate G1.2 change lands.
+The portable G1 contract is implemented under
+`MobileWorld/src/mobile_world/offline/causal_replay/`, independently of
+`sentinel_mvp`; that directory remains only a legacy reference. G1.3 adds a
+separate offline capsule-materialization layer and does not modify the accepted
+G1.2 contract.
 
 ## Working in this repository
 
@@ -94,6 +99,12 @@ protocol and locked analysis plan are
 [`G1_CAUSAL_REPLAY_PROTOCOL_V1.md`](mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md)
 and
 [`G1_LOCKED_ANALYSIS_PLAN_V1.md`](mobileworld_audit_handoff/G1_LOCKED_ANALYSIS_PLAN_V1.md).
+The accepted portable contract and the active capsule contract are
+[`G1_PORTABLE_SENTINEL_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_PORTABLE_SENTINEL_CONTRACT_V1.md)
+and
+[`G1_REPLAY_CAPSULE_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1.md);
+the five G1.3 machine schemas live under
+[`schemas/g1_3/`](mobileworld_audit_handoff/schemas/g1_3/).
 
 Raw collections, derived audit artifacts, screenshots, and replay outputs must
 remain outside the Git repository in restricted, versioned data roots. Git

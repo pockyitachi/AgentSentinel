@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_3/field_visibility.schema.json",
+  "title": "G1.3 Replay Capsule Field Visibility Policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "default_policy",
+    "classification_complete",
+    "overlap_policy",
+    "rules",
+    "curator_channels",
+    "renderer_input_roots",
+    "harness_input_roots",
+    "forbidden_runtime_roots",
+    "validator_metadata_roots",
+    "validator_metadata_consumers",
+    "validator_metadata_direct_provider_input"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.g1.replay-capsule.field-visibility/v1"
+    },
+    "default_policy": {"const": "DENY"},
+    "classification_complete": {"const": true},
+    "overlap_policy": {"const": "ROOTS_NON_OVERLAPPING"},
+    "rules": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/rule",
+          "properties": {
+            "classification": {"const": "FROZEN_MODEL_VISIBLE"},
+            "root_json_pointer": {"const": "/runtime/model_visible"},
+            "allowed_consumers": {
+              "const": ["HISTORY_CODEC", "PROTOCOL_VALIDATOR"]
+            },
+            "mutable": {"const": false},
+            "may_reference_post_cutoff": {"const": false},
+            "direct_provider_input": {"const": false}
+          }
+        },
+        {
+          "$ref": "#/$defs/rule",
+          "properties": {
+            "classification": {"const": "FROZEN_NON_HISTORY_ENVELOPE"},
+            "root_json_pointer": {"const": "/runtime/non_history_envelope"},
+            "allowed_consumers": {
+              "const": ["REPLAY_HARNESS", "PROTOCOL_VALIDATOR"]
+            },
+            "mutable": {"const": false},
+            "may_reference_post_cutoff": {"const": false},
+            "direct_provider_input": {"const": false}
+          }
+        },
+        {
+          "$ref": "#/$defs/rule",
+          "properties": {
+            "classification": {"const": "MUTABLE_HISTORY_TREATMENT"},
+            "root_json_pointer": {"const": "/runtime/treatment_surface"},
+            "allowed_consumers": {
+              "const": [
+                "HISTORY_CODEC",
+                "PROTOCOL_VALIDATOR",
+                "TRANSFORMATION_CURATOR"
+              ]
+            },
+            "mutable": {"const": true},
+            "may_reference_post_cutoff": {"const": false},
+            "direct_provider_input": {"const": false}
+          }
+        },
+        {
+          "$ref": "#/$defs/rule",
+          "properties": {
+            "classification": {"const": "CURATOR_ONLY"},
+            "root_json_pointer": {"const": "/curator_only"},
+            "allowed_consumers": {
+              "const": [
+                "ACTION_GOLD_CURATOR",
+                "TRANSFORMATION_CURATOR",
+                "PROTOCOL_VALIDATOR"
+              ]
+            },
+            "mutable": {"const": false},
+            "may_reference_post_cutoff": {"const": false},
+            "direct_provider_input": {"const": false}
+          }
+        },
+        {
+          "$ref": "#/$defs/rule",
+          "properties": {
+            "classification": {"const": "POST_ACTION_AUDIT_ONLY"},
+            "root_json_pointer": {"const": "/post_action_audit"},
+            "allowed_consumers": {"const": ["AUDIT_VALIDATOR"]},
+            "mutable": {"const": false},
+            "may_reference_post_cutoff": {"const": true},
+            "direct_provider_input": {"const": false}
+          }
+        }
+      ],
+      "items": false
+    },
+    "curator_channels": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/curatorChannel",
+          "properties": {
+            "channel": {"const": "ACTION_GOLD"},
+            "root_json_pointer": {"const": "/curator_only/action_gold"},
+            "allowed_consumer": {"const": "ACTION_GOLD_CURATOR"},
+            "history_visible": {"const": false}
+          }
+        },
+        {
+          "$ref": "#/$defs/curatorChannel",
+          "properties": {
+            "channel": {"const": "TRANSFORMATION"},
+            "root_json_pointer": {"const": "/curator_only/transformation"},
+            "allowed_consumer": {"const": "TRANSFORMATION_CURATOR"},
+            "history_visible": {"const": true}
+          }
+        }
+      ],
+      "items": false
+    },
+    "renderer_input_roots": {
+      "const": ["/runtime/model_visible", "/runtime/treatment_surface"]
+    },
+    "harness_input_roots": {
+      "const": ["/runtime/non_history_envelope"]
+    },
+    "forbidden_runtime_roots": {
+      "const": [
+        "/unit",
+        "/source_provenance",
+        "/curator_only",
+        "/post_action_audit",
+        "/field_visibility",
+        "/artifact_closure",
+        "/integrity_binding",
+        "/safety"
+      ]
+    },
+    "validator_metadata_roots": {
+      "const": [
+        "/capsule_id",
+        "/protocol_version",
+        "/portable_contract_version",
+        "/issue",
+        "/story",
+        "/curated",
+        "/deployment_prediction",
+        "/unit",
+        "/source_provenance",
+        "/field_visibility",
+        "/artifact_closure",
+        "/integrity_binding",
+        "/safety"
+      ]
+    },
+    "validator_metadata_consumers": {
+      "const": ["PROTOCOL_VALIDATOR", "AUDIT_VALIDATOR"]
+    },
+    "validator_metadata_direct_provider_input": {
+      "const": false
+    }
+  },
+  "$defs": {
+    "classification": {
+      "enum": [
+        "FROZEN_MODEL_VISIBLE",
+        "FROZEN_NON_HISTORY_ENVELOPE",
+        "MUTABLE_HISTORY_TREATMENT",
+        "CURATOR_ONLY",
+        "POST_ACTION_AUDIT_ONLY"
+      ]
+    },
+    "consumer": {
+      "enum": [
+        "HISTORY_CODEC",
+        "REPLAY_HARNESS",
+        "PROTOCOL_VALIDATOR",
+        "ACTION_GOLD_CURATOR",
+        "TRANSFORMATION_CURATOR",
+        "AUDIT_VALIDATOR"
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "root_json_pointer",
+        "allowed_consumers",
+        "mutable",
+        "may_reference_post_cutoff",
+        "direct_provider_input"
+      ],
+      "properties": {
+        "classification": {"$ref": "#/$defs/classification"},
+        "root_json_pointer": {
+          "type": "string",
+          "pattern": "^/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])+)*$"
+        },
+        "allowed_consumers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/consumer"}
+        },
+        "mutable": {"type": "boolean"},
+        "may_reference_post_cutoff": {"type": "boolean"},
+        "direct_provider_input": {"const": false}
+      }
+    },
+    "curatorChannel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channel",
+        "root_json_pointer",
+        "allowed_consumer",
+        "history_visible",
+        "natural_target_output_visible",
+        "later_trajectory_visible",
+        "event_cutoff_policy"
+      ],
+      "properties": {
+        "channel": {"enum": ["ACTION_GOLD", "TRANSFORMATION"]},
+        "root_json_pointer": {
+          "type": "string",
+          "pattern": "^/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])+)*$"
+        },
+        "allowed_consumer": {"$ref": "#/$defs/consumer"},
+        "history_visible": {"type": "boolean"},
+        "natural_target_output_visible": {"const": false},
+        "later_trajectory_visible": {"const": false},
+        "event_cutoff_policy": {"const": "AT_OR_BEFORE_REQUEST_CUTOFF"}
+      }
+    }
+  }
+}

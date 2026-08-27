@@ -23,23 +23,26 @@ next action.
 
 Epic 1 is complete: six host-native history representations were collected and
 audited across 702 MobileWorld model-task cases. G1.1's immutable pre-gold
-causal-replay protocol and registry are also complete.
+causal-replay protocol/registry and G1.2's portable contract are also complete.
 
-The next workstream, ALE-320 / G1.2, is being prepared separately as a
-portable, CPU-only contract:
-canonical History IR/Core, history-family codecs, a provider-codec interface,
-pre-provider protocol validation, and derived sidecars. This legacy package
-must not be treated as that formal implementation. A future formal package may
-migrate independently verified semantics from here, including span/evidence provenance,
-KEEP/DROP/REPLACE/ARCHIVE/KEEP_UNCERTAIN behavior, raw immutability, reversible
-mappings, and fail-closed treatment validation.
+The accepted portable package lives at
+`MobileWorld/src/mobile_world/offline/causal_replay/`; this legacy package must
+not be treated as that formal implementation. ALE-321 / G1.3 completed and
+formally published a separate CPU-only offline capsule layer from frozen
+Collector v1 artifacts. The formal G1.3 implementation does not import this
+legacy package and does not modify its legacy code, tests, or fixtures; this
+README-only scope synchronization does not change the prototype's behavior.
 
-The intended G1.2 scope applies curated Transformation Plans with
-`deployment_prediction=false`; it does not include automatic claim
-extraction, factual verification, correction generation, provider/model
-invocation, GUI action execution, or live runtime interception. Its phase
-decision and scope-file updates are being prepared in a separate change. This
-README is not implementation authorization.
+G1.3 targets exactly 190 frozen units: 152 strict-MHR candidates plus 38
+selected clean controls. The separate 38 reserve clean controls are census-only
+and produce neither a capsule nor an exclusion.
+
+G1.3 does not apply a treatment or choose a Transformation Plan. It freezes
+exact recorded decision inputs and visibility boundaries with
+`deployment_prediction=false`; it does not include automatic claim extraction,
+factual verification, correction generation, provider/model invocation, GPU,
+GUI/action/replay, or live runtime interception. This README is not broader
+implementation authorization. ALE-322 / G1.4 remains unstarted and unapproved.
 
 See the [project overview](../README.md), [current status](../mobileworld_audit_handoff/STATUS.md),
 and [G1 causal-replay protocol](../mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md).
