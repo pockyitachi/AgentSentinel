@@ -46,6 +46,13 @@ adjudication 与 formal exporter 仍待完成。所有 provider/external-network
 MobileWorld-generated-action/treatment 路径保持禁用；owner-started loopback annotation HTTP 与
 human curation clicks 是 D-029 唯一例外。G1.7 与任何 live/GPU owner 授权仍未完成。
 
+**D-030 已在 commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405` 增加隔离的
+`SOLO_FIRST_PASS`，供当前唯一一位真实 curator 做非正式 precursor。** 它强制全 190 条
+ACTION_GOLD → 全 190 条 TRANSFORMATION → 全 190 条 preliminary CONSISTENCY_AUDIT 的阶段顺序，
+使用独立 root/key/manifest/journal，且所有 independence/resolution/promotion/export/admission/
+replay authority 均为 false。当前 owner-authorized tmux 仅在 `127.0.0.1:8766` 运行该单进程
+网页；这不改变 ALE-324 的未完成状态，也不能替代未来真实独立双审。
+
 已确认的工程决策：
 
 ```text
@@ -810,3 +817,15 @@ Owner approval required: no additional approval for retaining this validated CPU
 - 未来 Sentinel 的 rubric template 已约定在任务开始时由 task 生成并版本化；运行中更新 milestone state，不是每步静默重生成 rubric。允许何时显式发布 rubric 新版本仍留给后续实验；不属于本次 collector 实现。
 
 这些问题不能被用来拖延label-free raw collection，因为raw schema的目的就是让后续定义可改变。
+
+```text
+Date: 2026-08-28 UTC
+ALE-324 / G1.6 one-person precursor checkpoint: D-030 and contract amendment `mobileworld.g1.gold-history-intervention-solo-first-pass/amendment-v1` are implemented at commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405` (`feat(g1): add nonformal solo curation pass`). The story remains `IN_PROGRESS_HUMAN_CURATION_REQUIRED`; operational mode is `SOLO_FIRST_PASS / NON_FORMAL / NOT_PROMOTABLE`, not formal G1.6 completion.
+Scope and isolation: one canonical principal may use the three `*_PRIMARY` UI surfaces only in the separate solo workspace. The runtime enforces all 190 ACTION_GOLD locks before any TRANSFORMATION packet/image/preview/draft/lock, then all 190 TRANSFORMATION locks before preliminary CONSISTENCY_AUDIT. Solo uses an atomic write-once mode claim, `solo-assignment-key.bin`, `solo-first-pass-workspace-manifest.json`, and `solo-first-pass-events.jsonl`; formal and solo bootstrap are mutually exclusive even under a forced race. Every solo event and precursor receipt fixes independent-review, resolution, adjudication, promotion, formal-export, admission, provider, treatment, replay, and seal authority false. Exact transport retry of an existing immutable lock is idempotent; a future-stage lock remains `SOLO_STAGE_BLOCKED` before payload/token validation.
+Validation on the committed bytes: the G1.6 focused plus tokenizer suites returned `99 passed in 38.50s`; the G1.5 plus G1.1/G1.2 regression command returned `121 passed in 4.97s`; the G1.3 regression returned `83 passed in 212.50s`; and the complete MobileWorld suite returned `1406 passed in 312.72s`. Ruff check passed, Ruff format reported 11 files already formatted, mypy reported success over 9 source files, compileall exited 0, seven G1.6 schemas passed Draft 2020-12 meta-validation, and git diff checks passed. Independent cold review returned GO with no remaining reproducible P1/P2; its forced mode-claim race passed 30/30 and all premature-stage HTTP routes failed closed. Node was unavailable for a separate JS parser run; focused static/UI route tests cover the shipped local assets.
+Implementation hashes: `solo.py` `d83af8ce22766db09e2b653e1304d5a5d9ad9e5ce74bc2fd94864187705525ea`; `server.py` `5ce2c0d0a30dacdeb641ab93301b4b1cf7ecd0b398beb44c59f8e8c0d58e65c0`; `store.py` `38a293e572ffb428e35a7997f85134000c69fd0277e088dd77ffe70e53afc247`; `web/app.js` `c36663bbf997a4c966e38a23a034344a8701d8b26f2a5b93d163aa9f4091f0dd`; focused test `67646c07121428069fa6ecaa80dfcda330a07e1a5f572cc4bec774d5f0b84c38`; amendment `fe9f9c59275a70be81ac53beec6bc7e5b19d8d0feb23f3ba364b8b4019c1c031`; solo event schema `507f592ea20c9a7c35ae9b47424fd0e3901e7ae48faaab87d98a78812ec1f1a3`; solo workspace schema `c51ecae32c0ad31cf550b4b4fa3f7e2ab63de25aa4ba9117567326508c35268b`.
+Operational state at checkpoint: tmux session `g1_6_solo_first_pass` runs one Python process bound only to `127.0.0.1:8766`, with workers=1, reload=false, proxy_headers=false, local assets, and both hash-verified CPU tokenizer counters available. The repo-external workspace is `/shared/linqiang/mobileworld_causal_replay_data/g1_6/solo-first-pass-workspace-v1`; workspace ID is `g1workspace-2163636f9fbe79ea490c723f`, immutable manifest SHA-256 is `1790df32c0b8d21bdb2583c68fd75457aad13d1ccb2853d3deb0adfc420b3d35`, and codec-gate receipt SHA-256 is `955ec54df6dc8b855d8241d19278dd83a238f27d0b524d9df1958fe0d51a128b`. Current phase is ACTION_GOLD and no event journal exists yet. The mode-0600 registry is repo-external; its generated access secret was not printed, logged, committed, or copied into the journal.
+Authorized access boundary: the owner may use only `ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8766:127.0.0.1:8766 <normal-host-alias>` and then browse `http://127.0.0.1:8766`. Reverse/dynamic forwarding, wildcard binds, GatewayPorts, proxies, and external hosting remain forbidden. No model/provider client, external network, GPU probe/use, model weights, replay, treatment response, or MobileWorld/generated GUI/tool/action was invoked. Human browser clicks are curation input only.
+Remaining gates: 570 non-formal solo locks may be collected but never promoted. Formal ALE-324 still requires a new root/key/registry, genuinely independent PRIMARY/SECONDARY reviewers, necessary channel-bound adjudicators, formal exporter and validators, 190-unit closure, blinded catalog/report, admission, and seal. GPU/live work remains in its separately unauthorized backlog.
+Owner approval required: no additional approval for keeping this loopback-only solo process running under the recorded tmux/SSH boundary; yes for any formal expansion, external network, model/provider, GPU, replay/action/treatment, formal export/admission/seal, or ALE-324 completion claim.
+```

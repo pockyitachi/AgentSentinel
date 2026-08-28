@@ -17,7 +17,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
 | ALE-322 / G1.4 | **CPU/fake checkpoint 与 inert live-proof code preparation 已实现；live proof 延后** | commits `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`、`74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d` 已验证 runner/fake path 和 D-026 no-execution preparation；全部 readiness/authorization 与 safety fields 仍为 false，无 formal publication，story 仍未完成 |
 | ALE-323 / G1.5 | **CPU History Codec checkpoint 已实现；live smoke 延后** | Qwen flat-progress 与 MAI raw-replay 的 exact extraction/render/diff/reversibility、arbitrary human-draft five-arm preview、secret-free CPU publication 和 G1.4 fail-closed interface 已验证；`live_ready=false`，10-call GPU backlog 未授权，story 仍未完成 |
-| ALE-324 / G1.6 | **CPU/manual annotation workspace 已实现；人工标注与 formal export 待完成** | 私有 loopback-only 网页覆盖 190 个盲化 packet 的 action gold、transformation、consistency 与独立 adjudication；G1.5 preview/tokenizer 只读绑定，journal repo-external append-only；无 provider/GPU/replay/action |
+| ALE-324 / G1.6 | **单人非正式 first pass 已启动；独立双审与 formal export 待完成** | D-030 以隔离 root/key/journal 提供 Action → Transformation → Consistency 的 190-unit 单人 precursor；所有记录不计独立 review、不可晋升/正式导出；无 provider/GPU/replay/action |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -176,6 +176,14 @@ history、target-only diff 与 reversible mapping。
 owner 启动步骤、9-role registry 形状和 completion boundary 见
 [`G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`](G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md)。
 
+D-030 与
+[`G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`](G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md)
+为当前仅一位真实 curator 的情况增加机械隔离的 `SOLO_FIRST_PASS`。同一 principal 必须先锁定
+全部 190 条 Action Gold，再锁定全部 190 条 Transformation，最后才可查看 preliminary
+Consistency。它使用独立 mode marker、assignment key、manifest 与 journal；formal review、
+resolution、adjudication、promotion、export、admission、seal 与 replay authority 全为 false。
+未来正式工作必须另建 blind workspace/registry/key，不能把 solo 记录原地晋升。
+
 当前精确状态是 `IN_PROGRESS_HUMAN_CURATION_REQUIRED`：代码/workspace checkpoint 不是
 formal gold publication。190 个单元仍需真实 PRIMARY/SECONDARY review 与必要 adjudication；
 formal action bundle、Transformation Plan、admission/blinded catalog/seal 还必须在独立 exporter
@@ -208,14 +216,15 @@ formal action bundle、Transformation Plan、admission/blinded catalog/seal 还�
 20. [G1_5_HISTORY_CODEC_CONTRACT_V1.md](G1_5_HISTORY_CODEC_CONTRACT_V1.md)；
 21. [G1_5_HISTORY_CODEC_CAPABILITIES_V1.md](G1_5_HISTORY_CODEC_CAPABILITIES_V1.md)；
 22. [G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md](G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md)；
-23. [G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md](G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md)；
-24. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
-25. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
-26. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
-27. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
-28. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
-29. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
-30. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
+23. [G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md](G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md)；
+24. [G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md](G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md)；
+25. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
+26. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
+27. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
+28. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
+29. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
+30. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
+31. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
 
 三个无 `_v1_1` 后缀的 capsule/manifest/integrity schema 是 byte-frozen 历史 v1，
 不得作为当前 formal G1 contract 使用。
@@ -263,6 +272,7 @@ mobileworld_audit_handoff/
 ├── G1_5_HISTORY_CODEC_CAPABILITIES_V1.md
 ├── G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md
 ├── G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md
+├── G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md
 ├── G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md
 ├── g1/
 │   └── frozen registry inputs, model/config manifest, publication lock
@@ -277,7 +287,7 @@ mobileworld_audit_handoff/
 ├── schemas/g1_5/
 │   └── captured-shape fixture, provider-free CPU checkpoint/publication/preview, and coordinate schemas
 ├── schemas/g1_6/
-│   └── annotation workspace/event/proposal, role-projected packet, and browser-preview schemas
+│   └── formal workspace/event/proposal/packet/browser-preview plus additive solo workspace/event schemas
 ├── g1_5/
 │   └── content-addressed CPU manifest, two conformance receipts, preview binding, and no-tokenizer binding
 └── examples/

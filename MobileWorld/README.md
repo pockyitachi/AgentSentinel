@@ -68,9 +68,12 @@
 > fields remain false, `live_code_prepared=true` is not readiness, and no formal
 > run publication exists.
 > ALE-323 now has a provider-free Qwen/MAI History Codec CPU checkpoint, and
-> ALE-324 has a private loopback-only manual-curation workspace checkpoint. The
-> latter collects blinded human reviews and CPU previews only; it is not a
-> formal gold publication. Real model/provider/external-network calls, GPU use,
+> ALE-324 has a private loopback-only manual-curation workspace checkpoint.
+> Commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405` adds the isolated
+> `SOLO_FIRST_PASS` for the currently sole curator: Action Gold, then
+> Transformation, then preliminary Consistency over all 190 units. These locks
+> are explicitly non-formal, do not count as independent reviews, and cannot be
+> promoted or exported as formal evidence. Real model/provider/external-network calls, GPU use,
 > MobileWorld/generated GUI/action execution, live replay, and treatment-response
 > generation remain unauthorized. Human clicks in the private annotation site
 > are curation inputs and are never executed as MobileWorld actions.

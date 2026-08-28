@@ -27,7 +27,7 @@ Status as of 2026-08-28:
 | G1.3: immutable decision capsules | **Complete; v1.1 corrected** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); Amendment 1 adds explicit fail-closed authorization guards; 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
 | G1.4: exact-request replay runner | **CPU/fake checkpoint and inert live-proof code prepared; live proof deferred** | The validated CPU/fake runner now has additive D-026 no-execution preparation for static bindings, no-send descriptors, caller-injected response projection, inert launch plans, and injected-only GPU assessment; all readiness/authorization fields remain false and the story remains incomplete |
 | G1.5: Qwen/MAI History Codecs | **CPU checkpoint implemented; live smoke deferred** | Exact flat-progress/raw-replay extraction, rendering, target-only diff, reversibility, human-bound CPU previews, and a content-bound CPU publication are implemented; no model/provider/GPU path is enabled |
-| G1.6: curated gold workspace | **CPU/manual annotation workspace implemented; human curation and formal export pending** | A private loopback-only website presents every human action-gold, transformation, consistency, and adjudication choice over 190 blinded packets; submissions are append-only and all provider/GPU/replay paths remain disabled |
+| G1.6: curated gold workspace | **One-person non-formal first pass is running; independent review and formal export pending** | The private loopback-only site now has an isolated `SOLO_FIRST_PASS` for the sole curator, ordered Action → Transformation → Consistency across 190 packets; it cannot count as independent review or be promoted/exported, and all provider/GPU/replay paths remain disabled |
 
 G1.2 is merged and accepted. ALE-321 / G1.3 formally froze and published all
 190 targets—152 strict-MHR candidates plus 38 selected clean controls—as
@@ -52,8 +52,10 @@ replay or action. All eight readiness/authorization fields and all nine safety
 fields remain false, no formal run publication exists, and the story state is
 `IN_PROGRESS_LIVE_PROOF_DEFERRED`. ALE-323 / G1.5 now has a provider-free CPU
 History Codec checkpoint, and ALE-324 / G1.6 has a private human-curation
-workspace checkpoint. Neither is a live proof or a completed formal gold
-publication. G1.7 and owner authorization for any live/GPU proof remain
+workspace checkpoint. Commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405`
+adds the D-030 one-person `SOLO_FIRST_PASS`: it is a separate, non-promotable
+precursor journal and never satisfies independent review. Neither checkpoint is
+a live proof or a completed formal gold publication. G1.7 and owner authorization for any live/GPU proof remain
 outstanding. Passing CPU or fake-provider tests must
 not be reported as ALE-322 completion. The checked-in AGENTS, STATUS, and the
 applicable G1.4/G1.5/G1.6 additive decision logs remain authoritative.
