@@ -24,6 +24,8 @@ const WORKFLOW_STATES = [
   "FIRST_PASS_LOCKED", "WAITING_FOR_PREVIOUS_STAGE", "FIRST_PASS_COMPLETE",
 ];
 
+const COORDINATE_DRAG_THRESHOLD_PX = 4;
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -176,7 +178,7 @@ function renderAssignments() {
 function evidenceMarkup(packet) {
   const imageSuffix = state.profile.role === "ADJUDICATOR" ? `?channel=${encodeURIComponent(packet.channel)}` : "";
   const evidence = packet.evidence.map((item) => `<article class="evidence-card"><h3>${escapeHtml(item.evidence_role)}</h3><pre class="evidence-content">${escapeHtml(typeof item.content === "string" ? item.content : JSON.stringify(item.content, null, 2))}</pre><small>${escapeHtml(item.evidence_token)}</small></article>`).join("");
-  const image = `<article class="evidence-card"><h3>当前 GUI · S<sub>t</sub></h3><div class="screenshot-wrap"><img id="target-screenshot" src="/api/assignments/${packet.assignment_id}/image${imageSuffix}" alt="Target-pre GUI screenshot"></div><p class="screenshot-meta">${packet.current_screenshot.width} × ${packet.current_screenshot.height} · 原始像素坐标</p></article>`;
+  const image = `<article class="evidence-card"><h3>当前 GUI · S<sub>t</sub></h3><div class="screenshot-wrap"><img id="target-screenshot" src="/api/assignments/${packet.assignment_id}/image${imageSuffix}" alt="Target-pre GUI screenshot" draggable="false" tabindex="0"><div id="coordinate-selection" class="coordinate-selection" hidden aria-hidden="true"></div></div><p class="screenshot-meta">${packet.current_screenshot.width} × ${packet.current_screenshot.height} · 原始像素坐标；框选模式支持鼠标/触控拖拽，也可依次点击两个角点</p></article>`;
   let history = "";
   if (packet.visibility.history_visible && packet.source_records) {
     history = `<div class="section-label">Captured source history</div>${packet.source_records.map((record, index) => `<article class="history-record" data-record-index="${index}"><header><span>${escapeHtml(record.author_role)}</span><span>record ${index + 1}</span></header><pre data-exact-record="${index}"></pre><div><button class="candidate-chip select-span" data-record="${index}" data-target="focal">选区 → Focal / clean anchor</button><button class="candidate-chip select-span" data-record="${index}" data-target="oracle">选区 → Oracle</button><button class="candidate-chip select-span" data-record="${index}" data-target="sham">选区 → Sham</button><button class="candidate-chip select-span" data-record="${index}" data-target="protected">选区 → Protected</button><button class="candidate-chip select-span" data-record="${index}" data-target="repair">选区 → Delimiter repair</button></div></article>`).join("")}`;
@@ -237,8 +239,8 @@ function predicateFields(predicate, index, packet) {
   const evidenceChecks = packet.evidence.map((item) => `<label><input type="checkbox" data-p="evidence_id" value="${item.evidence_token}" ${(predicate.evidence_ids || []).includes(item.evidence_token) ? "checked" : ""}>${escapeHtml(item.evidence_role)}</label>`).join("");
   let fields = "";
   if (!kind) fields = '<p class="screenshot-meta">先明确选择 predicate kind；页面不会替你推断动作或区域。</p>';
-  if (kind === "POINT_REGION") fields = `${regionFields("region", predicate.regions?.[0], predicate.regions?.slice(1) || [])}<div class="field-row"><label>Tolerance px<input type="number" min="0" step="1" data-p="tolerance_px" value="${predicate.tolerance_px ?? ""}"></label><button type="button" class="add-button coordinate-pick" data-coordinate="${index}:region">在截图上点两角并追加 region</button></div>`;
-  if (kind === "DRAG_REGION") fields = `<p class="screenshot-meta">Start region set</p>${regionFields("start", predicate.start_regions?.[0], predicate.start_regions?.slice(1) || [])}<button type="button" class="add-button coordinate-pick" data-coordinate="${index}:start">截图点两角并追加 start</button><p class="screenshot-meta">End region set</p>${regionFields("end", predicate.end_regions?.[0], predicate.end_regions?.slice(1) || [])}<button type="button" class="add-button coordinate-pick" data-coordinate="${index}:end">截图点两角并追加 end</button><div class="check-grid">${state.config.directions.map((value) => `<label><input type="checkbox" data-p="allowed_direction" value="${value}" ${(predicate.allowed_directions || []).includes(value) ? "checked" : ""}>${value}</label>`).join("")}</div><div class="field-row"><label>Min displacement px<input type="number" min="0" step="1" data-p="minimum_displacement_px" value="${predicate.minimum_displacement_px ?? ""}"></label><label>Tolerance px<input type="number" min="0" step="1" data-p="tolerance_px" value="${predicate.tolerance_px ?? ""}"></label></div>`;
+  if (kind === "POINT_REGION") fields = `${regionFields("region", predicate.regions?.[0], predicate.regions?.slice(1) || [])}<div class="field-row"><label>Tolerance px<input type="number" min="0" step="1" data-p="tolerance_px" value="${predicate.tolerance_px ?? ""}"></label><button type="button" class="add-button coordinate-pick" data-coordinate="${index}:region">在截图上拖拽框选并追加 region</button></div>`;
+  if (kind === "DRAG_REGION") fields = `<p class="screenshot-meta">Start region set</p>${regionFields("start", predicate.start_regions?.[0], predicate.start_regions?.slice(1) || [])}<button type="button" class="add-button coordinate-pick" data-coordinate="${index}:start">截图拖拽框选并追加 start</button><p class="screenshot-meta">End region set</p>${regionFields("end", predicate.end_regions?.[0], predicate.end_regions?.slice(1) || [])}<button type="button" class="add-button coordinate-pick" data-coordinate="${index}:end">截图拖拽框选并追加 end</button><div class="check-grid">${state.config.directions.map((value) => `<label><input type="checkbox" data-p="allowed_direction" value="${value}" ${(predicate.allowed_directions || []).includes(value) ? "checked" : ""}>${value}</label>`).join("")}</div><div class="field-row"><label>Min displacement px<input type="number" min="0" step="1" data-p="minimum_displacement_px" value="${predicate.minimum_displacement_px ?? ""}"></label><label>Tolerance px<input type="number" min="0" step="1" data-p="tolerance_px" value="${predicate.tolerance_px ?? ""}"></label></div>`;
   if (kind === "TEXT_VARIANTS") fields = `<div class="field-row"><label>Field<input data-p="field" value="${escapeHtml(predicate.field || "")}"></label><label>Case sensitivity<select data-p="case_sensitive"><option value="">— 人工选择 —</option><option value="true" ${predicate.case_sensitive === true ? "selected" : ""}>case-sensitive</option><option value="false" ${predicate.case_sensitive === false ? "selected" : ""}>case-insensitive</option></select></label></div><label>允许值（JSON string array；保留每个值内的 exact 换行与 NFC bytes）<textarea data-p="allowed_values">${escapeHtml(JSON.stringify(predicate.allowed_values || [], null, 2))}</textarea></label>`;
   if (kind === "DIRECTION_SET") fields = `<div class="check-grid">${state.config.directions.filter((value) => value !== "any").map((value) => `<label><input type="checkbox" data-p="allowed_direction" value="${value}" ${(predicate.allowed_directions || []).includes(value) ? "checked" : ""}>${value}</label>`).join("")}</div>`;
   if (kind === "EXACT_NORMALIZED_ACTION") fields = `<div class="section-label">Production normalized action fields</div><div data-exact-action-fields>${exactActionFields(predicate)}</div>`;
@@ -246,6 +248,7 @@ function predicateFields(predicate, index, packet) {
 }
 
 function renderPredicates() {
+  cancelCoordinatePicker();
   const root = $("#predicate-list");
   if (!root) return;
   const packet = state.active.data.packet;
@@ -259,7 +262,15 @@ function renderPredicates() {
   $$("[data-remove]", root).forEach((button) => { button.onclick = () => { const index = Number(button.dataset.remove); try { syncPredicatesExcept(index); state.predicates.splice(index, 1); renderPredicates(); } catch (error) { toast(error.message, true); } }; });
   $$("select[data-p=predicate_kind]", root).forEach((select) => { select.onchange = () => { const card = select.closest(".predicate-card"); const index = Number(card.dataset.index); try { syncPredicatesExcept(index); state.predicates[index] = {predicate_kind: select.value, action_type: "", evidence_ids: [], rationale: "", human_selected: false}; renderPredicates(); } catch (error) { select.value = state.predicates[index]?.predicate_kind || ""; toast(error.message, true); } }; });
   $$("select[data-p=action_type]", root).forEach((select) => { select.onchange = () => { const card = select.closest(".predicate-card"); const kind = card.querySelector("select[data-p=predicate_kind]")?.value; if (kind === "EXACT_NORMALIZED_ACTION") { const target = card.querySelector("[data-exact-action-fields]"); target.innerHTML = exactActionFields({action_type: select.value, normalized_action: select.value ? emptyNormalizedAction(select.value) : null, _exact_fields_confirmed: false}); } }; });
-  $$(".coordinate-pick", root).forEach((button) => { button.onclick = () => { const [index, target] = button.dataset.coordinate.split(":"); state.coordinateTarget = {index: Number(index), target, firstCorner: null}; $(".screenshot-wrap")?.classList.add("picking"); toast("请在左侧截图明确点击矩形第一个角点"); }; });
+  $$(".coordinate-pick", root).forEach((button) => { button.onclick = () => {
+    cancelCoordinatePicker();
+    const [index, target] = button.dataset.coordinate.split(":");
+    state.coordinateTarget = {index: Number(index), target, firstCorner: null, pointerId: null, dragStart: null};
+    const image = $("#target-screenshot");
+    image?.closest(".screenshot-wrap")?.classList.add("picking");
+    image?.focus({preventScroll: true});
+    toast("请在左侧截图按住并拖出矩形；也可依次点击两个角点");
+  }; });
 }
 
 function readRegion(card, prefix) {
@@ -582,49 +593,179 @@ async function requestTransformationPreview() {
   }
 }
 
+function coordinatePoint(event, image, packet) {
+  const bounds = image.getBoundingClientRect();
+  if (!(bounds.width > 0 && bounds.height > 0)) throw new Error("截图尚未完成布局，请稍后重试");
+  const renderedX = Math.min(bounds.width, Math.max(0, event.clientX - bounds.left));
+  const renderedY = Math.min(bounds.height, Math.max(0, event.clientY - bounds.top));
+  return {
+    x: Math.round(renderedX * packet.current_screenshot.width / bounds.width),
+    y: Math.round(renderedY * packet.current_screenshot.height / bounds.height),
+    renderedX,
+    renderedY,
+    ratioX: renderedX / bounds.width,
+    ratioY: renderedY / bounds.height,
+  };
+}
+
+function normalizedCoordinateRegion(start, end) {
+  return {
+    x_min: Math.min(start.x, end.x),
+    y_min: Math.min(start.y, end.y),
+    x_max: Math.max(start.x, end.x),
+    y_max: Math.max(start.y, end.y),
+  };
+}
+
+function drawCoordinateSelection(start, end, anchor = false) {
+  const overlay = $("#coordinate-selection");
+  if (!overlay) return;
+  overlay.style.left = `${100 * (anchor ? start.ratioX : Math.min(start.ratioX, end.ratioX))}%`;
+  overlay.style.top = `${100 * (anchor ? start.ratioY : Math.min(start.ratioY, end.ratioY))}%`;
+  overlay.style.width = anchor ? "8px" : `${100 * Math.abs(end.ratioX - start.ratioX)}%`;
+  overlay.style.height = anchor ? "8px" : `${100 * Math.abs(end.ratioY - start.ratioY)}%`;
+  overlay.style.transform = anchor ? "translate(-50%, -50%)" : "";
+  overlay.classList.toggle("anchor", anchor);
+  overlay.hidden = false;
+}
+
+function hideCoordinateSelection() {
+  const overlay = $("#coordinate-selection");
+  if (!overlay) return;
+  overlay.hidden = true;
+  overlay.classList.remove("anchor");
+  for (const property of ("left top width height transform").split(" ")) overlay.style[property] = "";
+}
+
+function releaseCoordinateCapture(image, pointerId) {
+  if (!image || pointerId === null || pointerId === undefined) return;
+  try {
+    if (typeof image.hasPointerCapture === "function" && image.hasPointerCapture(pointerId)) image.releasePointerCapture(pointerId);
+  } catch (_error) {
+    // The browser may already have released capture during pointer cancellation.
+  }
+}
+
+function resetCoordinateGesture(message = null, error = false) {
+  const image = $("#target-screenshot");
+  const target = state.coordinateTarget;
+  releaseCoordinateCapture(image, target?.pointerId);
+  if (target) {
+    target.pointerId = null;
+    target.dragStart = null;
+    target.firstCorner = null;
+  }
+  image?.closest(".screenshot-wrap")?.classList.remove("dragging");
+  hideCoordinateSelection();
+  if (message) toast(message, error);
+}
+
+function cancelCoordinatePicker(message = null, error = false) {
+  const image = $("#target-screenshot");
+  releaseCoordinateCapture(image, state.coordinateTarget?.pointerId);
+  state.coordinateTarget = null;
+  image?.closest(".screenshot-wrap")?.classList.remove("picking", "dragging");
+  hideCoordinateSelection();
+  if (message) toast(message, error);
+}
+
+function writeCoordinateRegion(start, end) {
+  const target = state.coordinateTarget;
+  if (!target) return;
+  const values = normalizedCoordinateRegion(start, end);
+  if (values.x_min === values.x_max || values.y_min === values.y_max) throw new Error("框选必须形成非空矩形");
+  const card = $(`.predicate-card[data-index="${target.index}"]`);
+  if (!card) throw new Error("目标 predicate 已变化，请重新进入框选模式");
+  const prefix = target.target;
+  const coordinateInputs = Object.fromEntries(["x_min", "y_min", "x_max", "y_max"].map((key) => [key, card.querySelector(`[data-p="${prefix}_${key}"]`)]));
+  const shapeInput = card.querySelector(`[data-p="${prefix}_shape"]`);
+  if (!shapeInput || Object.values(coordinateInputs).some((input) => !input)) throw new Error("目标 region 表单不完整，请重新选择 predicate");
+  const primaryEmpty = Object.values(coordinateInputs).every((input) => input.value === "");
+  if (primaryEmpty) {
+    shapeInput.value = "BOUNDING_BOX";
+    Object.entries(values).forEach(([key, value]) => { coordinateInputs[key].value = value; });
+  } else {
+    const additional = card.querySelector(`[data-p="${prefix}_additional_regions"]`);
+    if (!additional) throw new Error("Additional region 表单不完整，请重新选择 predicate");
+    const regions = JSON.parse(additional.value || "[]");
+    if (!Array.isArray(regions)) throw new Error("Additional region set 必须是 JSON array");
+    regions.push({shape: "BOUNDING_BOX", ...values});
+    additional.value = JSON.stringify(regions, null, 2);
+  }
+  cancelCoordinatePicker();
+  toast(`已写入人工框选 [${values.x_min},${values.y_min}]–[${values.x_max},${values.y_max}]`);
+}
+
 function bindCoordinatePicker(packet) {
   const image = $("#target-screenshot");
   if (!image) return;
-  image.onclick = (event) => {
-    if (!state.coordinateTarget) return;
-    const bounds = image.getBoundingClientRect();
-    const x = Math.round((event.clientX - bounds.left) * packet.current_screenshot.width / bounds.width);
-    const y = Math.round((event.clientY - bounds.top) * packet.current_screenshot.height / bounds.height);
-    const card = $(`.predicate-card[data-index="${state.coordinateTarget.index}"]`);
-    const prefix = state.coordinateTarget.target;
-    if (!state.coordinateTarget.firstCorner) {
-      state.coordinateTarget.firstCorner = {x, y};
-      toast(`第一个角点 (${x}, ${y}) 已记录；请明确点击对角点`);
-      return;
+  image.onpointerdown = (event) => {
+    const target = state.coordinateTarget;
+    if (!target || target.pointerId !== null || event.isPrimary === false || (event.pointerType === "mouse" && event.button !== 0)) return;
+    try {
+      const point = coordinatePoint(event, image, packet);
+      target.pointerId = event.pointerId;
+      target.dragStart = point;
+      image.closest(".screenshot-wrap")?.classList.add("dragging");
+      if (typeof image.setPointerCapture === "function") image.setPointerCapture(event.pointerId);
+      drawCoordinateSelection(point, point);
+      event.preventDefault();
+    } catch (error) {
+      cancelCoordinatePicker(error.message, true);
     }
-    const first = state.coordinateTarget.firstCorner;
-    const values = {x_min: Math.min(first.x, x), y_min: Math.min(first.y, y), x_max: Math.max(first.x, x), y_max: Math.max(first.y, y)};
-    if (values.x_min === values.x_max || values.y_min === values.y_max) {
-      state.coordinateTarget.firstCorner = null;
-      toast("两个角点必须形成非空区域；请重新点击第一个角点", true);
-      return;
+  };
+  image.onpointermove = (event) => {
+    const target = state.coordinateTarget;
+    if (!target || target.pointerId !== event.pointerId || !target.dragStart) return;
+    drawCoordinateSelection(target.dragStart, coordinatePoint(event, image, packet));
+    event.preventDefault();
+  };
+  image.onpointerup = (event) => {
+    const target = state.coordinateTarget;
+    if (!target || target.pointerId !== event.pointerId || !target.dragStart) return;
+    try {
+      const end = coordinatePoint(event, image, packet);
+      const start = target.dragStart;
+      const dragged = Math.hypot(end.renderedX - start.renderedX, end.renderedY - start.renderedY) >= COORDINATE_DRAG_THRESHOLD_PX;
+      target.pointerId = null;
+      target.dragStart = null;
+      releaseCoordinateCapture(image, event.pointerId);
+      image.closest(".screenshot-wrap")?.classList.remove("dragging");
+      if (dragged) {
+        target.firstCorner = null;
+        writeCoordinateRegion(start, end);
+      } else if (target.firstCorner) {
+        const first = target.firstCorner;
+        target.firstCorner = null;
+        writeCoordinateRegion(first, end);
+      } else {
+        target.firstCorner = end;
+        drawCoordinateSelection(end, end, true);
+        toast(`第一个角点 (${end.x}, ${end.y}) 已记录；请点击对角点或重新拖拽`);
+      }
+      event.preventDefault();
+    } catch (error) {
+      cancelCoordinatePicker(error.message, true);
     }
-    const primaryEmpty = ["x_min", "y_min", "x_max", "y_max"].every((key) => card.querySelector(`[data-p="${prefix}_${key}"]`).value === "");
-    if (primaryEmpty) {
-      card.querySelector(`[data-p="${prefix}_shape"]`).value = "BOUNDING_BOX";
-      Object.entries(values).forEach(([key, value]) => { card.querySelector(`[data-p="${prefix}_${key}"]`).value = value; });
-    } else {
-      const additional = card.querySelector(`[data-p="${prefix}_additional_regions"]`);
-      const regions = JSON.parse(additional.value || "[]");
-      if (!Array.isArray(regions)) throw new Error("Additional region set 必须是 JSON array");
-      regions.push({shape: "BOUNDING_BOX", ...values});
-      additional.value = JSON.stringify(regions, null, 2);
-    }
-    state.coordinateTarget = null;
-    $(".screenshot-wrap")?.classList.remove("picking");
-    toast(`已按两次人工点击写入 [${values.x_min},${values.y_min}]–[${values.x_max},${values.y_max}]`);
+  };
+  image.onpointercancel = (event) => {
+    if (state.coordinateTarget?.pointerId !== event.pointerId) return;
+    resetCoordinateGesture("本次框选手势已取消，可直接重新拖拽", true);
+  };
+  image.onlostpointercapture = (event) => {
+    if (state.coordinateTarget?.pointerId !== event.pointerId) return;
+    resetCoordinateGesture("指针离开了框选区域，可直接重新拖拽", true);
+  };
+  image.onkeydown = (event) => {
+    if (event.key !== "Escape" || !state.coordinateTarget) return;
+    cancelCoordinatePicker("已取消框选");
+    event.preventDefault();
   };
 }
 
 async function openAssignment(assignmentId, channel) {
   try {
-    state.coordinateTarget = null;
-    $(".screenshot-wrap")?.classList.remove("picking");
+    cancelCoordinatePicker();
     const query = new URLSearchParams();
     if (state.profile.role === "ADJUDICATOR") query.set("channel", channel);
     const binding = await api(`/api/assignments/${assignmentId}/binding${query.toString() ? `?${query}` : ""}`);
@@ -652,7 +793,7 @@ async function openAssignment(assignmentId, channel) {
 
 async function loadAssignment(assignmentId, channel) {
   try {
-    state.coordinateTarget = null;
+    cancelCoordinatePicker();
     const query = new URLSearchParams();
     if (state.profile.role === "ADJUDICATOR") query.set("channel", channel);
     const data = await api(`/api/assignments/${assignmentId}/packet${query.toString() ? `?${query}` : ""}`);
@@ -800,8 +941,7 @@ async function boot() {
   $("#packet-binding-form").onsubmit = confirmPacketOpen;
   $("#cancel-packet-open").onclick = () => { state.pendingOpen = null; $("#packet-binding-dialog").close(); };
   $("#close-workbench").onclick = () => {
-    state.coordinateTarget = null;
-    $(".screenshot-wrap")?.classList.remove("picking");
+    cancelCoordinatePicker();
     $("#workbench-dialog").close();
   };
   $("#save-draft").onclick = () => persist("draft");

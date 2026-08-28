@@ -137,8 +137,12 @@ textarea { resize: vertical; min-height: 88px; line-height: 1.5; }
 .evidence-card h3, .form-card h3 { font-size: 13px; margin: 0 0 10px; }
 .task-text { white-space: pre-wrap; font-size: 12px; line-height: 1.65; color: #2d3b35; }
 .screenshot-wrap { position: relative; background: #18201d; border-radius: 12px; overflow: hidden; }
-.screenshot-wrap img { width: 100%; height: auto; display: block; }
+.screenshot-wrap img { width: 100%; height: auto; display: block; -webkit-user-drag: none; }
 .screenshot-wrap.picking, .screenshot-wrap.picking img { cursor: crosshair; }
+.screenshot-wrap.picking img { touch-action: none; user-select: none; }
+.coordinate-selection { position: absolute; z-index: 2; box-sizing: border-box; border: 2px solid #0b825d; border-radius: 4px; background: rgba(17, 155, 110, .18); box-shadow: 0 0 0 1px rgba(255,255,255,.9), 0 2px 10px rgba(0,0,0,.22); pointer-events: none; }
+.coordinate-selection.anchor { border-radius: 50%; background: #0b825d; }
+.coordinate-selection[hidden] { display: none; }
 .screenshot-meta { color: var(--muted); font-size: 10px; margin-top: 7px; }
 .packet-binding { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 7px 10px; align-items: baseline; }
 .packet-binding code { overflow-wrap: anywhere; color: var(--muted); font-size: 9px; }

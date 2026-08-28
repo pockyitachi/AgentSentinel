@@ -2349,6 +2349,48 @@ def test_web_assets_are_local_no_store_and_have_no_authoritative_browser_databas
     assert 'data.status?.own_state === "DRAFTING"' in sources["app.js"]
 
 
+def test_coordinate_picker_supports_scaled_pointer_drag_and_two_corner_fallback() -> None:
+    web_root = MOBILEWORLD_SOURCE_ROOT / "mobile_world/offline/gold_curation/web"
+    app = (web_root / "app.js").read_text(encoding="utf-8")
+    styles = (web_root / "styles.css").read_text(encoding="utf-8")
+
+    for marker in (
+        'id="coordinate-selection"',
+        'draggable="false"',
+        "COORDINATE_DRAG_THRESHOLD_PX = 4",
+        "function coordinatePoint(event, image, packet)",
+        "event.clientX - bounds.left",
+        "event.clientY - bounds.top",
+        "packet.current_screenshot.width / bounds.width",
+        "packet.current_screenshot.height / bounds.height",
+        "function normalizedCoordinateRegion(start, end)",
+        "x_min: Math.min(start.x, end.x)",
+        "y_min: Math.min(start.y, end.y)",
+        "x_max: Math.max(start.x, end.x)",
+        "y_max: Math.max(start.y, end.y)",
+        "image.onpointerdown",
+        "image.onpointermove",
+        "image.onpointerup",
+        "image.onpointercancel",
+        "image.onlostpointercapture",
+        "image.setPointerCapture(event.pointerId)",
+        "releaseCoordinateCapture(image, event.pointerId)",
+        "target.pointerId !== null",
+        "event.isPrimary === false",
+        "Math.hypot(end.renderedX - start.renderedX, end.renderedY - start.renderedY)",
+        "target.firstCorner = end",
+        "writeCoordinateRegion(first, end)",
+        'image.closest(".screenshot-wrap")',
+        'event.key !== "Escape"',
+        "在截图上拖拽框选并追加 region",
+    ):
+        assert marker in app
+
+    assert ".screenshot-wrap.picking img { touch-action: none; user-select: none; }" in styles
+    assert ".coordinate-selection" in styles
+    assert ".coordinate-selection[hidden] { display: none; }" in styles
+
+
 def test_dashboard_derives_blocked_invalid_input_from_authoritative_packet_bytes(
     annotation_store: AnnotationStore,
     fake_publication: FakePublication,
