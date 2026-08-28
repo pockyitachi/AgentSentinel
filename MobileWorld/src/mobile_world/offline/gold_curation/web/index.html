@@ -37,6 +37,10 @@
       </aside>
 
       <main class="main">
+        <section id="solo-first-pass-banner" class="solo-first-pass-banner" hidden>
+          <strong>SOLO FIRST PASS · 非正式单人初筛</strong>
+          <span>只保存候选判断；不计独立 review，不生成 resolution / adjudication / formal export / admission。</span>
+        </section>
         <header class="topbar">
           <div>
             <p class="eyebrow" id="view-kicker">ALE-324 · G1.6</p>
@@ -53,11 +57,14 @@
             <article><span>任务</span><strong id="stat-total">—</strong><small>当前角色可见</small></article>
             <article><span>未开始</span><strong id="stat-not-assigned">—</strong><small>NOT_ASSIGNED</small></article>
             <article><span>草稿中</span><strong id="stat-drafting">—</strong><small>append-only</small></article>
-            <article><span>已冻结</span><strong id="stat-finalized">—</strong><small>不可覆盖</small></article>
-            <article><span>等待 peer</span><strong id="stat-waiting-for-peer">—</strong><small>double blind</small></article>
-            <article><span>待裁决</span><strong id="stat-adjudication-required">—</strong><small>material only</small></article>
-            <article><span>裁决中</span><strong id="stat-adjudicating">—</strong><small>independent</small></article>
-            <article><span>已解决</span><strong id="stat-resolved">—</strong><small>hash-bound</small></article>
+            <article class="formal-only"><span>已冻结</span><strong id="stat-finalized">—</strong><small>不可覆盖</small></article>
+            <article class="solo-only" hidden><span>初筛已锁</span><strong id="stat-first-pass-locked">—</strong><small>non-formal</small></article>
+            <article class="solo-only" hidden><span>等待前序</span><strong id="stat-waiting-for-previous-stage">—</strong><small>Action → Transform → Consistency</small></article>
+            <article class="solo-only" hidden><span>初筛完成</span><strong id="stat-first-pass-complete">—</strong><small>不可晋升</small></article>
+            <article class="formal-only"><span>等待 peer</span><strong id="stat-waiting-for-peer">—</strong><small>double blind</small></article>
+            <article class="formal-only"><span>待裁决</span><strong id="stat-adjudication-required">—</strong><small>material only</small></article>
+            <article class="formal-only"><span>裁决中</span><strong id="stat-adjudicating">—</strong><small>independent</small></article>
+            <article class="formal-only"><span>已解决</span><strong id="stat-resolved">—</strong><small>hash-bound</small></article>
             <article><span>输入阻断</span><strong id="stat-blocked-invalid-input">—</strong><small>fail closed</small></article>
           </div>
           <div class="toolbar">
@@ -65,11 +72,14 @@
               <button class="selected" data-status="ALL">全部</button>
               <button data-status="NOT_ASSIGNED">未开始</button>
               <button data-status="DRAFTING">草稿</button>
-              <button data-status="FINALIZED">已冻结</button>
-              <button data-status="WAITING_FOR_PEER">等待 peer</button>
-              <button data-status="ADJUDICATION_REQUIRED">待裁决</button>
-              <button data-status="ADJUDICATING">裁决中</button>
-              <button data-status="RESOLVED">已解决</button>
+              <button class="formal-only" data-status="FINALIZED">已冻结</button>
+              <button class="solo-only" data-status="FIRST_PASS_LOCKED" hidden>初筛已锁</button>
+              <button class="solo-only" data-status="WAITING_FOR_PREVIOUS_STAGE" hidden>等待前序</button>
+              <button class="solo-only" data-status="FIRST_PASS_COMPLETE" hidden>初筛完成</button>
+              <button class="formal-only" data-status="WAITING_FOR_PEER">等待 peer</button>
+              <button class="formal-only" data-status="ADJUDICATION_REQUIRED">待裁决</button>
+              <button class="formal-only" data-status="ADJUDICATING">裁决中</button>
+              <button class="formal-only" data-status="RESOLVED">已解决</button>
               <button data-status="BLOCKED_INVALID_INPUT">输入阻断</button>
             </div>
             <label class="search"><span>⌕</span><input id="assignment-search" placeholder="按序号筛选"></label>
@@ -77,8 +87,8 @@
           <div id="progress-breakdowns" class="progress-breakdowns" aria-label="按模型、unit kind、channel、role、state 的盲化进度"></div>
           <div id="assignment-list" class="assignment-list empty-state">
             <div class="empty-glyph">◎</div>
-            <h2>先选择 reviewer 身份</h2>
-            <p>角色一旦产生标注事件，就不能与其他通道复用。</p>
+            <h2 id="empty-queue-title">先选择 reviewer 身份</h2>
+            <p id="empty-queue-copy">角色一旦产生标注事件，就不能与其他通道复用。</p>
           </div>
         </section>
 
@@ -96,7 +106,7 @@
               <span>03 · Consistency audit</span><h2>冻结后再看自然动作</h2>
               <p>仅做描述性标签；它不能回写或改善前两条 gold。</p>
             </article>
-            <article class="guide-card accent-green">
+            <article class="guide-card accent-green formal-only">
               <span>04 · Adjudication</span><h2>只处理 material disagreement</h2>
               <p>第三位身份独立的 reviewer 只看到同一通道两份已提交结果。</p>
             </article>
@@ -114,9 +124,9 @@
 
     <dialog id="profile-dialog" class="modal compact-modal">
       <form method="dialog" id="profile-form">
-        <span class="eyebrow">独立 reviewer profile</span>
-        <h2>选择你的标注角色</h2>
-        <p>同一身份不能跨通道，也不能同时担任 Primary、Secondary 或 Adjudicator。</p>
+        <span class="eyebrow" id="profile-dialog-eyebrow">独立 reviewer profile</span>
+        <h2 id="profile-dialog-title">选择你的标注角色</h2>
+        <p id="profile-policy-copy">同一身份不能跨通道，也不能同时担任 Primary、Secondary 或 Adjudicator。</p>
         <label>Reviewer ID<input id="reviewer-id" required maxlength="256" placeholder="owner registry 中的 exact UTF-8 principal"></label>
         <label>Role<select id="reviewer-role" required></select></label>
         <label>Owner-issued access secret<input id="reviewer-secret" type="password" required minlength="16" autocomplete="current-password" placeholder="仅用于本地会话，不写入 journal"></label>
@@ -144,7 +154,7 @@
         </header>
         <div id="workbench-body" class="workbench-body"></div>
         <footer class="workbench-footer">
-          <p>提交后不可覆盖；material disagreement 将进入第三方 adjudication。</p>
+          <p id="workbench-authority-copy">提交后不可覆盖；material disagreement 将进入第三方 adjudication。</p>
           <div><button id="save-draft" class="quiet-button">保存草稿</button><button id="submit-review" class="primary-button">确认并提交</button></div>
         </footer>
       </div>

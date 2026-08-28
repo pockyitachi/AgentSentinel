@@ -20,10 +20,12 @@ SCHEMA_FILENAMES: Final = {
     "browser_transformation_preview.schema.json",
     "curator_packet.schema.json",
     "review_proposal.schema.json",
+    "solo_annotation_event.schema.json",
+    "solo_annotation_workspace.schema.json",
 }
 
 
-@lru_cache(maxsize=5)
+@lru_cache(maxsize=7)
 def _validator(filename: str) -> Draft202012Validator:
     if filename not in SCHEMA_FILENAMES:
         raise CurationError("WORKSPACE_SCHEMA_INVALID", "unknown G1.6 workspace schema")

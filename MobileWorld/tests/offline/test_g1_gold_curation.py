@@ -67,6 +67,14 @@ from mobile_world.offline.gold_curation.server import (  # noqa: E402
     _browser_transformation_preview,
     create_app,
 )
+from mobile_world.offline.gold_curation.solo import (  # noqa: E402
+    SOLO_EVENT_SCHEMA_VERSION,
+    SOLO_REGISTRY_SCHEMA_VERSION,
+    SOLO_REVIEW_ROLES,
+    SOLO_WORKSPACE_SCHEMA_VERSION,
+    SoloCuratorRegistry,
+    SoloFirstPassStore,
+)
 from mobile_world.offline.gold_curation.store import (  # noqa: E402
     REVIEWER_REGISTRY_SCHEMA_VERSION,
     WORKSPACE_MANIFEST_SCHEMA_VERSION,
@@ -1119,6 +1127,22 @@ def reviewer_registry(tmp_path: Path) -> ReviewerRegistry:
     return ReviewerRegistry.load(_write_reviewer_registry(tmp_path / "reviewers.json"))
 
 
+def _write_solo_registry(path: Path) -> Path:
+    path.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema_version": SOLO_REGISTRY_SCHEMA_VERSION,
+                "principal": {
+                    "principal_id": "one-real-curator",
+                    "access_secret": "solo-curator-secret-0001",
+                },
+            }
+        )
+    )
+    path.chmod(0o600)
+    return path
+
+
 @pytest.fixture
 def annotation_store(
     tmp_path: Path,
@@ -1149,6 +1173,28 @@ def open_annotation_store(
         tmp_path / "open-annotation-state",
         fake_publication,  # type: ignore[arg-type]
         reviewer_registry,
+        repository_root=synthetic_repository,
+        codec_gate_receipt_path=receipt,
+        g1_5_publication_manifest_path=manifest,
+    )
+
+
+def _open_solo_store(
+    tmp_path: Path,
+    fake_publication: FakePublication,
+) -> SoloFirstPassStore:
+    synthetic_repository = tmp_path / "solo-synthetic-g1-5-repository"
+    manifest = _write_synthetic_g1_5_publication(synthetic_repository)
+    receipt = write_codec_gate_receipt(
+        manifest,
+        tmp_path / "solo-codec-gate",
+        repository_root=synthetic_repository,
+    )
+    registry = SoloCuratorRegistry.load(_write_solo_registry(tmp_path / "solo-curator.json"))
+    return SoloFirstPassStore(
+        tmp_path / "solo-first-pass-state",
+        fake_publication,  # type: ignore[arg-type]
+        registry,
         repository_root=synthetic_repository,
         codec_gate_receipt_path=receipt,
         g1_5_publication_manifest_path=manifest,
@@ -1294,6 +1340,8 @@ def test_schema_documents_are_valid_and_runtime_versions_are_pinned() -> None:
         "browser_transformation_preview.schema.json",
         "curator_packet.schema.json",
         "review_proposal.schema.json",
+        "solo_annotation_event.schema.json",
+        "solo_annotation_workspace.schema.json",
     }
     for schema in schemas.values():
         Draft202012Validator.check_schema(schema)
@@ -1310,6 +1358,14 @@ def test_schema_documents_are_valid_and_runtime_versions_are_pinned() -> None:
     assert (
         schemas["annotation_workspace.schema.json"]["properties"]["schema_version"]["const"]
         == WORKSPACE_MANIFEST_SCHEMA_VERSION
+    )
+    assert (
+        schemas["solo_annotation_event.schema.json"]["properties"]["schema_version"]["const"]
+        == SOLO_EVENT_SCHEMA_VERSION
+    )
+    assert (
+        schemas["solo_annotation_workspace.schema.json"]["properties"]["schema_version"]["const"]
+        == SOLO_WORKSPACE_SCHEMA_VERSION
     )
     assert (
         schemas["curator_packet.schema.json"]["properties"]["schema_version"]["const"]
@@ -3699,3 +3755,404 @@ def test_runtime_annotation_event_validates_against_additive_schema(
     )
     schema = json.loads((G16_SCHEMA_ROOT / "annotation_event.schema.json").read_bytes())
     Draft202012Validator(schema).validate(event)
+
+
+def test_solo_registry_is_one_real_principal_with_three_nonformal_surfaces(
+    tmp_path: Path,
+) -> None:
+    registry = SoloCuratorRegistry.load(_write_solo_registry(tmp_path / "solo.json"))
+    assert registry.principal_id == "one-real-curator"
+    assert registry.sha256 == _sha256(registry.canonical_bytes)
+    for role in SOLO_REVIEW_ROLES:
+        assert registry.authenticate("one-real-curator", role, "solo-curator-secret-0001") == (
+            "one-real-curator",
+            role,
+        )
+    with pytest.raises(CurationError) as exc:
+        registry.authenticate(
+            "one-real-curator", "ACTION_GOLD_SECONDARY", "solo-curator-secret-0001"
+        )
+    assert exc.value.code == "REVIEWER_AUTHENTICATION_FAILED"
+    with pytest.raises(CurationError) as exc:
+        registry.authenticate(
+            "alias-for-same-person", SOLO_REVIEW_ROLES[0], "solo-curator-secret-0001"
+        )
+    assert exc.value.code == "REVIEWER_AUTHENTICATION_FAILED"
+
+
+def test_solo_first_pass_is_separate_nonformal_immutable_authority(
+    tmp_path: Path,
+    fake_publication: FakePublication,
+) -> None:
+    store = _open_solo_store(tmp_path, fake_publication)
+    unit_id = fake_publication.list_units()[0]["unit_id"]
+    assert store.workspace_mode == "SOLO_FIRST_PASS"
+    assert store.formal_annotation_open is False
+    assert store.first_pass_lock_open is True
+    assert store.current_phase() == "ACTION_GOLD"
+
+    event = _submit_review(
+        store,  # type: ignore[arg-type]
+        unit_id=unit_id,
+        reviewer_id="one-real-curator",
+        reviewer_role="ACTION_GOLD_PRIMARY",
+        payload=_action_payload(),
+    )
+    assert event["event_kind"] == "SOLO_FIRST_PASS_LOCKED"
+    assert event["review_tier"] == "NON_FORMAL_SOLO_FIRST_PASS"
+    for guard in (
+        "counts_as_independent_review",
+        "formal_resolution_eligible",
+        "admission_eligible",
+        "promotion_allowed",
+        "replay_eligible",
+    ):
+        assert event[guard] is False
+    assert event["cross_channel_exposed"] is True
+    assert not (store.root / "annotation-events.jsonl").exists()
+    assert (store.root / "solo-first-pass-events.jsonl").is_file()
+    assert store.channel_resolution(unit_id, "ACTION_GOLD") is None
+    assert store._final_reviews(store.read_events(), unit_id, "ACTION_GOLD") == {}
+
+    with pytest.raises(CurationError) as exc:
+        _save_draft(
+            store,  # type: ignore[arg-type]
+            unit_id=unit_id,
+            reviewer_id="one-real-curator",
+            reviewer_role="ACTION_GOLD_PRIMARY",
+            payload=_action_payload(x_min=7),
+        )
+    assert exc.value.code == "SOLO_FIRST_PASS_ALREADY_LOCKED"
+    with pytest.raises(CurationError) as exc:
+        store.export_workspace_receipt()
+    assert exc.value.code == "SOLO_FIRST_PASS_FORMAL_EXPORT_BLOCKED"
+    receipt = store.precursor_receipt()
+    assert receipt["review_tier"] == "NON_FORMAL_SOLO_FIRST_PASS"
+    for guard in (
+        "counts_as_independent_review",
+        "formal_resolution_eligible",
+        "adjudication_eligible",
+        "formal_export_eligible",
+        "admission_eligible",
+        "promotion_allowed",
+        "replay_eligible",
+        "provider_invocation_allowed",
+        "treatment_response_generation_allowed",
+    ):
+        assert receipt[guard] is False
+    assert receipt["cross_channel_exposed"] is True
+    assert receipt["lock_counts"] == {
+        "ACTION_GOLD": 1,
+        "TRANSFORMATION": 0,
+        "CONSISTENCY_AUDIT": 0,
+    }
+
+    manifest = json.loads((store.root / "solo-first-pass-workspace-manifest.json").read_bytes())
+    solo_schema = json.loads(
+        (G16_SCHEMA_ROOT / "solo_annotation_workspace.schema.json").read_bytes()
+    )
+    validator = Draft202012Validator(solo_schema)
+    validator.validate(manifest)
+    assert manifest["workspace_mode"] == "SOLO_FIRST_PASS"
+    assert manifest["authority"]["counts_as_independent_review"] is False
+    assert manifest["authority"]["formal_export_eligible"] is False
+    for field in (
+        "provider_invocation_allowed",
+        "treatment_response_generation_allowed",
+    ):
+        missing = deepcopy(manifest)
+        missing["readiness"].pop(field)
+        assert not validator.is_valid(missing)
+        enabled = deepcopy(manifest)
+        enabled["readiness"][field] = True
+        assert not validator.is_valid(enabled)
+
+
+def test_solo_and_formal_workspace_modes_cannot_share_a_root_or_assignment_key(
+    tmp_path: Path,
+    fake_publication: FakePublication,
+    reviewer_registry: ReviewerRegistry,
+) -> None:
+    solo = _open_solo_store(tmp_path, fake_publication)
+    assert (solo.root / "solo-assignment-key.bin").is_file()
+    assert not (solo.root / "assignment-key.bin").exists()
+    with pytest.raises(CurationError) as exc:
+        AnnotationStore(
+            solo.root,
+            fake_publication,  # type: ignore[arg-type]
+            reviewer_registry,
+        )
+    assert exc.value.code == "WORKSPACE_MODE_MISMATCH"
+    assert not (solo.root / "assignment-key.bin").exists()
+
+    formal_root = tmp_path / "formal-state"
+    AnnotationStore(
+        formal_root,
+        fake_publication,  # type: ignore[arg-type]
+        reviewer_registry,
+    )
+    solo_registry = SoloCuratorRegistry.load(
+        _write_solo_registry(tmp_path / "other-solo-curator.json")
+    )
+    with pytest.raises(CurationError) as exc:
+        SoloFirstPassStore(
+            formal_root,
+            fake_publication,  # type: ignore[arg-type]
+            solo_registry,
+        )
+    assert exc.value.code == "WORKSPACE_MODE_MISMATCH"
+    assert not (formal_root / "solo-assignment-key.bin").exists()
+
+
+def test_solo_and_formal_bootstrap_atomically_claim_workspace_mode(
+    tmp_path: Path,
+    fake_publication: FakePublication,
+    reviewer_registry: ReviewerRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    root = tmp_path / "concurrent-mode-root"
+    root.mkdir(mode=0o700)
+    solo_registry = SoloCuratorRegistry.load(
+        _write_solo_registry(tmp_path / "concurrent-solo-curator.json")
+    )
+    barrier = threading.Barrier(2)
+    original = AnnotationStore._assert_workspace_mode_isolated
+
+    def synchronized_check(store: AnnotationStore) -> None:
+        original(store)
+        barrier.wait(timeout=5)
+
+    monkeypatch.setattr(AnnotationStore, "_assert_workspace_mode_isolated", synchronized_check)
+
+    def open_store(mode: str) -> str:
+        try:
+            if mode == "formal":
+                AnnotationStore(
+                    root,
+                    fake_publication,  # type: ignore[arg-type]
+                    reviewer_registry,
+                )
+            else:
+                SoloFirstPassStore(
+                    root,
+                    fake_publication,  # type: ignore[arg-type]
+                    solo_registry,
+                )
+        except CurationError as exc:
+            return exc.code
+        return "OPENED"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = sorted(pool.map(open_store, ("formal", "solo")))
+    assert outcomes == ["OPENED", "WORKSPACE_MODE_MISMATCH"]
+    marker = json.loads((root / "workspace-mode.json").read_bytes())
+    assert marker["workspace_mode"] in {"FORMAL_DOUBLE_BLIND", "SOLO_FIRST_PASS"}
+    assert not (
+        (root / "assignment-key.bin").exists() and (root / "solo-assignment-key.bin").exists()
+    )
+
+
+def test_solo_global_stage_gate_requires_all_190_action_locks(
+    tmp_path: Path,
+    fake_publication: FakePublication,
+) -> None:
+    store = _open_solo_store(tmp_path, fake_publication)
+    units = fake_publication.list_units()
+    with pytest.raises(CurationError) as exc:
+        _save_draft(
+            store,  # type: ignore[arg-type]
+            unit_id=units[0]["unit_id"],
+            reviewer_id="one-real-curator",
+            reviewer_role="TRANSFORMATION_PRIMARY",
+            payload=_transformation_payload(),
+        )
+    assert exc.value.code == "SOLO_STAGE_BLOCKED"
+
+    action_locks = [
+        {
+            "event_kind": "SOLO_FIRST_PASS_LOCKED",
+            "unit_id": unit["unit_id"],
+            "channel": "ACTION_GOLD",
+        }
+        for unit in units
+    ]
+    assert store._phase_from_events(action_locks) == "TRANSFORMATION"
+    transformation_locks = [
+        {
+            "event_kind": "SOLO_FIRST_PASS_LOCKED",
+            "unit_id": unit["unit_id"],
+            "channel": "TRANSFORMATION",
+        }
+        for unit in units
+    ]
+    assert store._phase_from_events([*action_locks, *transformation_locks]) == ("CONSISTENCY_AUDIT")
+    consistency_locks = [
+        {
+            "event_kind": "SOLO_FIRST_PASS_LOCKED",
+            "unit_id": unit["unit_id"],
+            "channel": "CONSISTENCY_AUDIT",
+        }
+        for unit in units
+    ]
+    assert (
+        store._phase_from_events([*action_locks, *transformation_locks, *consistency_locks])
+        == "COMPLETE"
+    )
+
+
+def test_solo_lock_transport_retry_is_idempotent_after_phase_advances(
+    tmp_path: Path,
+    fake_publication: FakePublication,
+) -> None:
+    fake_publication._units = [fake_publication._units[0]]
+    store = _open_solo_store(tmp_path, fake_publication)
+    unit_id = fake_publication.list_units()[0]["unit_id"]
+    first = _submit_review(
+        store,  # type: ignore[arg-type]
+        unit_id=unit_id,
+        reviewer_id="one-real-curator",
+        reviewer_role="ACTION_GOLD_PRIMARY",
+        payload=_action_payload(),
+    )
+    assert store.current_phase() == "TRANSFORMATION"
+    retry = _submit_review(
+        store,  # type: ignore[arg-type]
+        unit_id=unit_id,
+        reviewer_id="one-real-curator",
+        reviewer_role="ACTION_GOLD_PRIMARY",
+        payload=_action_payload(),
+    )
+    assert retry == first
+    assert len(store.read_events()) == 1
+    with pytest.raises(CurationError) as exc:
+        _submit_review(
+            store,  # type: ignore[arg-type]
+            unit_id=unit_id,
+            reviewer_id="one-real-curator",
+            reviewer_role="ACTION_GOLD_PRIMARY",
+            payload=_action_payload(x_min=7),
+        )
+    assert exc.value.code == "SOLO_FIRST_PASS_ALREADY_LOCKED"
+    assert len(store.read_events()) == 1
+
+
+def test_solo_http_lock_transport_retry_is_idempotent_after_phase_advances(
+    tmp_path: Path,
+    fake_publication: FakePublication,
+) -> None:
+    fake_publication._units = [fake_publication._units[0]]
+    store = _open_solo_store(tmp_path, fake_publication)
+    app = create_app(fake_publication, store)  # type: ignore[arg-type]
+    with InProcessASGIClient(app) as client:
+        session = client.post(
+            "/api/session",
+            json={
+                "reviewer_id": "one-real-curator",
+                "role": "ACTION_GOLD_PRIMARY",
+                "access_secret": "solo-curator-secret-0001",
+            },
+        )
+        assert session.status_code == 200
+        csrf = session.json()["csrf_token"]
+        assignment_id = client.get("/api/assignments").json()["items"][0]["assignment_id"]
+        packet = client.get(f"/api/assignments/{assignment_id}/packet")
+        assert packet.status_code == 200
+        body = {
+            "assignment_id": assignment_id,
+            "payload": _browser_action_payload(packet.json()["packet"]),
+        }
+        headers = {
+            "origin": "http://127.0.0.1",
+            "x-g1-csrf-token": csrf,
+        }
+        first = client.post("/api/solo/lock", json=body, headers=headers)
+        assert first.status_code == 200
+        assert store.current_phase() == "TRANSFORMATION"
+        retry = client.post("/api/solo/lock", json=body, headers=headers)
+        assert retry.status_code == 200
+        assert retry.json() == first.json()
+        assert len(store.read_events()) == 1
+
+
+def test_solo_http_surface_labels_authority_and_blocks_formal_endpoints(
+    tmp_path: Path,
+    fake_publication: FakePublication,
+) -> None:
+    store = _open_solo_store(tmp_path, fake_publication)
+    app = create_app(fake_publication, store)  # type: ignore[arg-type]
+    with InProcessASGIClient(app) as client:
+        config = client.get("/api/config").json()
+        assert config["workspace_mode"] == "SOLO_FIRST_PASS"
+        assert config["solo_first_pass"] is True
+        assert config["formal_annotation_open"] is False
+        assert config["first_pass_lock_open"] is True
+        assert config["roles"] == list(SOLO_REVIEW_ROLES)
+        assert config["review_authority"] == {
+            "counts_as_independent_review": False,
+            "formal_resolution_eligible": False,
+            "adjudication_eligible": False,
+            "formal_export_eligible": False,
+            "admission_eligible": False,
+            "promotion_allowed": False,
+            "replay_eligible": False,
+            "cross_channel_exposed": True,
+        }
+        session = client.post(
+            "/api/session",
+            json={
+                "reviewer_id": "one-real-curator",
+                "role": "ACTION_GOLD_PRIMARY",
+                "access_secret": "solo-curator-secret-0001",
+            },
+        )
+        assert session.status_code == 200
+        csrf = session.json()["csrf_token"]
+        assignments = client.get("/api/assignments").json()
+        assert assignments["total"] == 190
+        assert assignments["current_phase"] == "ACTION_GOLD"
+        blocked = client.post(
+            "/api/reviews/submit",
+            json={"assignment_id": assignments["items"][0]["assignment_id"], "payload": {}},
+            headers={"origin": "http://127.0.0.1", "x-g1-csrf-token": csrf},
+        )
+        assert blocked.status_code == 400
+        assert blocked.json()["error"] == "SOLO_FIRST_PASS_FORMAL_SUBMISSION_BLOCKED"
+
+        transformation_session = client.post(
+            "/api/session",
+            json={
+                "reviewer_id": "one-real-curator",
+                "role": "TRANSFORMATION_PRIMARY",
+                "access_secret": "solo-curator-secret-0001",
+            },
+        )
+        assert transformation_session.status_code == 200
+        transformation_csrf = transformation_session.json()["csrf_token"]
+        future_assignment = client.get("/api/assignments").json()["items"][0]["assignment_id"]
+        future_lock = client.post(
+            "/api/solo/lock",
+            json={"assignment_id": future_assignment, "payload": {}},
+            headers={
+                "origin": "http://127.0.0.1",
+                "x-g1-csrf-token": transformation_csrf,
+            },
+        )
+        assert future_lock.status_code == 400
+        assert future_lock.json()["error"] == "SOLO_STAGE_BLOCKED"
+        html = (
+            MOBILEWORLD_SOURCE_ROOT / "mobile_world/offline/gold_curation/web/index.html"
+        ).read_text()
+        assert "SOLO FIRST PASS · 非正式单人初筛" in html
+        assert "不计独立 review" in html
+        assert 'class="guide-card accent-green formal-only"' in html
+        assert 'id="profile-dialog-eyebrow"' in html
+        script = (
+            MOBILEWORLD_SOURCE_ROOT / "mobile_world/offline/gold_curation/web/app.js"
+        ).read_text()
+        assert '$$(".formal-only").forEach((element) => { element.hidden = true; });' in script
+        assert '$$(".solo-only").forEach((element) => { element.hidden = false; });' in script
+        assert '$("#profile-dialog-eyebrow").textContent = "单人非正式初筛身份";' in script
+        assert 'state.config.solo_first_pass ? "初筛已锁" : "已提交"' in script
+        assert "同一真实身份按 Action → Transformation → Consistency" in script

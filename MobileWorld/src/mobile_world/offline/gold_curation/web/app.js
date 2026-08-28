@@ -21,6 +21,7 @@ const state = {
 const WORKFLOW_STATES = [
   "NOT_ASSIGNED", "DRAFTING", "FINALIZED", "WAITING_FOR_PEER",
   "ADJUDICATION_REQUIRED", "ADJUDICATING", "RESOLVED", "BLOCKED_INVALID_INPUT",
+  "FIRST_PASS_LOCKED", "WAITING_FOR_PREVIOUS_STAGE", "FIRST_PASS_COMPLETE",
 ];
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -75,7 +76,7 @@ function uniqueSpanPush(target, span) {
 }
 
 function roleLabel(role) {
-  return ({
+  const label = ({
     ACTION_GOLD_PRIMARY: "Action Gold · Primary",
     ACTION_GOLD_SECONDARY: "Action Gold · Secondary",
     TRANSFORMATION_PRIMARY: "Transformation · Primary",
@@ -84,10 +85,11 @@ function roleLabel(role) {
     CONSISTENCY_AUDIT_SECONDARY: "Consistency Audit · Secondary",
     ADJUDICATOR: "Material Disagreement · Adjudicator",
   })[role] || role;
+  return state.config?.solo_first_pass && role.endsWith("_PRIMARY") ? `单人初筛 · ${label.replace(" · Primary", "")}` : label;
 }
 
 function statusLabel(value) {
-  return ({NOT_ASSIGNED: "未开始", DRAFTING: "草稿中", FINALIZED: "已冻结", WAITING_FOR_PEER: "等待 peer", ADJUDICATION_REQUIRED: "待裁决", ADJUDICATING: "裁决中", RESOLVED: "已解决", BLOCKED_INVALID_INPUT: "输入阻断"})[value] || value;
+  return ({NOT_ASSIGNED: "未开始", DRAFTING: "草稿中", FINALIZED: "已冻结", WAITING_FOR_PEER: "等待 peer", ADJUDICATION_REQUIRED: "待裁决", ADJUDICATING: "裁决中", RESOLVED: "已解决", BLOCKED_INVALID_INPUT: "输入阻断", FIRST_PASS_LOCKED: "初筛已锁", WAITING_FOR_PREVIOUS_STAGE: "等待前序阶段", FIRST_PASS_COMPLETE: "单人初筛完成"})[value] || value;
 }
 
 function slug(value) { return value.toLowerCase().replaceAll("_", "-"); }
@@ -110,6 +112,9 @@ function showProfileDialog() {
   if (state.profile) {
     $("#reviewer-id").value = state.profile.reviewer_id;
     $("#reviewer-role").value = state.profile.role;
+  }
+  if (state.config.solo_first_pass) {
+    $("#profile-policy-copy").textContent = "同一个真实身份按 Action → Transformation → Consistency 做非正式初筛；三个阶段都不计独立 review，也不能晋升为正式证据。";
   }
   $("#profile-dialog").showModal();
 }
@@ -135,6 +140,7 @@ async function saveProfile(event) {
 async function loadAssignments() {
   if (!state.profile) return;
   const data = await api("/api/assignments");
+  state.config.current_phase = data.current_phase;
   state.assignments = data.items;
   $("#stat-total").textContent = data.total;
   $("#nav-total").textContent = data.total;
@@ -143,6 +149,9 @@ async function loadAssignments() {
     $(`#stat-${slug(name)}`).textContent = source[name] || 0;
   });
   renderBreakdowns(data.breakdowns);
+  if (state.config.solo_first_pass) {
+    $("#solo-first-pass-banner span").textContent = `当前阶段：${data.current_phase}。全部 190 条锁定后才开放下一阶段；结果不计独立 review。`;
+  }
   renderAssignments();
 }
 
@@ -629,7 +638,7 @@ async function openAssignment(assignmentId, channel) {
     ].map(([label, value]) => `<b>${escapeHtml(label)}</b><code>${escapeHtml(value)}</code>`).join("");
     const noticeLabels = {
       only_pre_cutoff_role_projected_evidence: "只显示当前 role 的 pre-cutoff evidence",
-      peer_answers_hidden_before_adjudication: "双审阶段看不到 peer answer",
+      peer_answers_hidden_before_adjudication: state.config.solo_first_pass ? "单人初筛不读取任何 formal peer answer" : "双审阶段看不到 peer answer",
       only_same_channel_finalized_peers_visible: "裁决只显示同一 channel 的两份 finalized peer proposal",
       post_state_outcome_replay_hidden: "post-state / outcome / replay 全部隐藏",
       whole_capsule_and_paths_hidden: "不暴露完整 capsule、路径或 store ID",
@@ -656,8 +665,15 @@ async function loadAssignment(assignmentId, channel) {
     $("#workbench-body").innerHTML = evidenceMarkup(packet) + form;
     hydrateExactHistory(packet);
     $("#save-draft").style.display = state.profile.role === "ADJUDICATOR" ? "none" : "inline-block";
-    $("#submit-review").textContent = state.profile.role === "ADJUDICATOR" ? "提交裁决" : state.config.formal_annotation_open ? "确认并提交" : "等待 G1.5 codec gate";
-    $("#submit-review").disabled = !state.config.formal_annotation_open;
+    if (state.config.solo_first_pass) {
+      $("#submit-review").textContent = state.config.first_pass_lock_open ? "锁定本阶段（非正式）" : "等待 G1.5 CPU codec gate";
+      $("#submit-review").disabled = !state.config.first_pass_lock_open;
+      $("#workbench-authority-copy").textContent = "锁定后不可覆盖；该记录明确不计独立 review，不进入裁决、formal export、admission 或 replay。";
+    } else {
+      $("#submit-review").textContent = state.profile.role === "ADJUDICATOR" ? "提交裁决" : state.config.formal_annotation_open ? "确认并提交" : "等待 G1.5 codec gate";
+      $("#submit-review").disabled = !state.config.formal_annotation_open;
+      $("#workbench-authority-copy").textContent = "提交后不可覆盖；material disagreement 将进入第三方 adjudication。";
+    }
     if (packet.channel === "ACTION_GOLD") {
       renderPredicates();
       $("#add-predicate").onclick = () => { try { syncPredicatesExcept(); state.predicates.push({predicate_kind: "", action_type: "", evidence_ids: [], rationale: "", human_selected: false}); renderPredicates(); } catch (error) { toast(error.message, true); } };
@@ -727,10 +743,12 @@ function collectPayload() {
 async function persist(kind) {
   try {
     const payload = collectPayload();
-    const path = kind === "draft" ? "/api/reviews/draft" : "/api/reviews/submit";
+    const path = state.config.solo_first_pass
+      ? (kind === "draft" ? "/api/solo/draft" : "/api/solo/lock")
+      : (kind === "draft" ? "/api/reviews/draft" : "/api/reviews/submit");
     await api(path, {method: "POST", body: JSON.stringify({assignment_id: state.active.assignmentId, payload})});
-    $("#autosave-state").textContent = kind === "draft" ? "草稿已追加" : "已提交";
-    toast(kind === "draft" ? "草稿已追加到 hash-chain journal" : "独立 review 已冻结");
+    $("#autosave-state").textContent = kind === "draft" ? "草稿已追加" : state.config.solo_first_pass ? "初筛已锁" : "已提交";
+    toast(kind === "draft" ? "草稿已追加到 hash-chain journal" : state.config.solo_first_pass ? "非正式第一遍已锁定（不计独立 review）" : "独立 review 已冻结");
     if (kind === "submit") { $("#workbench-dialog").close(); await loadAssignments(); }
   } catch (error) { toast(error.message, true); }
 }
@@ -756,6 +774,17 @@ function bindNavigation() {
 
 async function boot() {
   state.config = await api("/api/config");
+  $("#solo-first-pass-banner").hidden = !state.config.solo_first_pass;
+  if (state.config.solo_first_pass) {
+    $$(".formal-only").forEach((element) => { element.hidden = true; });
+    $$(".solo-only").forEach((element) => { element.hidden = false; });
+    $("#profile-role").textContent = "单人初筛 · 非正式";
+    $("#view-kicker").textContent = "ALE-324 · G1.6 · SOLO FIRST PASS";
+    $("#empty-queue-title").textContent = "选择当前单人初筛阶段";
+    $("#empty-queue-copy").textContent = "同一真实身份按 Action → Transformation → Consistency 的全局顺序工作；所有结果均不计独立 review。";
+    $("#profile-dialog-eyebrow").textContent = "单人非正式初筛身份";
+    $("#profile-dialog-title").textContent = "选择当前开放的初筛阶段";
+  }
   bindNavigation();
   const integrity = {
     ...state.config.readiness,

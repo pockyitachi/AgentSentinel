@@ -24,14 +24,15 @@
 20. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
 21. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
 22. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-23. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-24. `G1_SENTINEL_MVP_MIGRATION.md`
-25. `g1/registry.lock.v1.json`
-26. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-27. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-28. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-29. `schemas/g1_3/field_visibility.schema.json`
-30. `schemas/g1_3/capsule_exclusion.schema.json`
+23. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+24. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+25. `G1_SENTINEL_MVP_MIGRATION.md`
+26. `g1/registry.lock.v1.json`
+27. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+28. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+29. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+30. `schemas/g1_3/field_visibility.schema.json`
+31. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -81,6 +82,12 @@ CPU-only 人工标注工作台**：从 immutable G1.3 publication 生成双盲 r
 判断 focal/oracle/sham/correction/action gold/consistency/adjudication；formal bundle、admission、
 seal、replay 与 treatment generation 在独立门禁完成前继续 fail closed。
 
+`G1_6_DECISION_LOG.md` D-030 与 `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md` 仅额外授权
+隔离的单人非正式 first pass。它必须使用独立 root/key/manifest/journal，按全局
+ACTION_GOLD → TRANSFORMATION → CONSISTENCY_AUDIT 顺序锁定，并保持所有独立 review、
+resolution、promotion、formal export、admission、replay 与 seal authority 为 false；不得原地
+晋升或替代正式双盲 workspace。
+
 必须：
 
 - 保存模型真正收到的最终 request；
@@ -115,8 +122,10 @@ seal、replay 与 treatment generation 在独立门禁完成前继续 fail close
   claim validity、自动选择/生成 intervention，或开始 G1.7+；只允许无网络的确定性
   fake-provider conformance、provider-free G1.5 CPU checkpoint 与 D-029 限定的人工 G1.6
   CPU workspace；
-- D-029 唯一允许的 socket 是 owner 前台启动、单进程、仅绑定 loopback、无 remote asset、
-  强制 same-origin/CSRF 的 annotation site；不得通过 tunnel/proxy/remote hosting 扩大它；
+- D-029 唯一允许的 server socket 是 owner 启动、单进程、仅绑定 loopback、无 remote asset、
+  强制 same-origin/CSRF 的 annotation site；D-030 只额外允许 owner 的单端口 SSH local forward
+  从 client `127.0.0.1:8766` 到 server `127.0.0.1:8766`，禁止 reverse/dynamic forwarding、
+  wildcard bind、shared proxy 或 remote hosting；
 - annotation browser 内的人类点击/表单输入是获准的 curation 输入，不得转成或执行为
   MobileWorld action；
 - 将 G1 label、capsule metadata、visibility classification 或 transformation decision 写回

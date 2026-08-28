@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6/solo_annotation_event.schema.json",
+  "title": "G1.6 non-formal single-curator first-pass event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "event_id", "event_seq", "previous_event_sha256",
+    "event_sha256", "event_kind", "created_at_ns", "unit_id", "channel", "assignment_id",
+    "source_packet_sha256", "assignment_packet_sha256", "reviewer_identity_sha256",
+    "reviewer_role", "proposal_schema_version", "codec_gate_receipt_sha256", "payload",
+    "payload_sha256", "material_projection_sha256", "review_tier",
+    "counts_as_independent_review", "formal_resolution_eligible", "admission_eligible",
+    "promotion_allowed", "replay_eligible", "cross_channel_exposed"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.solo-first-pass-event/v1"},
+    "record_type": {"const": "solo_first_pass_event"},
+    "event_id": {"type": "string", "pattern": "^g1soloannotation-[0-9a-f]{24}$"},
+    "event_seq": {"type": "integer", "minimum": 0},
+    "previous_event_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "event_sha256": {"$ref": "#/$defs/sha256"},
+    "event_kind": {"enum": ["SOLO_DRAFT_SAVED", "SOLO_FIRST_PASS_LOCKED"]},
+    "created_at_ns": {"type": "integer", "minimum": 0},
+    "unit_id": {"type": "string", "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"},
+    "channel": {"enum": ["ACTION_GOLD", "TRANSFORMATION", "CONSISTENCY_AUDIT"]},
+    "assignment_id": {"type": "string", "pattern": "^g1assignment-[0-9a-f]{32}$"},
+    "source_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "assignment_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "reviewer_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "reviewer_role": {
+      "enum": ["ACTION_GOLD_PRIMARY", "TRANSFORMATION_PRIMARY", "CONSISTENCY_AUDIT_PRIMARY"]
+    },
+    "proposal_schema_version": {"const": "mobileworld.g1.gold-curation-review-proposal/v1"},
+    "codec_gate_receipt_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "payload": {"type": "object", "required": ["proposal_kind"]},
+    "payload_sha256": {"$ref": "#/$defs/sha256"},
+    "material_projection_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "review_tier": {"const": "NON_FORMAL_SOLO_FIRST_PASS"},
+    "counts_as_independent_review": {"const": false},
+    "formal_resolution_eligible": {"const": false},
+    "admission_eligible": {"const": false},
+    "promotion_allowed": {"const": false},
+    "replay_eligible": {"const": false},
+    "cross_channel_exposed": {"const": true}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"event_seq": {"const": 0}}},
+      "then": {"properties": {"previous_event_sha256": {"type": "null"}}},
+      "else": {"properties": {"previous_event_sha256": {"$ref": "#/$defs/sha256"}}}
+    },
+    {
+      "if": {"properties": {"event_kind": {"const": "SOLO_DRAFT_SAVED"}}},
+      "then": {
+        "properties": {
+          "codec_gate_receipt_sha256": {"type": "null"},
+          "material_projection_sha256": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "codec_gate_receipt_sha256": {"$ref": "#/$defs/sha256"},
+          "material_projection_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"channel": {"const": "ACTION_GOLD"}}},
+      "then": {
+        "properties": {
+          "reviewer_role": {"const": "ACTION_GOLD_PRIMARY"},
+          "payload": {"properties": {"proposal_kind": {"const": "ACTION_GOLD"}}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"channel": {"const": "TRANSFORMATION"}}},
+      "then": {
+        "properties": {
+          "reviewer_role": {"const": "TRANSFORMATION_PRIMARY"},
+          "payload": {"properties": {"proposal_kind": {"const": "TRANSFORMATION"}}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"channel": {"const": "CONSISTENCY_AUDIT"}}},
+      "then": {
+        "properties": {
+          "reviewer_role": {"const": "CONSISTENCY_AUDIT_PRIMARY"},
+          "payload": {"properties": {"proposal_kind": {"const": "CONSISTENCY_AUDIT"}}}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

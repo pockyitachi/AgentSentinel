@@ -1047,6 +1047,16 @@ class ReviewerRegistry:
 class AnnotationStore:
     """Authoritative local journal for blind reviews and adjudications."""
 
+    workspace_mode = "FORMAL_DOUBLE_BLIND"
+    journal_filename = "annotation-events.jsonl"
+    manifest_filename = "workspace-manifest.json"
+    assignment_key_filename = "assignment-key.bin"
+    incompatible_workspace_filenames = (
+        "solo-first-pass-workspace-manifest.json",
+        "solo-first-pass-events.jsonl",
+        "solo-assignment-key.bin",
+    )
+
     def __init__(
         self,
         root: str | os.PathLike[str],
@@ -1059,10 +1069,13 @@ class AnnotationStore:
     ) -> None:
         repo = Path(repository_root or Path(__file__).resolve().parents[5]).resolve(strict=True)
         self.root = _ensure_root(Path(root), (repo, ACTIVE_G1_3_PUBLICATION))
+        self._assert_workspace_mode_isolated()
+        self._workspace_mode_marker = self.root / "workspace-mode.json"
+        self._claim_workspace_mode()
         self.publication = publication
-        self._journal = self.root / "annotation-events.jsonl"
-        self._manifest = self.root / "workspace-manifest.json"
-        self._assignment_key_path = self.root / "assignment-key.bin"
+        self._journal = self.root / self.journal_filename
+        self._manifest = self.root / self.manifest_filename
+        self._assignment_key_path = self.root / self.assignment_key_filename
         self.reviewer_registry = reviewer_registry
         self._repository_root = repo
         require(
@@ -1089,21 +1102,88 @@ class AnnotationStore:
         )
         self._assignment_key = self._load_or_create_assignment_key()
         self._identity_key_commitment_sha256 = hashlib.sha256(self._assignment_key).hexdigest()
-        self.workspace_id = (
-            "g1workspace-"
-            + canonical_sha256(
-                {
-                    "publication_manifest_sha256": ACTIVE_G1_3_MANIFEST_SHA256,
-                    "capsule_set_sha256": ACTIVE_G1_3_CAPSULE_SET_SHA256,
-                    "owner_registry_sha256": reviewer_registry.sha256,
-                    "identity_key_commitment_sha256": self._identity_key_commitment_sha256,
-                }
-            )[:24]
-        )
+        workspace_subject = {
+            "publication_manifest_sha256": ACTIVE_G1_3_MANIFEST_SHA256,
+            "capsule_set_sha256": ACTIVE_G1_3_CAPSULE_SET_SHA256,
+            "owner_registry_sha256": reviewer_registry.sha256,
+            "identity_key_commitment_sha256": self._identity_key_commitment_sha256,
+        }
+        if self.workspace_mode != "FORMAL_DOUBLE_BLIND":
+            workspace_subject["workspace_mode"] = self.workspace_mode
+        self.workspace_id = "g1workspace-" + canonical_sha256(workspace_subject)[:24]
         self._bind_manifest()
+
+    def _assert_workspace_mode_isolated(self) -> None:
+        conflicting = [
+            name
+            for name in self.incompatible_workspace_filenames
+            if os.path.lexists(self.root / name)
+        ]
+        require(
+            not conflicting,
+            "WORKSPACE_MODE_MISMATCH",
+            "annotation root already contains state from a different workspace mode",
+        )
+
+    def _claim_workspace_mode(self) -> None:
+        data = (
+            canonical_json_bytes(
+                {
+                    "schema_version": "mobileworld.g1.gold-curation-workspace-mode/v1",
+                    "workspace_mode": self.workspace_mode,
+                }
+            )
+            + b"\n"
+        )
+        lock_path = self.root / "workspace-mode.lock"
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(lock_path, flags, 0o600)
+        except OSError as exc:
+            raise CurationError(
+                "ANNOTATION_STORE_INVALID", "workspace mode lock cannot be opened safely"
+            ) from exc
+        try:
+            opened = os.fstat(fd)
+            require(
+                stat.S_ISREG(opened.st_mode)
+                and opened.st_uid == os.geteuid()
+                and opened.st_nlink == 1
+                and opened.st_mode & 0o077 == 0,
+                "ANNOTATION_STORE_INVALID",
+                "workspace mode lock ownership, link count, or mode is unsafe",
+            )
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                _write_once_regular(self._workspace_mode_marker, data)
+            except CurationError as exc:
+                if exc.code == "ANNOTATION_STORE_COLLISION":
+                    raise CurationError(
+                        "WORKSPACE_MODE_MISMATCH",
+                        "annotation root is already claimed by a different workspace mode",
+                    ) from exc
+                raise
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+        self._workspace_mode_marker_bytes = data
+
+    def _assert_workspace_mode_marker(self) -> None:
+        current = _read_regular(self._workspace_mode_marker, owner_restricted=True)
+        require(
+            current == self._workspace_mode_marker_bytes,
+            "WORKSPACE_MODE_MISMATCH",
+            "annotation workspace mode marker changed after bootstrap",
+        )
 
     @property
     def formal_annotation_open(self) -> bool:
+        return self._verified_codec_gate_receipt_sha256() is not None
+
+    @property
+    def preview_gate_open(self) -> bool:
         return self._verified_codec_gate_receipt_sha256() is not None
 
     def _verified_codec_gate_receipt_sha256(self) -> str | None:
@@ -1307,6 +1387,7 @@ class AnnotationStore:
             os.close(fd)
 
     def _assert_workspace_manifest(self) -> None:
+        self._assert_workspace_mode_marker()
         current = _read_regular(self._manifest, owner_restricted=True)
         require(
             current == self._workspace_manifest_bytes,

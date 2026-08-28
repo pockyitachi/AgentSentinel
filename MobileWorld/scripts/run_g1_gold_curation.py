@@ -12,6 +12,8 @@ from mobile_world.offline.gold_curation import (
     AnnotationStore,
     CurationPublication,
     ReviewerRegistry,
+    SoloCuratorRegistry,
+    SoloFirstPassStore,
     create_app,
     load_local_pinned_token_counters,
     write_codec_gate_receipt,
@@ -29,6 +31,14 @@ def main() -> int:
         "--reviewer-registry",
         type=Path,
         help="Restricted repo-external owner registry for reviewer principals, roles, and secrets",
+    )
+    parser.add_argument(
+        "--solo-first-pass",
+        action="store_true",
+        help=(
+            "Run the mechanically non-formal one-person first-pass workspace; records never "
+            "count as independent reviews and cannot be promoted or formally exported"
+        ),
     )
     parser.add_argument(
         "--g1-5-publication-manifest",
@@ -87,11 +97,16 @@ def main() -> int:
         )
         preview_counters = load_local_pinned_token_counters(model_config_manifest)
     publication = CurationPublication(preview_token_counters=preview_counters)
-    reviewer_registry = ReviewerRegistry.load(args.reviewer_registry)
-    store = AnnotationStore(
+    reviewer_registry = (
+        SoloCuratorRegistry.load(args.reviewer_registry)
+        if args.solo_first_pass
+        else ReviewerRegistry.load(args.reviewer_registry)
+    )
+    store_class = SoloFirstPassStore if args.solo_first_pass else AnnotationStore
+    store = store_class(
         args.annotation_root,
         publication,
-        reviewer_registry,
+        reviewer_registry,  # type: ignore[arg-type]
         codec_gate_receipt_path=args.codec_gate_receipt,
         g1_5_publication_manifest_path=args.g1_5_publication_manifest,
     )
@@ -99,6 +114,10 @@ def main() -> int:
     print(f"G1.6 private workspace: http://127.0.0.1:{args.port}")
     print(f"Annotation state: {store.root}")
     print(f"Formal annotation open: {str(store.formal_annotation_open).lower()}")
+    if args.solo_first_pass:
+        assert isinstance(store, SoloFirstPassStore)
+        print("Mode: SOLO_FIRST_PASS / NON_FORMAL / NOT_PROMOTABLE")
+        print(f"Current phase: {store.current_phase()}")
     print("GPU/model/provider/network/replay/action paths remain disabled.")
     uvicorn.run(
         app,

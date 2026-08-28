@@ -91,3 +91,42 @@ blinded-gold catalog；二者均不得变成 outcome 或 intervention rule。
 `schemas/g1_6/` 只定义 annotation workspace、role-projected packet、assignment-scoped CPU preview、
 intermediate proposal 和 append-only event envelopes；它们不得复制、放宽或替代 frozen
 G1.1 formal output schemas。
+
+## D-030 — 单人仅可执行隔离的非正式 first pass，不得伪装独立复核
+
+**状态：Locked（owner 于 2026-08-28 明确确认“只有 1 人”并授权单人模式）**
+
+Owner 当前只有一位真实 curator。不得通过多个用户名、别名、role 或 session 把同一个人伪装成
+独立 `PRIMARY`、`SECONDARY` 或 `ADJUDICATOR`。D-029 的正式双盲独立性、第三方裁决和 frozen
+formal output 要求保持不变。
+
+新增 `SOLO_FIRST_PASS` 仅用于保存非正式人工候选：同一真实 principal 按全局阶段顺序完成全部
+190 条 `ACTION_GOLD`，再完成全部 190 条 `TRANSFORMATION`，最后才可查看并完成全部 190 条
+preliminary `CONSISTENCY_AUDIT`。每条可反复保存 append-only 草稿，并可不可逆锁定本阶段结果；
+后续阶段尚未开放时，packet、image、preview、draft 和 lock API 均必须 fail closed。Consistency
+使用前两阶段所有 immutable lock 的 content-bound precursor checkpoint，不得将其称为 formal
+channel resolution。
+
+该模式使用独立的 owner-only registry、workspace manifest、assignment key 和
+`solo-first-pass-events.jsonl`。每条记录固定 `review_tier=NON_FORMAL_SOLO_FIRST_PASS`、
+`counts_as_independent_review=false`、`formal_resolution_eligible=false`、
+`admission_eligible=false`、`promotion_allowed=false`、`replay_eligible=false` 和
+`cross_channel_exposed=true`。它不得生成 `REVIEW_SUBMITTED`、adjudication、formal export、
+admission 或 seal；正式 endpoint 在 solo session 下必须拒绝。
+
+未来获得真实独立 reviewers 时，必须新建 formal workspace、registry 和 assignment key。Solo
+journal 只保留为 non-authorizing precursor receipt，且在盲审完成前不得向 formal reviewers
+展示；不存在把 solo lock 原地导入、晋升或改名为正式 review 的 API。
+
+Owner 同时明确允许使用一个 detached `tmux` session 运行这一个单进程 annotation server，作为
+D-029 前台包装要求的窄化运维例外。服务仍只能绑定 `127.0.0.1`，必须保持 `workers=1`、
+`reload=false`、`proxy_headers=false`，不得启动外部网络、model/provider/GPU/replay/action 路径。
+
+Owner 还明确要求通过其正常 SSH 登录连接做本地端口转发以打开该网页。这只授权 client 端
+`127.0.0.1:8766` 到 server 端 `127.0.0.1:8766` 的单端口 `ssh -L`，并要求
+`ExitOnForwardFailure=yes`。禁止 `-R`、`-D`、`GatewayPorts`、`0.0.0.0` client bind、共享代理、
+外部 tunnel/hosting 或向第三方暴露端口；该转发不改变 annotation server 的 loopback-only
+authority，也不授权任何应用层外联。
+
+`G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md` 与两个 additive solo schemas 是本条的 normative
+实现边界；D-029 与正式 schemas 不因本条放宽。

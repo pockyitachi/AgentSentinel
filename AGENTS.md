@@ -25,14 +25,15 @@ Before changing code, read these files completely:
 17. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
 18. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
 19. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-20. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-21. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
-22. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
-23. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
-24. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
-25. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
-26. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
-27. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
+20. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+21. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+22. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
+23. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
+24. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
+25. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
+26. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
+27. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
+28. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
 
 The historical `replay_capsule.schema.json`, `capsule_manifest.schema.json`, and
 `capsule_integrity.schema.json` remain byte-frozen v1 references. Amendment 1
@@ -84,6 +85,14 @@ sham, oracle, accepted action, or adjudication on behalf of a human. Formal
 bundle export, admission/sealing, replay, and treatment generation remain
 blocked until their separate versioned gates are satisfied.
 
+`G1_6_DECISION_LOG.md` D-030 and
+`G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md` additionally authorize a mechanically
+non-formal one-person precursor workspace. It must use a separate root, key,
+manifest, and journal; enforce the global Action Gold → Transformation →
+Consistency stage order; and keep every independence, resolution, promotion,
+export, admission, replay, and seal authority false. It cannot replace or be
+promoted into the formal double-blind workspace.
+
 Collector v1 remains event-sourced, lossless, label-free, zero-intervention,
 and byte-immutable. Do not invoke any real model/provider, use an external network or a
 GPU, load/serve model weights, execute a MobileWorld/generated GUI/tool/action, restore a backend,
@@ -93,7 +102,10 @@ runtime Sentinel behavior. The deterministic fake-provider conformance path,
 provider-free G1.5 CPU checkpoint, and explicitly human-authored G1.6 CPU
 workspace are the only permitted substitutes.
 The sole socket exception is the owner-started, single-process D-029 annotation
-site bound to loopback with same-origin/CSRF checks and no remote assets.
+site bound to loopback with same-origin/CSRF checks and no remote assets. D-030
+also permits only the owner's single-port SSH local forward from client
+`127.0.0.1:8766` to server `127.0.0.1:8766`; reverse/dynamic forwarding,
+wildcard binds, shared proxies, and external hosting remain forbidden.
 Human clicks and form entry inside that annotation site are authorized curation
 inputs; they must never be converted into or executed as a MobileWorld action.
 Store real capsule, collection, and

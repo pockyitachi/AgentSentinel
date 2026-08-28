@@ -569,6 +569,7 @@ def _action_payload_identities(
 def create_app(publication: CurationPublication, store: AnnotationStore) -> FastAPI:
     """Construct the private app without opening a socket or starting a server."""
 
+    solo_mode = store.workspace_mode == "SOLO_FIRST_PASS"
     app = FastAPI(
         title="G1.6 Gold Curation Workspace",
         docs_url=None,
@@ -674,14 +675,31 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
 
     @app.get("/api/config")
     async def config() -> dict[str, Any]:
+        catalog = option_catalog()
+        roles = list(getattr(store, "available_roles", tuple(catalog["roles"])))
+        current_phase = store.current_phase() if solo_mode else None  # type: ignore[attr-defined]
         return {
-            **option_catalog(),
+            **catalog,
+            "roles": roles,
             "unit_count": 190,
-            "workspace_mode": "PRIVATE_LOCAL_MANUAL_CURATION",
+            "workspace_mode": store.workspace_mode,
             "authoritative_state": "REPO_EXTERNAL_APPEND_ONLY_JOURNAL",
             "formal_annotation_open": store.formal_annotation_open,
+            "solo_first_pass": solo_mode,
+            "first_pass_lock_open": bool(getattr(store, "first_pass_lock_open", False)),
+            "current_phase": current_phase,
+            "review_authority": {
+                "counts_as_independent_review": not solo_mode,
+                "formal_resolution_eligible": not solo_mode,
+                "adjudication_eligible": not solo_mode,
+                "formal_export_eligible": False,
+                "admission_eligible": False,
+                "promotion_allowed": False,
+                "replay_eligible": False,
+                "cross_channel_exposed": solo_mode,
+            },
             "readiness": {
-                "codec_gate_open": store.formal_annotation_open,
+                "codec_gate_open": store.preview_gate_open,
                 "human_curation_complete": False,
                 "formal_g1_6_bundle": False,
                 "admission_ready": False,
@@ -758,7 +776,10 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
         reviewer_role: str,
         channel: str,
         compared_review_event_ids: list[str] | None = None,
+        enforce_solo_phase: bool = True,
     ) -> dict[str, Any]:
+        if solo_mode and enforce_solo_phase:
+            store.assert_channel_open(channel)  # type: ignore[attr-defined]
         if channel == "CONSISTENCY_AUDIT":
             require(
                 store.consistency_ready(unit_id),
@@ -781,11 +802,16 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
         return projected
 
     def assignment_status(
-        *, unit_id: str, reviewer_id: str, reviewer_role: str, channel: str
+        *,
+        unit_id: str,
+        reviewer_id: str,
+        reviewer_role: str,
+        channel: str,
+        precomputed: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Project all eight UI states from authoritative bytes, not browser memory."""
 
-        status = store.status_for(unit_id, reviewer_role, reviewer_id)
+        status = precomputed or store.status_for(unit_id, reviewer_role, reviewer_id)
         try:
             if channel == "CONSISTENCY_AUDIT" and store.consistency_ready(unit_id):
                 publication.consistency_packet(unit_id)
@@ -839,6 +865,11 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
                 metric_rows.append({**item, **unit})
         else:
             channel = role_channel(role)
+            solo_statuses = (
+                store.statuses_for_role(role, reviewer_id)  # type: ignore[attr-defined]
+                if solo_mode
+                else None
+            )
             blinded_units = sorted(
                 (
                     store.assignment_id(unit["unit_id"], role),
@@ -852,6 +883,7 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
                     reviewer_id=reviewer_id,
                     reviewer_role=role,
                     channel=channel,
+                    precomputed=None if solo_statuses is None else solo_statuses[unit["unit_id"]],
                 )
                 item = {
                     "assignment_id": assignment_id,
@@ -896,6 +928,7 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
                 "state": counts_for("state"),
             },
             "total": len(items),
+            "current_phase": store.current_phase() if solo_mode else None,  # type: ignore[attr-defined]
         }
 
     @app.get("/api/assignments/{assignment_id}/packet")
@@ -1062,6 +1095,8 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
             role,
             channel=channel if role == ADJUDICATOR_ROLE else None,
         )
+        if solo_mode:
+            store.assert_channel_open(role_channel(role))  # type: ignore[attr-defined]
         if role.startswith("CONSISTENCY_AUDIT"):
             require(
                 store.consistency_ready(unit_id),
@@ -1133,21 +1168,47 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
             assignment_id=body["assignment_id"],
         )
 
-    @app.post("/api/reviews/draft")
-    async def save_draft(request: Request) -> dict[str, Any]:
+    async def persist_review(request: Request, *, lock: bool) -> dict[str, Any]:
         reviewer_id, reviewer_role = reviewer_session(request)
         body = await _closed_json_request(
-            request, required={"assignment_id", "payload"}, label="draft request"
+            request,
+            required={"assignment_id", "payload"},
+            label="first-pass lock request" if lock else "draft request",
         )
         unit_id = store.resolve_assignment(body["assignment_id"], reviewer_role)
         channel = role_channel(reviewer_role)
-        projected = assignment_projection(
-            unit_id=unit_id,
-            assignment_id=body["assignment_id"],
-            reviewer_id=reviewer_id,
-            reviewer_role=reviewer_role,
-            channel=channel,
-        )
+        try:
+            projected = assignment_projection(
+                unit_id=unit_id,
+                assignment_id=body["assignment_id"],
+                reviewer_id=reviewer_id,
+                reviewer_role=reviewer_role,
+                channel=channel,
+            )
+        except CurationError as exc:
+            retrying_existing_solo_lock = (
+                solo_mode
+                and lock
+                and exc.code == "SOLO_STAGE_BLOCKED"
+                and store.has_locked_first_pass(  # type: ignore[attr-defined]
+                    unit_id=unit_id,
+                    reviewer_id=reviewer_id,
+                    reviewer_role=reviewer_role,
+                )
+            )
+            if not retrying_existing_solo_lock:
+                raise
+            # Only an already durable lock may rederive its old packet after the global phase has
+            # advanced.  The journal lock below still requires every binding and payload byte to
+            # match exactly; future-stage lock requests never reach payload/token validation.
+            projected = assignment_projection(
+                unit_id=unit_id,
+                assignment_id=body["assignment_id"],
+                reviewer_id=reviewer_id,
+                reviewer_role=reviewer_role,
+                channel=channel,
+                enforce_solo_phase=False,
+            )
         payload = body["payload"]
         if channel == "TRANSFORMATION":
             payload = _transform_payload_identities(
@@ -1165,7 +1226,8 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
                 payload=payload,
                 to_browser=False,
             )
-        event = store.save_draft(
+        method = store.submit_review if lock else store.save_draft
+        event = method(
             unit_id=unit_id,
             reviewer_id=reviewer_id,
             reviewer_role=reviewer_role,
@@ -1175,60 +1237,56 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
             payload=payload,
         )
         return {
-            "saved": True,
+            "saved": not lock,
+            "locked": lock and solo_mode,
+            "submitted": lock and not solo_mode,
             "event_id": event["event_id"],
             "payload_sha256": event["payload_sha256"],
         }
+
+    @app.post("/api/reviews/draft")
+    async def save_draft(request: Request) -> dict[str, Any]:
+        require(
+            not solo_mode,
+            "SOLO_ENDPOINT_REQUIRED",
+            "solo first-pass drafts must use the explicitly non-formal endpoint",
+        )
+        return await persist_review(request, lock=False)
+
+    @app.post("/api/solo/draft")
+    async def save_solo_draft(request: Request) -> dict[str, Any]:
+        require(
+            solo_mode,
+            "FORMAL_ENDPOINT_REQUIRED",
+            "solo first-pass endpoint is unavailable in a formal workspace",
+        )
+        return await persist_review(request, lock=False)
 
     @app.post("/api/reviews/submit")
     async def submit_review(request: Request) -> dict[str, Any]:
-        reviewer_id, reviewer_role = reviewer_session(request)
-        body = await _closed_json_request(
-            request, required={"assignment_id", "payload"}, label="review request"
+        require(
+            not solo_mode,
+            "SOLO_FIRST_PASS_FORMAL_SUBMISSION_BLOCKED",
+            "solo first-pass records cannot enter the formal review endpoint",
         )
-        unit_id = store.resolve_assignment(body["assignment_id"], reviewer_role)
-        channel = role_channel(reviewer_role)
-        projected = assignment_projection(
-            unit_id=unit_id,
-            assignment_id=body["assignment_id"],
-            reviewer_id=reviewer_id,
-            reviewer_role=reviewer_role,
-            channel=channel,
+        return await persist_review(request, lock=True)
+
+    @app.post("/api/solo/lock")
+    async def lock_solo_first_pass(request: Request) -> dict[str, Any]:
+        require(
+            solo_mode,
+            "FORMAL_ENDPOINT_REQUIRED",
+            "solo first-pass endpoint is unavailable in a formal workspace",
         )
-        payload = body["payload"]
-        if channel == "TRANSFORMATION":
-            payload = _transform_payload_identities(
-                publication,
-                unit_id=unit_id,
-                assignment_id=body["assignment_id"],
-                payload=payload,
-                to_browser=False,
-            )
-        elif channel == "ACTION_GOLD":
-            payload = _action_payload_identities(
-                publication,
-                unit_id=unit_id,
-                assignment_id=body["assignment_id"],
-                payload=payload,
-                to_browser=False,
-            )
-        event = store.submit_review(
-            unit_id=unit_id,
-            reviewer_id=reviewer_id,
-            reviewer_role=reviewer_role,
-            assignment_id=body["assignment_id"],
-            source_packet_sha256=projected["source_packet_sha256"],
-            assignment_packet_sha256=projected["assignment_packet_sha256"],
-            payload=payload,
-        )
-        return {
-            "submitted": True,
-            "event_id": event["event_id"],
-            "payload_sha256": event["payload_sha256"],
-        }
+        return await persist_review(request, lock=True)
 
     @app.post("/api/adjudications/submit")
     async def submit_adjudication(request: Request) -> dict[str, Any]:
+        require(
+            not solo_mode,
+            "SOLO_FIRST_PASS_ADJUDICATION_BLOCKED",
+            "solo first-pass records cannot enter adjudication",
+        )
         reviewer_id, reviewer_role = reviewer_session(request)
         require(
             reviewer_role == ADJUDICATOR_ROLE,

@@ -11,7 +11,13 @@ actions.  The site binds only to
 
 ## What the website covers
 
-The website exposes every human research choice currently required before a formal G1.6 export:
+The website exposes every human research choice currently required before a formal G1.6 export.
+It has two mechanically distinct workspace modes: the original formal double-blind workspace and
+the additive `SOLO_FIRST_PASS` precursor workspace for an owner who currently has only one real
+curator.  Solo records never count as independent reviews and can never be promoted or formally
+exported.
+
+The available research surfaces are:
 
 - `ACTION_GOLD`: accepted next-action alternatives, exact normalized actions, point/drag region
   sets, text variants, direction sets, tolerances, evidence references, and rationales;
@@ -36,8 +42,9 @@ append-only records.
 2. Keep the active G1.3 v1.1 publication and the checked-in G1.5 CPU publication byte-unchanged.
 3. Select a repository-external annotation root and codec-gate root owned by the current user.
 4. Create a repository-external reviewer registry with mode `0600`.
-5. Use genuinely independent reviewer principals.  Creating several aliases for one reviewer
-   does not satisfy the contract's independence requirement.
+5. For formal mode, use genuinely independent reviewer principals.  Creating several aliases for
+   one reviewer does not satisfy the contract's independence requirement.  If only one real
+   curator is available, use the separate solo registry and `--solo-first-pass` flow below.
 
 The exact local CPU environment that contains the pinned `tokenizers==0.22.2` runtime is:
 
@@ -101,6 +108,26 @@ Each secret must contain at least 16 UTF-8 bytes.  Do not put real secrets in Gi
 screenshots, issue comments, or the annotation journal.  The immutable workspace manifest records
 only the registry's redacted semantic digest.
 
+### 2a. One-person non-formal registry
+
+When there is exactly one real curator, do not create aliases for the nine formal roles.  Create a
+different repo-external file with mode `0600` and this closed shape:
+
+```json
+{
+  "schema_version": "mobileworld.g1.solo-first-pass-curator-registry/v1",
+  "principal": {
+    "principal_id": "OWNER_CHOSEN_ID",
+    "access_secret": "OWNER_ISSUED_SECRET_WITH_AT_LEAST_16_UTF8_BYTES"
+  }
+}
+```
+
+The one principal may use the three `*_PRIMARY` user-interface surfaces only inside the
+`SOLO_FIRST_PASS` workspace.  This is an interface convenience, not an independence claim.  The
+workspace, journal, events, banner, status API, and receipt all remain explicitly non-formal and
+not promotable.
+
 ## 3. Owner-started foreground launch
 
 Substitute the exact receipt and registry paths selected above:
@@ -127,6 +154,38 @@ The website refuses final review submission unless the exact codec gate is open.
 preview confirmation also remains blocked if either pinned local tokenizer is unavailable or if
 any correction, evidence, span, delimiter repair, or sham selection changes after preview.
 
+### 3a. Owner-authorized detached solo launch
+
+For the one-person precursor flow, use a separate root and the solo registry.  The owner has
+authorized a detached `tmux` wrapper for this one loopback-only process:
+
+```bash
+tmux new-session -d -s g1_6_solo_first_pass \
+  "cd /ABSOLUTE/PATH/TO/AGENTSENTINEL && \
+   PYTHONPATH=MobileWorld/src \
+   /shared/linqiang/evofsm_project/SkyRL-AndroidWorld/skyrl-agent/.venv/bin/python \
+   MobileWorld/scripts/run_g1_gold_curation.py \
+   --solo-first-pass \
+   --annotation-root /shared/linqiang/mobileworld_causal_replay_data/g1_6/solo-first-pass-workspace-v1 \
+   --reviewer-registry /ABSOLUTE/REPO-EXTERNAL/solo-first-pass-reviewer-registry.v1.json \
+   --g1-5-publication-manifest mobileworld_audit_handoff/g1_5/cpu_publication_manifest.v1.json \
+   --codec-gate-receipt /ABSOLUTE/REPO-EXTERNAL/sha256/xx/DIGEST.json \
+   --load-local-pinned-tokenizers \
+   --port 8766"
+```
+
+Do not add workers, reload, proxy headers, a second process, a non-loopback bind, or any external
+tunnel/hosting.  From the owner's computer, use only this local-forward shape with the normal SSH
+host alias:
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes \
+  -L 127.0.0.1:8766:127.0.0.1:8766 YOUR_NORMAL_SSH_ALIAS
+```
+
+Then open `http://127.0.0.1:8766` on that computer.  Do not use `-R`, `-D`, `GatewayPorts`, a
+`0.0.0.0` client bind, a shared proxy, or a third-party tunnel.
+
 ## 4. Human workflow
 
 1. Each initial reviewer signs in only with the principal and role assigned in the owner registry.
@@ -141,6 +200,25 @@ any correction, evidence, span, delimiter repair, or sham selection changes afte
    resolution for every disagreement field.  There is no copy-primary or majority shortcut.
 7. `CONSISTENCY_AUDIT` opens only after both formal channels resolve and remains descriptive; it
    cannot modify action gold, transformations, admission, scoring, or replay.
+
+### Solo first-pass workflow
+
+The server enforces one global, irreversible order across all 190 units:
+
+1. lock all 190 `ACTION_GOLD` first passes;
+2. then lock all 190 `TRANSFORMATION` first passes;
+3. then lock all 190 preliminary `CONSISTENCY_AUDIT` first passes.
+
+Before a stage opens, its packet, image, preview, draft, and lock endpoints all fail closed.  Drafts
+are append-only snapshots; a stage lock is immutable and idempotent only for identical bytes.  The
+natural action shown in Consistency can therefore never influence an editable Action Gold or
+Transformation first pass.
+
+Solo mode never emits formal `REVIEW_SUBMITTED`, resolution, adjudication, admission, or seal
+records.  Its formal review count and resolved-channel count remain zero.  When independent
+reviewers become available, create a new formal root, registry, and assignment key.  The solo
+journal remains a non-authorizing precursor and must stay hidden from those reviewers until blind
+formal review is complete.
 
 ## 5. Checkpoint and completion boundary
 

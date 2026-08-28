@@ -6,6 +6,7 @@ from mobile_world.offline.gold_curation.publication import (
     CurationPublication,
 )
 from mobile_world.offline.gold_curation.server import create_app
+from mobile_world.offline.gold_curation.solo import SoloCuratorRegistry, SoloFirstPassStore
 from mobile_world.offline.gold_curation.store import (
     AnnotationStore,
     ReviewerRegistry,
@@ -18,6 +19,8 @@ __all__ = [
     "AnnotationStore",
     "CurationPublication",
     "ReviewerRegistry",
+    "SoloCuratorRegistry",
+    "SoloFirstPassStore",
     "build_codec_gate_receipt",
     "create_app",
     "load_local_pinned_token_counters",
