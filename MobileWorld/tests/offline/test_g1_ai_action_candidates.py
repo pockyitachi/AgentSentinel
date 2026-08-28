@@ -973,7 +973,8 @@ def test_web_has_no_generation_vote_bulk_accept_or_candidate_autosave() -> None:
     server = (PYTHON_ROOT / "src/mobile_world/offline/gold_curation/server.py").read_text(
         encoding="utf-8"
     )
-    assert "三路 AI 候选 · 逐项人工复核" in app_js
+    assert "第 1 步 · 简易候选审核" in app_js
+    assert "逐条选择，不是在三个 Agent 中选一个" in app_js
     assert "ADOPT_TO_FORM" in app_js
     assert "ADOPT_WITH_EDITS_TO_FORM" in app_js
     assert "USE_AS_SUPPLEMENT" in app_js
@@ -986,11 +987,102 @@ def test_web_has_no_generation_vote_bulk_accept_or_candidate_autosave() -> None:
     assert '$("#closed-world").checked = false' in app_js
     assert '$("#all-actions").checked = false' in app_js
     assert 'api("/api/assist/candidate-decisions"' in app_js
-    assert (
-        'api("/api/solo/draft"'
-        not in app_js[
-            app_js.index("async function decideAiCandidate") : app_js.index("function actionForm")
-        ]
-    )
+    decision_slice = app_js[
+        app_js.index("async function decideAiCandidate") : app_js.index("function actionForm")
+    ]
+    assert 'api("/api/solo/draft"' not in decision_slice
+    assert 'api("/api/solo/lock"' not in decision_slice
+    assert "persist(" not in decision_slice
+    assert "window.confirm" not in decision_slice
     for forbidden in ("/generate", "/regenerate", "/rank", "/merge", "/accept-all"):
         assert f'@app.post("{forbidden}' not in server
+
+
+def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -> None:
+    app_js = (PYTHON_ROOT / "src/mobile_world/offline/gold_curation/web/app.js").read_text(
+        encoding="utf-8"
+    )
+    styles = (PYTHON_ROOT / "src/mobile_world/offline/gold_curation/web/styles.css").read_text(
+        encoding="utf-8"
+    )
+
+    candidate_card = app_js[
+        app_js.index("function aiCandidateCard") : app_js.index(
+            "function renderAiCandidateOverlays"
+        )
+    ]
+    assert "data-ai-evidence-verified" in candidate_card
+    assert 'type="checkbox"' in candidate_card
+    assert "checked" not in candidate_card
+    assert 'role="alert"' in candidate_card
+    assert 'aria-live="assertive"' in candidate_card
+    assert "查看技术字段" in app_js
+    assert "可选备注与 evidence ID" in candidate_card
+
+    decision_slice = app_js[
+        app_js.index("async function decideAiCandidate") : app_js.index("function actionForm")
+    ]
+    assert "if (!evidenceVerified?.checked)" in decision_slice
+    assert "itemFeedback.textContent = message" in decision_slice
+    assert "evidenceVerified.focus()" in decision_slice
+    assert (
+        'evidenceVerified.scrollIntoView({behavior: "smooth", block: "center"})' in decision_slice
+    )
+    assert 'card.setAttribute("aria-busy", "true")' in decision_slice
+    busy_controls = app_js[
+        app_js.index("function setAiDecisionUiBusy") : app_js.index("function renderAiCandidates")
+    ]
+    assert "button.disabled = busy" in busy_controls
+    assert "close.disabled = busy" in busy_controls
+    assert "save.disabled = busy" in busy_controls
+    assert "submit.disabled = busy" in busy_controls
+    assert "state.aiDecisionInFlight" in decision_slice
+    assert "const assignmentId = state.active?.assignmentId" in decision_slice
+    assert "state.active?.assignmentId !== assignmentId" in decision_slice
+    assert "state.aiCandidates !== candidateData" in decision_slice
+    assert "renderAiCandidates()" in decision_slice
+    assert "candidate.current_decision" in decision_slice
+    for attestation in (
+        "human_confirmed_item_review: true",
+        "human_verified_visible_evidence: true",
+        "ai_candidate_is_not_evidence: true",
+        "annotation_form_not_saved_or_finalized: true",
+    ):
+        assert attestation in decision_slice
+
+    action_form = app_js[app_js.index("function actionForm") : app_js.index("function spanList")]
+    for required_id in (
+        "advanced-action-form",
+        "predicate-list",
+        "add-predicate",
+        "closed-world",
+        "all-actions",
+        "evidence-rationale",
+    ):
+        assert required_id in action_form
+    disposition_form = app_js[
+        app_js.index("function commonDisposition") : app_js.index("function predicateActionOptions")
+    ]
+    assert 'id="disposition"' in disposition_form
+    assert 'id="exclusion-reason"' in disposition_form
+    assert "<details" in action_form
+    assert "第 2 步 · 最终人工确认" in action_form
+    collect_payload = app_js[
+        app_js.index("function collectPayload") : app_js.index("async function persist")
+    ]
+    assert '$$(".predicate-card").map((card) => collectPredicate(card))' in collect_payload
+    assert 'base.disposition === "EXCLUDE" ? [] : state.predicates' in collect_payload
+    assert 'evidence_rationale: $("#evidence-rationale").value' in collect_payload
+    assert 'closed_world_confirmed: $("#closed-world").checked' in collect_payload
+    assert 'all_reasonable_actions_enumerated: $("#all-actions").checked' in collect_payload
+    assert 'const openDialogs = $$("dialog[open]")' in app_js
+    assert ".ai-decision-actions button { min-height: 48px" in styles
+    assert ".ai-candidate-item.needs-attention" in styles
+    assert ".ai-decision-actions button:disabled" in styles
+    assert ".ai-inline-feedback.error" in styles
+    assert ".advanced-action-form" in styles
+    assert "grid-template-columns: repeat(3,minmax(0,1fr))" in styles
+    assert "const columns = data.agent_outputs.map" in app_js
+    assert "pending[0]" not in app_js
+    assert 'event.target.closest(".ai-candidate-panel")' in app_js
+    assert "if (state.aiDecisionInFlight) return toast" in app_js

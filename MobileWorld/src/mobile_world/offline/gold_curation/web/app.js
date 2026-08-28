@@ -15,6 +15,8 @@ const state = {
   correctionCandidates: [],
   transformationPreview: null,
   aiCandidates: null,
+  aiDecisionInFlight: null,
+  aiReviewFeedback: null,
   formDirty: false,
   coordinateTarget: null,
   pendingOpen: null,
@@ -36,6 +38,9 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character
 
 function toast(message, error = false) {
   const element = $("#toast");
+  const openDialogs = $$("dialog[open]");
+  const host = openDialogs.length ? openDialogs[openDialogs.length - 1] : document.body;
+  if (element.parentElement !== host) host.appendChild(element);
   element.textContent = message;
   element.className = `toast show${error ? " error" : ""}`;
   clearTimeout(toast.timer);
@@ -180,7 +185,7 @@ function renderAssignments() {
 function evidenceMarkup(packet) {
   const imageSuffix = state.profile.role === "ADJUDICATOR" ? `?channel=${encodeURIComponent(packet.channel)}` : "";
   const evidence = packet.evidence.map((item) => `<article class="evidence-card"><h3>${escapeHtml(item.evidence_role)}</h3><pre class="evidence-content">${escapeHtml(typeof item.content === "string" ? item.content : JSON.stringify(item.content, null, 2))}</pre><small>${escapeHtml(item.evidence_token)}</small></article>`).join("");
-  const image = `<article class="evidence-card"><h3>当前 GUI · S<sub>t</sub></h3><div class="screenshot-wrap"><img id="target-screenshot" src="/api/assignments/${packet.assignment_id}/image${imageSuffix}" alt="Target-pre GUI screenshot" draggable="false" tabindex="0"><div id="coordinate-selection" class="coordinate-selection" hidden aria-hidden="true"></div></div><p class="screenshot-meta">${packet.current_screenshot.width} × ${packet.current_screenshot.height} · 原始像素坐标；框选模式支持鼠标/触控拖拽，也可依次点击两个角点</p></article>`;
+  const image = `<article class="evidence-card"><h3>当前 GUI · S<sub>t</sub></h3><div class="screenshot-wrap"><img id="target-screenshot" src="/api/assignments/${packet.assignment_id}/image${imageSuffix}" alt="Target-pre GUI screenshot" draggable="false" tabindex="0"><div id="ai-candidate-overlays" class="ai-candidate-overlays" aria-hidden="true"></div><div id="coordinate-selection" class="coordinate-selection" hidden aria-hidden="true"></div></div><p class="screenshot-meta">${packet.current_screenshot.width} × ${packet.current_screenshot.height} · 原始像素坐标；橙色框仅表示当前 AI 候选，不是证据；人工框选支持鼠标/触控拖拽</p></article>`;
   let history = "";
   if (packet.visibility.history_visible && packet.source_records) {
     history = `<div class="section-label">Captured source history</div>${packet.source_records.map((record, index) => `<article class="history-record" data-record-index="${index}"><header><span>${escapeHtml(record.author_role)}</span><span>record ${index + 1}</span></header><pre data-exact-record="${index}"></pre><div><button class="candidate-chip select-span" data-record="${index}" data-target="focal">选区 → Focal / clean anchor</button><button class="candidate-chip select-span" data-record="${index}" data-target="oracle">选区 → Oracle</button><button class="candidate-chip select-span" data-record="${index}" data-target="sham">选区 → Sham</button><button class="candidate-chip select-span" data-record="${index}" data-target="protected">选区 → Protected</button><button class="candidate-chip select-span" data-record="${index}" data-target="repair">选区 → Delimiter repair</button></div></article>`).join("")}`;
@@ -361,15 +366,145 @@ function syncPredicatesLenient() {
   });
 }
 
+const AI_DECISION_LABELS = {
+  ADOPT_TO_FORM: "采用",
+  ADOPT_WITH_EDITS_TO_FORM: "修改后采用",
+  USE_AS_SUPPLEMENT: "作为补充",
+  IGNORE: "不采用",
+};
+
+function actionTypeLabel(actionType) {
+  return ({
+    answer: "回答",
+    ask_user: "询问用户",
+    click: "点击",
+    double_tap: "双击",
+    drag: "拖拽",
+    finished: "完成任务",
+    input_text: "输入文字",
+    keyboard_enter: "按回车",
+    long_press: "长按",
+    navigate_back: "返回",
+    navigate_home: "回到主屏",
+    open_app: "打开应用",
+    scroll: "滚动",
+    swipe: "滑动",
+    wait: "等待",
+  })[actionType] || actionType;
+}
+
+function candidateRegionBounds(region) {
+  if (region?.shape === "BOUNDING_BOX") return region;
+  if (region?.shape !== "POLYGON" || !Array.isArray(region.vertices) || !region.vertices.length) return null;
+  const xs = region.vertices.map((point) => point[0]);
+  const ys = region.vertices.map((point) => point[1]);
+  return {x_min: Math.min(...xs), y_min: Math.min(...ys), x_max: Math.max(...xs), y_max: Math.max(...ys)};
+}
+
 function candidatePredicateSummary(predicate) {
-  const primary = `${predicate.predicate_kind} · ${predicate.action_type}`;
-  const details = JSON.stringify(predicate, null, 2);
-  return `<strong>${escapeHtml(primary)}</strong><pre>${escapeHtml(details)}</pre>`;
+  const action = actionTypeLabel(predicate.action_type);
+  const rows = [];
+  if (predicate.predicate_kind === "POINT_REGION") {
+    (predicate.regions || []).forEach((region, index) => {
+      const bounds = candidateRegionBounds(region);
+      if (bounds) rows.push(`区域 ${index + 1}：左 ${bounds.x_min} · 上 ${bounds.y_min} · 右 ${bounds.x_max} · 下 ${bounds.y_max}`);
+    });
+    rows.push(`允许误差：${predicate.tolerance_px} px`);
+  }
+  if (predicate.predicate_kind === "DRAG_REGION") {
+    const start = candidateRegionBounds(predicate.start_regions?.[0]);
+    const end = candidateRegionBounds(predicate.end_regions?.[0]);
+    if (start) rows.push(`起点区域：(${start.x_min}, ${start.y_min}) → (${start.x_max}, ${start.y_max})`);
+    if (end) rows.push(`终点区域：(${end.x_min}, ${end.y_min}) → (${end.x_max}, ${end.y_max})`);
+    if (predicate.allowed_directions?.length) rows.push(`方向：${predicate.allowed_directions.join(" / ")}`);
+  }
+  if (predicate.predicate_kind === "TEXT_VARIANTS") {
+    rows.push(`字段：${predicate.field}`);
+    rows.push(`允许内容：${(predicate.allowed_values || []).map((value) => JSON.stringify(value)).join(" / ")}`);
+  }
+  if (predicate.predicate_kind === "DIRECTION_SET") rows.push(`允许方向：${(predicate.allowed_directions || []).join(" / ")}`);
+  if (predicate.predicate_kind === "EXACT_NORMALIZED_ACTION") {
+    const populated = Object.entries(predicate.normalized_action?.value || {}).filter(([key, value]) => key !== "action_type" && value !== null);
+    rows.push(populated.length ? populated.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" · ") : "其余 optional 字段均为 null");
+  }
+  const raw = JSON.stringify(predicate, null, 2);
+  return `<div class="ai-action-summary"><span class="ai-action-kicker">建议动作</span><strong>${escapeHtml(action)}</strong>${rows.map((row) => `<p>${escapeHtml(row)}</p>`).join("")}<details class="ai-technical-details"><summary>查看技术字段</summary><pre>${escapeHtml(raw)}</pre></details></div>`;
 }
 
 function aiCandidatePanel() {
   if (!state.config?.ai_candidate_assistance?.enabled) return "";
-  return `<article class="form-card ai-candidate-panel"><header><div><span class="eyebrow">D-031 · AI-assisted solo</span><h3>三路 AI 候选 · 逐项人工复核</h3></div><span class="ai-warning">不是证据 · 不是 review</span></header><p class="screenshot-meta">Agent A/B/C 彼此隔离；没有投票、排名、默认答案或自动合并。点击决定只写独立候选日志；采用只复制到下方未保存表单。</p><div id="ai-candidate-columns" class="ai-candidate-columns"><p class="screenshot-meta">正在读取已冻结候选…</p></div></article>`;
+  return `<article class="form-card ai-candidate-panel"><header><div><span class="eyebrow">第 1 步 · 简易候选审核</span><h3>逐条选择，不是在三个 Agent 中选一个</h3></div><span class="ai-warning">AI 候选不是证据</span></header><p class="ai-simple-copy">A / B / C 三列地位相同，不是投票也没有推荐顺序。每张卡只需：看左侧任务与截图 → 勾选“我已核对” → 点一个大按钮。选择会立即记录，但不会自动保存或锁定标注。</p><div id="ai-review-feedback" class="ai-inline-feedback" role="status" aria-live="polite"></div><div id="ai-candidate-columns" class="ai-candidate-columns"><p class="screenshot-meta">正在读取已冻结候选…</p></div><button type="button" class="quiet-button ai-open-advanced" data-open-advanced>我想自己填写 / 打开高级编辑</button></article>`;
+}
+
+function flattenedAiCandidates(data) {
+  return data.agent_outputs.flatMap((output) => output.candidate_items.map((item) => ({agentSlot: output.agent_slot, item})));
+}
+
+function aiCandidateCard(entry) {
+  const {agentSlot, item} = entry;
+  const current = item.current_decision?.decision || null;
+  const currentLabel = current ? `已记录：${AI_DECISION_LABELS[current]}` : "待选择（不是第 4 个 Agent）";
+  const uncertainty = item.uncertainty_note ? `<div class="ai-uncertainty"><b>需要注意：</b>${escapeHtml(item.uncertainty_note)}</div>` : "";
+  const buttons = Object.entries(AI_DECISION_LABELS).map(([decision, label]) => `<button type="button" data-ai-decision="${decision}" aria-pressed="${current === decision}">${escapeHtml(label)}</button>`).join("");
+  return `<article class="ai-candidate-item ${current ? "is-decided" : "is-pending"}" data-ai-candidate="${escapeHtml(item.candidate_token)}"><header class="ai-candidate-title"><div><span>Agent ${escapeHtml(agentSlot)}</span><b>${escapeHtml(currentLabel)}</b></div><span class="ai-candidate-number">独立候选</span></header>${candidatePredicateSummary(item.predicate)}<div class="ai-rationale"><b>为什么可能合理</b><p>${escapeHtml(item.concise_rationale)}</p></div>${uncertainty}<label class="ai-item-attestation"><input type="checkbox" data-ai-evidence-verified><span><b>我已亲自核对</b>左侧任务、截图和这条候选引用的可见 evidence；我知道 AI 候选本身不是证据。</span></label><div class="ai-decision-actions">${buttons}</div><div class="ai-item-feedback" data-ai-item-feedback role="alert" aria-live="assertive"></div><details class="ai-optional-details"><summary>可选备注与 evidence ID</summary><label>人工备注（可留空）<textarea data-ai-note maxlength="4000">${escapeHtml(item.current_decision?.human_note || "")}</textarea></label><p class="ai-evidence-links">Evidence: ${item.evidence_tokens.map((token) => `<code>${escapeHtml(token)}</code>`).join(" ")}</p></details></article>`;
+}
+
+function renderAiCandidateOverlays(candidate) {
+  const layer = $("#ai-candidate-overlays");
+  if (!layer) return;
+  layer.innerHTML = "";
+  if (!candidate) return;
+  const predicate = candidate.predicate;
+  const width = state.active?.data.packet.current_screenshot.width;
+  const height = state.active?.data.packet.current_screenshot.height;
+  if (!(width > 0 && height > 0)) return;
+  const regions = predicate.predicate_kind === "POINT_REGION"
+    ? (predicate.regions || []).map((region) => ({region, label: "AI 候选"}))
+    : predicate.predicate_kind === "DRAG_REGION"
+      ? [...(predicate.start_regions || []).map((region) => ({region, label: "AI 起点"})), ...(predicate.end_regions || []).map((region) => ({region, label: "AI 终点"}))]
+      : [];
+  layer.innerHTML = regions.map(({region, label}) => {
+    const bounds = candidateRegionBounds(region);
+    if (!bounds || !(bounds.x_max > bounds.x_min && bounds.y_max > bounds.y_min)) return "";
+    const style = `left:${100 * bounds.x_min / width}%;top:${100 * bounds.y_min / height}%;width:${100 * (bounds.x_max - bounds.x_min) / width}%;height:${100 * (bounds.y_max - bounds.y_min) / height}%`;
+    return `<div class="ai-candidate-overlay" style="${style}"><span>${escapeHtml(label)}</span></div>`;
+  }).join("");
+}
+
+function openAdvancedActionForm(scroll = true) {
+  const advanced = $("#advanced-action-form");
+  if (!advanced) return;
+  advanced.open = true;
+  if (scroll) advanced.scrollIntoView({behavior: "smooth", block: "start"});
+}
+
+function bindOpenAdvancedButtons() {
+  $$('[data-open-advanced]').forEach((button) => { button.onclick = () => openAdvancedActionForm(); });
+}
+
+function updateAiLockControl() {
+  if (!(state.config?.solo_first_pass && state.active?.data.packet.channel === "ACTION_GOLD" && state.config?.ai_candidate_assistance?.enabled)) return;
+  const submit = $("#submit-review");
+  if (!submit) return;
+  if (!state.aiCandidates) {
+    submit.disabled = true;
+    submit.textContent = "候选尚未读取";
+    return;
+  }
+  const pending = flattenedAiCandidates(state.aiCandidates).filter(({item}) => !item.current_decision).length;
+  submit.disabled = !state.config.first_pass_lock_open || pending > 0;
+  submit.textContent = pending > 0 ? `先完成候选选择（还剩 ${pending}）` : state.config.first_pass_lock_open ? "锁定本阶段（非正式）" : "等待 G1.5 CPU codec gate";
+}
+
+function setAiDecisionUiBusy(busy) {
+  const close = $("#close-workbench");
+  const save = $("#save-draft");
+  const submit = $("#submit-review");
+  if (close) close.disabled = busy;
+  if (save) save.disabled = busy;
+  if (submit) submit.disabled = busy;
+  $$('[data-ai-decision]').forEach((button) => { button.disabled = busy; });
+  if (!busy) updateAiLockControl();
 }
 
 function renderAiCandidates() {
@@ -377,19 +512,40 @@ function renderAiCandidates() {
   if (!root) return;
   const data = state.aiCandidates;
   if (!data) {
-    root.innerHTML = '<p class="screenshot-meta">已冻结候选暂不可用；请完全自行填写下方表单。</p>';
+    root.innerHTML = '<div class="ai-inline-feedback error">已冻结候选暂不可用。当前不能锁定本任务；你仍可打开高级编辑并保存草稿。</div>';
+    bindOpenAdvancedButtons();
+    renderAiCandidateOverlays(null);
+    updateAiLockControl();
     return;
   }
-  root.innerHTML = data.agent_outputs.map((output) => {
-    const items = output.candidate_items.map((item) => {
-      const current = item.current_decision?.decision || "PENDING";
-      const uncertainty = item.uncertainty_note ? `<p><b>不确定性：</b>${escapeHtml(item.uncertainty_note)}</p>` : "";
-      return `<article class="ai-candidate-item" data-ai-candidate="${escapeHtml(item.candidate_token)}"><div class="ai-candidate-status"><span>${escapeHtml(current)}</span></div>${candidatePredicateSummary(item.predicate)}<p><b>简短依据：</b>${escapeHtml(item.concise_rationale)}</p>${uncertainty}<p class="ai-evidence-links">Evidence: ${item.evidence_tokens.map((token) => `<code>${escapeHtml(token)}</code>`).join(" ")}</p><label class="inline-check"><input type="checkbox" data-ai-evidence-verified>我已亲自核对当前任务、截图和列出的可见 evidence；AI 候选本身不是证据</label><label>可选人工备注<textarea data-ai-note maxlength="4000">${escapeHtml(item.current_decision?.human_note || "")}</textarea></label><div class="ai-decision-actions"><button type="button" data-ai-decision="ADOPT_TO_FORM">采用到表单</button><button type="button" data-ai-decision="ADOPT_WITH_EDITS_TO_FORM">采用后修改</button><button type="button" data-ai-decision="USE_AS_SUPPLEMENT">作为补充</button><button type="button" data-ai-decision="IGNORE">忽略</button></div></article>`;
-    }).join("");
-    const body = output.response_kind === "ABSTAIN" ? `<div class="ai-abstain">ABSTAIN · ${escapeHtml(output.abstain_reason)}</div>` : items;
-    return `<section class="ai-agent-column"><header><b>Agent ${escapeHtml(output.agent_slot)}</b><span>AI candidate</span></header>${body}</section>`;
+  const all = flattenedAiCandidates(data);
+  const pending = all.filter(({item}) => !item.current_decision);
+  const completed = all.length - pending.length;
+  const progress = `<div class="ai-review-progress"><div><b>候选审核 ${completed} / ${all.length}</b><span>${pending.length ? `还剩 ${pending.length} 条需要选择` : "所有 AI 候选都已有明确决定"}</span></div><progress value="${completed}" max="${Math.max(all.length, 1)}"></progress></div>`;
+  const columns = data.agent_outputs.map((output) => {
+    const items = output.candidate_items.map((item) => aiCandidateCard({agentSlot: output.agent_slot, item})).join("");
+    const body = output.response_kind === "ABSTAIN" ? `<div class="ai-abstain"><b>无需选择 · ABSTAIN</b><p>${escapeHtml(output.abstain_reason)}</p></div>` : items;
+    return `<section class="ai-agent-column"><header><b>Agent ${escapeHtml(output.agent_slot)}</b><span>${output.candidate_items.length} 条候选</span></header>${body}</section>`;
   }).join("");
+  const completion = pending.length ? "" : `<div class="ai-review-complete"><b>✓ 候选选择完成</b><p>${all.length ? "这些决定已写入独立候选日志。被采用的动作仍只是未保存表单，关闭页面后不会自动恢复；请现在进入第 2 步，逐项确认字段后再保存或锁定。" : "三个 Agent 都没有提供 atomic candidate。你仍需自己决定 ACCEPT / EXCLUDE 并填写最终表单。"}</p><button type="button" class="primary-button" data-open-advanced>进入第 2 步 · 最终人工确认</button></div>`;
+  root.innerHTML = `${progress}<div class="ai-agent-grid">${columns}</div>${completion}`;
+  const feedback = $("#ai-review-feedback");
+  if (feedback) {
+    feedback.textContent = state.aiReviewFeedback?.message || "";
+    feedback.className = `ai-inline-feedback${state.aiReviewFeedback?.error ? " error" : state.aiReviewFeedback ? " success" : ""}`;
+  }
   $$('[data-ai-decision]', root).forEach((button) => { button.onclick = () => decideAiCandidate(button); });
+  $$('.ai-candidate-item', root).forEach((card) => {
+    const candidateToken = card.dataset.aiCandidate;
+    const candidate = all.find(({item}) => item.candidate_token === candidateToken)?.item || null;
+    card.onpointerenter = () => renderAiCandidateOverlays(candidate);
+    card.onfocusin = () => renderAiCandidateOverlays(candidate);
+    card.onpointerleave = () => { if (!card.contains(document.activeElement)) renderAiCandidateOverlays(null); };
+    card.onfocusout = (event) => { if (!card.contains(event.relatedTarget)) renderAiCandidateOverlays(null); };
+  });
+  bindOpenAdvancedButtons();
+  renderAiCandidateOverlays(null);
+  updateAiLockControl();
 }
 
 async function loadAiCandidates(assignmentId) {
@@ -406,20 +562,39 @@ async function loadAiCandidates(assignmentId) {
 
 async function decideAiCandidate(button) {
   const card = button.closest("[data-ai-candidate]");
+  const assignmentId = state.active?.assignmentId;
+  const candidateData = state.aiCandidates;
   const candidateToken = card.dataset.aiCandidate;
   const decision = button.dataset.aiDecision;
-  const candidate = state.aiCandidates.agent_outputs.flatMap((output) => output.candidate_items).find((item) => item.candidate_token === candidateToken);
+  const candidate = candidateData.agent_outputs.flatMap((output) => output.candidate_items).find((item) => item.candidate_token === candidateToken);
   if (!candidate) return toast("候选已失效，请重新打开任务", true);
   const evidenceVerified = card.querySelector("[data-ai-evidence-verified]");
-  if (!evidenceVerified?.checked) return toast("请先亲自核对当前任务、截图和可见 evidence，再记录决定", true);
-  const labels = {ADOPT_TO_FORM: "采用到表单", ADOPT_WITH_EDITS_TO_FORM: "采用后修改", USE_AS_SUPPLEMENT: "作为补充", IGNORE: "忽略"};
-  if (!window.confirm(`确认对这一条 AI 候选选择“${labels[decision]}”？\n\n你已亲自核对可见证据。AI 候选不是证据，也不会自动保存或锁定表单。`)) return;
+  if (!evidenceVerified?.checked) {
+    const message = "先勾选上面的“我已亲自核对”，再选择采用或不采用。";
+    card.classList.add("needs-attention");
+    const itemFeedback = card.querySelector("[data-ai-item-feedback]");
+    itemFeedback.textContent = message;
+    state.aiReviewFeedback = {message, error: true};
+    const feedback = $("#ai-review-feedback");
+    if (feedback) { feedback.textContent = message; feedback.className = "ai-inline-feedback error"; }
+    evidenceVerified.focus();
+    evidenceVerified.scrollIntoView({behavior: "smooth", block: "center"});
+    return toast(message, true);
+  }
+  if (state.aiDecisionInFlight) return;
+  const previousDecision = candidate.current_decision?.decision || null;
+  const requestMarker = {assignmentId, candidateToken};
+  state.aiDecisionInFlight = requestMarker;
+  card.setAttribute("aria-busy", "true");
+  setAiDecisionUiBusy(true);
+  const itemFeedback = card.querySelector("[data-ai-item-feedback]");
+  itemFeedback.textContent = "正在记录这一个选择…";
   try {
     const humanNote = card.querySelector("[data-ai-note]").value;
     const recorded = await api("/api/assist/candidate-decisions", {
       method: "POST",
       body: JSON.stringify({
-        assignment_id: state.active.assignmentId,
+        assignment_id: assignmentId,
         candidate_token: candidateToken,
         decision,
         human_note: humanNote,
@@ -429,6 +604,10 @@ async function decideAiCandidate(button) {
         annotation_form_not_saved_or_finalized: true,
       }),
     });
+    if (state.active?.assignmentId !== assignmentId || state.aiCandidates !== candidateData || state.aiDecisionInFlight !== requestMarker) {
+      toast("选择已记录，但当前页面已经切换；旧候选没有复制到新任务，请重新打开原任务。", true);
+      return;
+    }
     candidate.current_decision = {decision: recorded.decision, human_note: recorded.human_note, decision_event_token: recorded.decision_event_token};
     if (decision !== "IGNORE") {
       syncPredicatesLenient();
@@ -443,17 +622,32 @@ async function decideAiCandidate(button) {
       $("#all-actions").checked = false;
       state.formDirty = true;
       $("#autosave-state").textContent = "未保存 · AI 候选已复制";
-      toast(decision === "ADOPT_TO_FORM" ? "候选已复制；请人工核对全部字段并勾选确认" : "候选已复制；请修改或补充后再单独保存草稿");
-    } else {
-      toast("已记录忽略；人工表单未改变");
     }
+    let message = decision === "IGNORE" ? "已记录：不采用。人工表单没有改变。" : `已记录：${AI_DECISION_LABELS[decision]}。候选已复制到未保存表单。`;
+    if (previousDecision && previousDecision !== "IGNORE" && decision === "IGNORE") message += " 之前已复制的内容不会自动删除，如需删除请在第 2 步操作。";
+    if (previousDecision && previousDecision !== "IGNORE" && decision !== "IGNORE") message += " 这是一次新的显式复制，旧副本不会自动合并。";
+    state.aiReviewFeedback = {message, error: false};
     renderAiCandidates();
-  } catch (error) { toast(error.message, true); }
+    toast(message);
+    if (decision === "ADOPT_WITH_EDITS_TO_FORM") openAdvancedActionForm();
+  } catch (error) {
+    const message = `这次选择没有记录：${error.message}`;
+    state.aiReviewFeedback = {message, error: true};
+    itemFeedback.textContent = message;
+    const feedback = $("#ai-review-feedback");
+    if (feedback) { feedback.textContent = message; feedback.className = "ai-inline-feedback error"; }
+    toast(message, true);
+  } finally {
+    if (state.aiDecisionInFlight === requestMarker) state.aiDecisionInFlight = null;
+    card.removeAttribute("aria-busy");
+    if (!state.aiDecisionInFlight) setAiDecisionUiBusy(false);
+  }
 }
 
 function actionForm(draft = {}) {
   state.predicates = structuredClone(draft.predicates || []);
-  return `<section class="form-pane">${aiCandidatePanel()}${commonDisposition(draft, ["NO_GOLD_CONSENSUS"])}<article class="form-card"><h3>Accepted next-action set</h3><p class="screenshot-meta">列出所有合理的一步动作；坐标使用截图原始像素空间。</p><div id="predicate-list"></div><button type="button" id="add-predicate" class="add-button">＋ 添加 accepted predicate</button><label class="inline-check"><input id="closed-world" type="checkbox" ${draft.closed_world_confirmed ? "checked" : ""}>我确认这是 closed-world accepted set</label><label class="inline-check"><input id="all-actions" type="checkbox" ${draft.all_reasonable_actions_enumerated ? "checked" : ""}>已枚举所有合理的一步动作</label></article><article class="form-card"><h3>Evidence rationale</h3><textarea id="evidence-rationale">${escapeHtml(draft.evidence_rationale || "")}</textarea></article></section>`;
+  const advancedOpen = !state.config?.ai_candidate_assistance?.enabled || Boolean(draft.disposition);
+  return `<section class="form-pane">${aiCandidatePanel()}<details id="advanced-action-form" class="advanced-action-form" ${advancedOpen ? "open" : ""}><summary><span><b>第 2 步 · 最终人工确认</b><small>只有要修改候选或准备保存 / 锁定时才需要打开</small></span><span class="advanced-chevron">⌄</span></summary><div class="advanced-action-body">${commonDisposition(draft, ["NO_GOLD_CONSENSUS"])}<article class="form-card"><h3>Accepted next-action set</h3><p class="screenshot-meta">逐项核对所有保留动作的字段、坐标、误差、证据和理由；候选选择不会替你完成这些确认。</p><div id="predicate-list"></div><button type="button" id="add-predicate" class="add-button">＋ 添加 accepted predicate</button><label class="inline-check"><input id="closed-world" type="checkbox" ${draft.closed_world_confirmed ? "checked" : ""}>我确认这是 closed-world accepted set</label><label class="inline-check"><input id="all-actions" type="checkbox" ${draft.all_reasonable_actions_enumerated ? "checked" : ""}>已枚举所有合理的一步动作</label></article><article class="form-card"><h3>Evidence rationale</h3><textarea id="evidence-rationale" placeholder="用一句话说明你依据左侧哪些可见证据做出最终判断">${escapeHtml(draft.evidence_rationale || "")}</textarea></article></div></details></section>`;
 }
 
 function spanList(title, id, spans) {
@@ -863,6 +1057,7 @@ function bindCoordinatePicker(packet) {
 
 async function openAssignment(assignmentId, channel) {
   try {
+    if (state.aiDecisionInFlight) throw new Error("候选选择正在记录，请完成后再切换任务");
     cancelCoordinatePicker();
     const query = new URLSearchParams();
     if (state.profile.role === "ADJUDICATOR") query.set("channel", channel);
@@ -891,8 +1086,10 @@ async function openAssignment(assignmentId, channel) {
 
 async function loadAssignment(assignmentId, channel) {
   try {
+    if (state.aiDecisionInFlight) throw new Error("候选选择正在记录，请完成后再切换任务");
     cancelCoordinatePicker();
     state.aiCandidates = null;
+    state.aiReviewFeedback = null;
     state.formDirty = false;
     const query = new URLSearchParams();
     if (state.profile.role === "ADJUDICATOR") query.set("channel", channel);
@@ -904,14 +1101,17 @@ async function loadAssignment(assignmentId, channel) {
     const draft = data.draft || {};
     const form = state.profile.role === "ADJUDICATOR" ? adjudicationForm(data) : packet.channel === "ACTION_GOLD" ? actionForm(draft) : packet.channel === "TRANSFORMATION" ? transformationForm(packet, draft) : consistencyForm(draft);
     $("#workbench-body").innerHTML = evidenceMarkup(packet) + form;
-    $("#workbench-body").oninput = () => {
+    $("#workbench-body").oninput = (event) => {
+      if (event.target.closest(".ai-candidate-panel")) return;
       state.formDirty = true;
       $("#autosave-state").textContent = "未保存";
     };
-    $("#workbench-body").onchange = () => {
+    $("#workbench-body").onchange = (event) => {
+      if (event.target.closest(".ai-candidate-panel")) return;
       state.formDirty = true;
       $("#autosave-state").textContent = "未保存";
     };
+    bindOpenAdvancedButtons();
     hydrateExactHistory(packet);
     $("#save-draft").style.display = state.profile.role === "ADJUDICATOR" ? "none" : "inline-block";
     if (state.config.solo_first_pass) {
@@ -992,6 +1192,7 @@ function collectPayload() {
 
 async function persist(kind) {
   try {
+    if (state.aiDecisionInFlight) throw new Error("候选选择正在记录，请完成后再保存或锁定");
     const payload = collectPayload();
     const path = state.config.solo_first_pass
       ? (kind === "draft" ? "/api/solo/draft" : "/api/solo/lock")
@@ -1051,10 +1252,24 @@ async function boot() {
   $("#packet-binding-form").onsubmit = confirmPacketOpen;
   $("#cancel-packet-open").onclick = () => { state.pendingOpen = null; $("#packet-binding-dialog").close(); };
   $("#close-workbench").onclick = () => {
+    if (state.aiDecisionInFlight) return toast("候选选择正在记录，请完成后再关闭", true);
     if (state.formDirty && !window.confirm("当前人工表单有未保存修改。确认关闭并丢弃这些未保存内容？")) return;
     cancelCoordinatePicker();
     state.formDirty = false;
     $("#workbench-dialog").close();
+  };
+  $("#workbench-dialog").oncancel = (event) => {
+    if (state.aiDecisionInFlight) {
+      event.preventDefault();
+      toast("候选选择正在记录，请完成后再关闭", true);
+      return;
+    }
+    if (state.formDirty && !window.confirm("当前人工表单有未保存修改。确认关闭并丢弃这些未保存内容？")) {
+      event.preventDefault();
+      return;
+    }
+    cancelCoordinatePicker();
+    state.formDirty = false;
   };
   $("#save-draft").onclick = () => persist("draft");
   $("#submit-review").onclick = () => state.profile.role === "ADJUDICATOR" ? submitAdjudication() : persist("submit");
@@ -1062,7 +1277,7 @@ async function boot() {
 }
 
 window.addEventListener("beforeunload", (event) => {
-  if (!state.formDirty) return;
+  if (!state.formDirty && !state.aiDecisionInFlight) return;
   event.preventDefault();
   event.returnValue = "";
 });
