@@ -16,7 +16,7 @@ gate and rubric tracker are proposed work; they are not implemented results.
 
 ## Project status
 
-Status as of 2026-08-27:
+Status as of 2026-08-28:
 
 | Workstream | Status | Scope |
 | --- | --- | --- |
@@ -26,6 +26,8 @@ Status as of 2026-08-27:
 | G1.2: portable Sentinel contract | **Complete** | CPU-only canonical History IR/Core, codec/provider interfaces, fail-closed validation, schemas, sidecars, and six-family fixture conformance |
 | G1.3: immutable decision capsules | **Complete; v1.1 corrected** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); Amendment 1 adds explicit fail-closed authorization guards; 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
 | G1.4: exact-request replay runner | **CPU/fake checkpoint and inert live-proof code prepared; live proof deferred** | The validated CPU/fake runner now has additive D-026 no-execution preparation for static bindings, no-send descriptors, caller-injected response projection, inert launch plans, and injected-only GPU assessment; all readiness/authorization fields remain false and the story remains incomplete |
+| G1.5: Qwen/MAI History Codecs | **CPU checkpoint implemented; live smoke deferred** | Exact flat-progress/raw-replay extraction, rendering, target-only diff, reversibility, human-bound CPU previews, and a content-bound CPU publication are implemented; no model/provider/GPU path is enabled |
+| G1.6: curated gold workspace | **CPU/manual annotation workspace implemented; human curation and formal export pending** | A private loopback-only website presents every human action-gold, transformation, consistency, and adjudication choice over 190 blinded packets; submissions are append-only and all provider/GPU/replay paths remain disabled |
 
 G1.2 is merged and accepted. ALE-321 / G1.3 formally froze and published all
 190 targets—152 strict-MHR candidates plus 38 selected clean controls—as
@@ -48,10 +50,13 @@ injected GPU inventory. It creates no client, performs no production network
 access, starts no process, probes or uses no GPU, loads no model, and executes no
 replay or action. All eight readiness/authorization fields and all nine safety
 fields remain false, no formal run publication exists, and the story state is
-`IN_PROGRESS_LIVE_PROOF_DEFERRED`. G1.5/G1.6/G1.7 and owner authorization for
-any live/GPU proof remain outstanding. Passing CPU or fake-provider tests must
-not be reported as ALE-322 completion. The checked-in AGENTS, STATUS, and G1.4
-decision log remain authoritative.
+`IN_PROGRESS_LIVE_PROOF_DEFERRED`. ALE-323 / G1.5 now has a provider-free CPU
+History Codec checkpoint, and ALE-324 / G1.6 has a private human-curation
+workspace checkpoint. Neither is a live proof or a completed formal gold
+publication. G1.7 and owner authorization for any live/GPU proof remain
+outstanding. Passing CPU or fake-provider tests must
+not be reported as ALE-322 completion. The checked-in AGENTS, STATUS, and the
+applicable G1.4/G1.5/G1.6 additive decision logs remain authoritative.
 
 ## Epic 1 results
 
@@ -132,6 +137,12 @@ and
 [`G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md);
 their nine original plus six additive schemas live under
 [`schemas/g1_4/`](mobileworld_audit_handoff/schemas/g1_4/).
+The G1.5 CPU codec and G1.6 human-curation boundaries are recorded in
+[`G1_5_DECISION_LOG.md`](mobileworld_audit_handoff/G1_5_DECISION_LOG.md),
+[`G1_6_DECISION_LOG.md`](mobileworld_audit_handoff/G1_6_DECISION_LOG.md), and
+[`G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md).
+The owner-only local website procedure is
+[`G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`](mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md).
 
 Raw collections, derived audit artifacts, screenshots, and replay outputs must
 remain outside the Git repository in restricted, versioned data roots. Git

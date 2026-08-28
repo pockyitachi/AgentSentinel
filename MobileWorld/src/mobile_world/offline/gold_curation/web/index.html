@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>G1.6 Gold Curation Workspace</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">G1.6</div>
+          <div>
+            <strong>Gold Curation</strong>
+            <span>private research workspace</span>
+          </div>
+        </div>
+        <div class="scope-lock">
+          <span class="pulse"></span>
+          CPU / manual only
+          <small>无模型 · 无 GPU · 无 replay</small>
+        </div>
+        <nav class="nav-stack">
+          <button class="nav-item active" data-view="queue">
+            <span>标注队列</span><b id="nav-total">190</b>
+          </button>
+          <button class="nav-item" data-view="guide"><span>标注准则</span></button>
+          <button class="nav-item" data-view="integrity"><span>完整性状态</span></button>
+        </nav>
+        <div class="profile-card">
+          <span class="eyebrow">当前身份</span>
+          <strong id="profile-name">尚未选择</strong>
+          <small id="profile-role">需绑定独立 reviewer role</small>
+          <button id="change-profile" class="quiet-button">切换身份</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="view-kicker">ALE-324 · G1.6</p>
+            <h1 id="view-title">人工标注队列</h1>
+          </div>
+          <div class="guard-row">
+            <span>external send <b>false</b></span>
+            <span>treatment <b>false</b></span>
+          </div>
+        </header>
+
+        <section id="queue-view" class="view active">
+          <div class="stats-grid">
+            <article><span>任务</span><strong id="stat-total">—</strong><small>当前角色可见</small></article>
+            <article><span>未开始</span><strong id="stat-not-assigned">—</strong><small>NOT_ASSIGNED</small></article>
+            <article><span>草稿中</span><strong id="stat-drafting">—</strong><small>append-only</small></article>
+            <article><span>已冻结</span><strong id="stat-finalized">—</strong><small>不可覆盖</small></article>
+            <article><span>等待 peer</span><strong id="stat-waiting-for-peer">—</strong><small>double blind</small></article>
+            <article><span>待裁决</span><strong id="stat-adjudication-required">—</strong><small>material only</small></article>
+            <article><span>裁决中</span><strong id="stat-adjudicating">—</strong><small>independent</small></article>
+            <article><span>已解决</span><strong id="stat-resolved">—</strong><small>hash-bound</small></article>
+            <article><span>输入阻断</span><strong id="stat-blocked-invalid-input">—</strong><small>fail closed</small></article>
+          </div>
+          <div class="toolbar">
+            <div class="segmented" id="status-filter">
+              <button class="selected" data-status="ALL">全部</button>
+              <button data-status="NOT_ASSIGNED">未开始</button>
+              <button data-status="DRAFTING">草稿</button>
+              <button data-status="FINALIZED">已冻结</button>
+              <button data-status="WAITING_FOR_PEER">等待 peer</button>
+              <button data-status="ADJUDICATION_REQUIRED">待裁决</button>
+              <button data-status="ADJUDICATING">裁决中</button>
+              <button data-status="RESOLVED">已解决</button>
+              <button data-status="BLOCKED_INVALID_INPUT">输入阻断</button>
+            </div>
+            <label class="search"><span>⌕</span><input id="assignment-search" placeholder="按序号筛选"></label>
+          </div>
+          <div id="progress-breakdowns" class="progress-breakdowns" aria-label="按模型、unit kind、channel、role、state 的盲化进度"></div>
+          <div id="assignment-list" class="assignment-list empty-state">
+            <div class="empty-glyph">◎</div>
+            <h2>先选择 reviewer 身份</h2>
+            <p>角色一旦产生标注事件，就不能与其他通道复用。</p>
+          </div>
+        </section>
+
+        <section id="guide-view" class="view">
+          <div class="guide-grid">
+            <article class="guide-card accent-blue">
+              <span>01 · Action gold</span><h2>只看任务与当前 GUI</h2>
+              <p>列出所有合理的一步动作，不看 history、自然动作、后状态、结果或 replay。</p>
+            </article>
+            <article class="guide-card accent-violet">
+              <span>02 · Transformation</span><h2>只改目标历史语义</h2>
+              <p>选择 focal / oracle span、最短事实 correction 与 matched sham。非目标 history 必须保持。</p>
+            </article>
+            <article class="guide-card accent-amber">
+              <span>03 · Consistency audit</span><h2>冻结后再看自然动作</h2>
+              <p>仅做描述性标签；它不能回写或改善前两条 gold。</p>
+            </article>
+            <article class="guide-card accent-green">
+              <span>04 · Adjudication</span><h2>只处理 material disagreement</h2>
+              <p>第三位身份独立的 reviewer 只看到同一通道两份已提交结果。</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="integrity-view" class="view">
+          <div class="integrity-panel">
+            <h2>机械边界</h2>
+            <div class="integrity-list" id="integrity-list"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="profile-dialog" class="modal compact-modal">
+      <form method="dialog" id="profile-form">
+        <span class="eyebrow">独立 reviewer profile</span>
+        <h2>选择你的标注角色</h2>
+        <p>同一身份不能跨通道，也不能同时担任 Primary、Secondary 或 Adjudicator。</p>
+        <label>Reviewer ID<input id="reviewer-id" required maxlength="256" placeholder="owner registry 中的 exact UTF-8 principal"></label>
+        <label>Role<select id="reviewer-role" required></select></label>
+        <label>Owner-issued access secret<input id="reviewer-secret" type="password" required minlength="16" autocomplete="current-password" placeholder="仅用于本地会话，不写入 journal"></label>
+        <div class="modal-actions"><button type="button" value="cancel" id="cancel-profile" class="quiet-button">取消</button><button value="default" id="save-profile" class="primary-button">进入工作台</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="packet-binding-dialog" class="modal compact-modal">
+      <form method="dialog" id="packet-binding-form">
+        <span class="eyebrow">Blind packet preflight</span>
+        <h2>确认身份与可见性后再打开</h2>
+        <p>此页尚未展示任务、截图、history 或 peer 内容。</p>
+        <div id="packet-binding-summary" class="binding-summary"></div>
+        <div id="packet-visibility-notice" class="visibility-notice"></div>
+        <label class="inline-check"><input id="packet-visibility-confirmed" type="checkbox">我确认当前 reviewer role、两个 digest 与可见性边界</label>
+        <div class="modal-actions"><button type="button" id="cancel-packet-open" class="quiet-button">取消</button><button type="submit" id="confirm-packet-open" class="primary-button">确认并打开 packet</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="workbench-dialog" class="modal workbench-modal">
+      <div class="workbench-shell">
+        <header class="workbench-header">
+          <div><span class="eyebrow" id="workbench-kicker">BLIND PACKET</span><h2 id="workbench-title">标注任务</h2></div>
+          <div class="workbench-actions"><span id="autosave-state" aria-live="polite">未保存</span><button id="close-workbench" class="icon-button" aria-label="关闭">×</button></div>
+        </header>
+        <div id="workbench-body" class="workbench-body"></div>
+        <footer class="workbench-footer">
+          <p>提交后不可覆盖；material disagreement 将进入第三方 adjudication。</p>
+          <div><button id="save-draft" class="quiet-button">保存草稿</button><button id="submit-review" class="primary-button">确认并提交</button></div>
+        </footer>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

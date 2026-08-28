@@ -17,6 +17,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
 | ALE-322 / G1.4 | **CPU/fake checkpoint 与 inert live-proof code preparation 已实现；live proof 延后** | commits `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`、`74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d` 已验证 runner/fake path 和 D-026 no-execution preparation；全部 readiness/authorization 与 safety fields 仍为 false，无 formal publication，story 仍未完成 |
 | ALE-323 / G1.5 | **CPU History Codec checkpoint 已实现；live smoke 延后** | Qwen flat-progress 与 MAI raw-replay 的 exact extraction/render/diff/reversibility、arbitrary human-draft five-arm preview、secret-free CPU publication 和 G1.4 fail-closed interface 已验证；`live_ready=false`，10-call GPU backlog 未授权，story 仍未完成 |
+| ALE-324 / G1.6 | **CPU/manual annotation workspace 已实现；人工标注与 formal export 待完成** | 私有 loopback-only 网页覆盖 190 个盲化 packet 的 action gold、transformation、consistency 与独立 adjudication；G1.5 preview/tokenizer 只读绑定，journal repo-external append-only；无 provider/GPU/replay/action |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -157,6 +158,29 @@ SHA-256；manifest 内分别绑定两个 selected Codec、capability、fixture�
 no-tokenizer Unicode/UTF-8 coordinate contract。
 它不是 live capability 或 formal G1 publication。
 
+## 当前活动阶段：ALE-324 / G1.6（CPU/manual annotation workspace checkpoint）
+
+[`G1_6_DECISION_LOG.md`](G1_6_DECISION_LOG.md) D-029 与
+[`G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`](G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md)
+授权把所有需要真人判断的 gold curation 选择放进一个私有、loopback-only 网页：ACTION_GOLD
+只看 exact task/current GUI；TRANSFORMATION 只看 exact source history/pre-cutoff evidence 并由
+人选择 focal/oracle/sham/correction/delimiter repair；CONSISTENCY_AUDIT 只在前两通道解决后做
+描述性判断；material disagreement 必须由第三个 channel-bound identity 独立裁决。
+
+工作台机械绑定 active G1.3 v1.1 publication、G1.5 CPU publication/preview、两个本地 pinned
+tokenizer records、role-projected browser packet 和 append-only event chain。网页不接收 raw path、
+完整 capsule、captured raw response、post/future/outcome 或另一通道 proposal；自然 normalized
+action/parse outcome 只在前两 formal channels 已解决后的 CONSISTENCY_AUDIT 可见，在
+ACTION_GOLD/TRANSFORMATION 始终不可见。preview 仅返回 assignment-scoped tokens、rendered
+history、target-only diff 与 reversible mapping。
+owner 启动步骤、9-role registry 形状和 completion boundary 见
+[`G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`](G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md)。
+
+当前精确状态是 `IN_PROGRESS_HUMAN_CURATION_REQUIRED`：代码/workspace checkpoint 不是
+formal gold publication。190 个单元仍需真实 PRIMARY/SECONDARY review 与必要 adjudication；
+formal action bundle、Transformation Plan、admission/blinded catalog/seal 还必须在独立 exporter
+门禁中完成。所有 execution/provider/treatment/GPU/replay/action flags 保持 false。
+
 ## 强制入口与补充导航
 
 先读取 repo root 的 AGENTS.md 与本目录的 [AGENTS.md](AGENTS.md)，并以它们为工程授权。
@@ -167,28 +191,31 @@ no-tokenizer Unicode/UTF-8 coordinate contract。
 3. [DECISION_LOG.md](DECISION_LOG.md)；
 4. [G1_4_DECISION_LOG.md](G1_4_DECISION_LOG.md)；
 5. [G1_5_DECISION_LOG.md](G1_5_DECISION_LOG.md)；
-6. [COLLECTOR_DESIGN.md](COLLECTOR_DESIGN.md)；
-7. [EVENT_CONTRACT_V1.md](EVENT_CONTRACT_V1.md)；
-8. [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)；
-9. [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md)；
-10. [SERVER_AGENT_INSTRUCTIONS.md](SERVER_AGENT_INSTRUCTIONS.md)；
-11. [STATUS.md](STATUS.md)；
-12. [G1_CAUSAL_REPLAY_PROTOCOL_V1.md](G1_CAUSAL_REPLAY_PROTOCOL_V1.md)；
-13. [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
-14. [G1_PORTABLE_SENTINEL_CONTRACT_V1.md](G1_PORTABLE_SENTINEL_CONTRACT_V1.md)；
-15. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
-16. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
-17. [G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md)；
-18. [G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)；
-19. [G1_5_HISTORY_CODEC_CONTRACT_V1.md](G1_5_HISTORY_CODEC_CONTRACT_V1.md)；
-20. [G1_5_HISTORY_CODEC_CAPABILITIES_V1.md](G1_5_HISTORY_CODEC_CAPABILITIES_V1.md)；
-21. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
-22. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
-23. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
-24. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
-25. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
-26. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
-27. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
+6. [G1_6_DECISION_LOG.md](G1_6_DECISION_LOG.md)；
+7. [COLLECTOR_DESIGN.md](COLLECTOR_DESIGN.md)；
+8. [EVENT_CONTRACT_V1.md](EVENT_CONTRACT_V1.md)；
+9. [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)；
+10. [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md)；
+11. [SERVER_AGENT_INSTRUCTIONS.md](SERVER_AGENT_INSTRUCTIONS.md)；
+12. [STATUS.md](STATUS.md)；
+13. [G1_CAUSAL_REPLAY_PROTOCOL_V1.md](G1_CAUSAL_REPLAY_PROTOCOL_V1.md)；
+14. [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
+15. [G1_PORTABLE_SENTINEL_CONTRACT_V1.md](G1_PORTABLE_SENTINEL_CONTRACT_V1.md)；
+16. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
+17. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
+18. [G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md)；
+19. [G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)；
+20. [G1_5_HISTORY_CODEC_CONTRACT_V1.md](G1_5_HISTORY_CODEC_CONTRACT_V1.md)；
+21. [G1_5_HISTORY_CODEC_CAPABILITIES_V1.md](G1_5_HISTORY_CODEC_CAPABILITIES_V1.md)；
+22. [G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md](G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md)；
+23. [G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md](G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md)；
+24. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
+25. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
+26. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
+27. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
+28. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
+29. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
+30. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
 
 三个无 `_v1_1` 后缀的 capsule/manifest/integrity schema 是 byte-frozen 历史 v1，
 不得作为当前 formal G1 contract 使用。
@@ -202,9 +229,12 @@ no-tokenizer Unicode/UTF-8 coordinate contract。
 - [schemas/g1_4/](schemas/g1_4/) 中的 9 个 CPU/fake runner schemas 与 6 个 additive inert-preparation schemas。
 - [schemas/g1_5/](schemas/g1_5/) 中的 captured-shape fixture、CPU checkpoint/publication、
   five-arm preview 与 host-coordinate binding schemas。
+- [schemas/g1_6/](schemas/g1_6/) 中的 workspace、event、review proposal、role-projected packet
+  与 assignment-scoped browser preview schemas。
 
 其中 Collector 文档保留其设计时状态与验收原则；完成记录以 STATUS.md 为准，工程授权
-以 AGENTS.md、DECISION_LOG.md、G1_4_DECISION_LOG.md 与 G1_5_DECISION_LOG.md 为准。本 README
+以 AGENTS.md、DECISION_LOG.md、G1_4_DECISION_LOG.md、G1_5_DECISION_LOG.md 与
+G1_6_DECISION_LOG.md 为准。本 README
 不能覆盖它们。
 
 ## 目录职责
@@ -214,7 +244,7 @@ mobileworld_audit_handoff/
 ├── AGENTS.md, SERVER_AGENT_INSTRUCTIONS.md
 │   └── agent 工作范围与服务器操作规则
 ├── PROJECT_CONTEXT.md, DECISION_LOG.md, G1_4_DECISION_LOG.md,
-│   G1_5_DECISION_LOG.md, STATUS.md
+│   G1_5_DECISION_LOG.md, G1_6_DECISION_LOG.md, STATUS.md
 │   └── 研究语义、locked decisions 与 append-only execution record
 ├── COLLECTOR_DESIGN.md, EVENT_CONTRACT_V1.md
 ├── IMPLEMENTATION_GUIDE.md, TEST_AND_ACCEPTANCE.md
@@ -232,6 +262,8 @@ mobileworld_audit_handoff/
 ├── G1_5_HISTORY_CODEC_CONTRACT_V1.md
 ├── G1_5_HISTORY_CODEC_CAPABILITIES_V1.md
 ├── G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md
+├── G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md
+├── G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md
 ├── g1/
 │   └── frozen registry inputs, model/config manifest, publication lock
 ├── schemas/g1/
@@ -244,6 +276,8 @@ mobileworld_audit_handoff/
 │   └── nine CPU/fake runner schemas plus six additive inert-preparation schemas
 ├── schemas/g1_5/
 │   └── captured-shape fixture, provider-free CPU checkpoint/publication/preview, and coordinate schemas
+├── schemas/g1_6/
+│   └── annotation workspace/event/proposal, role-projected packet, and browser-preview schemas
 ├── g1_5/
 │   └── content-addressed CPU manifest, two conformance receipts, preview binding, and no-tokenizer binding
 └── examples/

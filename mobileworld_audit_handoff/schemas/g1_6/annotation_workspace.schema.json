@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6/annotation_workspace.schema.json",
+  "title": "G1.6 write-once private annotation workspace manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "workspace_id", "workspace_version",
+    "previous_workspace_manifest_sha256", "supersession_reason", "contract_version",
+    "issue", "story", "publication_manifest_sha256", "capsule_set_sha256",
+    "strict_mhr_count", "selected_clean_control_count", "target_unit_count",
+    "reserve_clean_control_out_of_scope_count", "qwen_target_count", "mai_target_count",
+    "formal_schema_sha256s", "identity_policy", "storage_policy", "server_policy",
+    "review_policy", "readiness", "safety"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gold-curation-workspace-manifest/v1"},
+    "record_type": {"const": "gold_curation_workspace_manifest"},
+    "workspace_id": {"type": "string", "pattern": "^g1workspace-[0-9a-f]{24}$"},
+    "workspace_version": {"type": "integer", "minimum": 1},
+    "previous_workspace_manifest_sha256": {
+      "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+    },
+    "supersession_reason": {"type": ["string", "null"]},
+    "contract_version": {"const": "mobileworld.g1.gold-history-intervention/contract-v1"},
+    "issue": {"const": "ALE-324"},
+    "story": {"const": "G1.6"},
+    "publication_manifest_sha256": {
+      "const": "8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402"
+    },
+    "capsule_set_sha256": {
+      "const": "7d0e85c523c2b20b3f0b820c2e846cbb84957d4ae78e46d7090c6ce78ae9fbed"
+    },
+    "strict_mhr_count": {"const": 152},
+    "selected_clean_control_count": {"const": 38},
+    "target_unit_count": {"const": 190},
+    "reserve_clean_control_out_of_scope_count": {"const": 38},
+    "qwen_target_count": {"const": 169},
+    "mai_target_count": {"const": 21},
+    "formal_schema_sha256s": {"$ref": "#/$defs/formalSchemaHashes"},
+    "identity_policy": {"$ref": "#/$defs/identityPolicy"},
+    "storage_policy": {"$ref": "#/$defs/storagePolicy"},
+    "server_policy": {"$ref": "#/$defs/serverPolicy"},
+    "review_policy": {"$ref": "#/$defs/reviewPolicy"},
+    "readiness": {"$ref": "#/$defs/readiness"},
+    "safety": {"$ref": "#/$defs/safety"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"workspace_version": {"const": 1}}},
+      "then": {
+        "properties": {
+          "previous_workspace_manifest_sha256": {"type": "null"},
+          "supersession_reason": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "previous_workspace_manifest_sha256": {"$ref": "#/$defs/sha256"},
+          "supersession_reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "formalSchemaHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "curation_input_manifest.schema.json", "curation_evidence.schema.json",
+        "action_gold_bundle.schema.json", "transformation_plan.schema.json",
+        "review_ledger.schema.json", "arm.schema.json", "admission.schema.json",
+        "admission_validation.schema.json", "admission_seal.schema.json"
+      ],
+      "properties": {
+        "curation_input_manifest.schema.json": {"$ref": "#/$defs/sha256"},
+        "curation_evidence.schema.json": {"$ref": "#/$defs/sha256"},
+        "action_gold_bundle.schema.json": {"$ref": "#/$defs/sha256"},
+        "transformation_plan.schema.json": {"$ref": "#/$defs/sha256"},
+        "review_ledger.schema.json": {"$ref": "#/$defs/sha256"},
+        "arm.schema.json": {"$ref": "#/$defs/sha256"},
+        "admission.schema.json": {"$ref": "#/$defs/sha256"},
+        "admission_validation.schema.json": {"$ref": "#/$defs/sha256"},
+        "admission_seal.schema.json": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "identityPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity_key_commitment_sha256", "owner_registry_sha256", "identity_commitment_formula_id",
+        "assignment_id_formula_id", "one_workspace_key", "canonical_principal_contract",
+        "owner_registry_authoritative", "adjudicator_channel_registry_bound", "client_supplied_identity_accepted",
+        "aliases_for_same_principal_allowed", "http_only_session_required"
+      ],
+      "properties": {
+        "identity_key_commitment_sha256": {"$ref": "#/$defs/sha256"},
+        "owner_registry_sha256": {"$ref": "#/$defs/sha256"},
+        "identity_commitment_formula_id": {"const": "mobileworld.g1.workspace-principal-hmac-sha256/v1"},
+        "assignment_id_formula_id": {"const": "mobileworld.g1.workspace-assignment-hmac-sha256/v1"},
+        "one_workspace_key": {"const": true},
+        "canonical_principal_contract": {"const": "OWNER_REGISTRY_STABLE_UTF8_IDENTIFIER_EXACT_BYTES_V1"},
+        "owner_registry_authoritative": {"const": true},
+        "adjudicator_channel_registry_bound": {"const": true},
+        "client_supplied_identity_accepted": {"const": false},
+        "aliases_for_same_principal_allowed": {"const": false},
+        "http_only_session_required": {"const": true}
+      }
+    },
+    "storagePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo_external", "append_only_canonical_jsonl", "atomic_no_replace",
+        "no_follow", "regular_files_only", "path_escape_rejected",
+        "authoritative_browser_storage", "authoritative_records_mutable"
+      ],
+      "properties": {
+        "repo_external": {"const": true},
+        "append_only_canonical_jsonl": {"const": true},
+        "atomic_no_replace": {"const": true},
+        "no_follow": {"const": true},
+        "regular_files_only": {"const": true},
+        "path_escape_rejected": {"const": true},
+        "authoritative_browser_storage": {"const": false},
+        "authoritative_records_mutable": {"const": false}
+      }
+    },
+    "serverPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed_bind_hosts", "wildcard_bind_allowed", "non_loopback_peer_allowed",
+        "external_hosting_allowed", "external_network_allowed", "remote_assets_allowed",
+        "same_origin_required", "csrf_protection_required", "http_only_session_cookie_required",
+        "single_process_foreground_server_allowed", "child_worker_or_reloader_allowed",
+        "packet_scoped_evidence_authorization"
+      ],
+      "properties": {
+        "allowed_bind_hosts": {
+          "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true,
+          "items": {"enum": ["127.0.0.1", "::1"]}
+        },
+        "wildcard_bind_allowed": {"const": false},
+        "non_loopback_peer_allowed": {"const": false},
+        "external_hosting_allowed": {"const": false},
+        "external_network_allowed": {"const": false},
+        "remote_assets_allowed": {"const": false},
+        "same_origin_required": {"const": true},
+        "csrf_protection_required": {"const": true},
+        "http_only_session_cookie_required": {"const": true},
+        "single_process_foreground_server_allowed": {"const": true},
+        "child_worker_or_reloader_allowed": {"const": false},
+        "packet_scoped_evidence_authorization": {"const": true}
+      }
+    },
+    "reviewPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewed_channels", "formal_curation_channels", "descriptive_channels",
+        "initial_review_stages", "independent_review_count_per_channel",
+        "peer_proposal_visible_before_both_finalize",
+        "material_disagreement_requires_adjudication", "adjudicator_identity_disjoint",
+        "cross_channel_identity_disjoint", "semantic_choices_human_only",
+        "consistency_audit_opens_after_formal_channels_resolve",
+        "consistency_audit_may_affect_admission"
+      ],
+      "properties": {
+        "reviewed_channels": {"const": ["ACTION_GOLD", "TRANSFORMATION", "CONSISTENCY_AUDIT"]},
+        "formal_curation_channels": {"const": ["ACTION_GOLD", "TRANSFORMATION"]},
+        "descriptive_channels": {"const": ["CONSISTENCY_AUDIT"]},
+        "initial_review_stages": {"const": ["PRIMARY", "SECONDARY"]},
+        "independent_review_count_per_channel": {"const": 2},
+        "peer_proposal_visible_before_both_finalize": {"const": false},
+        "material_disagreement_requires_adjudication": {"const": true},
+        "adjudicator_identity_disjoint": {"const": true},
+        "cross_channel_identity_disjoint": {"const": true},
+        "semantic_choices_human_only": {"const": true},
+        "consistency_audit_opens_after_formal_channels_resolve": {"const": true},
+        "consistency_audit_may_affect_admission": {"const": false}
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_initialized", "formal_annotation_open", "codec_publication_required_for_formal_annotation",
+        "curation_and_admission_sealed", "admission_ready", "execution_ready",
+        "provider_invocation_allowed", "treatment_response_generation_allowed", "formal_replay_ready"
+      ],
+      "properties": {
+        "workspace_initialized": {"const": true},
+        "formal_annotation_open": {"const": false},
+        "codec_publication_required_for_formal_annotation": {"const": true},
+        "curation_and_admission_sealed": {"const": false},
+        "admission_ready": {"const": false},
+        "execution_ready": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "treatment_response_generation_allowed": {"const": false},
+        "formal_replay_ready": {"const": false}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "external_network_used", "provider_client_created", "provider_invoked",
+        "gpu_probed", "gpu_used", "model_loaded", "replay_executed",
+        "mobileworld_gui_or_tool_action_executed", "treatment_response_count",
+        "automatic_semantic_inference_performed", "raw_or_frozen_artifact_mutated"
+      ],
+      "properties": {
+        "external_network_used": {"const": false},
+        "provider_client_created": {"const": false},
+        "provider_invoked": {"const": false},
+        "gpu_probed": {"const": false},
+        "gpu_used": {"const": false},
+        "model_loaded": {"const": false},
+        "replay_executed": {"const": false},
+        "mobileworld_gui_or_tool_action_executed": {"const": false},
+        "treatment_response_count": {"const": 0},
+        "automatic_semantic_inference_performed": {"const": false},
+        "raw_or_frozen_artifact_mutated": {"const": false}
+      }
+    }
+  }
+}

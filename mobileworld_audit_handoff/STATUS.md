@@ -1,6 +1,6 @@
 # Project Status：GUI Agent Previous-Step Misleading Motivation Study
 
-Last updated: 2026-08-27 (UTC)
+Last updated: 2026-08-28 (UTC)
 
 ## 1. Project objective
 
@@ -31,8 +31,20 @@ preparation；story 仍为 `IN_PROGRESS_LIVE_PROOF_DEFERRED`，live/GPU proof �
 `live_code_prepared=true` 只表示代码准备完成；全部 readiness/authorization 与 safety fields
 仍为 false，也没有 formal run publication。Production 实现没有运行真实模型、创建或调用
 外部 provider client、使用网络/GPU、启动服务、执行 GUI/action/live replay、生成 treatment
-response、选择 intervention 或实现自动 Sentinel；G1.5/G1.6/G1.7 与 live/GPU owner 授权
-仍未完成。Reviewer-only validator 的一次被沙箱拦截的 DNS 尝试另在本页追加记录中披露。
+response、选择 intervention 或实现自动 Sentinel。Reviewer-only validator 的一次被沙箱拦截的
+DNS 尝试另在本页追加记录中披露。
+
+**ALE-323 / G1.5 已形成 `CPU_CHECKPOINT_IMPLEMENTED_LIVE_SMOKE_DEFERRED` 的 Qwen/MAI
+History Codec 与 CPU preview/publication checkpoint；live smoke 仍在统一 GPU backlog，未授权执行。**
+
+**ALE-324 / G1.6 已获 D-029 CPU-only 人工标注授权，并形成 private loopback-only manual
+annotation workspace checkpoint。精确状态是 `IN_PROGRESS_HUMAN_CURATION_REQUIRED`。** 网页将
+ACTION_GOLD、TRANSFORMATION、CONSISTENCY_AUDIT 与必要 adjudication 的人工选择显式化；G1.5
+preview、pinned local tokenizer、source packet、reviewer identity 与 append-only journal 均做
+hash binding。当前没有 formal G1.6 bundle、admission 或 seal；190 个单元的双盲 review/必要
+adjudication 与 formal exporter 仍待完成。所有 provider/external-network/GPU/model/replay/
+MobileWorld-generated-action/treatment 路径保持禁用；owner-started loopback annotation HTTP 与
+human curation clicks 是 D-029 唯一例外。G1.7 与任何 live/GPU owner 授权仍未完成。
 
 已确认的工程决策：
 

@@ -33,7 +33,7 @@
 > MobileWorld benchmark/runtime host used by AgentSentinel; the original
 > upstream MobileWorld documentation continues below.
 >
-> **Status (2026-08-27):** Epic 1, G1.1, G1.2, and G1.3 are complete. We collected and audited the
+> **Status (2026-08-28):** Epic 1, G1.1, G1.2, and G1.3 are complete. We collected and audited the
 > same canonical 117-task GUI-only suite for MAI-UI-8B, Qwen3-VL-8B,
 > GELab-Zero-4B, UI-Venus-1.5-8B, GUI-Owl-1.5-8B-Instruct, and
 > MemGUI-8B-SFT: 702 model-task cases across six host-native history
@@ -67,12 +67,18 @@
 > replay or action. All eight readiness/authorization fields and all nine safety
 > fields remain false, `live_code_prepared=true` is not readiness, and no formal
 > run publication exists.
-> Real model/provider/network calls, GPU use, GUI/action/live replay,
-> treatment-response generation, and G1.5+ remain unauthorized. Formal capsules
-> retain their three false safety guards, and ALE-322 remains incomplete pending
-> separately authorized live/GPU proof; its exact state is
+> ALE-323 now has a provider-free Qwen/MAI History Codec CPU checkpoint, and
+> ALE-324 has a private loopback-only manual-curation workspace checkpoint. The
+> latter collects blinded human reviews and CPU previews only; it is not a
+> formal gold publication. Real model/provider/external-network calls, GPU use,
+> MobileWorld/generated GUI/action execution, live replay, and treatment-response
+> generation remain unauthorized. Human clicks in the private annotation site
+> are curation inputs and are never executed as MobileWorld actions.
+> Formal capsules retain their three false safety guards, and ALE-322 remains
+> incomplete pending separately authorized live/GPU proof; its exact state is
 > `IN_PROGRESS_LIVE_PROOF_DEFERRED`. Follow the
-> [inert-preparation contract](../mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)
+> [inert-preparation contract](../mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md),
+> [G1.6 workspace runbook](../mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md),
 > and [project status](../mobileworld_audit_handoff/STATUS.md).
 >
 > See the [six-model audit](docs/misleading_history_audit_report.md),

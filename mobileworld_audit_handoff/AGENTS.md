@@ -7,28 +7,31 @@
 3. `DECISION_LOG.md`
 4. `G1_4_DECISION_LOG.md`
 5. `G1_5_DECISION_LOG.md`
-6. `COLLECTOR_DESIGN.md`
-7. `EVENT_CONTRACT_V1.md`
-8. `IMPLEMENTATION_GUIDE.md`
-9. `TEST_AND_ACCEPTANCE.md`
-10. `SERVER_AGENT_INSTRUCTIONS.md`
-11. `STATUS.md`
-12. `G1_CAUSAL_REPLAY_PROTOCOL_V1.md`
-13. `G1_LOCKED_ANALYSIS_PLAN_V1.md`
-14. `G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
-15. `G1_REPLAY_CAPSULE_CONTRACT_V1.md`
-16. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
-17. `G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
-18. `G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
-19. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
-20. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-21. `G1_SENTINEL_MVP_MIGRATION.md`
-22. `g1/registry.lock.v1.json`
-23. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-24. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-25. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-26. `schemas/g1_3/field_visibility.schema.json`
-27. `schemas/g1_3/capsule_exclusion.schema.json`
+6. `G1_6_DECISION_LOG.md`
+7. `COLLECTOR_DESIGN.md`
+8. `EVENT_CONTRACT_V1.md`
+9. `IMPLEMENTATION_GUIDE.md`
+10. `TEST_AND_ACCEPTANCE.md`
+11. `SERVER_AGENT_INSTRUCTIONS.md`
+12. `STATUS.md`
+13. `G1_CAUSAL_REPLAY_PROTOCOL_V1.md`
+14. `G1_LOCKED_ANALYSIS_PLAN_V1.md`
+15. `G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
+16. `G1_REPLAY_CAPSULE_CONTRACT_V1.md`
+17. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
+18. `G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
+19. `G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
+20. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
+21. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
+22. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
+23. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+24. `G1_SENTINEL_MVP_MIGRATION.md`
+25. `g1/registry.lock.v1.json`
+26. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+27. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+28. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+29. `schemas/g1_3/field_visibility.schema.json`
+30. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -70,6 +73,14 @@ G1.4 runner 的 fail-closed interface integration。两个 Codec 均须保持 `l
 2 codecs × 5 arms 的 10-call live smoke 仅进入统一 GPU backlog，当前不授权执行。不得把该
 checkpoint 冒充 live proof、formal replay 或 G1.6 curation。
 
+`G1_6_DECISION_LOG.md` D-029 与
+`G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md` 授权 **ALE-324 / G1.6
+CPU-only 人工标注工作台**：从 immutable G1.3 publication 生成双盲 role-projected packets，
+使用本地 hash-verified tokenizer 与 G1.5 pure preview 做 renderer/diff/reversibility 检查，
+并将 human-authored review/adjudication 写入 repo-external append-only journal。程序不得替人
+判断 focal/oracle/sham/correction/action gold/consistency/adjudication；formal bundle、admission、
+seal、replay 与 treatment generation 在独立门禁完成前继续 fail closed。
+
 必须：
 
 - 保存模型真正收到的最终 request；
@@ -98,10 +109,16 @@ checkpoint 冒充 live proof、formal replay 或 G1.6 curation。
 - 用 HTTP 200、截图变化或 task failure 自动等同动作语义失败；
 - 把 API key、Authorization header 或其他 secrets 写入日志；
 - 为了匹配本设计而破坏服务器已有用户修改或强制 reset 工作树。
-- 调用任何真实/外部 model 或 provider、发起网络请求、使用 GPU、加载/服务模型权重、
-  执行 GUI/tool/action、backend restore、prefix 或 live replay、生成 treatment response、自动推断
-  claim validity、选择/生成 intervention，或开始 G1.6+；只允许无网络的确定性 fake-provider
-  conformance 与 provider-free G1.5 CPU checkpoint；
+- 调用任何真实/外部 model 或 provider、发起外部网络请求、使用 GPU、加载/服务模型权重、
+  执行 MobileWorld/generated GUI/tool/action、backend restore、prefix 或 live replay、生成
+  treatment response、自动推断
+  claim validity、自动选择/生成 intervention，或开始 G1.7+；只允许无网络的确定性
+  fake-provider conformance、provider-free G1.5 CPU checkpoint 与 D-029 限定的人工 G1.6
+  CPU workspace；
+- D-029 唯一允许的 socket 是 owner 前台启动、单进程、仅绑定 loopback、无 remote asset、
+  强制 same-origin/CSRF 的 annotation site；不得通过 tunnel/proxy/remote hosting 扩大它；
+- annotation browser 内的人类点击/表单输入是获准的 curation 输入，不得转成或执行为
+  MobileWorld action；
 - 将 G1 label、capsule metadata、visibility classification 或 transformation decision 写回
   raw Collector event。
 
@@ -122,4 +139,8 @@ visibility/future-leakage、稳定 exclusion 和 deterministic double-build 验�
 记录 commit、命令、测试结果、外部 publication 与已知限制后，才可宣称 G1.3 完成。
 G1.4 CPU checkpoint 必须单独记录未完成的 live/GPU 验收项，不得将 ALE-322 标记为完成。
 G1.5 CPU checkpoint 也必须记录精确 10-call live-smoke backlog，不得将 ALE-323 标记为完成。
-任何真实 model/provider/network/GPU/GUI/action/live-replay 仍需另行授权；不得把凭据写入代码或本目录。
+G1.6 workspace checkpoint 不能冒充 gold publication；只有 190 单元双盲 review、必要 adjudication、
+formal export/validation/admission/seal 全部完成后才可将 ALE-324 标记为完成。
+任何真实 model/provider/external-network/GPU/MobileWorld-generated-GUI/action/live-replay 仍需
+另行授权；D-029 owner-started loopback annotation site/human curation clicks 是唯一例外。不得把
+凭据写入代码或本目录。

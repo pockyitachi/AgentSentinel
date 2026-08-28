@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6/annotation_event.schema.json",
+  "title": "G1.6 authoritative flat append-only annotation journal event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "event_id", "event_seq", "previous_event_sha256",
+    "event_sha256", "event_kind", "created_at_ns", "unit_id", "channel", "assignment_id",
+    "source_packet_sha256", "assignment_packet_sha256", "reviewer_identity_sha256", "reviewer_role",
+    "proposal_schema_version", "codec_gate_receipt_sha256", "payload", "payload_sha256",
+    "material_projection_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gold-curation-annotation-event/v1"},
+    "record_type": {"const": "gold_curation_annotation_event"},
+    "event_id": {"type": "string", "pattern": "^g1annotation-[0-9a-f]{24}$"},
+    "event_seq": {"type": "integer", "minimum": 0},
+    "previous_event_sha256": {
+      "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+    },
+    "event_sha256": {"$ref": "#/$defs/sha256"},
+    "event_kind": {"enum": ["DRAFT_SAVED", "REVIEW_SUBMITTED", "ADJUDICATION_SUBMITTED"]},
+    "created_at_ns": {"type": "integer", "minimum": 0},
+    "unit_id": {"type": "string", "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"},
+    "channel": {"enum": ["ACTION_GOLD", "TRANSFORMATION", "CONSISTENCY_AUDIT"]},
+    "assignment_id": {"type": "string", "pattern": "^g1assignment-[0-9a-f]{32}$"},
+    "source_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "assignment_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "reviewer_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "reviewer_role": {
+      "enum": [
+        "ACTION_GOLD_PRIMARY", "ACTION_GOLD_SECONDARY",
+        "TRANSFORMATION_PRIMARY", "TRANSFORMATION_SECONDARY",
+        "CONSISTENCY_AUDIT_PRIMARY", "CONSISTENCY_AUDIT_SECONDARY", "ADJUDICATOR"
+      ]
+    },
+    "proposal_schema_version": {"const": "mobileworld.g1.gold-curation-review-proposal/v1"},
+    "codec_gate_receipt_sha256": {
+      "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+    },
+    "payload": {"type": "object"},
+    "payload_sha256": {"$ref": "#/$defs/sha256"},
+    "material_projection_sha256": {
+      "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"event_seq": {"const": 0}}},
+      "then": {"properties": {"previous_event_sha256": {"type": "null"}}},
+      "else": {"properties": {"previous_event_sha256": {"$ref": "#/$defs/sha256"}}}
+    },
+    {
+      "if": {"properties": {"event_kind": {"enum": ["DRAFT_SAVED", "REVIEW_SUBMITTED"]}}},
+      "then": {
+        "properties": {
+          "reviewer_role": {
+            "enum": [
+              "ACTION_GOLD_PRIMARY", "ACTION_GOLD_SECONDARY",
+              "TRANSFORMATION_PRIMARY", "TRANSFORMATION_SECONDARY",
+              "CONSISTENCY_AUDIT_PRIMARY", "CONSISTENCY_AUDIT_SECONDARY"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "reviewer_role": {"const": "ADJUDICATOR"},
+          "payload": {"$ref": "#/$defs/adjudicationPayload"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"event_kind": {"const": "DRAFT_SAVED"}}},
+      "then": {
+        "properties": {
+          "payload": {"properties": {"proposal_kind": {"type": "string"}}},
+          "codec_gate_receipt_sha256": {"type": "null"},
+          "material_projection_sha256": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "codec_gate_receipt_sha256": {"$ref": "#/$defs/sha256"},
+          "material_projection_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"channel": {"const": "ACTION_GOLD"}}},
+      "then": {
+        "properties": {
+          "reviewer_role": {"enum": ["ACTION_GOLD_PRIMARY", "ACTION_GOLD_SECONDARY", "ADJUDICATOR"]}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"event_kind": {"const": "ADJUDICATION_SUBMITTED"}}},
+            "then": {"properties": {"payload": {"properties": {"resolved_payload": {"properties": {"proposal_kind": {"const": "ACTION_GOLD"}}}}}}},
+            "else": {"properties": {"payload": {"required": ["proposal_kind"], "properties": {"proposal_kind": {"const": "ACTION_GOLD"}}}}}
+          }
+        ]
+      }
+    },
+    {
+      "if": {"properties": {"channel": {"const": "TRANSFORMATION"}}},
+      "then": {
+        "properties": {
+          "reviewer_role": {"enum": ["TRANSFORMATION_PRIMARY", "TRANSFORMATION_SECONDARY", "ADJUDICATOR"]}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"event_kind": {"const": "ADJUDICATION_SUBMITTED"}}},
+            "then": {"properties": {"payload": {"properties": {"resolved_payload": {"properties": {"proposal_kind": {"const": "TRANSFORMATION"}}}}}}},
+            "else": {"properties": {"payload": {"required": ["proposal_kind"], "properties": {"proposal_kind": {"const": "TRANSFORMATION"}}}}}
+          }
+        ]
+      }
+    },
+    {
+      "if": {"properties": {"channel": {"const": "CONSISTENCY_AUDIT"}}},
+      "then": {
+        "properties": {
+          "reviewer_role": {"enum": ["CONSISTENCY_AUDIT_PRIMARY", "CONSISTENCY_AUDIT_SECONDARY", "ADJUDICATOR"]}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"event_kind": {"const": "ADJUDICATION_SUBMITTED"}}},
+            "then": {"properties": {"payload": {"properties": {"resolved_payload": {"properties": {"proposal_kind": {"const": "CONSISTENCY_AUDIT"}}}}}}},
+            "else": {"properties": {"payload": {"required": ["proposal_kind"], "properties": {"proposal_kind": {"const": "CONSISTENCY_AUDIT"}}}}}
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "eventId": {"type": "string", "pattern": "^g1annotation-[0-9a-f]{24}$"},
+    "disagreementField": {
+      "enum": [
+        "DISPOSITION", "ACCEPTED_ACTION_PREDICATES", "ACTION_TOLERANCE",
+        "FOCAL_TARGET_SET", "ORACLE_TARGET_SET", "CORRECTION_BYTES", "SHAM_SPAN",
+        "SHAM_MATCH", "DELIMITER_REPAIR", "CONSISTENCY_LABEL"
+      ]
+    },
+    "adjudicationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disagreement_fields", "primary_material_projection_sha256",
+        "secondary_material_projection_sha256", "resolved_payload", "rationale",
+        "primary_event_id", "secondary_event_id"
+      ],
+      "properties": {
+        "disagreement_fields": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/disagreementField"}},
+        "primary_material_projection_sha256": {"$ref": "#/$defs/sha256"},
+        "secondary_material_projection_sha256": {"$ref": "#/$defs/sha256"},
+        "resolved_payload": {"type": "object", "required": ["proposal_kind"]},
+        "rationale": {"type": "string", "minLength": 1},
+        "primary_event_id": {"$ref": "#/$defs/eventId"},
+        "secondary_event_id": {"$ref": "#/$defs/eventId"}
+      }
+    }
+  }
+}

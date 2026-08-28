@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6/browser_transformation_preview.schema.json",
+  "title": "G1.6 assignment-scoped CPU transformation preview",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "preview_scope", "plan_set_profile",
+    "preview_receipt_sha256", "correction_ranking", "correction_anchors",
+    "sham_token_match", "delimiter_repairs", "arms", "acceptance_ready",
+    "provider_invocation_allowed", "provider_invocation_count",
+    "treatment_response_generation_allowed", "treatment_response_count",
+    "network_used", "gpu_used", "replay_executed", "gui_action_executed"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gold-curation-browser-preview/v1"},
+    "record_type": {"const": "gold_curation_browser_preview"},
+    "preview_scope": {"const": "CPU_ONLY_READ_ONLY"},
+    "plan_set_profile": {"enum": ["G1_STRICT_MHR", "G1_CLEAN_CONTROL"]},
+    "preview_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "correction_ranking": {
+      "oneOf": [{"$ref": "#/$defs/correctionRanking"}, {"type": "null"}]
+    },
+    "correction_anchors": {
+      "type": "array", "uniqueItems": true,
+      "items": {"$ref": "#/$defs/correctionAnchor"}
+    },
+    "sham_token_match": {"$ref": "#/$defs/shamTokenMatch"},
+    "delimiter_repairs": {
+      "type": "array", "uniqueItems": true,
+      "items": {"$ref": "#/$defs/delimiterRepair"}
+    },
+    "arms": {
+      "type": "array", "maxItems": 5,
+      "items": {"$ref": "#/$defs/previewArm"}
+    },
+    "acceptance_ready": {"type": "boolean"},
+    "provider_invocation_allowed": {"const": false},
+    "provider_invocation_count": {"const": 0},
+    "treatment_response_generation_allowed": {"const": false},
+    "treatment_response_count": {"const": 0},
+    "network_used": {"const": false},
+    "gpu_used": {"const": false},
+    "replay_executed": {"const": false},
+    "gui_action_executed": {"const": false}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"plan_set_profile": {"const": "G1_STRICT_MHR"}}},
+      "then": {
+        "properties": {
+          "correction_ranking": {"$ref": "#/$defs/correctionRanking"},
+          "correction_anchors": {"minItems": 1},
+          "arms": {
+            "minItems": 5, "maxItems": 5,
+            "prefixItems": [
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "ORIGINAL"}}},
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "MASK"}}},
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "MASK_CORRECTION"}}},
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "ORACLE_CLEAN"}}},
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}}}
+            ],
+            "items": false
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"plan_set_profile": {"const": "G1_CLEAN_CONTROL"}}},
+      "then": {
+        "properties": {
+          "correction_ranking": {"type": "null"},
+          "correction_anchors": {"maxItems": 0},
+          "delimiter_repairs": {
+            "items": {
+              "$ref": "#/$defs/delimiterRepair",
+              "properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}}
+            }
+          },
+          "arms": {
+            "minItems": 2, "maxItems": 2,
+            "prefixItems": [
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "ORIGINAL"}}},
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}}}
+            ],
+            "items": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "sham_token_match": {
+            "properties": {"matched": {"const": true}},
+            "required": ["matched"]
+          }
+        },
+        "required": ["sham_token_match"]
+      },
+      "then": {"properties": {"acceptance_ready": {"const": true}}},
+      "else": {"properties": {"acceptance_ready": {"const": false}}}
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "bindingToken": {"type": "string", "pattern": "^binding-[0-9a-f]{24}$"},
+    "recordToken": {"type": "string", "pattern": "^record-[0-9a-f]{24}$"},
+    "containerToken": {"type": "string", "pattern": "^container-[0-9a-f]{24}$"},
+    "operationToken": {"type": "string", "pattern": "^operation-[0-9a-f]{24}$"},
+    "repairToken": {"type": "string", "pattern": "^repair-[0-9a-f]{24}$"},
+    "correctionCandidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["text", "token_count", "utf8_byte_count", "codepoint_count", "rank"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "token_count": {"type": "integer", "minimum": 1},
+        "utf8_byte_count": {"type": "integer", "minimum": 1},
+        "codepoint_count": {"type": "integer", "minimum": 1},
+        "rank": {"type": "integer", "minimum": 1}
+      }
+    },
+    "correctionRanking": {
+      "type": "object", "additionalProperties": false,
+      "required": ["special_tokens_enabled", "tie_break_order", "candidates"],
+      "properties": {
+        "special_tokens_enabled": {"const": false},
+        "tie_break_order": {
+          "const": ["token_count", "utf8_byte_count", "codepoint_count", "lexicographic_utf8_bytes"]
+        },
+        "candidates": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/correctionCandidate"}
+        }
+      }
+    },
+    "correctionAnchor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["binding_token", "target_record_token", "anchor"],
+      "properties": {
+        "binding_token": {"$ref": "#/$defs/bindingToken"},
+        "target_record_token": {"$ref": "#/$defs/recordToken"},
+        "anchor": {
+          "type": "object", "additionalProperties": false,
+          "required": [
+            "container_token", "insert_index", "expected_role", "placement",
+            "context_kind", "visible_prefix", "visible_suffix"
+          ],
+          "properties": {
+            "container_token": {"$ref": "#/$defs/containerToken"},
+            "insert_index": {"type": "integer", "minimum": 0},
+            "expected_role": {"const": "user"},
+            "placement": {"const": "BEFORE"},
+            "context_kind": {"const": "TEXT_CONTENT_BLOCK"},
+            "visible_prefix": {"const": "SENTINEL correction: "},
+            "visible_suffix": {"const": ""}
+          }
+        }
+      }
+    },
+    "shamTokenMatch": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "special_tokens_enabled", "focal_token_count", "sham_token_count",
+        "match_formula", "matched"
+      ],
+      "properties": {
+        "special_tokens_enabled": {"const": false},
+        "focal_token_count": {"type": "integer", "minimum": 1},
+        "sham_token_count": {"type": "integer", "minimum": 1},
+        "match_formula": {
+          "const": "(5*sham>=4*focal && 4*sham<=5*focal) || abs(sham-focal)<=4"
+        },
+        "matched": {"type": "boolean"}
+      }
+    },
+    "delimiterRepair": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repair_token", "arm", "operation"],
+      "properties": {
+        "repair_token": {"$ref": "#/$defs/repairToken"},
+        "arm": {"enum": ["MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+        "operation": {"enum": ["DELETE_EMPTY_DELIMITER", "DELETE_ORPHAN_SEPARATOR"]}
+      }
+    },
+    "renderedHistory": {
+      "type": "object", "additionalProperties": false,
+      "required": ["container_token", "record_tokens", "source_text", "rendered_text"],
+      "properties": {
+        "container_token": {"$ref": "#/$defs/containerToken"},
+        "record_tokens": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/recordToken"}
+        },
+        "source_text": {"type": "string"},
+        "rendered_text": {"type": "string"}
+      }
+    },
+    "renderDiff": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "operation_token", "container_token", "source_char_start", "source_char_end",
+        "original_text", "rendered_text", "mapping_kind"
+      ],
+      "properties": {
+        "operation_token": {"$ref": "#/$defs/operationToken"},
+        "container_token": {"$ref": "#/$defs/containerToken"},
+        "source_char_start": {"type": "integer", "minimum": 0},
+        "source_char_end": {"type": "integer", "minimum": 1},
+        "original_text": {"type": "string"},
+        "rendered_text": {"type": "string"},
+        "mapping_kind": {"enum": ["COPIED", "DELETED", "INSERTED", "SYNTAX_REPAIR"]}
+      }
+    },
+    "listInsertion": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "operation_token", "container_token", "source_index", "rendered_index", "inserted_text"
+      ],
+      "properties": {
+        "operation_token": {"$ref": "#/$defs/operationToken"},
+        "container_token": {"$ref": "#/$defs/containerToken"},
+        "source_index": {"type": "integer", "minimum": 0},
+        "rendered_index": {"type": "integer", "minimum": 0},
+        "inserted_text": {"type": "string", "minLength": 1}
+      }
+    },
+    "sourceMapping": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "container_token", "source_char_start", "source_char_end",
+        "rendered_char_start", "rendered_char_end", "kind", "operation_token"
+      ],
+      "properties": {
+        "container_token": {"$ref": "#/$defs/containerToken"},
+        "source_char_start": {"type": "integer", "minimum": 0},
+        "source_char_end": {"type": "integer", "minimum": 0},
+        "rendered_char_start": {"type": "integer", "minimum": 0},
+        "rendered_char_end": {"type": "integer", "minimum": 0},
+        "kind": {"enum": ["COPIED", "DELETED", "INSERTED", "SYNTAX_REPAIR"]},
+        "operation_token": {
+          "oneOf": [{"$ref": "#/$defs/operationToken"}, {"type": "null"}]
+        }
+      }
+    },
+    "previewArm": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "arm", "rendered_history", "diffs", "list_insertions", "source_mappings",
+        "human_diff", "target_only_diff", "source_mapping_reversible",
+        "provider_invocation_allowed"
+      ],
+      "properties": {
+        "arm": {"enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+        "rendered_history": {
+          "type": "array", "minItems": 1,
+          "items": {"$ref": "#/$defs/renderedHistory"}
+        },
+        "diffs": {"type": "array", "items": {"$ref": "#/$defs/renderDiff"}},
+        "list_insertions": {"type": "array", "items": {"$ref": "#/$defs/listInsertion"}},
+        "source_mappings": {"type": "array", "items": {"$ref": "#/$defs/sourceMapping"}},
+        "human_diff": {"type": "string", "minLength": 1},
+        "target_only_diff": {"const": true},
+        "source_mapping_reversible": {"const": true},
+        "provider_invocation_allowed": {"const": false}
+      }
+    }
+  }
+}
