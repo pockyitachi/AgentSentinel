@@ -13,6 +13,7 @@ import importlib.util
 import json
 import sys
 import types
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -401,6 +402,8 @@ def test_cli_loads_and_injects_local_counters_only_with_explicit_flag(
     counters = {"synthetic": object()}
     publication_arguments: list[Any] = []
     uvicorn_calls: list[dict[str, Any]] = []
+    candidate_workspaces: list[Any] = []
+    app_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
     def load_counters(path: Path) -> dict[str, object]:
         loaded.append(path)
@@ -421,11 +424,38 @@ def test_cli_loads_and_injects_local_counters_only_with_explicit_flag(
         def __init__(self, root: Path, *_args: Any, **_kwargs: Any) -> None:
             self.root = root
 
+        def assert_formal_ai_assistance_eligibility(self, exposed: set[str]) -> None:
+            assert exposed == set()
+
+    class FakeCandidateWorkspace:
+        def __init__(self, root: Path, publication: Any, **kwargs: Any) -> None:
+            self.root = root
+            self.publication = publication
+            self.kwargs = kwargs
+            self.campaign_id = "g1aicampaign-synthetic000000000000"
+            candidate_workspaces.append(self)
+
+        def assert_formal_registry_eligible(self, registry: Any) -> None:
+            assert registry[0] == "registry"
+
+        def formal_registry_guard(self, registry: Any) -> Any:
+            assert registry[0] == "registry"
+            return nullcontext()
+
+        def exposed_stable_principal_commitments(self) -> set[str]:
+            return set()
+
     monkeypatch.setattr(launcher, "load_local_pinned_token_counters", load_counters)
     monkeypatch.setattr(launcher, "CurationPublication", FakePublication)
     monkeypatch.setattr(launcher, "ReviewerRegistry", FakeReviewerRegistry)
     monkeypatch.setattr(launcher, "AnnotationStore", FakeStore)
-    monkeypatch.setattr(launcher, "create_app", lambda *_args: "synthetic-asgi-app")
+    monkeypatch.setattr(launcher, "AICandidateWorkspace", FakeCandidateWorkspace)
+
+    def create_app(*app_args: Any, **app_kwargs: Any) -> str:
+        app_calls.append((app_args, app_kwargs))
+        return "synthetic-asgi-app"
+
+    monkeypatch.setattr(launcher, "create_app", create_app)
     monkeypatch.setattr(
         launcher.uvicorn,
         "run",
@@ -437,6 +467,8 @@ def test_cli_loads_and_injects_local_counters_only_with_explicit_flag(
         str(tmp_path / "workspace"),
         "--reviewer-registry",
         str(tmp_path / "reviewers.json"),
+        "--ai-candidate-root",
+        str(tmp_path / "candidates"),
     ]
     if enable_tokenizers:
         argv.append("--load-local-pinned-tokenizers")
@@ -444,6 +476,14 @@ def test_cli_loads_and_injects_local_counters_only_with_explicit_flag(
 
     assert launcher.main() == 0
     assert publication_arguments == [counters if enable_tokenizers else None]
+    assert len(candidate_workspaces) == 1
+    assert candidate_workspaces[0].root == tmp_path / "candidates"
+    assert candidate_workspaces[0].kwargs == {"forbidden_roots": (tmp_path / "workspace",)}
+    assert len(app_calls) == 1
+    assert app_calls[0][1] == {
+        "ai_candidate_workspace": None,
+        "ai_exposure_workspace": candidate_workspaces[0],
+    }
     assert len(loaded) == int(enable_tokenizers)
     if enable_tokenizers:
         assert loaded[0] == (
@@ -459,6 +499,107 @@ def test_cli_loads_and_injects_local_counters_only_with_explicit_flag(
             "access_log": False,
         }
     ]
+
+
+@pytest.mark.parametrize("candidate_name", ["workspace", "workspace/candidates", "."])
+def test_cli_rejects_ai_candidate_root_overlap_before_workspace_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    candidate_name: str,
+) -> None:
+    launcher = _load_launcher_module()
+    annotation_root = tmp_path / "workspace"
+    candidate_root = tmp_path / candidate_name
+
+    class BombPublication:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError("publication was constructed before root overlap rejection")
+
+    monkeypatch.setattr(launcher, "CurationPublication", BombPublication)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(LAUNCHER),
+            "--annotation-root",
+            str(annotation_root),
+            "--reviewer-registry",
+            str(tmp_path / "reviewers.json"),
+            "--solo-first-pass",
+            "--ai-candidate-root",
+            str(candidate_root),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        launcher.main()
+    assert exc_info.value.code == 2
+    assert not annotation_root.exists()
+
+
+def test_cli_codec_gate_preparation_rejects_ai_candidate_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = _load_launcher_module()
+    called = False
+
+    def write_gate(*_args: Any, **_kwargs: Any) -> Path:
+        nonlocal called
+        called = True
+        return tmp_path / "unexpected.json"
+
+    monkeypatch.setattr(launcher, "write_codec_gate_receipt", write_gate)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(LAUNCHER),
+            "--g1-5-publication-manifest",
+            str(tmp_path / "g1-5.json"),
+            "--prepare-codec-gate-output-root",
+            str(tmp_path / "gate"),
+            "--ai-candidate-root",
+            str(tmp_path / "candidates"),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        launcher.main()
+    assert exc_info.value.code == 2
+    assert called is False
+
+
+def test_cli_rejects_symlink_alias_overlap_before_workspace_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = _load_launcher_module()
+    annotation_root = tmp_path / "workspace"
+    candidate_alias = tmp_path / "candidate-alias"
+    candidate_alias.symlink_to(annotation_root, target_is_directory=True)
+
+    class BombPublication:
+        def __init__(self, **_kwargs: Any) -> None:
+            raise AssertionError("publication was constructed before alias overlap rejection")
+
+    monkeypatch.setattr(launcher, "CurationPublication", BombPublication)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(LAUNCHER),
+            "--annotation-root",
+            str(annotation_root),
+            "--reviewer-registry",
+            str(tmp_path / "reviewers.json"),
+            "--solo-first-pass",
+            "--ai-candidate-root",
+            str(candidate_alias),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        launcher.main()
+    assert exc_info.value.code == 2
+    assert not annotation_root.exists()
 
 
 def test_tokenizer_loader_and_cli_have_no_model_provider_network_gpu_or_replay_path() -> None:

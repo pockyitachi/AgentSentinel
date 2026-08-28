@@ -130,3 +130,54 @@ authority，也不授权任何应用层外联。
 
 `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md` 与两个 additive solo schemas 是本条的 normative
 实现边界；D-029 与正式 schemas 不因本条放宽。
+
+## D-031 — 三路 AI Action-Gold 候选只作单人辅助，不构成人工复核
+
+**状态：Locked（owner 于 2026-08-28 明确授权 AI 先拟候选、唯一人类逐项复核）**
+
+Owner 只授权三个彼此隔离的 Codex research-agent streams，对 active 190-unit population 的
+`ACTION_GOLD` reviewer-neutral blind packet 离线拟定非权威 action-predicate 候选。本条仅在
+这个候选 campaign 内窄幅取代 D-029 对 model-assisted action suggestion 与 target-pre GUI
+inspection 的禁止；不授权仓库或 annotation server 调用 AI/provider API，不授权 actor model、
+external network、GPU、weights、replay、MobileWorld action 或 treatment response。
+
+每个 stream 只能看到相同冻结输入：exact task instruction、target-pre screenshot，以及 request
+cutoff 前 allowlisted tool/ask-user evidence。禁止 history、misleading span、natural target output、
+post/later/outcome/checker、transformation、human draft/decision 和 peer-agent output。三个 stream
+不得互看、投票、排名、自动合并，且不得根据人类反馈 regenerate。输出不得保存 chain-of-thought，
+只允许 evidence-linked concise rationale 与 uncertainty note。
+
+AI output 不是 evidence、review、gold、resolution 或 adjudication，固定
+`counts_as_independent_review=false`、`formal_resolution_eligible=false`、
+`admission_eligible=false`、`replay_eligible=false`、`auto_apply_allowed=false` 和
+`human_review_required=true`。AI 只可提出 action-predicate alternatives 或 `ABSTAIN`；不得替人
+选择 `ACCEPT`、`EXCLUDE` 或 `NO_GOLD_CONSENSUS`。
+
+唯一人类必须逐 atomic candidate 明确选择 `ADOPT_TO_FORM`、
+`ADOPT_WITH_EDITS_TO_FORM`、`USE_AS_SUPPLEMENT` 或 `IGNORE`。不存在默认、bulk accept、majority、
+best、consensus winner 或自动 merge。每次决定前还必须由人类勾选“已亲自核对 task、screenshot
+与 cited visible evidence”，网页不得替人自动断言。采用只把候选追加复制到浏览器内存的 dirty
+form，不折叠等价项，并将全部 predicate 人工确认与 closed-world/completeness 确认重置为 false；
+它不得 autosave、finalize 或 lock。只有人类随后另点现有 solo draft/lock 按钮才可写入 solo
+journal。
+
+Candidate campaign、objects、receipts 与 human candidate-decision journal 必须位于第三个独立的
+repo-external root，且不得嵌套或写入 formal/solo roots。网页只有已冻结候选的 read endpoint 与独立
+decision append endpoint；禁止任何 `/generate`、`/regenerate`、`/rank`、`/merge` 或
+`/accept-all` endpoint。Exposure 必须同时绑定 workspace-scoped identity 与跨 workspace 可重算
+但不泄露 access secret 的 owner-registry principal commitment；formal registry/store 必须消费该
+exposure set 并在认证或权威操作前拒绝匹配 principal。看到候选的 principal 记录为
+`AI_ASSISTED_SOLO_CURATOR`，以后不得担任 formal G1.6 Primary、Secondary 或 Adjudicator；solo
+结果仍不可晋升或迁移为 formal review。
+
+`G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`、
+`G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md` 与 `schemas/g1_6_ai/` 是本条的 normative additive
+边界。Campaign 必须诚实记录 `ai_semantic_suggestion_performed=true`，以及 task/GUI evidence
+进入 Codex agent context 的新数据披露；所有 target-actor/provider/project-GPU/replay/action/
+treatment authority 继续为 false。
+
+Owner 随后于 2026-08-28 再次明确授权继续 ALE-324/G1.6 D-031、更新两份 `AGENTS.md`、
+本地提交实现、把通过验收的 sealed campaign 部署到 repo-external root，并关闭/替换旧版 tmux
+进程后重启同一个 loopback annotation website。该运维确认不授权 GitHub push、formal G1.6
+completion/export/seal、GPU、真实 provider、external network、replay 或 MobileWorld action；旧
+solo workspace/registry/key 与已持久化记录必须保留，新进程只能在同一 workspace 上升级。

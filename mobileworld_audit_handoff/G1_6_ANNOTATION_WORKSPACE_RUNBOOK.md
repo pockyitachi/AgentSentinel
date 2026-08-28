@@ -143,6 +143,8 @@ PYTHONPATH=MobileWorld/src \
   mobileworld_audit_handoff/g1_5/cpu_publication_manifest.v1.json \
   --codec-gate-receipt /ABSOLUTE/REPO-EXTERNAL/sha256/xx/DIGEST.json \
   --load-local-pinned-tokenizers \
+  --ai-candidate-root \
+  /shared/linqiang/mobileworld_causal_replay_data/g1_6/ai-action-gold-candidates-v1 \
   --port 8766
 ```
 
@@ -171,8 +173,17 @@ tmux new-session -d -s g1_6_solo_first_pass \
    --g1-5-publication-manifest mobileworld_audit_handoff/g1_5/cpu_publication_manifest.v1.json \
    --codec-gate-receipt /ABSOLUTE/REPO-EXTERNAL/sha256/xx/DIGEST.json \
    --load-local-pinned-tokenizers \
+   --ai-candidate-root \
+   /shared/linqiang/mobileworld_causal_replay_data/g1_6/ai-action-gold-candidates-v1 \
    --port 8766"
 ```
+
+In solo mode, optional `--ai-candidate-root` displays an already sealed D-031 campaign containing
+exactly 190 packets and three terminal outputs per unit. It never generates or refreshes
+candidates; omitting it leaves the existing human-only solo behavior unchanged. Formal website
+mode requires the same root only to recheck the append-only exposure set before authentication and
+every authoritative operation. A formal application does not register `/api/assist/*`, does not
+return candidate bytes, and cannot use candidate outputs as review evidence.
 
 Do not add workers, reload, proxy headers, a second process, a non-loopback bind, or any external
 tunnel/hosting.  From the owner's computer, use only this local-forward shape with the normal SSH
@@ -185,6 +196,12 @@ ssh -N -o ExitOnForwardFailure=yes \
 
 Then open `http://127.0.0.1:8766` on that computer.  Do not use `-R`, `-D`, `GatewayPorts`, a
 `0.0.0.0` client bind, a shared proxy, or a third-party tunnel.
+
+Replacing the loopback process invalidates only its in-memory browser session: sign in again with
+the same owner-issued secret from the unchanged repo-external registry. Saved append-only
+drafts/locks, the workspace manifest, assignment key, and registry remain in place. Unsaved form
+state exists only in browser memory, so save a draft before an intentional restart. Never print or
+copy the secret into tmux output, logs, STATUS, or the repository.
 
 ## 4. Human workflow
 
@@ -202,6 +219,19 @@ Then open `http://127.0.0.1:8766` on that computer.  Do not use `-R`, `-D`, `Gat
    cannot modify action gold, transformations, admission, scoring, or replay.
 
 ### Solo first-pass workflow
+
+During `ACTION_GOLD`, a configured D-031 campaign adds three neutral `Agent A/B/C` suggestion
+columns. They are untrusted AI candidates, not evidence and not independent reviews. Review every
+atomic item and explicitly choose `ADOPT_TO_FORM`, `ADOPT_WITH_EDITS_TO_FORM`,
+`USE_AS_SUPPLEMENT`, or `IGNORE`; there is no majority/default/bulk action. A non-ignore choice only
+copies the predicate into the browser's dirty form with all human confirmation controls unset.
+Candidate decisions go to a separate candidate journal. They do not save or lock the annotation
+form; use the existing solo draft/lock button separately after checking the screenshot, coordinates,
+evidence, accepted-set completeness, and every field. Opening these candidates records the
+principal as `AI_ASSISTED_SOLO_CURATOR`, which is ineligible for future formal G1.6 reviewer or
+adjudicator roles. With a campaign mounted, the server rejects an Action-Gold stage lock until every
+atomic candidate for that unit has one explicit decision; draft saves remain available while items
+are pending.
 
 The server enforces one global, irreversible order across all 190 units:
 

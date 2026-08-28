@@ -13,6 +13,10 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from mobile_world.offline.gold_curation.ai_assistance import (
+    AICandidateWorkspace,
+    validate_ai_schema_record,
+)
 from mobile_world.offline.gold_curation.contracts import (
     ADJUDICATOR_ROLE,
     CurationError,
@@ -566,10 +570,31 @@ def _action_payload_identities(
     return result
 
 
-def create_app(publication: CurationPublication, store: AnnotationStore) -> FastAPI:
+def create_app(
+    publication: CurationPublication,
+    store: AnnotationStore,
+    *,
+    ai_candidate_workspace: AICandidateWorkspace | None = None,
+    ai_exposure_workspace: AICandidateWorkspace | None = None,
+) -> FastAPI:
     """Construct the private app without opening a socket or starting a server."""
 
     solo_mode = store.workspace_mode == "SOLO_FIRST_PASS"
+    require(
+        ai_candidate_workspace is None or solo_mode,
+        "AI_CANDIDATE_MODE_INVALID",
+        "AI candidate assistance is available only in the non-formal solo workspace",
+    )
+    require(
+        ai_exposure_workspace is None or not solo_mode,
+        "AI_CANDIDATE_MODE_INVALID",
+        "formal AI-exposure enforcement is unavailable in a solo workspace",
+    )
+    require(
+        solo_mode or ai_exposure_workspace is not None,
+        "AI_CANDIDATE_EXPOSURE_GUARD_REQUIRED",
+        "formal workspace requires the sealed D-031 exposure guard",
+    )
     app = FastAPI(
         title="G1.6 Gold Curation Workspace",
         docs_url=None,
@@ -641,7 +666,19 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
                         response = JSONResponse({"error": "CSRF_TOKEN_REQUIRED"}, status_code=403)
                     else:
                         request.state.reviewer_session = session
-                        response = await call_next(request)
+                        if ai_exposure_workspace is None:
+                            response = await call_next(request)
+                        else:
+                            try:
+                                with ai_exposure_workspace.formal_registry_guard(
+                                    store.reviewer_registry
+                                ):
+                                    response = await call_next(request)
+                            except CurationError as exc:
+                                response = JSONResponse(
+                                    {"error": exc.code, "message": exc.message},
+                                    status_code=400,
+                                )
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; img-src 'self'; connect-src 'self'; "
             "style-src 'self'; script-src 'self'; object-src 'none'; "
@@ -678,7 +715,7 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
         catalog = option_catalog()
         roles = list(getattr(store, "available_roles", tuple(catalog["roles"])))
         current_phase = store.current_phase() if solo_mode else None  # type: ignore[attr-defined]
-        return {
+        result = {
             **catalog,
             "roles": roles,
             "unit_count": 190,
@@ -686,6 +723,17 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
             "authoritative_state": "REPO_EXTERNAL_APPEND_ONLY_JOURNAL",
             "formal_annotation_open": store.formal_annotation_open,
             "solo_first_pass": solo_mode,
+            "ai_candidate_assistance": {
+                "enabled": ai_candidate_workspace is not None,
+                "campaign_id": None
+                if ai_candidate_workspace is None
+                else ai_candidate_workspace.campaign_id,
+                "ai_semantic_suggestion_performed": ai_candidate_workspace is not None,
+                "three_agents_are_independent_human_reviewers": False,
+                "counts_as_independent_review": False,
+                "auto_apply_allowed": False,
+                "human_review_required": True,
+            },
             "first_pass_lock_open": bool(getattr(store, "first_pass_lock_open", False)),
             "current_phase": current_phase,
             "review_authority": {
@@ -723,6 +771,7 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
             if store.codec_gate_receipt is None
             else store.codec_gate_receipt["receipt_sha256"],
         }
+        return result
 
     @app.post("/api/session")
     async def create_session(request: Request) -> JSONResponse:
@@ -731,6 +780,10 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
             required={"reviewer_id", "role", "access_secret"},
             label="session request",
         )
+        if ai_exposure_workspace is not None:
+            store.assert_formal_ai_assistance_eligibility(
+                ai_exposure_workspace.exposed_stable_principal_commitments()
+            )
         reviewer_id, role, identity_commitment = store.authenticate_identity(
             body["reviewer_id"], body["role"], body["access_secret"]
         )
@@ -759,6 +812,97 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
         )
         return response
 
+    def browser_ai_candidates(
+        *,
+        unit_id: str,
+        assignment_id: str,
+        reviewer_identity_sha256: str,
+        stable_principal_commitment: str,
+    ) -> dict[str, Any]:
+        require(
+            ai_candidate_workspace is not None,
+            "AI_CANDIDATE_ASSISTANCE_UNAVAILABLE",
+            "no sealed AI candidate campaign is configured",
+        )
+        assert ai_candidate_workspace is not None
+        ai_candidate_workspace.record_exposure(
+            reviewer_identity_sha256,
+            stable_principal_commitment,
+        )
+        source = publication.packet(unit_id, "ACTION_GOLD")
+        evidence_tokens = {
+            item["evidence_id"]: _opaque_token(assignment_id, "evidence", item["evidence_id"])
+            for item in source["evidence"]
+        }
+        latest = ai_candidate_workspace.latest_decisions(reviewer_identity_sha256)
+        outputs: list[dict[str, Any]] = []
+        for output in ai_candidate_workspace.outputs_for_unit(unit_id):
+            items: list[dict[str, Any]] = []
+            for candidate in output["candidate_items"]:
+                require(
+                    all(item in evidence_tokens for item in candidate["evidence_ids"]),
+                    "AI_CANDIDATE_VISIBILITY_VIOLATION",
+                    "candidate cites evidence outside this assignment",
+                )
+                current = latest.get(candidate["candidate_id"])
+                items.append(
+                    {
+                        "candidate_token": _opaque_token(
+                            assignment_id, "candidate", candidate["candidate_id"]
+                        ),
+                        "candidate_kind": "ACTION_PREDICATE",
+                        "predicate": json_copy(candidate["predicate"]),
+                        "evidence_tokens": [
+                            evidence_tokens[item] for item in candidate["evidence_ids"]
+                        ],
+                        "concise_rationale": candidate["concise_rationale"],
+                        "uncertainty_note": candidate["uncertainty_note"],
+                        "current_decision": None
+                        if current is None
+                        else {
+                            "decision": current["decision"],
+                            "human_note": current["human_note"],
+                            "decision_event_token": _opaque_token(
+                                assignment_id, "decision", current["event_id"]
+                            ),
+                        },
+                    }
+                )
+            outputs.append(
+                {
+                    "agent_slot": output["agent_slot"],
+                    "response_kind": output["response_kind"],
+                    "candidate_items": items,
+                    "abstain_reason": output["abstain_reason"],
+                }
+            )
+        require(
+            [item["agent_slot"] for item in outputs] == ["A", "B", "C"],
+            "AI_CANDIDATE_INVALID",
+            "candidate browser projection slot order differs",
+        )
+        result = {
+            "assignment_id": assignment_id,
+            "agent_outputs": outputs,
+            "notice": {
+                "ai_candidate_is_not_evidence": True,
+                "three_agents_are_independent_human_reviewers": False,
+                "no_vote_rank_or_winner": True,
+                "copy_changes_browser_memory_only": True,
+                "annotation_form_not_saved_or_finalized": True,
+            },
+            "authority": {
+                "counts_as_independent_review": False,
+                "formal_resolution_eligible": False,
+                "admission_eligible": False,
+                "replay_eligible": False,
+                "auto_apply_allowed": False,
+                "human_review_required": True,
+            },
+        }
+        validate_ai_schema_record("ai_action_gold_candidate_browser.schema.json", result)
+        return result
+
     def reviewer_session(request: Request) -> tuple[str, str]:
         session = request.state.reviewer_session
         require(
@@ -766,6 +910,10 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
             "REVIEWER_SESSION_REQUIRED",
             "reviewer session is missing",
         )
+        if ai_exposure_workspace is not None:
+            store.assert_formal_ai_assistance_eligibility(
+                ai_exposure_workspace.exposed_stable_principal_commitments()
+            )
         return session["reviewer_id"], session["reviewer_role"]
 
     def assignment_projection(
@@ -1028,6 +1176,161 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
             "status": store.status_for(unit_id, role, reviewer_id),
         }
 
+    async def action_gold_ai_candidates(request: Request, assignment_id: str) -> dict[str, Any]:
+        """Return only sealed, assignment-scoped suggestions; never generate or save a review."""
+
+        reviewer_id, role = reviewer_session(request)
+        require(
+            solo_mode and role_channel(role) == "ACTION_GOLD",
+            "AI_CANDIDATE_ROLE_INVALID",
+            "AI Action-Gold candidates are available only in the solo Action-Gold stage",
+        )
+        unit_id = store.resolve_assignment(assignment_id, role)
+        projected = assignment_projection(
+            unit_id=unit_id,
+            assignment_id=assignment_id,
+            reviewer_id=reviewer_id,
+            reviewer_role=role,
+            channel="ACTION_GOLD",
+        )
+        require(
+            projected["channel"] == "ACTION_GOLD",
+            "AI_CANDIDATE_SOURCE_MISMATCH",
+            "candidate assignment channel differs",
+        )
+        return browser_ai_candidates(
+            unit_id=unit_id,
+            assignment_id=assignment_id,
+            reviewer_identity_sha256=store.identity_commitment(reviewer_id),
+            stable_principal_commitment=store.reviewer_registry.stable_principal_commitment(
+                reviewer_id
+            ),
+        )
+
+    async def ai_candidate_progress(request: Request) -> dict[str, Any]:
+        reviewer_id, role = reviewer_session(request)
+        require(
+            solo_mode and role_channel(role) == "ACTION_GOLD",
+            "AI_CANDIDATE_ROLE_INVALID",
+            "AI candidate progress is available only to the solo Action-Gold curator",
+        )
+        require(
+            ai_candidate_workspace is not None,
+            "AI_CANDIDATE_ASSISTANCE_UNAVAILABLE",
+            "no sealed AI candidate campaign is configured",
+        )
+        assert ai_candidate_workspace is not None
+        return ai_candidate_workspace.progress(store.identity_commitment(reviewer_id))
+
+    async def record_ai_candidate_decision(request: Request) -> dict[str, Any]:
+        reviewer_id, role = reviewer_session(request)
+        require(
+            solo_mode and role_channel(role) == "ACTION_GOLD",
+            "AI_CANDIDATE_ROLE_INVALID",
+            "AI candidate decisions are available only in the solo Action-Gold stage",
+        )
+        require(
+            ai_candidate_workspace is not None,
+            "AI_CANDIDATE_ASSISTANCE_UNAVAILABLE",
+            "no sealed AI candidate campaign is configured",
+        )
+        assert ai_candidate_workspace is not None
+        body = await _closed_json_request(
+            request,
+            required={
+                "assignment_id",
+                "candidate_token",
+                "decision",
+                "human_note",
+                "human_confirmed_item_review",
+                "human_verified_visible_evidence",
+                "ai_candidate_is_not_evidence",
+                "annotation_form_not_saved_or_finalized",
+            },
+            label="AI candidate human decision",
+        )
+        require(
+            body["human_confirmed_item_review"] is True
+            and body["human_verified_visible_evidence"] is True
+            and body["ai_candidate_is_not_evidence"] is True
+            and body["annotation_form_not_saved_or_finalized"] is True,
+            "AI_DECISION_ATTESTATION_REQUIRED",
+            "every AI candidate decision requires all explicit human attestations",
+        )
+        require(
+            isinstance(body["assignment_id"], str)
+            and isinstance(body["candidate_token"], str)
+            and isinstance(body["decision"], str)
+            and isinstance(body["human_note"], str),
+            "AI_DECISION_INVALID",
+            "AI candidate decision fields have invalid types",
+        )
+        assignment_id = body["assignment_id"]
+        unit_id = store.resolve_assignment(assignment_id, role)
+        assignment_projection(
+            unit_id=unit_id,
+            assignment_id=assignment_id,
+            reviewer_id=reviewer_id,
+            reviewer_role=role,
+            channel="ACTION_GOLD",
+        )
+        candidates = [
+            item
+            for output in ai_candidate_workspace.outputs_for_unit(unit_id)
+            for item in output["candidate_items"]
+        ]
+        matches = [
+            item
+            for item in candidates
+            if _opaque_token(assignment_id, "candidate", item["candidate_id"])
+            == body["candidate_token"]
+        ]
+        require(
+            len(matches) == 1,
+            "AI_CANDIDATE_UNKNOWN",
+            "candidate token is not in this assignment",
+        )
+        candidate = matches[0]
+        ai_candidate_workspace.record_exposure(
+            store.identity_commitment(reviewer_id),
+            store.reviewer_registry.stable_principal_commitment(reviewer_id),
+        )
+        event = ai_candidate_workspace.record_decision(
+            unit_id=unit_id,
+            candidate_id=candidate["candidate_id"],
+            candidate_sha256=candidate["candidate_sha256"],
+            human_identity_commitment=store.identity_commitment(reviewer_id),
+            decision=body["decision"],
+            human_note=body["human_note"],
+        )
+        return {
+            "recorded": True,
+            "candidate_token": body["candidate_token"],
+            "decision": event["decision"],
+            "human_note": event["human_note"],
+            "decision_event_token": _opaque_token(assignment_id, "decision", event["event_id"]),
+            "annotation_form_saved": False,
+            "annotation_form_finalized": False,
+            "counts_as_independent_review": False,
+        }
+
+    if ai_candidate_workspace is not None:
+        app.add_api_route(
+            "/api/assist/action-gold/{assignment_id}",
+            action_gold_ai_candidates,
+            methods=["GET"],
+        )
+        app.add_api_route(
+            "/api/assist/progress",
+            ai_candidate_progress,
+            methods=["GET"],
+        )
+        app.add_api_route(
+            "/api/assist/candidate-decisions",
+            record_ai_candidate_decision,
+            methods=["POST"],
+        )
+
     @app.get("/api/assignments/{assignment_id}/binding")
     async def packet_binding(
         request: Request, assignment_id: str, channel: str | None = None
@@ -1177,6 +1480,11 @@ def create_app(publication: CurationPublication, store: AnnotationStore) -> Fast
         )
         unit_id = store.resolve_assignment(body["assignment_id"], reviewer_role)
         channel = role_channel(reviewer_role)
+        if lock and solo_mode and channel == "ACTION_GOLD" and ai_candidate_workspace is not None:
+            ai_candidate_workspace.assert_unit_decisions_complete(
+                unit_id,
+                store.identity_commitment(reviewer_id),
+            )
         try:
             projected = assignment_projection(
                 unit_id=unit_id,

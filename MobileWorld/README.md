@@ -73,7 +73,14 @@
 > `SOLO_FIRST_PASS` for the currently sole curator: Action Gold, then
 > Transformation, then preliminary Consistency over all 190 units. These locks
 > are explicitly non-formal, do not count as independent reviews, and cannot be
-> promoted or exported as formal evidence. Real model/provider/external-network calls, GPU use,
+> promoted or exported as formal evidence. D-031 adds three already-frozen,
+> blind Agent A/B/C candidate streams for Action Gold. Every candidate remains
+> untrusted and non-authoritative; the human must explicitly review it, and an
+> adoption only copies it into an unsaved form with all confirmations cleared.
+> The site cannot generate, rank, merge, bulk-accept, autosave, or lock AI output.
+> This candidate campaign records `ai_semantic_suggestion_performed=true`; it
+> does not invoke the target actor model or any project provider client/call.
+> External-network calls, GPU use,
 > MobileWorld/generated GUI/action execution, live replay, and treatment-response
 > generation remain unauthorized. Human clicks in the private annotation site
 > are curation inputs and are never executed as MobileWorld actions.
@@ -81,8 +88,10 @@
 > incomplete pending separately authorized live/GPU proof; its exact state is
 > `IN_PROGRESS_LIVE_PROOF_DEFERRED`. Follow the
 > [inert-preparation contract](../mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md),
+> [AI-candidate amendment](../mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md),
 > [G1.6 workspace runbook](../mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md),
-> and [project status](../mobileworld_audit_handoff/STATUS.md).
+> and [project status](../mobileworld_audit_handoff/STATUS.md). ALE-324 remains
+> exactly `IN_PROGRESS_HUMAN_CURATION_REQUIRED`, not formal G1.6 completion.
 >
 > See the [six-model audit](docs/misleading_history_audit_report.md),
 > [workspace overview](../README.md).

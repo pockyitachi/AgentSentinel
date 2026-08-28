@@ -105,6 +105,34 @@ CODEC_GATE_CHECKS: Final = {
     "model_loaded": False,
     "replay_executed": False,
 }
+STABLE_PRINCIPAL_COMMITMENT_SCHEME: Final = "mobileworld.g1.stable-principal-secret-sha256/v1"
+
+
+def stable_principal_commitment(principal_id: Any, access_secret: Any) -> str:
+    """Return a workspace-independent, domain-separated principal commitment.
+
+    The returned value commits to the exact UTF-8 secret digest without returning that
+    digest. Owner registries can therefore mechanically link the same principal and secret
+    across solo/formal workspaces while keeping both inputs private.
+    """
+
+    require(
+        isinstance(principal_id, str)
+        and bool(principal_id)
+        and isinstance(access_secret, str)
+        and len(access_secret.encode("utf-8")) >= 16,
+        "REVIEWER_AUTHENTICATION_FAILED",
+        "stable principal commitment inputs are invalid",
+    )
+    principal_text = cast(str, principal_id)
+    secret_text = cast(str, access_secret)
+    return canonical_sha256(
+        {
+            "commitment_scheme": STABLE_PRINCIPAL_COMMITMENT_SCHEME,
+            "principal_id": principal_text,
+            "access_secret_sha256": hashlib.sha256(secret_text.encode("utf-8")).hexdigest(),
+        }
+    )
 
 
 def _is_within(path: Path, parent: Path) -> bool:
@@ -1008,6 +1036,51 @@ class ReviewerRegistry:
             "reviewer principal is not in the owner registry",
         )
         return matches[0]
+
+    def principal_ids(self) -> tuple[str, ...]:
+        """Return the closed owner-registry inventory without secrets."""
+
+        return tuple(sorted(principal_id for principal_id, _, _, _ in self._principals))
+
+    def stable_principal_commitment(self, principal_id: str) -> str:
+        """Link this owner principal across workspaces without exposing its secret."""
+
+        matches = [
+            secret
+            for candidate, _, secret, _ in self._principals
+            if hmac.compare_digest(candidate, principal_id)
+        ]
+        require(
+            len(matches) == 1,
+            "REVIEWER_AUTHENTICATION_FAILED",
+            "reviewer principal is not in the owner registry",
+        )
+        return stable_principal_commitment(principal_id, matches[0])
+
+    def assert_formal_ai_assistance_eligibility(self, ineligible_stable_commitments: Any) -> None:
+        """Fail closed if any formal principal was exposed to the AI candidate campaign."""
+
+        require(
+            isinstance(ineligible_stable_commitments, (set, frozenset))
+            and all(
+                isinstance(item, str)
+                and len(item) == 64
+                and all(character in "0123456789abcdef" for character in item)
+                for item in ineligible_stable_commitments
+            ),
+            "FORMAL_REVIEWER_ELIGIBILITY_INVALID",
+            "AI-assistance ineligibility commitments are invalid",
+        )
+        exposed = [
+            principal_id
+            for principal_id in self.principal_ids()
+            if self.stable_principal_commitment(principal_id) in ineligible_stable_commitments
+        ]
+        require(
+            not exposed,
+            "FORMAL_REVIEWER_AI_EXPOSURE_INELIGIBLE",
+            "formal owner registry contains an AI-assisted principal",
+        )
 
     def authenticate(self, principal_id: Any, role: Any, access_secret: Any) -> tuple[str, str]:
         principal_id, role = validate_identity(principal_id, role)
@@ -2068,6 +2141,21 @@ class AnnotationStore:
             ).encode(),
             hashlib.sha256,
         ).hexdigest()
+
+    def assert_formal_ai_assistance_eligibility(
+        self, ineligible_stable_commitments: set[str] | frozenset[str]
+    ) -> None:
+        """Apply the persistent AI-exposure exclusion before formal review is opened."""
+
+        require(
+            self.workspace_mode == "FORMAL_DOUBLE_BLIND"
+            and isinstance(self.reviewer_registry, ReviewerRegistry),
+            "FORMAL_REVIEWER_ELIGIBILITY_INVALID",
+            "AI-assistance eligibility guard applies only to a formal workspace",
+        )
+        self.reviewer_registry.assert_formal_ai_assistance_eligibility(
+            ineligible_stable_commitments
+        )
 
     def assert_identity_role(self, reviewer_id: str, reviewer_role: str) -> str:
         validate_identity(reviewer_id, reviewer_role)

@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai/ai_action_gold_candidate_output.schema.json",
+  "title": "G1.6 AI Action-Gold Candidate Output V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "campaign_id", "unit_id", "source_packet_sha256",
+    "agent_slot", "prompt_sha256", "response_kind", "candidate_items", "abstain_reason",
+    "input_attestation", "authority", "safety", "agent_output_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.ai-action-gold-candidate-output/v1"},
+    "record_type": {"const": "ai_action_gold_candidate_output"},
+    "campaign_id": {"type": "string", "pattern": "^g1aicampaign-[0-9a-f]{24}$"},
+    "unit_id": {"type": "string", "pattern": "^(?:g1case|g1control)-[0-9a-f]{24}$"},
+    "source_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "agent_slot": {"enum": ["A", "B", "C"]},
+    "prompt_sha256": {"$ref": "#/$defs/sha256"},
+    "response_kind": {"enum": ["CANDIDATES", "ABSTAIN"]},
+    "candidate_items": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/candidateItem"}},
+    "abstain_reason": {
+      "anyOf": [{"type": "null"}, {"allOf": [{"$ref": "#/$defs/safeAgentString"}, {"minLength": 1, "maxLength": 4000}]}]
+    },
+    "input_attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "only_frozen_packet_used", "history_used", "natural_action_used", "post_or_later_used",
+        "outcome_used", "transformation_used", "human_review_used", "peer_agent_output_used",
+        "chain_of_thought_stored"
+      ],
+      "properties": {
+        "only_frozen_packet_used": {"const": true},
+        "history_used": {"const": false},
+        "natural_action_used": {"const": false},
+        "post_or_later_used": {"const": false},
+        "outcome_used": {"const": false},
+        "transformation_used": {"const": false},
+        "human_review_used": {"const": false},
+        "peer_agent_output_used": {"const": false},
+        "chain_of_thought_stored": {"const": false}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "counts_as_independent_review", "formal_resolution_eligible", "admission_eligible",
+        "replay_eligible", "auto_apply_allowed", "human_review_required"
+      ],
+      "properties": {
+        "counts_as_independent_review": {"const": false},
+        "formal_resolution_eligible": {"const": false},
+        "admission_eligible": {"const": false},
+        "replay_eligible": {"const": false},
+        "auto_apply_allowed": {"const": false},
+        "human_review_required": {"const": true}
+      }
+    },
+    "safety": {"$ref": "#/$defs/safety"},
+    "agent_output_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"response_kind": {"const": "CANDIDATES"}}, "required": ["response_kind"]},
+      "then": {"properties": {"candidate_items": {"minItems": 1}, "abstain_reason": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"response_kind": {"const": "ABSTAIN"}}, "required": ["response_kind"]},
+      "then": {"properties": {"candidate_items": {"maxItems": 0}, "abstain_reason": {"type": "string", "minLength": 1}}}
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "evidenceId": {"type": "string", "pattern": "^evidence-[0-9a-f]{24}$"},
+    "region": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["shape", "x_min", "y_min", "x_max", "y_max"],
+          "properties": {
+            "shape": {"const": "BOUNDING_BOX"},
+            "x_min": {"type": "integer", "minimum": 0}, "y_min": {"type": "integer", "minimum": 0},
+            "x_max": {"type": "integer", "minimum": 0}, "y_max": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["shape", "vertices"],
+          "properties": {
+            "shape": {"const": "POLYGON"},
+            "vertices": {"type": "array", "minItems": 3, "items": {"type": "array", "prefixItems": [{"type": "integer", "minimum": 0}, {"type": "integer", "minimum": 0}], "items": false, "minItems": 2, "maxItems": 2}}
+          }
+        }
+      ]
+    },
+    "normalizedAction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["class", "serializer", "serializer_version", "value"],
+      "properties": {
+        "class": {"const": "mobile_world.runtime.utils.models.JSONAction"},
+        "serializer": {"const": "pydantic model_dump(mode=json, exclude_none=false)"},
+        "serializer_version": {"const": "2.11.7"},
+        "value": {
+          "type": "object", "additionalProperties": false,
+          "required": ["action_json", "action_name", "action_type", "app_name", "clear_text", "direction", "end_x", "end_y", "goal_status", "index", "keycode", "start_x", "start_y", "text", "x", "y"],
+          "properties": {
+            "action_json": {
+              "anyOf": [
+                {"type": "null"},
+                {"type": "object", "propertyNames": {"$ref": "#/$defs/safeAgentString"}, "additionalProperties": {"$ref": "#/$defs/safeAgentJson"}}
+              ]
+            },
+            "action_name": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/safeAgentString"}]},
+            "action_type": {"$ref": "#/$defs/actionType"},
+            "app_name": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/safeAgentString"}]},
+            "clear_text": {"type": ["boolean", "null"]}, "direction": {"enum": ["left", "right", "up", "down", null]},
+            "end_x": {"type": ["integer", "null"], "minimum": 0}, "end_y": {"type": ["integer", "null"], "minimum": 0},
+            "goal_status": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/safeAgentString"}]},
+            "index": {"type": ["integer", "null"]},
+            "keycode": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/safeAgentString"}]},
+            "start_x": {"type": ["integer", "null"], "minimum": 0},
+            "start_y": {"type": ["integer", "null"], "minimum": 0},
+            "text": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/safeAgentString"}]},
+            "x": {"type": ["integer", "null"], "minimum": 0}, "y": {"type": ["integer", "null"], "minimum": 0}
+          }
+        }
+      }
+    },
+    "actionType": {"enum": ["click", "double_tap", "scroll", "swipe", "input_text", "navigate_home", "navigate_back", "keyboard_enter", "open_app", "status", "wait", "long_press", "answer", "finished", "drag", "ask_user", "mcp"]},
+    "predicate": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["predicate_kind", "action_type", "normalized_action"],
+          "properties": {"predicate_kind": {"const": "EXACT_NORMALIZED_ACTION"}, "action_type": {"$ref": "#/$defs/actionType"}, "normalized_action": {"$ref": "#/$defs/normalizedAction"}}
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["predicate_kind", "action_type", "regions", "tolerance_px"],
+          "properties": {"predicate_kind": {"const": "POINT_REGION"}, "action_type": {"enum": ["click", "double_tap", "long_press"]}, "regions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/region"}}, "tolerance_px": {"type": "integer", "minimum": 0}}
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["predicate_kind", "action_type", "start_regions", "end_regions", "allowed_directions", "minimum_displacement_px", "tolerance_px"],
+          "properties": {"predicate_kind": {"const": "DRAG_REGION"}, "action_type": {"const": "drag"}, "start_regions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/region"}}, "end_regions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/region"}}, "allowed_directions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["left", "right", "up", "down", "any"]}}, "minimum_displacement_px": {"type": "integer", "minimum": 0}, "tolerance_px": {"type": "integer", "minimum": 0}}
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["predicate_kind", "action_type", "field", "unicode_normalization", "case_sensitive", "allowed_values"],
+          "properties": {"predicate_kind": {"const": "TEXT_VARIANTS"}, "action_type": {"enum": ["input_text", "open_app", "status", "answer", "finished", "ask_user"]}, "field": {"enum": ["text", "app_name", "goal_status"]}, "unicode_normalization": {"const": "NFC"}, "case_sensitive": {"type": "boolean"}, "allowed_values": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"allOf": [{"$ref": "#/$defs/safeAgentString"}, {"minLength": 1}]}}},
+          "allOf": [
+            {
+              "if": {"properties": {"action_type": {"enum": ["input_text", "answer", "finished", "ask_user"]}}, "required": ["action_type"]},
+              "then": {"properties": {"field": {"const": "text"}}}
+            },
+            {
+              "if": {"properties": {"action_type": {"const": "open_app"}}, "required": ["action_type"]},
+              "then": {"properties": {"field": {"const": "app_name"}}}
+            },
+            {
+              "if": {"properties": {"action_type": {"const": "status"}}, "required": ["action_type"]},
+              "then": {"properties": {"field": {"const": "goal_status"}}}
+            }
+          ]
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["predicate_kind", "action_type", "allowed_directions"],
+          "properties": {"predicate_kind": {"const": "DIRECTION_SET"}, "action_type": {"enum": ["scroll", "swipe"]}, "allowed_directions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["left", "right", "up", "down"]}}}
+        }
+      ]
+    },
+    "candidateItem": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_id", "candidate_kind", "predicate", "evidence_ids", "concise_rationale", "uncertainty_note", "candidate_sha256"],
+      "properties": {
+        "candidate_id": {"type": "string", "pattern": "^g1aicandidate-[0-9a-f]{24}$"},
+        "candidate_kind": {"const": "ACTION_PREDICATE"},
+        "predicate": {"$ref": "#/$defs/predicate"},
+        "evidence_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/evidenceId"}},
+        "concise_rationale": {"allOf": [{"$ref": "#/$defs/safeAgentString"}, {"minLength": 1, "maxLength": 4000}]},
+        "uncertainty_note": {"anyOf": [{"type": "null"}, {"allOf": [{"$ref": "#/$defs/safeAgentString"}, {"maxLength": 4000}]}]},
+        "candidate_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "safeAgentString": {
+      "type": "string",
+      "pattern": "(?i)^(?!.*(?:https?://|ftp://|file://|www\\.|mailto:|(?:^|[^A-Za-z0-9_])(?:/(?!/)[^ ]+|\\.\\.?/|~/|[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\ ]+\\\\)|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret)[ ]*[:=][ ]*[^ ]+|(?:bearer|basic)[ ]+[A-Za-z0-9._~+/=-]{8,}))[^\\u0000-\\u001f\\u007f-\\u009f<>]*$"
+    },
+    "safeAgentJson": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "boolean"},
+        {"type": "number"},
+        {"$ref": "#/$defs/safeAgentString"},
+        {"type": "array", "items": {"$ref": "#/$defs/safeAgentJson"}},
+        {"type": "object", "propertyNames": {"$ref": "#/$defs/safeAgentString"}, "additionalProperties": {"$ref": "#/$defs/safeAgentJson"}}
+      ]
+    },
+    "safety": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target_actor_model_invoked", "project_gpu_used", "external_network_used", "replay_executed", "action_executed", "treatment_response_generation_allowed"],
+      "properties": {
+        "target_actor_model_invoked": {"const": false}, "project_gpu_used": {"const": false},
+        "external_network_used": {"const": false}, "replay_executed": {"const": false},
+        "action_executed": {"const": false}, "treatment_response_generation_allowed": {"const": false}
+      }
+    }
+  }
+}

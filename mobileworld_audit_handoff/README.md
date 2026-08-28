@@ -17,7 +17,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
 | ALE-322 / G1.4 | **CPU/fake checkpoint 与 inert live-proof code preparation 已实现；live proof 延后** | commits `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`、`74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d` 已验证 runner/fake path 和 D-026 no-execution preparation；全部 readiness/authorization 与 safety fields 仍为 false，无 formal publication，story 仍未完成 |
 | ALE-323 / G1.5 | **CPU History Codec checkpoint 已实现；live smoke 延后** | Qwen flat-progress 与 MAI raw-replay 的 exact extraction/render/diff/reversibility、arbitrary human-draft five-arm preview、secret-free CPU publication 和 G1.4 fail-closed interface 已验证；`live_ready=false`，10-call GPU backlog 未授权，story 仍未完成 |
-| ALE-324 / G1.6 | **单人非正式 first pass 已启动；独立双审与 formal export 待完成** | D-030 以隔离 root/key/journal 提供 Action → Transformation → Consistency 的 190-unit 单人 precursor；所有记录不计独立 review、不可晋升/正式导出；无 provider/GPU/replay/action |
+| ALE-324 / G1.6 | **单人非正式 first-pass checkpoint + 三路 AI 候选辅助；独立双审与 formal export 待完成** | D-030 以隔离 root/key/journal 提供 190-unit 单人 precursor；D-031 冻结 3×190 blind Action-Gold outputs（585 atomic suggestions），每项必须由唯一人类明确复核且仅可复制进未保存表单；二者均不计独立 review、不可晋升/正式导出；无 target-actor provider/GPU/replay/action |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -184,10 +184,24 @@ Consistency。它使用独立 mode marker、assignment key、manifest 与 journa
 resolution、adjudication、promotion、export、admission、seal 与 replay authority 全为 false。
 未来正式工作必须另建 blind workspace/registry/key，不能把 solo 记录原地晋升。
 
+D-031、
+[`G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`](G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md)
+与冻结的
+[`G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`](G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md)
+增加一个与 formal/solo journals 物理隔离的离线候选 campaign。三个 Agent A/B/C stream 对
+同一批 190 个 role-projected Action-Gold blind packets 各输出一次，共 570 个 terminal envelopes、
+585 个 atomic suggestions。候选不是 evidence、review、gold、resolution 或 adjudication；网页没有
+generate/regenerate/rank/merge/bulk-accept 路径，采用候选只会追加到浏览器内未保存表单并清空所有
+人工确认。唯一 curator 必须逐项选择 adopt、adopt-with-edits、supplement 或 ignore，并另行保存
+solo draft/lock。看到候选的 principal 会被记录为 AI-assisted，不能在未来 formal G1.6 workspace
+担任 reviewer 或 adjudicator。
+
 当前精确状态是 `IN_PROGRESS_HUMAN_CURATION_REQUIRED`：代码/workspace checkpoint 不是
 formal gold publication。190 个单元仍需真实 PRIMARY/SECONDARY review 与必要 adjudication；
 formal action bundle、Transformation Plan、admission/blinded catalog/seal 还必须在独立 exporter
-门禁中完成。所有 execution/provider/treatment/GPU/replay/action flags 保持 false。
+门禁中完成。唯一的 AI disclosure 是独立 candidate campaign 明确记录的
+`ai_semantic_suggestion_performed=true`；target-actor/project-provider/treatment/GPU/replay/
+action authority 与执行 flags 全部保持 false。
 
 ## 强制入口与补充导航
 
@@ -217,14 +231,16 @@ formal action bundle、Transformation Plan、admission/blinded catalog/seal 还�
 21. [G1_5_HISTORY_CODEC_CAPABILITIES_V1.md](G1_5_HISTORY_CODEC_CAPABILITIES_V1.md)；
 22. [G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md](G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md)；
 23. [G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md](G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md)；
-24. [G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md](G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md)；
-25. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
-26. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
-27. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
-28. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
-29. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
-30. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
-31. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
+24. [G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md](G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md)；
+25. [G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md](G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md)；
+26. [G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md](G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md)；
+27. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
+28. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
+29. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
+30. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
+31. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
+32. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
+33. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
 
 三个无 `_v1_1` 后缀的 capsule/manifest/integrity schema 是 byte-frozen 历史 v1，
 不得作为当前 formal G1 contract 使用。
@@ -240,6 +256,8 @@ formal action bundle、Transformation Plan、admission/blinded catalog/seal 还�
   five-arm preview 与 host-coordinate binding schemas。
 - [schemas/g1_6/](schemas/g1_6/) 中的 workspace、event、review proposal、role-projected packet
   与 assignment-scoped browser preview schemas。
+- [schemas/g1_6_ai/](schemas/g1_6_ai/) 中的离线三路候选 campaign、packet、output、receipt、
+  exposure、browser projection 与人工 candidate-decision schemas。
 
 其中 Collector 文档保留其设计时状态与验收原则；完成记录以 STATUS.md 为准，工程授权
 以 AGENTS.md、DECISION_LOG.md、G1_4_DECISION_LOG.md、G1_5_DECISION_LOG.md 与
@@ -273,6 +291,8 @@ mobileworld_audit_handoff/
 ├── G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md
 ├── G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md
 ├── G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md
+├── G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md
+├── G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md
 ├── G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md
 ├── g1/
 │   └── frozen registry inputs, model/config manifest, publication lock
@@ -288,6 +308,8 @@ mobileworld_audit_handoff/
 │   └── captured-shape fixture, provider-free CPU checkpoint/publication/preview, and coordinate schemas
 ├── schemas/g1_6/
 │   └── formal workspace/event/proposal/packet/browser-preview plus additive solo workspace/event schemas
+├── schemas/g1_6_ai/
+│   └── closed non-authoritative AI candidate campaign, packet, output, receipt, exposure, browser, and decision schemas
 ├── g1_5/
 │   └── content-addressed CPU manifest, two conformance receipts, preview binding, and no-tokenizer binding
 └── examples/

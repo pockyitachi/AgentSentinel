@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai/ai_action_gold_candidate_packet.schema.json",
+  "title": "G1.6 AI Action-Gold Candidate Packet V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "campaign_id", "packet_id", "unit_id",
+    "source_packet_sha256", "task_instruction", "task_instruction_sha256", "evidence_ids",
+    "auxiliary_evidence",
+    "screenshot", "visibility", "authority", "packet_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.ai-action-gold-candidate-packet/v1"},
+    "record_type": {"const": "ai_action_gold_candidate_packet"},
+    "campaign_id": {"type": "string", "pattern": "^g1aicampaign-[0-9a-f]{24}$"},
+    "packet_id": {"type": "string", "pattern": "^g1aipacket-[0-9a-f]{24}$"},
+    "unit_id": {"type": "string", "pattern": "^(?:g1case|g1control)-[0-9a-f]{24}$"},
+    "source_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "task_instruction": {"type": "string", "minLength": 1, "maxLength": 20000},
+    "task_instruction_sha256": {"$ref": "#/$defs/sha256"},
+    "evidence_ids": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^evidence-[0-9a-f]{24}$"}
+    },
+    "auxiliary_evidence": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence_id", "evidence_role", "content_sha256", "content"],
+        "properties": {
+          "evidence_id": {"type": "string", "pattern": "^evidence-[0-9a-f]{24}$"},
+          "evidence_role": {"enum": ["tool_response", "ask_user_response"]},
+          "content_sha256": {"$ref": "#/$defs/sha256"},
+          "content": {}
+        }
+      }
+    },
+    "screenshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "path", "sha256", "byte_count", "media_type", "width", "height"],
+      "properties": {
+        "evidence_id": {"type": "string", "pattern": "^evidence-[0-9a-f]{24}$"},
+        "path": {"type": "string", "pattern": "^screenshots/sha256/[0-9a-f]{2}/[0-9a-f]{64}\\.png$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "media_type": {"const": "image/png"},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "visibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_instruction_visible", "target_pre_visible", "history_visible",
+        "natural_target_output_visible", "target_post_visible", "later_trajectory_visible",
+        "outcome_visible", "transformation_visible", "human_review_visible",
+        "peer_agent_output_visible", "replay_response_visible"
+      ],
+      "properties": {
+        "task_instruction_visible": {"const": true},
+        "target_pre_visible": {"const": true},
+        "history_visible": {"const": false},
+        "natural_target_output_visible": {"const": false},
+        "target_post_visible": {"const": false},
+        "later_trajectory_visible": {"const": false},
+        "outcome_visible": {"const": false},
+        "transformation_visible": {"const": false},
+        "human_review_visible": {"const": false},
+        "peer_agent_output_visible": {"const": false},
+        "replay_response_visible": {"const": false}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["counts_as_independent_review", "formal_resolution_eligible", "admission_eligible", "replay_eligible"],
+      "properties": {
+        "counts_as_independent_review": {"const": false},
+        "formal_resolution_eligible": {"const": false},
+        "admission_eligible": {"const": false},
+        "replay_eligible": {"const": false}
+      }
+    },
+    "packet_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

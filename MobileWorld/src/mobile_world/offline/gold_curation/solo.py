@@ -46,6 +46,7 @@ from mobile_world.offline.gold_curation.store import (
     _read_regular,
     _write_all,
     _write_once_regular,
+    stable_principal_commitment,
 )
 
 SOLO_REGISTRY_SCHEMA_VERSION: Final = "mobileworld.g1.solo-first-pass-curator-registry/v1"
@@ -167,6 +168,16 @@ class SoloCuratorRegistry:
 
     def permits(self, principal_id: str, role: str) -> bool:
         return hmac.compare_digest(principal_id, self.principal_id) and role in SOLO_REVIEW_ROLES
+
+    def stable_principal_commitment(self, principal_id: str) -> str:
+        """Link the owner principal across workspaces without exposing its secret."""
+
+        require(
+            hmac.compare_digest(principal_id, self.principal_id),
+            "REVIEWER_AUTHENTICATION_FAILED",
+            "solo curator is not in the owner registry",
+        )
+        return stable_principal_commitment(principal_id, self._access_secret)
 
 
 class SoloFirstPassStore(AnnotationStore):

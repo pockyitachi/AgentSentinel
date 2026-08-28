@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai/ai_candidate_generation_receipt.schema.json",
+  "title": "G1.6 AI Candidate Generation Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "campaign_id", "agent_slot", "draft_file_sha256",
+    "generation_attestation",
+    "output_count", "output_refs", "peer_agent_output_visible", "human_feedback_visible",
+    "chain_of_thought_stored", "target_actor_model_invoked", "project_gpu_used",
+    "external_network_used", "replay_executed", "action_executed", "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.ai-candidate-generation-receipt/v1"},
+    "record_type": {"const": "ai_candidate_generation_receipt"},
+    "campaign_id": {"type": "string", "pattern": "^g1aicampaign-[0-9a-f]{24}$"},
+    "agent_slot": {"enum": ["A", "B", "C"]},
+    "draft_file_sha256": {"$ref": "#/$defs/sha256"},
+    "generation_attestation": {"$ref": "#/$defs/generationAttestation"},
+    "output_count": {"const": 190},
+    "output_refs": {
+      "type": "array",
+      "minItems": 190,
+      "maxItems": 190,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["unit_id", "agent_slot", "path", "sha256", "byte_count"],
+        "properties": {
+          "unit_id": {"type": "string", "pattern": "^(?:g1case|g1control)-[0-9a-f]{24}$"},
+          "agent_slot": {"enum": ["A", "B", "C"]},
+          "path": {"type": "string", "pattern": "^outputs/sha256/[0-9a-f]{2}/[0-9a-f]{64}\\.json$"},
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "byte_count": {"type": "integer", "minimum": 2}
+        }
+      }
+    },
+    "peer_agent_output_visible": {"const": false},
+    "human_feedback_visible": {"const": false},
+    "chain_of_thought_stored": {"const": false},
+    "target_actor_model_invoked": {"const": false},
+    "project_gpu_used": {"const": false},
+    "external_network_used": {"const": false},
+    "replay_executed": {"const": false},
+    "action_executed": {"const": false},
+    "receipt_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generationAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "agent_slot", "draft_file_sha256", "generation_mode",
+        "input_attestation", "peer_agent_output_visible", "human_feedback_visible",
+        "provider_client_created", "project_model_weights_loaded", "safety",
+        "attestation_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": "mobileworld.g1.ai-candidate-generation-attestation/v1"},
+        "agent_slot": {"enum": ["A", "B", "C"]},
+        "draft_file_sha256": {"$ref": "#/$defs/sha256"},
+        "generation_mode": {"const": "ISOLATED_CODEX_RESEARCH_STREAM"},
+        "input_attestation": {
+          "type": "object", "additionalProperties": false,
+          "required": ["only_frozen_packet_used", "history_used", "natural_action_used", "post_or_later_used", "outcome_used", "transformation_used", "human_review_used", "peer_agent_output_used", "chain_of_thought_stored"],
+          "properties": {
+            "only_frozen_packet_used": {"const": true}, "history_used": {"const": false},
+            "natural_action_used": {"const": false}, "post_or_later_used": {"const": false},
+            "outcome_used": {"const": false}, "transformation_used": {"const": false},
+            "human_review_used": {"const": false}, "peer_agent_output_used": {"const": false},
+            "chain_of_thought_stored": {"const": false}
+          }
+        },
+        "peer_agent_output_visible": {"const": false},
+        "human_feedback_visible": {"const": false},
+        "provider_client_created": {"const": false},
+        "project_model_weights_loaded": {"const": false},
+        "safety": {
+          "type": "object", "additionalProperties": false,
+          "required": ["target_actor_model_invoked", "project_gpu_used", "external_network_used", "replay_executed", "action_executed", "treatment_response_generation_allowed"],
+          "properties": {
+            "target_actor_model_invoked": {"const": false}, "project_gpu_used": {"const": false},
+            "external_network_used": {"const": false}, "replay_executed": {"const": false},
+            "action_executed": {"const": false}, "treatment_response_generation_allowed": {"const": false}
+          }
+        },
+        "attestation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

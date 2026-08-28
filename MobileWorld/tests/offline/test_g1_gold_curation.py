@@ -20,6 +20,7 @@ import sys
 import types
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,29 @@ from mobile_world.offline.gold_curation.store import (  # noqa: E402
 
 SHA256_ZERO = "0" * 64
 SCREENSHOT_BYTES = b"\x89PNG\r\n\x1a\nG1.6-test-fixture"
+
+
+class _EmptyAIExposureWorkspace:
+    def exposed_stable_principal_commitments(self) -> frozenset[str]:
+        return frozenset()
+
+    def formal_registry_guard(self, _registry: ReviewerRegistry) -> Any:
+        return nullcontext()
+
+
+_EMPTY_AI_EXPOSURE_WORKSPACE = _EmptyAIExposureWorkspace()
+
+
+def _create_formal_test_app(
+    publication: Any,
+    store: AnnotationStore,
+) -> Any:
+    return create_app(
+        publication,
+        store,
+        ai_exposure_workspace=_EMPTY_AI_EXPOSURE_WORKSPACE,  # type: ignore[arg-type]
+    )
+
 
 PRINCIPALS: tuple[tuple[str, str, str, str | None], ...] = (
     ("action-primary", "ACTION_GOLD_PRIMARY", "secret-action-primary-0001", None),
@@ -2405,7 +2429,7 @@ def test_dashboard_derives_blocked_invalid_input_from_authoritative_packet_bytes
         return original_packet(unit_id, channel)
 
     monkeypatch.setattr(fake_publication, "packet", packet)
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app) as client:
         _session(client, "action-primary")
         response = client.get("/api/assignments")
@@ -2617,7 +2641,7 @@ def test_session_rejects_wrong_secret_unknown_alias_and_role_mismatch(
     role: str,
     secret: str,
 ) -> None:
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app) as client:
         response = client.post(
             "/api/session",
@@ -2633,7 +2657,7 @@ def test_session_cookie_csrf_host_origin_headers_and_identity_nonleakage(
     annotation_store: AnnotationStore,
     fake_publication: FakePublication,
 ) -> None:
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app) as anonymous:
         response = anonymous.get("/api/assignments")
         assert response.status_code == 401
@@ -2748,7 +2772,7 @@ def test_different_loopback_origin_is_rejected_as_cross_origin(
     annotation_store: AnnotationStore,
     fake_publication: FakePublication,
 ) -> None:
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app, base_url="http://127.0.0.1:8766") as client:
         response = client.get(
             "/api/config",
@@ -2761,7 +2785,7 @@ def test_state_change_requires_origin_even_with_a_valid_csrf_token(
     annotation_store: AnnotationStore,
     fake_publication: FakePublication,
 ) -> None:
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app) as client:
         csrf, _ = _session(client, "action-primary")
         assignment_id = annotation_store.assignment_id(_unit_id(0), "ACTION_GOLD_PRIMARY")
@@ -2781,7 +2805,7 @@ def test_transformation_preview_endpoint_is_role_assignment_and_body_bound(
     annotation_store: AnnotationStore,
     fake_publication: FakePublication,
 ) -> None:
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     unit_id = _unit_id(0)
     assignment_id = annotation_store.assignment_id(unit_id, "TRANSFORMATION_PRIMARY")
     wrong_role_assignment = annotation_store.assignment_id(unit_id, "TRANSFORMATION_SECONDARY")
@@ -2883,7 +2907,7 @@ def test_non_loopback_peer_is_rejected_even_with_allowed_host(
     annotation_store: AnnotationStore,
     fake_publication: FakePublication,
 ) -> None:
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app, client=("203.0.113.9", 43100)) as client:
         response = client.get("/api/config", headers={"host": "127.0.0.1"})
     assert response.status_code == 403
@@ -2940,7 +2964,7 @@ def test_http_boundary_requires_bounded_closed_json(
     status: int,
     error: str,
 ) -> None:
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app) as client:
         response = client.post("/api/session", content=content, headers=headers)
     assert response.status_code == status
@@ -2953,7 +2977,7 @@ def test_blinded_assignment_packets_are_role_bound_and_leak_no_stable_identity(
     annotation_store: AnnotationStore,
     fake_publication: FakePublication,
 ) -> None:
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     unit_id = _unit_id(0)
     primary_assignment = annotation_store.assignment_id(unit_id, "ACTION_GOLD_PRIMARY")
     secondary_assignment = annotation_store.assignment_id(unit_id, "ACTION_GOLD_SECONDARY")
@@ -3007,7 +3031,7 @@ def test_assignment_packet_digest_is_server_derived_and_cannot_be_forged(
     fake_publication: FakePublication,
 ) -> None:
     unit_id = _unit_id(8)
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app) as client:
         csrf, _ = _session(client, "action-primary")
         assignment_id = annotation_store.assignment_id(unit_id, "ACTION_GOLD_PRIMARY")
@@ -3073,7 +3097,7 @@ def test_primary_cannot_observe_secondary_submission_before_or_after_finalize(
         reviewer_role="ACTION_GOLD_SECONDARY",
         payload=_action_payload(),
     )
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     assignment_id = annotation_store.assignment_id(unit_id, "ACTION_GOLD_PRIMARY")
     with InProcessASGIClient(app) as client:
         _session(client, "action-primary")
@@ -3225,7 +3249,7 @@ def test_adjudicator_http_packet_is_peer_visible_but_assignment_scoped(
         reviewer_role="ACTION_GOLD_SECONDARY",
         payload=_excluded_action_payload(),
     )
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app) as adjudicator:
         csrf, _ = _session(adjudicator, "third-adjudicator")
         assignments = adjudicator.get("/api/assignments")
@@ -3722,7 +3746,7 @@ def test_inprocess_http_workflow_never_uses_external_network_or_subprocess(
     monkeypatch.setattr(socket, "getaddrinfo", forbidden)
     monkeypatch.setattr(subprocess, "Popen", forbidden)
     monkeypatch.setattr(subprocess, "run", forbidden)
-    app = create_app(fake_publication, annotation_store)  # type: ignore[arg-type]
+    app = _create_formal_test_app(fake_publication, annotation_store)
     with InProcessASGIClient(app) as client:
         csrf, _ = _session(client, "action-primary")
         assignments = client.get("/api/assignments")

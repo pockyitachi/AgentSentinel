@@ -25,14 +25,16 @@
 21. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
 22. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
 23. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-24. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-25. `G1_SENTINEL_MVP_MIGRATION.md`
-26. `g1/registry.lock.v1.json`
-27. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-28. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-29. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-30. `schemas/g1_3/field_visibility.schema.json`
-31. `schemas/g1_3/capsule_exclusion.schema.json`
+24. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+25. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+26. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+27. `G1_SENTINEL_MVP_MIGRATION.md`
+28. `g1/registry.lock.v1.json`
+29. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+30. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+31. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+32. `schemas/g1_3/field_visibility.schema.json`
+33. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -88,6 +90,11 @@ ACTION_GOLD → TRANSFORMATION → CONSISTENCY_AUDIT 顺序锁定，并保持所
 resolution、promotion、formal export、admission、replay 与 seal authority 为 false；不得原地
 晋升或替代正式双盲 workspace。
 
+`G1_6_DECISION_LOG.md` D-031 只再授权三路彼此隔离的 Codex stream 离线生成非权威
+`ACTION_GOLD` 候选，供同一个 solo curator 逐项判断。候选不得成为 evidence/review/gold，
+不得计入独立复核；网页只能读取冻结候选与写独立 candidate-decision journal，不能在线生成、
+排序、投票、自动应用、保存、锁定或晋升候选。
+
 必须：
 
 - 保存模型真正收到的最终 request；
@@ -116,12 +123,13 @@ resolution、promotion、formal export、admission、replay 与 seal authority �
 - 用 HTTP 200、截图变化或 task failure 自动等同动作语义失败；
 - 把 API key、Authorization header 或其他 secrets 写入日志；
 - 为了匹配本设计而破坏服务器已有用户修改或强制 reset 工作树。
-- 调用任何真实/外部 model 或 provider、发起外部网络请求、使用 GPU、加载/服务模型权重、
-  执行 MobileWorld/generated GUI/tool/action、backend restore、prefix 或 live replay、生成
-  treatment response、自动推断
-  claim validity、自动选择/生成 intervention，或开始 G1.7+；只允许无网络的确定性
-  fake-provider conformance、provider-free G1.5 CPU checkpoint 与 D-029 限定的人工 G1.6
-  CPU workspace；
+- 调用 target actor model 或任何 project provider/client、发起外部网络请求、使用 GPU、
+  加载/服务 project model weights、执行 MobileWorld/generated GUI/tool/action、backend
+  restore、prefix 或 live replay、生成 treatment response、自动决定 claim validity、自动选择
+  formal intervention，或开始 G1.7+；只允许无网络的确定性 fake-provider conformance、
+  provider-free G1.5 CPU checkpoint、D-029 限定的人工 G1.6 CPU workspace，以及 D-031 已明确
+  授权的三路离线 Codex 候选 campaign。D-031 是唯一 semantic-suggestion 例外；输出仍不可信且
+  必须逐项人审，annotation website 自身不得调用 Codex 或任何 model/provider；
 - D-029 唯一允许的 server socket 是 owner 启动、单进程、仅绑定 loopback、无 remote asset、
   强制 same-origin/CSRF 的 annotation site；D-030 只额外允许 owner 的单端口 SSH local forward
   从 client `127.0.0.1:8766` 到 server `127.0.0.1:8766`，禁止 reverse/dynamic forwarding、
@@ -150,6 +158,6 @@ G1.4 CPU checkpoint 必须单独记录未完成的 live/GPU 验收项，不得�
 G1.5 CPU checkpoint 也必须记录精确 10-call live-smoke backlog，不得将 ALE-323 标记为完成。
 G1.6 workspace checkpoint 不能冒充 gold publication；只有 190 单元双盲 review、必要 adjudication、
 formal export/validation/admission/seal 全部完成后才可将 ALE-324 标记为完成。
-任何真实 model/provider/external-network/GPU/MobileWorld-generated-GUI/action/live-replay 仍需
-另行授权；D-029 owner-started loopback annotation site/human curation clicks 是唯一例外。不得把
-凭据写入代码或本目录。
+任何 target-actor/project-provider/external-network/GPU/MobileWorld-generated-GUI/action/
+live-replay 仍需另行授权；D-029 owner-started loopback annotation site/human curation clicks
+与 D-031 已冻结的离线候选 campaign 是现有窄幅例外。不得把凭据写入代码或本目录。

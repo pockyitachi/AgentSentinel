@@ -26,14 +26,16 @@ Before changing code, read these files completely:
 18. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
 19. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
 20. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-21. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-22. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
-23. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
-24. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
-25. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
-26. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
-27. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
-28. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
+21. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+22. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+23. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+24. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
+25. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
+26. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
+27. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
+28. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
+29. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
+30. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
 
 The historical `replay_capsule.schema.json`, `capsule_manifest.schema.json`, and
 `capsule_integrity.schema.json` remain byte-frozen v1 references. Amendment 1
@@ -93,14 +95,23 @@ Consistency stage order; and keep every independence, resolution, promotion,
 export, admission, replay, and seal authority false. It cannot replace or be
 promoted into the formal double-blind workspace.
 
+`G1_6_DECISION_LOG.md` D-031 additionally authorizes exactly three isolated Codex streams to
+prepare offline, non-authoritative `ACTION_GOLD` candidate predicates for the solo curator. The
+website may only display already frozen candidates and append separate per-item human decisions;
+it must never generate, rank, merge, auto-apply, save, lock, or promote a candidate. These streams
+are not human reviewers, their outputs never count as independent review, and candidate exposure
+permanently excludes that principal from future formal G1.6 reviewer/adjudicator roles.
+
 Collector v1 remains event-sourced, lossless, label-free, zero-intervention,
-and byte-immutable. Do not invoke any real model/provider, use an external network or a
-GPU, load/serve model weights, execute a MobileWorld/generated GUI/tool/action, restore a backend,
-run a deterministic prefix or live replay, generate a treatment response,
-automatically infer claim validity or choose an intervention, or implement
-runtime Sentinel behavior. The deterministic fake-provider conformance path,
-provider-free G1.5 CPU checkpoint, and explicitly human-authored G1.6 CPU
-workspace are the only permitted substitutes.
+and byte-immutable. Do not invoke the target actor model or any project provider/client, use an
+external network or a GPU, load/serve project model weights, execute a MobileWorld/generated
+GUI/tool/action, restore a backend, run a deterministic prefix or live replay, generate a treatment
+response, automatically decide claim validity or choose a formal intervention, or implement runtime
+Sentinel behavior. The deterministic fake-provider conformance path, provider-free G1.5 CPU
+checkpoint, explicitly human-authored G1.6 CPU workspace, and the already authorized three-stream
+D-031 offline candidate campaign are the only permitted substitutes. D-031 is the sole semantic
+suggestion exception: its outputs remain untrusted and require individual human decisions, and the
+annotation website itself must never invoke Codex or another model/provider.
 The sole socket exception is the owner-started, single-process D-029 annotation
 site bound to loopback with same-origin/CSRF checks and no remote assets. D-030
 also permits only the owner's single-port SSH local forward from client
