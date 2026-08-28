@@ -6,7 +6,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 
 ## 当前状态
 
-截至 2026-08-27：
+截至 2026-08-28：
 
 | Workstream | 状态 | 说明 |
 | --- | --- | --- |
@@ -16,6 +16,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | ALE-320 / G1.2 | **已完成** | 已冻结可移植 History IR/Core、codec/provider interface、protocol validator、sidecar schemas 与六 family fixture conformance |
 | ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
 | ALE-322 / G1.4 | **CPU/fake checkpoint 与 inert live-proof code preparation 已实现；live proof 延后** | commits `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`、`74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d` 已验证 runner/fake path 和 D-026 no-execution preparation；全部 readiness/authorization 与 safety fields 仍为 false，无 formal publication，story 仍未完成 |
+| ALE-323 / G1.5 | **CPU History Codec checkpoint 已实现；live smoke 延后** | Qwen flat-progress 与 MAI raw-replay 的 exact extraction/render/diff/reversibility、secret-free CPU publication 和 G1.4 fail-closed interface 已验证；`live_ready=false`，10-call GPU backlog 未授权，story 仍未完成 |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -109,7 +110,7 @@ fields 与 9 个 safety fields 仍为 false，也没有 formal run publication�
 Formal capsule 的 `execution_ready=false`、`provider_invocation_allowed=false` 和
 `treatment_response_generation_allowed=false` 不变，不得被 wrapper、CLI、resume 或 test path
 绕过。当前不授权任何真实 model/provider/network 调用、GPU、模型加载/服务、
-GUI/tool/action、backend restore/prefix、live replay、treatment response 或 G1.5+ 工作。“约 90%”是
+GUI/tool/action、backend restore/prefix、live replay 或 treatment response。“约 90%”是
 调度目标而非验收比例，不能用作完成度声明；ALE-322 的精确状态仍是
 `IN_PROGRESS_LIVE_PROOF_DEFERRED`。G1.5 live History Codec、G1.6 curation/gold/admission、
 G1.7 serving/seed/isolation/backend/scorer/restorer/run-ready/execution seals 与 owner 的 live/GPU
@@ -118,6 +119,29 @@ G1.7 serving/seed/isolation/backend/scorer/restorer/run-ready/execution seals �
 CPU/fake checkpoint 的实现提交是
 `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`。它不是正式 replay publication，也不包含
 任何 treatment response；精确回归、冻结输入与剩余 live gate 记录在 [STATUS.md](STATUS.md)。
+
+## 当前活动阶段：ALE-323 / G1.5（CPU History Codec checkpoint）
+
+[`G1_5_DECISION_LOG.md`](G1_5_DECISION_LOG.md) D-028 与
+[`G1_5_HISTORY_CODEC_CONTRACT_V1.md`](G1_5_HISTORY_CODEC_CONTRACT_V1.md) 只授权 Qwen
+flat-progress 与 MAI raw-replay 两个 History Codec 的 CPU-only 阶段。实现范围是 exact captured
+request syntax extraction、request/hash-bound 的外部 curated span binding、复用冻结 G1.2 core 的
+五 arm render/diff/reversibility、secret-free captured-shape fixtures/golden diff，以及复用 G1.4
+invariance/runner 接口并在 provider encode/send 前阻断。
+
+两个 Codec 的 `scope=LIVE` 只声明 representation capability；`live_ready=false` 保持不变。
+Formal G1.3 capsule 三项 authorization guards 仍为 false，G1.4 live entrypoints 仍机械禁用。
+ALE-323 当前精确状态是 `CPU_CHECKPOINT_IMPLEMENTED_LIVE_SMOKE_DEFERRED`，不是完成。D-028
+冻结的剩余验收为 2 codecs × 5 arms × 1 invocation = 10-call non-formal smoke matrix；它已记录到
+统一 GPU backlog，但没有执行授权。能力和稳定 fallback 见
+[`G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`](G1_5_HISTORY_CODEC_CAPABILITIES_V1.md)，CPU conformance
+requirements coverage 见
+[`G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md`](G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md)。
+后续 CPU gate 应只读绑定
+[`g1_5/cpu_publication_manifest.v1.json`](g1_5/cpu_publication_manifest.v1.json) 的最终 file
+SHA-256；manifest 内分别绑定两个 selected Codec、capability、fixture、checkpoint receipt，并共同
+绑定冻结 G1.2 History-IR schema/renderer 与 explicit no-tokenizer Unicode/UTF-8 coordinate contract。
+它不是 live capability 或 formal G1 publication。
 
 ## 强制入口与补充导航
 
@@ -128,26 +152,29 @@ CPU/fake checkpoint 的实现提交是
 2. [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)；
 3. [DECISION_LOG.md](DECISION_LOG.md)；
 4. [G1_4_DECISION_LOG.md](G1_4_DECISION_LOG.md)；
-5. [COLLECTOR_DESIGN.md](COLLECTOR_DESIGN.md)；
-6. [EVENT_CONTRACT_V1.md](EVENT_CONTRACT_V1.md)；
-7. [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)；
-8. [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md)；
-9. [SERVER_AGENT_INSTRUCTIONS.md](SERVER_AGENT_INSTRUCTIONS.md)；
-10. [STATUS.md](STATUS.md)；
-11. [G1_CAUSAL_REPLAY_PROTOCOL_V1.md](G1_CAUSAL_REPLAY_PROTOCOL_V1.md)；
-12. [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
-13. [G1_PORTABLE_SENTINEL_CONTRACT_V1.md](G1_PORTABLE_SENTINEL_CONTRACT_V1.md)；
-14. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
-15. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
-16. [G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md)；
-17. [G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)；
-18. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
-19. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
-20. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
-21. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
-22. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
-23. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
-24. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
+5. [G1_5_DECISION_LOG.md](G1_5_DECISION_LOG.md)；
+6. [COLLECTOR_DESIGN.md](COLLECTOR_DESIGN.md)；
+7. [EVENT_CONTRACT_V1.md](EVENT_CONTRACT_V1.md)；
+8. [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)；
+9. [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md)；
+10. [SERVER_AGENT_INSTRUCTIONS.md](SERVER_AGENT_INSTRUCTIONS.md)；
+11. [STATUS.md](STATUS.md)；
+12. [G1_CAUSAL_REPLAY_PROTOCOL_V1.md](G1_CAUSAL_REPLAY_PROTOCOL_V1.md)；
+13. [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
+14. [G1_PORTABLE_SENTINEL_CONTRACT_V1.md](G1_PORTABLE_SENTINEL_CONTRACT_V1.md)；
+15. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
+16. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
+17. [G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md)；
+18. [G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)；
+19. [G1_5_HISTORY_CODEC_CONTRACT_V1.md](G1_5_HISTORY_CODEC_CONTRACT_V1.md)；
+20. [G1_5_HISTORY_CODEC_CAPABILITIES_V1.md](G1_5_HISTORY_CODEC_CAPABILITIES_V1.md)；
+21. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
+22. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
+23. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
+24. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
+25. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
+26. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
+27. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
 
 三个无 `_v1_1` 后缀的 capsule/manifest/integrity schema 是 byte-frozen 历史 v1，
 不得作为当前 formal G1 contract 使用。
@@ -159,9 +186,12 @@ CPU/fake checkpoint 的实现提交是
 - [schemas/g1/](schemas/g1/) 中的 G1.1 machine contracts；
 - [schemas/g1_2/](schemas/g1_2/) 中的 G1.2 machine contracts；
 - [schemas/g1_4/](schemas/g1_4/) 中的 9 个 CPU/fake runner schemas 与 6 个 additive inert-preparation schemas。
+- [schemas/g1_5/](schemas/g1_5/) 中的 captured-shape fixture、CPU checkpoint/publication 与
+  host-coordinate binding schemas。
 
 其中 Collector 文档保留其设计时状态与验收原则；完成记录以 STATUS.md 为准，工程授权
-以 AGENTS.md、DECISION_LOG.md 与 G1_4_DECISION_LOG.md 为准。本 README 不能覆盖它们。
+以 AGENTS.md、DECISION_LOG.md、G1_4_DECISION_LOG.md 与 G1_5_DECISION_LOG.md 为准。本 README
+不能覆盖它们。
 
 ## 目录职责
 
@@ -169,7 +199,8 @@ CPU/fake checkpoint 的实现提交是
 mobileworld_audit_handoff/
 ├── AGENTS.md, SERVER_AGENT_INSTRUCTIONS.md
 │   └── agent 工作范围与服务器操作规则
-├── PROJECT_CONTEXT.md, DECISION_LOG.md, G1_4_DECISION_LOG.md, STATUS.md
+├── PROJECT_CONTEXT.md, DECISION_LOG.md, G1_4_DECISION_LOG.md,
+│   G1_5_DECISION_LOG.md, STATUS.md
 │   └── 研究语义、locked decisions 与 append-only execution record
 ├── COLLECTOR_DESIGN.md, EVENT_CONTRACT_V1.md
 ├── IMPLEMENTATION_GUIDE.md, TEST_AND_ACCEPTANCE.md
@@ -184,6 +215,9 @@ mobileworld_audit_handoff/
 ├── G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md
 ├── G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md
 ├── G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md
+├── G1_5_HISTORY_CODEC_CONTRACT_V1.md
+├── G1_5_HISTORY_CODEC_CAPABILITIES_V1.md
+├── G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md
 ├── g1/
 │   └── frozen registry inputs, model/config manifest, publication lock
 ├── schemas/g1/
@@ -194,6 +228,10 @@ mobileworld_audit_handoff/
 │   └── five historical v1 contracts plus three active v1.1 corrected schemas
 ├── schemas/g1_4/
 │   └── nine CPU/fake runner schemas plus six additive inert-preparation schemas
+├── schemas/g1_5/
+│   └── captured-shape fixture, provider-free CPU checkpoint/publication, and coordinate schemas
+├── g1_5/
+│   └── content-addressed CPU manifest, two conformance receipts, and no-tokenizer binding
 └── examples/
     └── label-free raw event example
 ~~~

@@ -33,6 +33,7 @@ test_logs_2
 *.log
 *.txt
 !src/mobile_world/tasks/definitions/mastodon/assets/newFilter/filter_BCS.txt
+!tests/offline/fixtures/g1_5_history_codecs/*.expected_diff.v1.txt
 *.out
 .vscode
 .cursor/

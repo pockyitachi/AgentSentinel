@@ -1,0 +1,302 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_5/codec_cpu_publication.schema.json",
+  "title": "G1.5 History Codec CPU Publication Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "issue",
+    "story",
+    "publication_scope",
+    "status",
+    "selected_codecs",
+    "shared_bindings",
+    "safety",
+    "gpu_backlog"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.g1.history-codec-cpu-publication/v1"
+    },
+    "issue": {"const": "ALE-323"},
+    "story": {"const": "G1.5"},
+    "publication_scope": {"const": "SECRET_FREE_CPU_CONFORMANCE_ONLY"},
+    "status": {"const": "CPU_CHECKPOINT_IMPLEMENTED_LIVE_SMOKE_DEFERRED"},
+    "selected_codecs": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/selectedCodec",
+          "properties": {
+            "codec_id": {
+              "const": "mobileworld.g1.history-codec.qwen-flat-progress"
+            },
+            "history_family": {"const": "flat_progress"},
+            "implementation": {
+              "properties": {
+                "symbol": {"const": "QwenFlatProgressHistoryCodec"}
+              }
+            },
+            "source_fixture": {
+              "properties": {
+                "path": {
+                  "const": "MobileWorld/tests/offline/fixtures/g1_5_history_codecs/qwen_flat_progress.captured.v1.json"
+                }
+              }
+            },
+            "conformance_receipt": {
+              "properties": {
+                "path": {
+                  "const": "mobileworld_audit_handoff/g1_5/qwen_flat_progress.cpu_checkpoint.v1.json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/selectedCodec",
+          "properties": {
+            "codec_id": {
+              "const": "mobileworld.g1.history-codec.mai-raw-replay"
+            },
+            "history_family": {"const": "raw_replay"},
+            "implementation": {
+              "properties": {
+                "symbol": {"const": "MaiRawReplayHistoryCodec"}
+              }
+            },
+            "source_fixture": {
+              "properties": {
+                "path": {
+                  "const": "MobileWorld/tests/offline/fixtures/g1_5_history_codecs/mai_raw_replay.captured.v1.json"
+                }
+              }
+            },
+            "conformance_receipt": {
+              "properties": {
+                "path": {
+                  "const": "mobileworld_audit_handoff/g1_5/mai_raw_replay.cpu_checkpoint.v1.json"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "items": false
+    },
+    "shared_bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["history_ir_schema", "renderer", "tokenizer_binding"],
+      "properties": {
+        "history_ir_schema": {
+          "$ref": "#/$defs/artifact",
+          "properties": {
+            "path": {
+              "const": "mobileworld_audit_handoff/schemas/g1_2/history_ir.schema.json"
+            }
+          }
+        },
+        "renderer": {
+          "$ref": "#/$defs/artifact",
+          "properties": {
+            "path": {
+              "const": "MobileWorld/src/mobile_world/offline/causal_replay/core.py"
+            }
+          }
+        },
+        "tokenizer_binding": {
+          "allOf": [
+            {"$ref": "#/$defs/artifact"},
+            {
+              "type": "object",
+              "required": ["tokenizer_required"],
+              "properties": {
+                "path": {
+                  "const": "mobileworld_audit_handoff/g1_5/host_coordinate_binding.v1.json"
+                },
+                "tokenizer_required": {"const": false}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "formal_g1_data",
+        "live_smoke_completed",
+        "provider_invocation_allowed",
+        "provider_invocation_count",
+        "treatment_response_generation_allowed",
+        "treatment_response_count",
+        "network_used",
+        "gpu_used",
+        "gui_action_executed"
+      ],
+      "properties": {
+        "formal_g1_data": {"const": false},
+        "live_smoke_completed": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "provider_invocation_count": {"const": 0},
+        "treatment_response_generation_allowed": {"const": false},
+        "treatment_response_count": {"const": 0},
+        "network_used": {"const": false},
+        "gpu_used": {"const": false},
+        "gui_action_executed": {"const": false}
+      }
+    },
+    "gpu_backlog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["queue_state", "codec_count", "arm_count", "logical_invocations"],
+      "properties": {
+        "queue_state": {"const": "GPU_LIVE_BACKLOG_RECORDED_NOT_AUTHORIZED"},
+        "codec_count": {"const": 2},
+        "arm_count": {"const": 5},
+        "logical_invocations": {"const": 10}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?:MobileWorld|mobileworld_audit_handoff)/[^.][^\\n]*$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "tokenizer_required": {"const": false}
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "declaration"],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "declaration": {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "codec_id",
+            "contract_version",
+            "history_family",
+            "level",
+            "scope",
+            "supported_operations",
+            "supported_arms",
+            "preservation",
+            "live_ready",
+            "opaque_or_server_managed"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "mobileworld.g1.portable-sentinel.codec-capabilities/v1"
+            },
+            "codec_id": {"type": "string", "minLength": 1},
+            "contract_version": {"const": "v1"},
+            "history_family": {"enum": ["flat_progress", "raw_replay"]},
+            "level": {"const": "VALIDITY_TRANSFORMATION"},
+            "scope": {"const": "LIVE"},
+            "supported_operations": {
+              "const": ["DROP", "REPLACE"]
+            },
+            "supported_arms": {
+              "const": [
+                "ORIGINAL",
+                "MASK",
+                "MASK_CORRECTION",
+                "ORACLE_CLEAN",
+                "SHAM_BENIGN_EDIT"
+              ]
+            },
+            "preservation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "roles",
+                "ordering",
+                "multimodal_blocks",
+                "tool_call_result_adjacency",
+                "protocol_shell"
+              ],
+              "properties": {
+                "roles": {"const": true},
+                "ordering": {"const": true},
+                "multimodal_blocks": {"const": true},
+                "tool_call_result_adjacency": {"const": true},
+                "protocol_shell": {"const": true}
+              }
+            },
+            "live_ready": {"const": false},
+            "opaque_or_server_managed": {"const": false}
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "symbol", "sha256"],
+      "properties": {
+        "path": {
+          "const": "MobileWorld/src/mobile_world/offline/g1_history_codecs/codecs.py"
+        },
+        "symbol": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceFixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "file_sha256", "source_request_sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^MobileWorld/tests/offline/fixtures/g1_5_history_codecs/.+\\.json$"},
+        "file_sha256": {"$ref": "#/$defs/sha256"},
+        "source_request_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "file_sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^mobileworld_audit_handoff/g1_5/.+\\.cpu_checkpoint\\.v1\\.json$"},
+        "file_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "selectedCodec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codec_id",
+        "codec_contract_version",
+        "history_family",
+        "implementation",
+        "capability",
+        "source_fixture",
+        "conformance_receipt"
+      ],
+      "properties": {
+        "codec_id": {"type": "string", "minLength": 1},
+        "codec_contract_version": {"const": "v1"},
+        "history_family": {"enum": ["flat_progress", "raw_replay"]},
+        "implementation": {"$ref": "#/$defs/implementation"},
+        "capability": {"$ref": "#/$defs/capability"},
+        "source_fixture": {"$ref": "#/$defs/sourceFixture"},
+        "conformance_receipt": {"$ref": "#/$defs/receipt"}
+      }
+    }
+  }
+}

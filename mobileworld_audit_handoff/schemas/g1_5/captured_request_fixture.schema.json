@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_5/captured_request_fixture.schema.json",
+  "title": "G1.5 Secret-Free Captured Request Fixture v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fixture_id",
+    "capture_boundary",
+    "history_family",
+    "codec_id",
+    "source_capture",
+    "sanitization",
+    "fixture_request_sha256",
+    "application_request",
+    "curated_span_bindings",
+    "plan_targets",
+    "expected_rendered_request_sha256",
+    "human_diff_golden",
+    "human_diff_sha256",
+    "correction_text"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.g1.history-codec-captured-fixture/v1"
+    },
+    "fixture_id": {
+      "type": "string",
+      "pattern": "^g15-(?:qwen-flat-progress|mai-raw-replay)-captured-redacted-v1$"
+    },
+    "capture_boundary": {
+      "const": "APPLICATION_LAYER_SDK_ARGUMENTS_PRE_SEND"
+    },
+    "history_family": {"enum": ["flat_progress", "raw_replay"]},
+    "codec_id": {
+      "enum": [
+        "mobileworld.g1.history-codec.qwen-flat-progress",
+        "mobileworld.g1.history-codec.mai-raw-replay"
+      ]
+    },
+    "source_capture": {"$ref": "#/$defs/sourceCapture"},
+    "sanitization": {"$ref": "#/$defs/sanitization"},
+    "fixture_request_sha256": {"$ref": "#/$defs/sha256"},
+    "application_request": {
+      "type": "object",
+      "required": ["messages", "model"],
+      "properties": {
+        "messages": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"type": "object"}
+        },
+        "model": {"type": "string", "minLength": 1}
+      }
+    },
+    "curated_span_bindings": {
+      "type": "array",
+      "minItems": 3,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/spanBinding"}
+    },
+    "plan_targets": {"$ref": "#/$defs/planTargets"},
+    "expected_rendered_request_sha256": {"$ref": "#/$defs/armHashes"},
+    "human_diff_golden": {
+      "type": "string",
+      "pattern": "^(?:qwen_flat_progress|mai_raw_replay)\\.expected_diff\\.v1\\.txt$"
+    },
+    "human_diff_sha256": {"$ref": "#/$defs/sha256"},
+    "correction_text": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"history_family": {"const": "flat_progress"}}},
+      "then": {
+        "properties": {
+          "codec_id": {
+            "const": "mobileworld.g1.history-codec.qwen-flat-progress"
+          },
+          "source_capture": {
+            "properties": {
+              "shape_observed": {
+                "const": "TWO_MESSAGE_SYSTEM_TEXT_PLUS_USER_TEXT_AND_CURRENT_IMAGE"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "codec_id": {
+            "const": "mobileworld.g1.history-codec.mai-raw-replay"
+          },
+          "source_capture": {
+            "properties": {
+              "shape_observed": {
+                "const": "RAW_ASSISTANT_REPLAY_WITH_HIDDEN_OLD_IMAGES_AND_CURRENT_IMAGE"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "jsonPath": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {"type": "string", "minLength": 1},
+          {"type": "integer", "minimum": 0}
+        ]
+      }
+    },
+    "sourceCapture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publication_manifest_sha256",
+        "unit_id",
+        "canonical_semantic_request_sha256",
+        "shape_observed"
+      ],
+      "properties": {
+        "publication_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "unit_id": {
+          "type": "string",
+          "pattern": "^g1(?:case|control)-[0-9a-f]{24}$"
+        },
+        "canonical_semantic_request_sha256": {"$ref": "#/$defs/sha256"},
+        "shape_observed": {"type": "string", "minLength": 1}
+      }
+    },
+    "sanitization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "performed",
+        "method",
+        "source_bytes_copied",
+        "task_and_history_semantics_replaced",
+        "image_replaced_with_local_one_pixel_data_url",
+        "fixture_is_formal_g1_data"
+      ],
+      "properties": {
+        "performed": {"const": true},
+        "method": {"const": "STRUCTURE_PRESERVING_SECRET_FREE_SURROGATE"},
+        "source_bytes_copied": {"const": false},
+        "task_and_history_semantics_replaced": {"const": true},
+        "image_replaced_with_local_one_pixel_data_url": {"const": true},
+        "fixture_is_formal_g1_data": {"const": false}
+      }
+    },
+    "spanBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_id",
+        "source_request_sha256",
+        "container_path",
+        "char_start",
+        "char_end",
+        "utf8_byte_start",
+        "utf8_byte_end",
+        "exact_text",
+        "span_sha256",
+        "span_role"
+      ],
+      "properties": {
+        "binding_id": {"type": "string", "minLength": 1},
+        "source_request_sha256": {"$ref": "#/$defs/sha256"},
+        "container_path": {"$ref": "#/$defs/jsonPath"},
+        "char_start": {"type": "integer", "minimum": 0},
+        "char_end": {"type": "integer", "minimum": 1},
+        "utf8_byte_start": {"type": "integer", "minimum": 0},
+        "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "exact_text": {"type": "string", "minLength": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"},
+        "span_role": {"enum": ["EDITABLE_CLAIM", "BENIGN_SHAM"]}
+      }
+    },
+    "bindingIdList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "planTargets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mask",
+        "mask_correction",
+        "oracle_clean",
+        "sham_benign_edit"
+      ],
+      "properties": {
+        "mask": {"$ref": "#/$defs/bindingIdList"},
+        "mask_correction": {"$ref": "#/$defs/bindingIdList"},
+        "oracle_clean": {"$ref": "#/$defs/bindingIdList"},
+        "sham_benign_edit": {
+          "allOf": [
+            {"$ref": "#/$defs/bindingIdList"},
+            {"maxItems": 1}
+          ]
+        }
+      }
+    },
+    "armHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ORIGINAL",
+        "MASK",
+        "MASK_CORRECTION",
+        "ORACLE_CLEAN",
+        "SHAM_BENIGN_EDIT"
+      ],
+      "properties": {
+        "ORIGINAL": {"$ref": "#/$defs/sha256"},
+        "MASK": {"$ref": "#/$defs/sha256"},
+        "MASK_CORRECTION": {"$ref": "#/$defs/sha256"},
+        "ORACLE_CLEAN": {"$ref": "#/$defs/sha256"},
+        "SHAM_BENIGN_EDIT": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

@@ -6,26 +6,29 @@
 2. `PROJECT_CONTEXT.md`
 3. `DECISION_LOG.md`
 4. `G1_4_DECISION_LOG.md`
-5. `COLLECTOR_DESIGN.md`
-6. `EVENT_CONTRACT_V1.md`
-7. `IMPLEMENTATION_GUIDE.md`
-8. `TEST_AND_ACCEPTANCE.md`
-9. `SERVER_AGENT_INSTRUCTIONS.md`
-10. `STATUS.md`
-11. `G1_CAUSAL_REPLAY_PROTOCOL_V1.md`
-12. `G1_LOCKED_ANALYSIS_PLAN_V1.md`
-13. `G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
-14. `G1_REPLAY_CAPSULE_CONTRACT_V1.md`
-15. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
-16. `G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
-17. `G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
-18. `G1_SENTINEL_MVP_MIGRATION.md`
-19. `g1/registry.lock.v1.json`
-20. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-21. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-22. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-23. `schemas/g1_3/field_visibility.schema.json`
-24. `schemas/g1_3/capsule_exclusion.schema.json`
+5. `G1_5_DECISION_LOG.md`
+6. `COLLECTOR_DESIGN.md`
+7. `EVENT_CONTRACT_V1.md`
+8. `IMPLEMENTATION_GUIDE.md`
+9. `TEST_AND_ACCEPTANCE.md`
+10. `SERVER_AGENT_INSTRUCTIONS.md`
+11. `STATUS.md`
+12. `G1_CAUSAL_REPLAY_PROTOCOL_V1.md`
+13. `G1_LOCKED_ANALYSIS_PLAN_V1.md`
+14. `G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
+15. `G1_REPLAY_CAPSULE_CONTRACT_V1.md`
+16. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
+17. `G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
+18. `G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
+19. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
+20. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
+21. `G1_SENTINEL_MVP_MIGRATION.md`
+22. `g1/registry.lock.v1.json`
+23. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+24. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+25. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+26. `schemas/g1_3/field_visibility.schema.json`
+27. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -60,6 +63,13 @@ live/GPU proof 延后并需新授权。
 加载、provider send、replay 或 action；所有 live entrypoint 在 owner 新授权与 downstream seal
 齐备前继续机械禁用。
 
+`G1_5_DECISION_LOG.md` D-028 现只授权 **ALE-323 / G1.5 CPU-only History Codec
+checkpoint**：Qwen flat-progress 与 MAI raw-replay 的纯 request extraction/rendering、外部注入的
+精确 curated-span binding、五 arm conformance、secret-free fixture/schema/golden diff，以及与
+G1.4 runner 的 fail-closed interface integration。两个 Codec 均须保持 `live_ready=false`；
+2 codecs × 5 arms 的 10-call live smoke 仅进入统一 GPU backlog，当前不授权执行。不得把该
+checkpoint 冒充 live proof、formal replay 或 G1.6 curation。
+
 必须：
 
 - 保存模型真正收到的最终 request；
@@ -90,7 +100,8 @@ live/GPU proof 延后并需新授权。
 - 为了匹配本设计而破坏服务器已有用户修改或强制 reset 工作树。
 - 调用任何真实/外部 model 或 provider、发起网络请求、使用 GPU、加载/服务模型权重、
   执行 GUI/tool/action、backend restore、prefix 或 live replay、生成 treatment response、自动推断
-  claim validity、选择/生成 intervention，或开始 G1.5+；只允许无网络的确定性 fake-provider conformance；
+  claim validity、选择/生成 intervention，或开始 G1.6+；只允许无网络的确定性 fake-provider
+  conformance 与 provider-free G1.5 CPU checkpoint；
 - 将 G1 label、capsule metadata、visibility classification 或 transformation decision 写回
   raw Collector event。
 
@@ -110,4 +121,5 @@ captured natural action 当作 replay 必须复现的结果，也不得将 futur
 visibility/future-leakage、稳定 exclusion 和 deterministic double-build 验收，并在 `STATUS.md`
 记录 commit、命令、测试结果、外部 publication 与已知限制后，才可宣称 G1.3 完成。
 G1.4 CPU checkpoint 必须单独记录未完成的 live/GPU 验收项，不得将 ALE-322 标记为完成。
+G1.5 CPU checkpoint 也必须记录精确 10-call live-smoke backlog，不得将 ALE-323 标记为完成。
 任何真实 model/provider/network/GPU/GUI/action/live-replay 仍需另行授权；不得把凭据写入代码或本目录。

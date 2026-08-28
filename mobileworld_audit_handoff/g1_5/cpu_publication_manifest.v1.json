@@ -1,0 +1,135 @@
+{
+  "schema_version": "mobileworld.g1.history-codec-cpu-publication/v1",
+  "issue": "ALE-323",
+  "story": "G1.5",
+  "publication_scope": "SECRET_FREE_CPU_CONFORMANCE_ONLY",
+  "status": "CPU_CHECKPOINT_IMPLEMENTED_LIVE_SMOKE_DEFERRED",
+  "selected_codecs": [
+    {
+      "codec_id": "mobileworld.g1.history-codec.qwen-flat-progress",
+      "codec_contract_version": "v1",
+      "history_family": "flat_progress",
+      "implementation": {
+        "path": "MobileWorld/src/mobile_world/offline/g1_history_codecs/codecs.py",
+        "symbol": "QwenFlatProgressHistoryCodec",
+        "sha256": "32633d1ce3d75f13aea0eb9b61501a5a9816d73d9c80f10e27872126860d1cdf"
+      },
+      "capability": {
+        "sha256": "52e51c9067e14c00569889a5c80d4c315c185e0a34dd23b3afa1ab43b3ee487c",
+        "declaration": {
+          "schema_version": "mobileworld.g1.portable-sentinel.codec-capabilities/v1",
+          "codec_id": "mobileworld.g1.history-codec.qwen-flat-progress",
+          "contract_version": "v1",
+          "history_family": "flat_progress",
+          "level": "VALIDITY_TRANSFORMATION",
+          "scope": "LIVE",
+          "supported_operations": ["DROP", "REPLACE"],
+          "supported_arms": [
+            "ORIGINAL",
+            "MASK",
+            "MASK_CORRECTION",
+            "ORACLE_CLEAN",
+            "SHAM_BENIGN_EDIT"
+          ],
+          "preservation": {
+            "roles": true,
+            "ordering": true,
+            "multimodal_blocks": true,
+            "tool_call_result_adjacency": true,
+            "protocol_shell": true
+          },
+          "live_ready": false,
+          "opaque_or_server_managed": false
+        }
+      },
+      "source_fixture": {
+        "path": "MobileWorld/tests/offline/fixtures/g1_5_history_codecs/qwen_flat_progress.captured.v1.json",
+        "file_sha256": "60f19821f782cd20ded8a926ea4466dff151cc5163a4728f9d0c761ae08b34be",
+        "source_request_sha256": "72f1396204e56c05b49a2a8564650f915c780d9bfa32f455f1cef3320abd6a33"
+      },
+      "conformance_receipt": {
+        "path": "mobileworld_audit_handoff/g1_5/qwen_flat_progress.cpu_checkpoint.v1.json",
+        "file_sha256": "d6841c3c5fb02cff7def220a53f32154c038661a91a38510110b26a157afc3ed"
+      }
+    },
+    {
+      "codec_id": "mobileworld.g1.history-codec.mai-raw-replay",
+      "codec_contract_version": "v1",
+      "history_family": "raw_replay",
+      "implementation": {
+        "path": "MobileWorld/src/mobile_world/offline/g1_history_codecs/codecs.py",
+        "symbol": "MaiRawReplayHistoryCodec",
+        "sha256": "32633d1ce3d75f13aea0eb9b61501a5a9816d73d9c80f10e27872126860d1cdf"
+      },
+      "capability": {
+        "sha256": "c4d2d1896ead1e59eeb8330c2952ae24b258aa9be3470f74001de3cb90cf03b4",
+        "declaration": {
+          "schema_version": "mobileworld.g1.portable-sentinel.codec-capabilities/v1",
+          "codec_id": "mobileworld.g1.history-codec.mai-raw-replay",
+          "contract_version": "v1",
+          "history_family": "raw_replay",
+          "level": "VALIDITY_TRANSFORMATION",
+          "scope": "LIVE",
+          "supported_operations": ["DROP", "REPLACE"],
+          "supported_arms": [
+            "ORIGINAL",
+            "MASK",
+            "MASK_CORRECTION",
+            "ORACLE_CLEAN",
+            "SHAM_BENIGN_EDIT"
+          ],
+          "preservation": {
+            "roles": true,
+            "ordering": true,
+            "multimodal_blocks": true,
+            "tool_call_result_adjacency": true,
+            "protocol_shell": true
+          },
+          "live_ready": false,
+          "opaque_or_server_managed": false
+        }
+      },
+      "source_fixture": {
+        "path": "MobileWorld/tests/offline/fixtures/g1_5_history_codecs/mai_raw_replay.captured.v1.json",
+        "file_sha256": "b9e025b0b4990e9e3fe259b7dd21e2919de6538c00b42f2936c7b9fe403e9b40",
+        "source_request_sha256": "c2ee086c6e5e659c4f904fbb74afefc9c89f7aabcfd47441ce65cce332d37a7d"
+      },
+      "conformance_receipt": {
+        "path": "mobileworld_audit_handoff/g1_5/mai_raw_replay.cpu_checkpoint.v1.json",
+        "file_sha256": "2da368ba9e872facbb31188c51ebfa2914b14e5e38393377f6a0fd597046041e"
+      }
+    }
+  ],
+  "shared_bindings": {
+    "history_ir_schema": {
+      "path": "mobileworld_audit_handoff/schemas/g1_2/history_ir.schema.json",
+      "sha256": "9ff34560138d4ffe70fffa94746304479288f4d03b5de36ab3125555fbbdbaba"
+    },
+    "renderer": {
+      "path": "MobileWorld/src/mobile_world/offline/causal_replay/core.py",
+      "sha256": "cf6f5937c6e385357b1159eb5531c5b9092d5cb20347b458718614466e55c6f0"
+    },
+    "tokenizer_binding": {
+      "path": "mobileworld_audit_handoff/g1_5/host_coordinate_binding.v1.json",
+      "sha256": "56d90e9355b44ecb66c4021b675714944f6aa51cc5dc1a285fcce9edd01512a5",
+      "tokenizer_required": false
+    }
+  },
+  "safety": {
+    "formal_g1_data": false,
+    "live_smoke_completed": false,
+    "provider_invocation_allowed": false,
+    "provider_invocation_count": 0,
+    "treatment_response_generation_allowed": false,
+    "treatment_response_count": 0,
+    "network_used": false,
+    "gpu_used": false,
+    "gui_action_executed": false
+  },
+  "gpu_backlog": {
+    "queue_state": "GPU_LIVE_BACKLOG_RECORDED_NOT_AUTHORIZED",
+    "codec_count": 2,
+    "arm_count": 5,
+    "logical_invocations": 10
+  }
+}
