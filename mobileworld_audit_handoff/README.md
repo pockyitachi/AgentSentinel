@@ -16,7 +16,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | ALE-320 / G1.2 | **已完成** | 已冻结可移植 History IR/Core、codec/provider interface、protocol validator、sidecar schemas 与六 family fixture conformance |
 | ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
 | ALE-322 / G1.4 | **CPU/fake checkpoint 与 inert live-proof code preparation 已实现；live proof 延后** | commits `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`、`74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d` 已验证 runner/fake path 和 D-026 no-execution preparation；全部 readiness/authorization 与 safety fields 仍为 false，无 formal publication，story 仍未完成 |
-| ALE-323 / G1.5 | **CPU History Codec checkpoint 已实现；live smoke 延后** | Qwen flat-progress 与 MAI raw-replay 的 exact extraction/render/diff/reversibility、secret-free CPU publication 和 G1.4 fail-closed interface 已验证；`live_ready=false`，10-call GPU backlog 未授权，story 仍未完成 |
+| ALE-323 / G1.5 | **CPU History Codec checkpoint 已实现；live smoke 延后** | Qwen flat-progress 与 MAI raw-replay 的 exact extraction/render/diff/reversibility、arbitrary human-draft five-arm preview、secret-free CPU publication 和 G1.4 fail-closed interface 已验证；`live_ready=false`，10-call GPU backlog 未授权，story 仍未完成 |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -137,10 +137,24 @@ ALE-323 当前精确状态是 `CPU_CHECKPOINT_IMPLEMENTED_LIVE_SMOKE_DEFERRED`�
 [`G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`](G1_5_HISTORY_CODEC_CAPABILITIES_V1.md)，CPU conformance
 requirements coverage 见
 [`G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md`](G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md)。
+`mobile_world.offline.g1_history_codecs` 另公开纯 CPU、只读的
+`bind_human_record_spans`、`rank_correction_candidates`、`build_five_arm_preview` 与
+`build_clean_control_preview`：调用者可把
+exact G1.3 source record、显式人工 span/correction/oracle/sham/delimiter repair 绑定到任一已选
+Codec，得到 strict 五 arm 或 clean Original/Sham rendered history、exact correction anchors、
+summed-focal sham token match、target-only diff 与可逆 source mapping。序列化 preview 不含 full
+request。该接口不局限于
+fixture，但输入仍必须属于两个 Codec 的 admitted request grammar；它不推断 claim 或 correction。
+Correction token count 只接受 caller-injected、locally pinned 且不加 special token 的 deterministic
+counter；缺失时稳定阻断为 `PINNED_TOKENIZER_UNAVAILABLE`，禁止下载、替代 tokenizer 或人工填写
+count。publication 同时绑定 frozen G1.1 model/config manifest 中 Qwen/MAI 两个 tokenizer record 的
+canonical hashes 和 human-diff renderer dependency；caller 必须先逐项验证本地 artifact。输出闭合 schema 是
+[`schemas/g1_5/history_codec_preview.schema.json`](schemas/g1_5/history_codec_preview.schema.json)。
 后续 CPU gate 应只读绑定
 [`g1_5/cpu_publication_manifest.v1.json`](g1_5/cpu_publication_manifest.v1.json) 的最终 file
 SHA-256；manifest 内分别绑定两个 selected Codec、capability、fixture、checkpoint receipt，并共同
-绑定冻结 G1.2 History-IR schema/renderer 与 explicit no-tokenizer Unicode/UTF-8 coordinate contract。
+绑定 preview implementation/output schema、冻结 G1.2 History-IR schema/renderer 与 explicit
+no-tokenizer Unicode/UTF-8 coordinate contract。
 它不是 live capability 或 formal G1 publication。
 
 ## 强制入口与补充导航
@@ -186,8 +200,8 @@ SHA-256；manifest 内分别绑定两个 selected Codec、capability、fixture�
 - [schemas/g1/](schemas/g1/) 中的 G1.1 machine contracts；
 - [schemas/g1_2/](schemas/g1_2/) 中的 G1.2 machine contracts；
 - [schemas/g1_4/](schemas/g1_4/) 中的 9 个 CPU/fake runner schemas 与 6 个 additive inert-preparation schemas。
-- [schemas/g1_5/](schemas/g1_5/) 中的 captured-shape fixture、CPU checkpoint/publication 与
-  host-coordinate binding schemas。
+- [schemas/g1_5/](schemas/g1_5/) 中的 captured-shape fixture、CPU checkpoint/publication、
+  five-arm preview 与 host-coordinate binding schemas。
 
 其中 Collector 文档保留其设计时状态与验收原则；完成记录以 STATUS.md 为准，工程授权
 以 AGENTS.md、DECISION_LOG.md、G1_4_DECISION_LOG.md 与 G1_5_DECISION_LOG.md 为准。本 README
@@ -229,9 +243,9 @@ mobileworld_audit_handoff/
 ├── schemas/g1_4/
 │   └── nine CPU/fake runner schemas plus six additive inert-preparation schemas
 ├── schemas/g1_5/
-│   └── captured-shape fixture, provider-free CPU checkpoint/publication, and coordinate schemas
+│   └── captured-shape fixture, provider-free CPU checkpoint/publication/preview, and coordinate schemas
 ├── g1_5/
-│   └── content-addressed CPU manifest, two conformance receipts, and no-tokenizer binding
+│   └── content-addressed CPU manifest, two conformance receipts, preview binding, and no-tokenizer binding
 └── examples/
     └── label-free raw event example
 ~~~

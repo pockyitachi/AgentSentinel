@@ -47,8 +47,14 @@ from mobile_world.offline.causal_replay_runner import (
 )
 from mobile_world.offline.g1_history_codecs import (
     CuratedSpanBinding,
+    DelimiterRepairBinding,
     MaiRawReplayHistoryCodec,
+    PinnedTokenCounter,
     QwenFlatProgressHistoryCodec,
+    bind_human_record_spans,
+    build_clean_control_preview,
+    build_five_arm_preview,
+    rank_correction_candidates,
     render_human_diff,
     run_history_codec_cpu_checkpoint,
 )
@@ -1060,11 +1066,439 @@ def test_cpu_checkpoint_rejects_capsule_authorization_drift(field: str, value: J
     assert caught.value.provider_invocation_allowed is False
 
 
+def test_record_relative_human_span_binding_is_exact_for_both_families() -> None:
+    for case in CASES:
+        data = _load(case)
+        request = data["application_request"]
+        base_codec = case.codec_type()
+        base_ir = base_codec.extract(request)
+        fixture_binding = _bindings(data)[0]
+        matches = [
+            record
+            for record in base_ir.records
+            if record.source_span.container_path == fixture_binding.container_path
+            and record.source_span.char_start <= fixture_binding.char_start
+            and fixture_binding.char_end <= record.source_span.char_end
+        ]
+        assert len(matches) == 1
+        record = matches[0]
+        if case.model_id == "qwen3vl_8b":
+            source_text = get_at_path(request, record.coordinates.request_path)
+            assert isinstance(source_text, str)
+            relative_start = fixture_binding.char_start
+            relative_end = fixture_binding.char_end
+        else:
+            source_text = record.source_span.exact_text
+            relative_start = fixture_binding.char_start - record.source_span.char_start
+            relative_end = fixture_binding.char_end - record.source_span.char_start
+        source_record = {
+            "record_id": "record-" + hashlib.sha256(case.fixture_name.encode()).hexdigest()[:32],
+            "container_path": list(record.coordinates.request_path),
+            "message_index": record.coordinates.message_index,
+            "content_block_index": record.coordinates.content_block_index,
+            "author_role": record.role,
+            "exact_text": source_text,
+            "record_sha256": hashlib.sha256(source_text.encode()).hexdigest(),
+        }
+        selection = {
+            "binding_id": fixture_binding.binding_id,
+            "record_id": source_record["record_id"],
+            "char_start": relative_start,
+            "char_end": relative_end,
+            "utf8_byte_start": len(source_text[:relative_start].encode("utf-8")),
+            "utf8_byte_end": len(source_text[:relative_end].encode("utf-8")),
+            "exact_text": fixture_binding.exact_text,
+            "span_sha256": fixture_binding.span_sha256,
+            "span_role": fixture_binding.span_role.value,
+            "human_selected": True,
+        }
+        snapshot = canonical_sha256(request)
+        bound = bind_human_record_spans(
+            application_request=request,
+            base_codec=base_codec,
+            source_records=(source_record,),
+            selections=(selection,),
+        )
+        assert len(bound) == 1
+        assert bound[0].to_dict() == fixture_binding.to_dict()
+        assert canonical_sha256(request) == snapshot
+
+        stale = deepcopy(selection)
+        stale["utf8_byte_end"] += 1
+        _stable_error_code(
+            lambda: bind_human_record_spans(
+                application_request=request,
+                base_codec=base_codec,
+                source_records=(source_record,),
+                selections=(stale,),
+            ),
+            "HUMAN_SPAN_STALE",
+        )
+
+
+def test_pinned_correction_count_and_tie_break_or_unavailable_block() -> None:
+    counts = {"é": 1, "aa": 1, "ab": 1, "two token": 2}
+    counter = PinnedTokenCounter(
+        tokenizer_id="fixture-tokenizer-no-special-tokens",
+        tokenizer_sha256="f" * 64,
+        count_without_special_tokens=counts.__getitem__,
+    )
+    ranking = rank_correction_candidates(("ab", "two token", "aa", "é"), token_counter=counter)
+    assert [item.text for item in ranking.candidates] == ["é", "aa", "ab", "two token"]
+    assert [item.rank for item in ranking.candidates] == [1, 2, 3, 4]
+    assert ranking.selected_text == "é"
+    assert ranking.special_tokens_enabled is False
+    assert ranking.to_dict()["tie_break_order"] == [
+        "token_count",
+        "utf8_byte_count",
+        "codepoint_count",
+        "lexicographic_utf8_bytes",
+    ]
+    _stable_error_code(
+        lambda: rank_correction_candidates(("human correction",), token_counter=None),
+        "PINNED_TOKENIZER_UNAVAILABLE",
+    )
+
+    def bool_second_count() -> Any:
+        returned = iter((1, True))
+        return rank_correction_candidates(
+            ("human correction",),
+            token_counter=PinnedTokenCounter(
+                "fixture-tokenizer-no-special-tokens",
+                "f" * 64,
+                lambda _: next(returned),
+            ),
+        )
+
+    _stable_error_code(bool_second_count, "TOKEN_COUNTER_INVALID")
+    _stable_error_code(
+        lambda: rank_correction_candidates("fix", token_counter=counter),
+        "CORRECTION_CANDIDATES_INVALID",
+    )
+    _stable_error_code(
+        lambda: rank_correction_candidates(
+            ("missing",),
+            token_counter=PinnedTokenCounter(
+                "fixture-tokenizer-no-special-tokens", "f" * 64, counts.__getitem__
+            ),
+        ),
+        "TOKEN_COUNTER_INVALID",
+    )
+
+
+def test_shell_promotion_requires_original_structural_membership_and_position() -> None:
+    qwen_data = _load(CASES[0])
+    qwen_request = qwen_data["application_request"]
+    qwen_text = qwen_request["messages"][1]["content"][0]["text"]
+    assert isinstance(qwen_text, str)
+    request_sha = canonical_sha256(qwen_request)
+    external_separator_start = qwen_text.index("; Tool call result:")
+    external_separator = CuratedSpanBinding.from_text(
+        binding_id="qwen-nonterminal-external-semicolon",
+        source_request_sha256=request_sha,
+        container_path=("messages", 1, "content", 0, "text"),
+        container_text=qwen_text,
+        char_start=external_separator_start,
+        char_end=external_separator_start + 2,
+        span_role=SpanRole.ELIGIBLE_PROTOCOL_SHELL,
+    )
+    _stable_error_code(
+        lambda: QwenFlatProgressHistoryCodec((external_separator,)).extract(qwen_request),
+        "ELIGIBLE_SHELL_POSITION_INVALID",
+    )
+
+    internal_request = deepcopy(qwen_request)
+    internal_text = qwen_text.replace("已查看主题选项", "A; B")
+    internal_request["messages"][1]["content"][0]["text"] = internal_text
+    internal_start = internal_text.index(";", internal_text.index("Step 3:"))
+    internal_semicolon = CuratedSpanBinding.from_text(
+        binding_id="qwen-semantic-internal-semicolon",
+        source_request_sha256=canonical_sha256(internal_request),
+        container_path=("messages", 1, "content", 0, "text"),
+        container_text=internal_text,
+        char_start=internal_start,
+        char_end=internal_start + 1,
+        span_role=SpanRole.ELIGIBLE_PROTOCOL_SHELL,
+    )
+    _stable_error_code(
+        lambda: QwenFlatProgressHistoryCodec((internal_semicolon,)).extract(internal_request),
+        "ELIGIBLE_SHELL_PROTECTED_MEMBERSHIP_INVALID",
+    )
+
+    mai_data = _load(CASES[1])
+    mai_request = deepcopy(mai_data["application_request"])
+    mai_content = mai_request["messages"][2]["content"]
+    assert isinstance(mai_content, str)
+    mai_content = mai_content.replace("<thinking>\n", "<thinking>\nThought: ", 1)
+    mai_request["messages"][2]["content"] = mai_content
+    thought_start = mai_content.index("Thought:")
+    thought_shell = CuratedSpanBinding.from_text(
+        binding_id="mai-structural-thought-marker",
+        source_request_sha256=canonical_sha256(mai_request),
+        container_path=("messages", 2, "content"),
+        container_text=mai_content,
+        char_start=thought_start,
+        char_end=thought_start + len("Thought: "),
+        span_role=SpanRole.ELIGIBLE_PROTOCOL_SHELL,
+    )
+    thought_ir = MaiRawReplayHistoryCodec((thought_shell,)).extract(mai_request)
+    assert any(
+        span.exact_text == "Thought: " and span.span_role is SpanRole.ELIGIBLE_PROTOCOL_SHELL
+        for span in thought_ir.records[0].protected_spans
+    )
+
+
+def test_qwen_arbitrary_human_draft_five_arm_preview_with_shell_repairs() -> None:
+    case = CASES[0]
+    data = _load(case)
+    request = data["application_request"]
+    request_sha = canonical_sha256(request)
+    base_ir = QwenFlatProgressHistoryCodec().extract(request)
+    sham_record = next(record for record in base_ir.records if record.record_key == "step-0003")
+    container = get_at_path(request, sham_record.source_span.container_path)
+    assert isinstance(container, str)
+    prefix_start = sham_record.source_span.char_start
+    prefix_end = prefix_start + len("Step 3: ")
+    separator_start = container.index(";", prefix_end)
+    separator_end = sham_record.source_span.char_end
+    shell_bindings = (
+        CuratedSpanBinding.from_text(
+            binding_id="qwen-shell-step-3",
+            source_request_sha256=request_sha,
+            container_path=sham_record.source_span.container_path,
+            container_text=container,
+            char_start=prefix_start,
+            char_end=prefix_end,
+            span_role=SpanRole.ELIGIBLE_PROTOCOL_SHELL,
+        ),
+        CuratedSpanBinding.from_text(
+            binding_id="qwen-shell-semicolon-3",
+            source_request_sha256=request_sha,
+            container_path=sham_record.source_span.container_path,
+            container_text=container,
+            char_start=separator_start,
+            char_end=separator_end,
+            span_role=SpanRole.ELIGIBLE_PROTOCOL_SHELL,
+        ),
+    )
+    codec = QwenFlatProgressHistoryCodec((*_bindings(data), *shell_bindings))
+    ir = codec.extract(request)
+    assert [
+        span.exact_text
+        for record in ir.records
+        for span in record.protected_spans
+        if span.span_role is SpanRole.ELIGIBLE_PROTOCOL_SHELL
+    ] == ["Step 3: ", "; "]
+    repairs = (
+        DelimiterRepairBinding(
+            repair_id="repair-qwen-step-3",
+            arm=ArmKind.SHAM_BENIGN_EDIT,
+            operation="DELETE_ORPHAN_SEPARATOR",
+            shell_binding_id="qwen-shell-step-3",
+            target_binding_ids=("qwen-sham-step-3",),
+        ),
+        DelimiterRepairBinding(
+            repair_id="repair-qwen-semicolon-3",
+            arm=ArmKind.SHAM_BENIGN_EDIT,
+            operation="DELETE_ORPHAN_SEPARATOR",
+            shell_binding_id="qwen-shell-semicolon-3",
+            target_binding_ids=("qwen-sham-step-3",),
+        ),
+    )
+    token_counts = {
+        "更正：尚未打开设置。": 6,
+        "尚未打开设置。": 5,
+        "已打开设置🙂": 5,
+        "已查看主题选项": 5,
+    }
+    counter = PinnedTokenCounter(
+        tokenizer_id="fixture-tokenizer-no-special-tokens",
+        tokenizer_sha256="f" * 64,
+        count_without_special_tokens=token_counts.__getitem__,
+    )
+    kwargs = {
+        "application_request": request,
+        "codec": codec,
+        "focal_binding_ids": ("qwen-focal-step-1",),
+        "oracle_binding_ids": ("qwen-focal-step-1", "qwen-oracle-step-2"),
+        "sham_binding_id": "qwen-sham-step-3",
+        "correction_candidates": ("更正：尚未打开设置。", "尚未打开设置。"),
+        "correction_evidence_refs": (
+            EvidenceRef(
+                evidence_id="g1evidence-" + "1" * 24,
+                sha256="e" * 64,
+                role="target_pre",
+                event_seq=7,
+            ),
+        ),
+        "token_counter": counter,
+        "delimiter_repairs": repairs,
+    }
+    snapshot = canonical_sha256(request)
+    preview = build_five_arm_preview(**kwargs)
+    assert preview.to_dict() == build_five_arm_preview(**kwargs).to_dict()
+    assert [item.arm for item in preview.arms] == list(ArmKind)
+    assert preview.correction_ranking.selected_text == "尚未打开设置。"
+    assert preview.sham_token_match.matched is True
+    assert len(preview.correction_anchors) == 1
+    assert preview.correction_anchors[0].binding_id == "qwen-focal-step-1"
+    assert all(item.target_only_diff for item in preview.arms)
+    assert all(item.source_mapping_reversible for item in preview.arms)
+    assert all(not item.to_dict()["provider_invocation_allowed"] for item in preview.arms)
+    assert all(restore_original(item.render_result) == request for item in preview.arms)
+    sham = preview.arms[-1]
+    assert len(sham.render_result.diffs) == 3
+    assert "Step 3:" not in cast(str, sham.rendered_history[0]["rendered_text"])
+    assert preview.to_dict()["provider_invocation_count"] == 0
+    assert preview.to_dict()["network_used"] is False
+    assert preview.to_dict()["gpu_used"] is False
+    assert canonical_sha256(request) == snapshot
+    json.dumps(preview.to_dict(), ensure_ascii=False, sort_keys=True)
+    preview_schema = json.loads(
+        (SCHEMA_ROOT / "history_codec_preview.schema.json").read_text(encoding="utf-8")
+    )
+    Draft202012Validator.check_schema(preview_schema)
+    Draft202012Validator(preview_schema).validate(preview.to_dict())
+
+
+def test_clean_control_preview_uses_only_original_and_sham_for_both_families() -> None:
+    preview_schema = json.loads(
+        (SCHEMA_ROOT / "history_codec_preview.schema.json").read_text(encoding="utf-8")
+    )
+    for case in CASES:
+        data = _load(case)
+        bindings = _bindings(data)
+        codec = case.codec_type(bindings)
+        focal_id = next(
+            item.binding_id for item in bindings if item.span_role is SpanRole.EDITABLE_CLAIM
+        )
+        sham_id = next(
+            item.binding_id for item in bindings if item.span_role is SpanRole.BENIGN_SHAM
+        )
+        preview = build_clean_control_preview(
+            application_request=data["application_request"],
+            codec=codec,
+            focal_reference_binding_id=focal_id,
+            sham_binding_id=sham_id,
+            token_counter=PinnedTokenCounter(
+                "fixture-tokenizer-no-special-tokens", "f" * 64, lambda _: 5
+            ),
+        )
+        assert [item.arm for item in preview.arms] == [
+            ArmKind.ORIGINAL,
+            ArmKind.SHAM_BENIGN_EDIT,
+        ]
+        assert preview.sham_token_match.matched is True
+        payload = preview.to_dict()
+        assert payload["plan_set_profile"] == "G1_CLEAN_CONTROL"
+        assert payload["correction_ranking"] is None
+        assert payload["correction_anchors"] == []
+        assert all(
+            restore_original(item.render_result) == data["application_request"]
+            for item in preview.arms
+        )
+        Draft202012Validator(preview_schema).validate(payload)
+
+
+def test_mai_shell_binding_is_family_limited_and_unsupported_repair_blocks() -> None:
+    case = CASES[1]
+    data = _load(case)
+    request = data["application_request"]
+    request_sha = canonical_sha256(request)
+    content = request["messages"][2]["content"]
+    assert isinstance(content, str)
+    opening_end = content.index("\n") + 1
+    closing_start = content.index("\n", opening_end)
+    closing_end = content.index("</thinking>") + len("</thinking>")
+    shells = (
+        CuratedSpanBinding.from_text(
+            binding_id="mai-thinking-open",
+            source_request_sha256=request_sha,
+            container_path=("messages", 2, "content"),
+            container_text=content,
+            char_start=0,
+            char_end=opening_end,
+            span_role=SpanRole.ELIGIBLE_PROTOCOL_SHELL,
+        ),
+        CuratedSpanBinding.from_text(
+            binding_id="mai-thinking-close",
+            source_request_sha256=request_sha,
+            container_path=("messages", 2, "content"),
+            container_text=content,
+            char_start=closing_start,
+            char_end=closing_end,
+            span_role=SpanRole.ELIGIBLE_PROTOCOL_SHELL,
+        ),
+    )
+    codec = MaiRawReplayHistoryCodec((*_bindings(data), *shells))
+    ir = codec.extract(request)
+    assert (
+        len(
+            [
+                span
+                for span in ir.records[0].protected_spans
+                if span.span_role is SpanRole.ELIGIBLE_PROTOCOL_SHELL
+            ]
+        )
+        == 2
+    )
+    repairs = (
+        DelimiterRepairBinding(
+            repair_id="repair-mai-thinking-open",
+            arm=ArmKind.MASK,
+            operation="DELETE_EMPTY_DELIMITER",
+            shell_binding_id="mai-thinking-open",
+            target_binding_ids=("mai-focal-message-2",),
+        ),
+        DelimiterRepairBinding(
+            repair_id="repair-mai-thinking-close",
+            arm=ArmKind.MASK,
+            operation="DELETE_EMPTY_DELIMITER",
+            shell_binding_id="mai-thinking-close",
+            target_binding_ids=("mai-focal-message-2",),
+        ),
+    )
+    _stable_error_code(
+        lambda: build_five_arm_preview(
+            application_request=request,
+            codec=codec,
+            focal_binding_ids=("mai-focal-message-2",),
+            oracle_binding_ids=("mai-focal-message-2", "mai-oracle-message-3"),
+            sham_binding_id="mai-sham-message-5",
+            correction_candidates=("尚未打开设置。",),
+            correction_evidence_refs=(
+                EvidenceRef("g1evidence-" + "2" * 24, "e" * 64, "target_pre", 7),
+            ),
+            token_counter=PinnedTokenCounter(
+                "fixture-tokenizer-no-special-tokens", "f" * 64, lambda _: 5
+            ),
+            delimiter_repairs=repairs,
+        ),
+        "PROTOCOL_SHELL_NOT_CAUSALLY_EMPTY",
+    )
+
+    tool_start = content.index("<tool_call>")
+    invalid_shell = CuratedSpanBinding.from_text(
+        binding_id="mai-tool-wrapper-not-shell",
+        source_request_sha256=request_sha,
+        container_path=("messages", 2, "content"),
+        container_text=content,
+        char_start=tool_start,
+        char_end=tool_start + len("<tool_call>"),
+        span_role=SpanRole.ELIGIBLE_PROTOCOL_SHELL,
+    )
+    _stable_error_code(
+        lambda: MaiRawReplayHistoryCodec((*_bindings(data), invalid_shell)).extract(request),
+        "ELIGIBLE_SHELL_SYNTAX_INVALID",
+    )
+
+
 def test_static_shared_core_and_cpu_only_import_boundaries() -> None:
     shared_paths = (
         REPO_ROOT / "MobileWorld/src/mobile_world/offline/causal_replay/core.py",
         REPO_ROOT / "MobileWorld/src/mobile_world/offline/causal_replay_runner/runner.py",
         REPO_ROOT / "MobileWorld/src/mobile_world/offline/g1_history_codecs/cpu_checkpoint.py",
+        REPO_ROOT / "MobileWorld/src/mobile_world/offline/g1_history_codecs/preview.py",
     )
     for path in shared_paths:
         source = path.read_text(encoding="utf-8")
@@ -1122,6 +1556,73 @@ def test_static_shared_core_and_cpu_only_import_boundaries() -> None:
         path = REPO_ROOT / artifact["path"]
         assert hashlib.sha256(path.read_bytes()).hexdigest() == artifact["sha256"]
     assert shared["tokenizer_binding"]["tokenizer_required"] is False
+
+    preview_binding = publication["preview_api"]
+    preview_implementation = preview_binding["implementation"]
+    assert preview_implementation["symbols"] == [
+        "bind_human_record_spans",
+        "rank_correction_candidates",
+        "build_five_arm_preview",
+        "build_clean_control_preview",
+    ]
+    assert (
+        hashlib.sha256((REPO_ROOT / preview_implementation["path"]).read_bytes()).hexdigest()
+        == preview_implementation["sha256"]
+    )
+    for dependency in preview_binding["dependencies"].values():
+        assert (
+            hashlib.sha256((REPO_ROOT / dependency["path"]).read_bytes()).hexdigest()
+            == dependency["sha256"]
+        )
+    preview_output_schema = preview_binding["output_schema"]
+    preview_schema_path = REPO_ROOT / preview_output_schema["path"]
+    assert (
+        hashlib.sha256(preview_schema_path.read_bytes()).hexdigest()
+        == preview_output_schema["sha256"]
+    )
+    Draft202012Validator.check_schema(json.loads(preview_schema_path.read_text(encoding="utf-8")))
+    assert preview_binding["input_contract"] == (
+        "EXACT_G1_3_SOURCE_RECORDS_PLUS_EXPLICIT_G1_6_HUMAN_SELECTIONS"
+    )
+    assert preview_binding["supported_plan_set_profiles"] == [
+        "G1_STRICT_MHR",
+        "G1_CLEAN_CONTROL",
+    ]
+    assert preview_binding["outputs"] == {
+        "strict_five_arm": True,
+        "clean_original_sham": True,
+        "exact_correction_anchors": True,
+        "correction_token_ranking": True,
+        "sham_token_match": True,
+        "target_only_diff": True,
+        "reversible_mapping": True,
+        "full_request_browser_projection_allowed": False,
+    }
+    model_manifest_path = (
+        REPO_ROOT / preview_binding["pinned_tokenizers"][0]["model_config_manifest"]["path"]
+    )
+    model_manifest_bytes = model_manifest_path.read_bytes()
+    model_manifest = json.loads(model_manifest_bytes)
+    model_by_id = {item["model_id"]: item for item in model_manifest["models"]}
+    for tokenizer_binding in preview_binding["pinned_tokenizers"]:
+        model = model_by_id[tokenizer_binding["model_id"]]
+        assert model["history_family"] == tokenizer_binding["history_family"]
+        assert model["model_repository"] == tokenizer_binding["tokenizer_id"]
+        assert model["model_revision"] == tokenizer_binding["tokenizer_revision"]
+        assert canonical_sha256(model["tokenizer"]) == tokenizer_binding["tokenizer_binding_sha256"]
+        assert (
+            hashlib.sha256(model_manifest_bytes).hexdigest()
+            == tokenizer_binding["model_config_manifest"]["sha256"]
+        )
+        assert tokenizer_binding["counting_call"] == model["tokenizer"]["counting_call"]
+    assert preview_binding["tokenizer_policy"] == {
+        "caller_injected_local_pinned_counter": True,
+        "special_tokens_enabled": False,
+        "unavailable_reason_code": "PINNED_TOKENIZER_UNAVAILABLE",
+        "download_allowed": False,
+        "substitution_allowed": False,
+        "human_entered_count_allowed": False,
+    }
     for selected, case in zip(publication["selected_codecs"], CASES, strict=True):
         assert selected["codec_id"] == _codec(case, _load(case)).codec_id
         capability = selected["capability"]

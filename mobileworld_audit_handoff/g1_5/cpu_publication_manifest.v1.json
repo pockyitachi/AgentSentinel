@@ -12,7 +12,7 @@
       "implementation": {
         "path": "MobileWorld/src/mobile_world/offline/g1_history_codecs/codecs.py",
         "symbol": "QwenFlatProgressHistoryCodec",
-        "sha256": "32633d1ce3d75f13aea0eb9b61501a5a9816d73d9c80f10e27872126860d1cdf"
+        "sha256": "94de1ad5fa596448553c7ec918cf06682dae4d183216ea21a67f9510a65db633"
       },
       "capability": {
         "sha256": "52e51c9067e14c00569889a5c80d4c315c185e0a34dd23b3afa1ab43b3ee487c",
@@ -59,7 +59,7 @@
       "implementation": {
         "path": "MobileWorld/src/mobile_world/offline/g1_history_codecs/codecs.py",
         "symbol": "MaiRawReplayHistoryCodec",
-        "sha256": "32633d1ce3d75f13aea0eb9b61501a5a9816d73d9c80f10e27872126860d1cdf"
+        "sha256": "94de1ad5fa596448553c7ec918cf06682dae4d183216ea21a67f9510a65db633"
       },
       "capability": {
         "sha256": "c4d2d1896ead1e59eeb8330c2952ae24b258aa9be3470f74001de3cb90cf03b4",
@@ -100,6 +100,81 @@
       }
     }
   ],
+  "preview_api": {
+    "schema_version": "mobileworld.g1.history-codec-preview-api/v1",
+    "implementation": {
+      "path": "MobileWorld/src/mobile_world/offline/g1_history_codecs/preview.py",
+      "sha256": "eddca4fa6844d2c6b8137e8036eda2c6c0b8f139b80837633e0f55c63ce1cf41",
+      "symbols": [
+        "bind_human_record_spans",
+        "rank_correction_candidates",
+        "build_five_arm_preview",
+        "build_clean_control_preview"
+      ]
+    },
+    "dependencies": {
+      "human_diff_renderer": {
+        "path": "MobileWorld/src/mobile_world/offline/g1_history_codecs/diff.py",
+        "sha256": "42374eb8a7818cdfbdfd4d4dc23b1daaa6f0cec4019407346b39630a855861ad"
+      }
+    },
+    "output_schema": {
+      "path": "mobileworld_audit_handoff/schemas/g1_5/history_codec_preview.schema.json",
+      "sha256": "36e7edf94c7439750db8f252003a1b6d1c11ab4dad2a69c3a5ff1fecbf1764ca"
+    },
+    "input_contract": "EXACT_G1_3_SOURCE_RECORDS_PLUS_EXPLICIT_G1_6_HUMAN_SELECTIONS",
+    "supported_plan_set_profiles": ["G1_STRICT_MHR", "G1_CLEAN_CONTROL"],
+    "outputs": {
+      "strict_five_arm": true,
+      "clean_original_sham": true,
+      "exact_correction_anchors": true,
+      "correction_token_ranking": true,
+      "sham_token_match": true,
+      "target_only_diff": true,
+      "reversible_mapping": true,
+      "full_request_browser_projection_allowed": false
+    },
+    "pinned_tokenizers": [
+      {
+        "model_id": "qwen3vl_8b",
+        "history_family": "flat_progress",
+        "tokenizer_id": "Qwen/Qwen3-VL-8B-Instruct",
+        "tokenizer_revision": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+        "tokenizer_binding_sha256": "e97afc56a6ce6b1d0d78345efc2b27c9853e9251d1e2f2bb0ff60b9b99926efd",
+        "model_config_manifest": {
+          "path": "mobileworld_audit_handoff/g1/model_config_manifest.v1.json",
+          "sha256": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"
+        },
+        "counting_call": "tokenizer.encode(text, add_special_tokens=False)",
+        "special_tokens_enabled": false,
+        "local_artifact_verification_required": true,
+        "unavailable_reason_code": "PINNED_TOKENIZER_UNAVAILABLE"
+      },
+      {
+        "model_id": "mai_ui_8b",
+        "history_family": "raw_replay",
+        "tokenizer_id": "Tongyi-MAI/MAI-UI-8B",
+        "tokenizer_revision": "e00a0097abb9cc621cac5172d8c4809f0839c94e",
+        "tokenizer_binding_sha256": "dac3c7c7da1bcb043402cb3571a0867f98153c4fd3f3c0614153a6ea27518d23",
+        "model_config_manifest": {
+          "path": "mobileworld_audit_handoff/g1/model_config_manifest.v1.json",
+          "sha256": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"
+        },
+        "counting_call": "tokenizer.encode(text, add_special_tokens=False)",
+        "special_tokens_enabled": false,
+        "local_artifact_verification_required": true,
+        "unavailable_reason_code": "PINNED_TOKENIZER_UNAVAILABLE"
+      }
+    ],
+    "tokenizer_policy": {
+      "caller_injected_local_pinned_counter": true,
+      "special_tokens_enabled": false,
+      "unavailable_reason_code": "PINNED_TOKENIZER_UNAVAILABLE",
+      "download_allowed": false,
+      "substitution_allowed": false,
+      "human_entered_count_allowed": false
+    }
+  },
   "shared_bindings": {
     "history_ir_schema": {
       "path": "mobileworld_audit_handoff/schemas/g1_2/history_ir.schema.json",

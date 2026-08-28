@@ -46,7 +46,8 @@ Editable spans arrive through an immutable curated binding catalog. Every bindin
 - a stable binding ID, the exact source-request SHA-256, and exact JSON container path;
 - non-empty char and UTF-8 byte half-open coordinates;
 - exact source text and its SHA-256;
-- exactly `EDITABLE_CLAIM` or `BENIGN_SHAM` role.
+- exactly `EDITABLE_CLAIM`, `BENIGN_SHAM`, or separately human-selected
+  `ELIGIBLE_PROTOCOL_SHELL` role.
 
 Extraction MUST first match every binding's source-request digest, then re-resolve every path and
 recheck text, digest, both coordinate systems, uniqueness, non-overlap, structural membership, and
@@ -61,6 +62,12 @@ The catalog and each record assignment are canonicalized by exact JSON path, coo
 binding ID. The exact same ordered binding sequence MUST generate both `editable_spans` and the
 record's `curated_binding_ids`; caller order may not change the IR or associate an ID with another
 span. Non-binding values or mutable/non-canonical JSON paths raise a typed error before set/sort logic.
+Eligible-shell bindings are never semantic claims. They are published separately in record provenance,
+remain in the frozen G1.2 protected-span collection, and can only be addressed by a `DROP` operation
+whose `protocol_shell_for` IDs bind selected semantic deletions. Qwen admits only an exact record-leading
+`Step N:` marker or semicolon separator; MAI admits only exact `Thought:` or paired canonical
+`<thinking>`/`</thinking>` delimiters. Cross-family or arbitrary wrapper text is rejected before plan
+construction.
 
 Captured fixtures in Git are structure-preserving, secret-free surrogates derived from observed request
 shapes. They record the source publication/request digests only as provenance. They copy no formal
@@ -93,8 +100,12 @@ one query marker, one exact task-progress marker, a non-empty sequence of contig
 entries, an exact `; ` terminator per entry, and the final newline used by the host adapter.
 
 For each entry the semantic conclusion is the editable interval. `Step N: `, the trailing `; `, and any
-external suffix are protected. The host independently appends at most one suffix of each kind, so a
-tool result and ask-user response may both be present only in this exact order:
+external suffix are protected by default. An exact human-selected Step/semicolon binding may be
+reclassified only as `ELIGIBLE_PROTOCOL_SHELL`; the frozen G1.2 renderer will delete it only when the
+same plan deletes every non-whitespace byte in that structural record. External suffix bytes are never
+reclassified, so a step with retained tool/ask content cannot pass that shell-empty proof. The host
+independently appends at most one suffix of each kind, so a tool result and ask-user response may both
+be present only in this exact order:
 
 - `; Tool call result: <tool_response>opaque non-empty adapter payload</tool_response>`; then
 - `; Ask user response: ...` with a non-empty response.
@@ -124,7 +135,12 @@ shell and one of the two raw thinking shapes emitted/accepted by the host adapte
 `...</think><tool_call>...</tool_call>` for which the adapter adds/normalizes the opening/closing tag
 only in its local parser copy. The captured request is never normalized. The non-empty trimmed
 thinking interior is the only editable interval; all wrappers, inter-wrapper whitespace, and the
-complete tool-call payload are protected.
+complete tool-call payload are protected by default. A human may bind exact canonical thinking-tag or
+`Thought:` delimiter bytes as eligible shell, but the unchanged G1.2 core still requires the complete
+structural assistant record to become whitespace. Because an admitted MAI record retains its protected
+tool call, thinking-wrapper deletion therefore fails closed with
+`PROTOCOL_SHELL_NOT_CAUSALLY_EMPTY`; ordinary Mask preserves the wrappers. G1.5 does not weaken that
+frozen rule.
 
 Only whitespace may precede the canonical opening tag, appear between the thinking close and tool-call
 open, or follow the tool-call close. Non-whitespace actor text outside the admitted thinking wrapper is
@@ -172,6 +188,35 @@ The current frozen G1.2 core rejects multiple corrections that share one inserti
 `AMBIGUOUS_CORRECTION_ANCHOR`. G1.5 v1 supports a single focal correction per request and MUST fail
 closed for that multi-correction shape; it does not change the core or select an implicit ordering.
 
+### 7.1 CPU-only draft preview API
+
+`mobile_world.offline.g1_history_codecs.preview` is the public read-only composition boundary for
+G1.6. It accepts an exact application request; exact G1.3 treatment-surface source records; explicit
+record-relative human spans for focal, oracle, sham, and delimiter repair; human-authored correction
+alternatives and evidence; and a caller-injected locally pinned token counter. It performs only:
+
+1. exact record/path/text/hash matching and record-relative to host-request char/UTF-8 conversion;
+2. the pinned-tokenizer count and frozen tie-break of token count, UTF-8 bytes, code points, then
+   lexicographic UTF-8 bytes;
+3. deterministic construction of either the strict five-arm plan set or the clean-control
+   Original/Sham plan set, including per-arm shell bindings;
+4. frozen G1.2 plan/render/pre-send validation, full-request target-only comparison, exact
+   `restore_original`, and machine/human diff/source-mapping projection; and
+5. an exact focal-binding-to-correction-anchor projection plus the frozen integer sham token-match
+   formula, summing all focal-span token counts before comparison.
+
+The module does not load or download a tokenizer. The injected `PinnedTokenCounter` callback contract
+is special-tokens-disabled and is called twice per correction to reject nondeterminism. If the caller
+cannot bind a local pinned artifact, `rank_correction_candidates(..., token_counter=None)` and the
+five-arm API block with `PINNED_TOKENIZER_UNAVAILABLE`; estimated, substituted, or human-entered token
+counts are not accepted. Inputs outside either codec's exact captured grammar, stale human coordinates,
+unsupported delimiter repair, shared-anchor multi-correction shape, or any non-target render drift
+block before a provider boundary. This supports arbitrary human-authored drafts over admitted exact
+Qwen/MAI requests, not only checked-in fixtures; it performs no semantic extraction or suggestion.
+The serializable projection deliberately omits the full rendered request: G1.6 receives only admitted
+rendered history containers, exact correction anchors/list insertions, diffs and reversible mappings,
+so system/provider-control bytes and image payloads are not newly exposed to a browser packet.
+
 ## 8. CPU checkpoint and G1.4 runner integration
 
 The provider-free checkpoint validates the five-plan paired set with the registered real Codec, renders
@@ -193,6 +238,21 @@ text spans use exact JSON paths, Unicode-code-point offsets, and UTF-8 byte offs
 normalization; no model tokenizer is consulted, so the separately hashed coordinate binding records
 `tokenizer_required=false`. A later G1.6 repo-external gate may verify these hashes but may not infer
 live readiness from them.
+
+The same manifest also binds the preview implementation bytes, its human-diff renderer dependency,
+its four public entrypoints, the Draft 2020-12 output-record schema, exact input contract, and
+tokenizer-unavailable policy. Two model-specific tokenizer bindings are canonical hashes of the exact
+tokenizer records in the frozen G1.1 model/config manifest; every local artifact must still be verified
+by the caller before constructing `PinnedTokenCounter`, whose `tokenizer_sha256` is that binding hash.
+The
+entrypoints include strict `build_five_arm_preview` and clean-control
+`build_clean_control_preview`; the manifest declares both frozen plan-set profiles and the exact
+anchor/ranking/sham/diff/mapping output envelope. The
+no-tokenizer shared binding continues to describe codec extraction/rendering itself; correction
+minimality is a caller-injected, separately pinned G1.6 artifact and cannot be inferred from that
+coordinate binding. Because the repo-external codec-gate receipt binds the complete manifest bytes,
+the preview API is transitively content-bound even when the receipt projects only the selected codec,
+IR, renderer, coordinate, and conformance hashes.
 
 ## 9. Failure and fallback rules
 

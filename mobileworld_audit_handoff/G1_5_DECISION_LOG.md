@@ -22,6 +22,15 @@ implementation/capability/source-fixture/conformance-receipt hashes，并共同�
 History-IR schema、renderer 和 explicit no-tokenizer Unicode/UTF-8 coordinate binding；它本身不
 是 formal G1 data、live proof、provider authorization 或 G1.6 seal。
 
+2026-08-28 的 CPU-only 补充要求纳入同一 D-028：publication 还必须 hash-bind 一个纯只读
+strict-five-arm / clean-Original+Sham preview API 及其输出 schema。该 API 只能把 exact G1.3 source records 与显式人工选择的
+focal/oracle/sham/delimiter spans 转成 request-bound 坐标，机械计算人写 correction alternatives
+的 pinned-tokenizer token counts/tie-break，并调用冻结 G1.2 renderer 产生 target-only diff 与可逆
+mapping，同时显式投影 correction insertion anchors 与 summed-focal sham token match。浏览器输出不
+新增 full-request/system/provider/image-payload 投影。G1.5 不加载或下载 tokenizer；token counter 必须由 caller 从本地 pinned artifact 注入，
+special tokens 禁用，缺失时稳定返回 `PINNED_TOKENIZER_UNAVAILABLE`，不得估算、替代或信任人工
+填写的 count。该补充不授权 G1.6 annotation、server 启动、provider、network、GPU 或 replay。
+
 Codec 只解释 host-native syntax，不判断 claim 真伪、危害或该选择哪种 treatment。目标必须由
 caller 提供 request-hash-bound 的精确 path、char/UTF-8 坐标、原文和 digest；缺失、漂移、重叠、
 歧义或越过 protocol/external-result 边界时稳定阻断。两个 Codec 可声明

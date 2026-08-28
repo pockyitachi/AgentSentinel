@@ -1,0 +1,414 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_5/history_codec_preview.schema.json",
+  "title": "G1.5 CPU-only strict and clean-control History Codec preview v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "preview_scope",
+    "plan_set_profile",
+    "codec_id",
+    "source_request_sha256",
+    "history_ir_sha256",
+    "plan_set_sha256",
+    "correction_ranking",
+    "correction_anchors",
+    "sham_token_match",
+    "delimiter_repairs",
+    "arms",
+    "provider_invocation_allowed",
+    "provider_invocation_count",
+    "treatment_response_generation_allowed",
+    "treatment_response_count",
+    "network_used",
+    "gpu_used",
+    "replay_executed",
+    "gui_action_executed"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.history-codec-preview/v1"},
+    "preview_scope": {"const": "CPU_ONLY_READ_ONLY"},
+    "plan_set_profile": {"enum": ["G1_STRICT_MHR", "G1_CLEAN_CONTROL"]},
+    "codec_id": {
+      "enum": [
+        "mobileworld.g1.history-codec.qwen-flat-progress",
+        "mobileworld.g1.history-codec.mai-raw-replay"
+      ]
+    },
+    "source_request_sha256": {"$ref": "#/$defs/sha256"},
+    "history_ir_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_set_sha256": {"$ref": "#/$defs/sha256"},
+    "correction_ranking": {
+      "oneOf": [{"$ref": "#/$defs/correctionRanking"}, {"type": "null"}]
+    },
+    "correction_anchors": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/correctionAnchorBinding"}
+    },
+    "sham_token_match": {"$ref": "#/$defs/shamTokenMatch"},
+    "delimiter_repairs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/delimiterRepair"}
+    },
+    "arms": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {"$ref": "#/$defs/previewArm"}
+    },
+    "provider_invocation_allowed": {"const": false},
+    "provider_invocation_count": {"const": 0},
+    "treatment_response_generation_allowed": {"const": false},
+    "treatment_response_count": {"const": 0},
+    "network_used": {"const": false},
+    "gpu_used": {"const": false},
+    "replay_executed": {"const": false},
+    "gui_action_executed": {"const": false}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"plan_set_profile": {"const": "G1_STRICT_MHR"}}},
+      "then": {
+        "properties": {
+          "correction_ranking": {"$ref": "#/$defs/correctionRanking"},
+          "correction_anchors": {"minItems": 1},
+          "arms": {
+            "minItems": 5,
+            "maxItems": 5,
+            "prefixItems": [
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "ORIGINAL"}}},
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "MASK"}}},
+              {
+                "$ref": "#/$defs/previewArm",
+                "properties": {"arm": {"const": "MASK_CORRECTION"}}
+              },
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "ORACLE_CLEAN"}}},
+              {
+                "$ref": "#/$defs/previewArm",
+                "properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}}
+              }
+            ],
+            "items": false
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"plan_set_profile": {"const": "G1_CLEAN_CONTROL"}}},
+      "then": {
+        "properties": {
+          "correction_ranking": {"type": "null"},
+          "correction_anchors": {"maxItems": 0},
+          "delimiter_repairs": {
+            "items": {
+              "$ref": "#/$defs/delimiterRepair",
+              "properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}}
+            }
+          },
+          "arms": {
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              {"$ref": "#/$defs/previewArm", "properties": {"arm": {"const": "ORIGINAL"}}},
+              {
+                "$ref": "#/$defs/previewArm",
+                "properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}}
+              }
+            ],
+            "items": false
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "jsonPath": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "integer", "minimum": 0}]}
+    },
+    "correctionCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "text_sha256",
+        "token_count",
+        "utf8_byte_count",
+        "codepoint_count",
+        "rank"
+      ],
+      "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "text_sha256": {"$ref": "#/$defs/sha256"},
+        "token_count": {"type": "integer", "minimum": 0},
+        "utf8_byte_count": {"type": "integer", "minimum": 1},
+        "codepoint_count": {"type": "integer", "minimum": 1},
+        "rank": {"type": "integer", "minimum": 1}
+      }
+    },
+    "correctionRanking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tokenizer_id",
+        "tokenizer_sha256",
+        "special_tokens_enabled",
+        "tie_break_order",
+        "selected_text_sha256",
+        "candidates"
+      ],
+      "properties": {
+        "tokenizer_id": {"type": "string", "minLength": 1},
+        "tokenizer_sha256": {"$ref": "#/$defs/sha256"},
+        "special_tokens_enabled": {"const": false},
+        "tie_break_order": {
+          "const": [
+            "token_count",
+            "utf8_byte_count",
+            "codepoint_count",
+            "lexicographic_utf8_bytes"
+          ]
+        },
+        "selected_text_sha256": {"$ref": "#/$defs/sha256"},
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/correctionCandidate"}
+        }
+      }
+    },
+    "shamTokenMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tokenizer_id",
+        "tokenizer_sha256",
+        "special_tokens_enabled",
+        "focal_binding_ids",
+        "focal_span_sha256s",
+        "focal_token_count",
+        "sham_binding_id",
+        "sham_span_sha256",
+        "sham_token_count",
+        "match_formula",
+        "matched"
+      ],
+      "properties": {
+        "tokenizer_id": {"type": "string", "minLength": 1},
+        "tokenizer_sha256": {"$ref": "#/$defs/sha256"},
+        "special_tokens_enabled": {"const": false},
+        "focal_binding_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "focal_span_sha256s": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/sha256"}
+        },
+        "focal_token_count": {"type": "integer", "minimum": 0},
+        "sham_binding_id": {"type": "string", "minLength": 1},
+        "sham_span_sha256": {"$ref": "#/$defs/sha256"},
+        "sham_token_count": {"type": "integer", "minimum": 0},
+        "match_formula": {
+          "const": "(5*sham>=4*focal && 4*sham<=5*focal) || abs(sham-focal)<=4"
+        },
+        "matched": {"type": "boolean"}
+      }
+    },
+    "correctionAnchorBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding_id", "target_record_id", "anchor"],
+      "properties": {
+        "binding_id": {"type": "string", "minLength": 1},
+        "target_record_id": {"type": "string", "minLength": 1},
+        "anchor": {"$ref": "#/$defs/correctionAnchor"}
+      }
+    },
+    "correctionAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_path",
+        "insert_index",
+        "source_container_sha256",
+        "owner_region_id",
+        "host_context_path",
+        "host_context_sha256",
+        "role_path",
+        "expected_role",
+        "reference_path",
+        "reference_sha256",
+        "placement",
+        "context_kind",
+        "visible_prefix",
+        "visible_suffix"
+      ],
+      "properties": {
+        "container_path": {"$ref": "#/$defs/jsonPath"},
+        "insert_index": {"type": "integer", "minimum": 0},
+        "source_container_sha256": {"$ref": "#/$defs/sha256"},
+        "owner_region_id": {"type": "string", "minLength": 1},
+        "host_context_path": {"$ref": "#/$defs/jsonPath"},
+        "host_context_sha256": {"$ref": "#/$defs/sha256"},
+        "role_path": {"$ref": "#/$defs/jsonPath"},
+        "expected_role": {"const": "user"},
+        "reference_path": {"$ref": "#/$defs/jsonPath"},
+        "reference_sha256": {"$ref": "#/$defs/sha256"},
+        "placement": {"const": "BEFORE"},
+        "context_kind": {"const": "TEXT_CONTENT_BLOCK"},
+        "visible_prefix": {"const": "SENTINEL correction: "},
+        "visible_suffix": {"const": ""}
+      }
+    },
+    "delimiterRepair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repair_id",
+        "arm",
+        "operation",
+        "shell_binding_id",
+        "target_binding_ids"
+      ],
+      "properties": {
+        "repair_id": {"type": "string", "minLength": 1},
+        "arm": {"enum": ["MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+        "operation": {"enum": ["DELETE_EMPTY_DELIMITER", "DELETE_ORPHAN_SEPARATOR"]},
+        "shell_binding_id": {"type": "string", "minLength": 1},
+        "target_binding_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "renderedHistory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["container_path", "record_ids", "source_text", "rendered_text"],
+      "properties": {
+        "container_path": {"$ref": "#/$defs/jsonPath"},
+        "record_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "source_text": {"type": "string"},
+        "rendered_text": {"type": "string"}
+      }
+    },
+    "renderDiff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "container_path",
+        "source_char_start",
+        "source_char_end",
+        "original_text",
+        "rendered_text",
+        "original_sha256",
+        "rendered_sha256",
+        "mapping_kind"
+      ],
+      "properties": {
+        "operation_id": {"type": "string", "minLength": 1},
+        "container_path": {"$ref": "#/$defs/jsonPath"},
+        "source_char_start": {"type": "integer", "minimum": 0},
+        "source_char_end": {"type": "integer", "minimum": 1},
+        "original_text": {"type": "string"},
+        "rendered_text": {"type": "string"},
+        "original_sha256": {"$ref": "#/$defs/sha256"},
+        "rendered_sha256": {"$ref": "#/$defs/sha256"},
+        "mapping_kind": {"enum": ["COPIED", "DELETED", "INSERTED", "SYNTAX_REPAIR"]}
+      }
+    },
+    "listInsertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "container_path",
+        "source_index",
+        "rendered_index",
+        "inserted_value",
+        "inserted_value_sha256"
+      ],
+      "properties": {
+        "operation_id": {"type": "string", "minLength": 1},
+        "container_path": {"$ref": "#/$defs/jsonPath"},
+        "source_index": {"type": "integer", "minimum": 0},
+        "rendered_index": {"type": "integer", "minimum": 0},
+        "inserted_value": {},
+        "inserted_value_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "container_path",
+        "source_char_start",
+        "source_char_end",
+        "rendered_char_start",
+        "rendered_char_end",
+        "kind",
+        "operation_id"
+      ],
+      "properties": {
+        "container_path": {"$ref": "#/$defs/jsonPath"},
+        "source_char_start": {"type": "integer", "minimum": 0},
+        "source_char_end": {"type": "integer", "minimum": 0},
+        "rendered_char_start": {"type": "integer", "minimum": 0},
+        "rendered_char_end": {"type": "integer", "minimum": 0},
+        "kind": {"enum": ["COPIED", "DELETED", "INSERTED", "SYNTAX_REPAIR"]},
+        "operation_id": {"type": ["string", "null"], "minLength": 1}
+      }
+    },
+    "previewArm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arm",
+        "rendered_request_sha256",
+        "rendered_history",
+        "diffs",
+        "list_insertions",
+        "source_mappings",
+        "human_diff",
+        "validation_receipt_sha256",
+        "target_only_diff",
+        "source_mapping_reversible",
+        "provider_invocation_allowed"
+      ],
+      "properties": {
+        "arm": {"enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+        "rendered_request_sha256": {"$ref": "#/$defs/sha256"},
+        "rendered_history": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/renderedHistory"}
+        },
+        "diffs": {"type": "array", "items": {"$ref": "#/$defs/renderDiff"}},
+        "list_insertions": {"type": "array", "items": {"$ref": "#/$defs/listInsertion"}},
+        "source_mappings": {"type": "array", "items": {"$ref": "#/$defs/sourceMapping"}},
+        "human_diff": {"type": "string", "minLength": 1},
+        "validation_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "target_only_diff": {"const": true},
+        "source_mapping_reversible": {"const": true},
+        "provider_invocation_allowed": {"const": false}
+      }
+    }
+  }
+}

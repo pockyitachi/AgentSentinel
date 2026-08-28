@@ -71,7 +71,7 @@ _TOOL_CLOSE = "</tool_call>"
 
 @dataclass(frozen=True)
 class CuratedSpanBinding:
-    """An exact G1.2-curated target locator consumed without reinterpretation."""
+    """An exact G1.2-curated target or eligible-shell locator."""
 
     binding_id: str
     source_request_sha256: str
@@ -139,10 +139,14 @@ class CuratedSpanBinding:
                 "TARGET_BINDING_REQUEST_MISMATCH",
                 "curated target belongs to another captured request",
             )
-        if self.span_role not in {SpanRole.EDITABLE_CLAIM, SpanRole.BENIGN_SHAM}:
+        if (
+            self.span_role is not SpanRole.EDITABLE_CLAIM
+            and self.span_role is not SpanRole.BENIGN_SHAM
+            and self.span_role is not SpanRole.ELIGIBLE_PROTOCOL_SHELL
+        ):
             raise PortableContractError(
                 "TARGET_BINDING_ROLE_INVALID",
-                "curated target must be EDITABLE_CLAIM or BENIGN_SHAM",
+                "curated binding must be an editable target, benign sham, or eligible shell",
             )
         try:
             value = get_at_path(request, self.container_path)
@@ -438,10 +442,11 @@ class _CapturedHistoryCodec:
             if (
                 raw_span_role is not SpanRole.EDITABLE_CLAIM
                 and raw_span_role is not SpanRole.BENIGN_SHAM
+                and raw_span_role is not SpanRole.ELIGIBLE_PROTOCOL_SHELL
             ):
                 raise PortableContractError(
                     "TARGET_BINDING_ROLE_INVALID",
-                    "curated target must be EDITABLE_CLAIM or BENIGN_SHAM",
+                    "curated binding must be an editable target, benign sham, or eligible shell",
                 )
             validated_bindings.append(item)
         raw_bindings = tuple(validated_bindings)
@@ -576,6 +581,148 @@ class _CapturedHistoryCodec:
             visible_suffix="",
         )
 
+    def _validated_protected_spans(
+        self,
+        *,
+        spec: _RecordSpec,
+        container: str,
+        shell_bindings: tuple[CuratedSpanBinding, ...],
+    ) -> tuple[SourceSpan, ...]:
+        """Promote only family-whitelisted human bindings to eligible shell spans."""
+
+        shell_kinds: list[str] = []
+        for binding in shell_bindings:
+            selected = binding.exact_text
+            stripped = selected.strip()
+            if not any(
+                span.char_start <= binding.char_start and binding.char_end <= span.char_end
+                for span in spec.protected_spans
+            ):
+                raise PortableContractError(
+                    "ELIGIBLE_SHELL_PROTECTED_MEMBERSHIP_INVALID",
+                    "eligible shell must be frozen as structural protected bytes before promotion",
+                )
+            if self.history_family is HistoryFamily.FLAT_PROGRESS:
+                if re.fullmatch(r"Step\s+[1-9]\d*\s*:\s*", selected) is not None:
+                    if binding.char_start != spec.char_start:
+                        raise PortableContractError(
+                            "ELIGIBLE_SHELL_POSITION_INVALID",
+                            "Qwen step marker must begin the exact structural record",
+                        )
+                    shell_kinds.append("STEP_MARKER")
+                elif re.fullmatch(r"\s*;\s*", selected) is not None:
+                    if (
+                        binding.char_start != spec.char_end - len("; ")
+                        or binding.char_end != spec.char_end
+                        or selected != "; "
+                    ):
+                        raise PortableContractError(
+                            "ELIGIBLE_SHELL_POSITION_INVALID",
+                            "Qwen semicolon shell must be the exact structural record terminator",
+                        )
+                    shell_kinds.append("SEMICOLON")
+                else:
+                    raise PortableContractError(
+                        "ELIGIBLE_SHELL_SYNTAX_INVALID",
+                        "Qwen eligible shell must be one exact Step marker or semicolon",
+                    )
+            elif self.history_family is HistoryFamily.RAW_REPLAY:
+                if re.fullmatch(r"<thinking>\s*", selected) is not None:
+                    if binding.char_start != spec.char_start:
+                        raise PortableContractError(
+                            "ELIGIBLE_SHELL_POSITION_INVALID",
+                            "MAI opening thinking shell must begin the assistant record",
+                        )
+                    shell_kinds.append("THINKING_OPEN")
+                elif re.fullmatch(r"\s*</thinking>", selected) is not None:
+                    shell_kinds.append("THINKING_CLOSE")
+                elif re.fullmatch(r"Thought\s*:\s*", selected) is not None:
+                    shell_kinds.append("THOUGHT_MARKER")
+                else:
+                    raise PortableContractError(
+                        "ELIGIBLE_SHELL_SYNTAX_INVALID",
+                        "MAI eligible shell must be one exact Thought or thinking-tag delimiter",
+                    )
+            else:  # pragma: no cover - the package exports exactly two frozen families
+                raise PortableContractError(
+                    "ELIGIBLE_SHELL_FAMILY_INVALID", "history family has no G1.5 shell grammar"
+                )
+            if stripped == "":
+                raise PortableContractError(
+                    "ELIGIBLE_SHELL_SYNTAX_INVALID", "eligible shell cannot be whitespace only"
+                )
+
+        if self.history_family is HistoryFamily.RAW_REPLAY:
+            opening_count = shell_kinds.count("THINKING_OPEN")
+            closing_count = shell_kinds.count("THINKING_CLOSE")
+            if opening_count != closing_count or opening_count > 1:
+                raise PortableContractError(
+                    "ELIGIBLE_SHELL_PAIR_INCOMPLETE",
+                    "MAI thinking-tag deletion requires one exact opening/closing pair",
+                )
+
+        protected: list[SourceSpan] = list(spec.protected_spans)
+        for binding in shell_bindings:
+            rebuilt: list[SourceSpan] = []
+            for span in protected:
+                overlaps = binding.char_start < span.char_end and span.char_start < binding.char_end
+                if not overlaps:
+                    rebuilt.append(span)
+                    continue
+                if not (
+                    span.char_start <= binding.char_start and binding.char_end <= span.char_end
+                ):
+                    raise PortableContractError(
+                        "ELIGIBLE_SHELL_PROTECTED_PARTIAL_OVERLAP",
+                        "eligible shell must be wholly inside or outside a protected span",
+                    )
+                if span.char_start < binding.char_start:
+                    rebuilt.append(
+                        _source_span(
+                            path=spec.container_path,
+                            text=container,
+                            start=span.char_start,
+                            end=binding.char_start,
+                            role=span.span_role,
+                        )
+                    )
+                if binding.char_end < span.char_end:
+                    rebuilt.append(
+                        _source_span(
+                            path=spec.container_path,
+                            text=container,
+                            start=binding.char_end,
+                            end=span.char_end,
+                            role=span.span_role,
+                        )
+                    )
+            protected = rebuilt
+        protected.extend(
+            SourceSpan(
+                container_path=binding.container_path,
+                char_start=binding.char_start,
+                char_end=binding.char_end,
+                utf8_byte_start=binding.utf8_byte_start,
+                utf8_byte_end=binding.utf8_byte_end,
+                exact_text=binding.exact_text,
+                span_sha256=binding.span_sha256,
+                span_role=SpanRole.ELIGIBLE_PROTOCOL_SHELL,
+                claim_id=None,
+            )
+            for binding in shell_bindings
+        )
+        return tuple(
+            sorted(
+                protected,
+                key=lambda span: (
+                    span.char_start,
+                    span.char_end,
+                    span.span_sha256,
+                    span.span_role.value,
+                ),
+            )
+        )
+
     def _finish_ir(
         self,
         request: JsonValue,
@@ -595,12 +742,17 @@ class _CapturedHistoryCodec:
                 index
                 for index, spec in enumerate(specs)
                 if spec.container_path == binding.container_path
-                and spec.editable_start is not None
-                and spec.editable_end is not None
                 and spec.char_start <= binding.char_start
                 and binding.char_end <= spec.char_end
-                and spec.editable_start <= binding.char_start
-                and binding.char_end <= spec.editable_end
+                and (
+                    binding.span_role is SpanRole.ELIGIBLE_PROTOCOL_SHELL
+                    or (
+                        spec.editable_start is not None
+                        and spec.editable_end is not None
+                        and spec.editable_start <= binding.char_start
+                        and binding.char_end <= spec.editable_end
+                    )
+                )
             ]
             if len(candidates) != 1:
                 code = (
@@ -646,7 +798,22 @@ class _CapturedHistoryCodec:
             )
             editable: list[SourceSpan] = []
             record_bindings = tuple(sorted(assignments[spec_index], key=_binding_sort_key))
-            for binding in record_bindings:
+            editable_bindings = tuple(
+                binding
+                for binding in record_bindings
+                if binding.span_role is not SpanRole.ELIGIBLE_PROTOCOL_SHELL
+            )
+            shell_bindings = tuple(
+                binding
+                for binding in record_bindings
+                if binding.span_role is SpanRole.ELIGIBLE_PROTOCOL_SHELL
+            )
+            protected_spans = self._validated_protected_spans(
+                spec=spec,
+                container=container,
+                shell_bindings=shell_bindings,
+            )
+            for binding in editable_bindings:
                 editable.append(
                     SourceSpan(
                         container_path=binding.container_path,
@@ -670,7 +837,7 @@ class _CapturedHistoryCodec:
                     )
                 )
             for target in editable:
-                for protected in spec.protected_spans:
+                for protected in protected_spans:
                     if (
                         target.container_path == protected.container_path
                         and target.char_start < protected.char_end
@@ -728,12 +895,21 @@ class _CapturedHistoryCodec:
                     record_sha256=extent.span_sha256,
                     source_span=extent,
                     editable_spans=tuple(editable),
-                    protected_spans=spec.protected_spans,
+                    protected_spans=protected_spans,
                     write_time=None,
                     exposure_time="CAPTURED_REQUEST_PRE_SEND",
                     provenance={
                         **spec.provenance,
-                        "curated_binding_ids": [item.binding_id for item in record_bindings],
+                        "curated_binding_ids": [item.binding_id for item in editable_bindings],
+                        **(
+                            {
+                                "curated_shell_binding_ids": [
+                                    item.binding_id for item in shell_bindings
+                                ]
+                            }
+                            if shell_bindings
+                            else {}
+                        ),
                         "curated_binding_catalog_sha256": self._binding_catalog_sha256,
                         "binding_source_request_sha256": source_hash,
                     },
@@ -1243,6 +1419,9 @@ class MaiRawReplayHistoryCodec(_CapturedHistoryCodec):
                 right_trim = len(inner) - len(inner.rstrip())
                 claim_start = inner_start + left_trim
                 claim_end = inner_end - right_trim
+                thought_marker = re.match(r"Thought\s*:\s*", content[claim_start:claim_end])
+                if thought_marker is not None:
+                    claim_start += thought_marker.end()
                 if claim_start >= claim_end:
                     raise PortableContractError(
                         "MAI_EMPTY_REASONING", "assistant replay reasoning is empty"

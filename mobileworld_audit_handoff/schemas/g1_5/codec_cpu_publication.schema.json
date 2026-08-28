@@ -11,6 +11,7 @@
     "publication_scope",
     "status",
     "selected_codecs",
+    "preview_api",
     "shared_bindings",
     "safety",
     "gpu_backlog"
@@ -86,6 +87,161 @@
         }
       ],
       "items": false
+    },
+    "preview_api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "implementation",
+        "dependencies",
+        "output_schema",
+        "input_contract",
+        "supported_plan_set_profiles",
+        "outputs",
+        "pinned_tokenizers",
+        "tokenizer_policy"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "mobileworld.g1.history-codec-preview-api/v1"
+        },
+        "implementation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256", "symbols"],
+          "properties": {
+            "path": {
+              "const": "MobileWorld/src/mobile_world/offline/g1_history_codecs/preview.py"
+            },
+            "sha256": {"$ref": "#/$defs/sha256"},
+            "symbols": {
+              "const": [
+                "bind_human_record_spans",
+                "rank_correction_candidates",
+                "build_five_arm_preview",
+                "build_clean_control_preview"
+              ]
+            }
+          }
+        },
+        "dependencies": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["human_diff_renderer"],
+          "properties": {
+            "human_diff_renderer": {
+              "allOf": [
+                {"$ref": "#/$defs/artifact"},
+                {
+                  "properties": {
+                    "path": {
+                      "const": "MobileWorld/src/mobile_world/offline/g1_history_codecs/diff.py"
+                    },
+                    "sha256": {
+                      "const": "42374eb8a7818cdfbdfd4d4dc23b1daaa6f0cec4019407346b39630a855861ad"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "output_schema": {
+          "allOf": [
+            {"$ref": "#/$defs/artifact"},
+            {
+              "properties": {
+                "path": {
+                  "const": "mobileworld_audit_handoff/schemas/g1_5/history_codec_preview.schema.json"
+                }
+              }
+            }
+          ]
+        },
+        "input_contract": {
+          "const": "EXACT_G1_3_SOURCE_RECORDS_PLUS_EXPLICIT_G1_6_HUMAN_SELECTIONS"
+        },
+        "supported_plan_set_profiles": {
+          "const": ["G1_STRICT_MHR", "G1_CLEAN_CONTROL"]
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "strict_five_arm",
+            "clean_original_sham",
+            "exact_correction_anchors",
+            "correction_token_ranking",
+            "sham_token_match",
+            "target_only_diff",
+            "reversible_mapping",
+            "full_request_browser_projection_allowed"
+          ],
+          "properties": {
+            "strict_five_arm": {"const": true},
+            "clean_original_sham": {"const": true},
+            "exact_correction_anchors": {"const": true},
+            "correction_token_ranking": {"const": true},
+            "sham_token_match": {"const": true},
+            "target_only_diff": {"const": true},
+            "reversible_mapping": {"const": true},
+            "full_request_browser_projection_allowed": {"const": false}
+          }
+        },
+        "pinned_tokenizers": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/previewTokenizerBinding",
+              "properties": {
+                "model_id": {"const": "qwen3vl_8b"},
+                "history_family": {"const": "flat_progress"},
+                "tokenizer_id": {"const": "Qwen/Qwen3-VL-8B-Instruct"},
+                "tokenizer_revision": {"const": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"},
+                "tokenizer_binding_sha256": {
+                  "const": "e97afc56a6ce6b1d0d78345efc2b27c9853e9251d1e2f2bb0ff60b9b99926efd"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/previewTokenizerBinding",
+              "properties": {
+                "model_id": {"const": "mai_ui_8b"},
+                "history_family": {"const": "raw_replay"},
+                "tokenizer_id": {"const": "Tongyi-MAI/MAI-UI-8B"},
+                "tokenizer_revision": {"const": "e00a0097abb9cc621cac5172d8c4809f0839c94e"},
+                "tokenizer_binding_sha256": {
+                  "const": "dac3c7c7da1bcb043402cb3571a0867f98153c4fd3f3c0614153a6ea27518d23"
+                }
+              }
+            }
+          ],
+          "items": false
+        },
+        "tokenizer_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "caller_injected_local_pinned_counter",
+            "special_tokens_enabled",
+            "unavailable_reason_code",
+            "download_allowed",
+            "substitution_allowed",
+            "human_entered_count_allowed"
+          ],
+          "properties": {
+            "caller_injected_local_pinned_counter": {"const": true},
+            "special_tokens_enabled": {"const": false},
+            "unavailable_reason_code": {"const": "PINNED_TOKENIZER_UNAVAILABLE"},
+            "download_allowed": {"const": false},
+            "substitution_allowed": {"const": false},
+            "human_entered_count_allowed": {"const": false}
+          }
+        }
+      }
     },
     "shared_bindings": {
       "type": "object",
@@ -296,6 +452,48 @@
         "capability": {"$ref": "#/$defs/capability"},
         "source_fixture": {"$ref": "#/$defs/sourceFixture"},
         "conformance_receipt": {"$ref": "#/$defs/receipt"}
+      }
+    },
+    "previewTokenizerBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_id",
+        "history_family",
+        "tokenizer_id",
+        "tokenizer_revision",
+        "tokenizer_binding_sha256",
+        "model_config_manifest",
+        "counting_call",
+        "special_tokens_enabled",
+        "local_artifact_verification_required",
+        "unavailable_reason_code"
+      ],
+      "properties": {
+        "model_id": {"type": "string", "minLength": 1},
+        "history_family": {"enum": ["flat_progress", "raw_replay"]},
+        "tokenizer_id": {"type": "string", "minLength": 1},
+        "tokenizer_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tokenizer_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "model_config_manifest": {
+          "allOf": [
+            {"$ref": "#/$defs/artifact"},
+            {
+              "properties": {
+                "path": {
+                  "const": "mobileworld_audit_handoff/g1/model_config_manifest.v1.json"
+                },
+                "sha256": {
+                  "const": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"
+                }
+              }
+            }
+          ]
+        },
+        "counting_call": {"const": "tokenizer.encode(text, add_special_tokens=False)"},
+        "special_tokens_enabled": {"const": false},
+        "local_artifact_verification_required": {"const": true},
+        "unavailable_reason_code": {"const": "PINNED_TOKENIZER_UNAVAILABLE"}
       }
     }
   }
