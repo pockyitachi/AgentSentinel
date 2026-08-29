@@ -148,6 +148,39 @@ therefore satisfies the per-item gate vacuously. Because decisions are append-on
 superseded by another decided state, a completed unit cannot return to `PENDING` after the global
 solo phase advances.
 
+### 5.1 D-032 simplified solo projection
+
+For the owner-authorized D-032 solo UI, the browser projects three explicit human choices while
+retaining the existing append-only decision schema: `BEST` / `最优（直接用）` maps to
+`ADOPT_TO_FORM`, `CORRECT` / `正确（也可用）` maps to `USE_AS_SUPPLEMENT`, and `WRONG` /
+`错误（不用）` maps to `IGNORE`. `BEST` is only a non-formal curator preference label. It MUST NOT
+create a rank, winner, vote, Agent priority, consensus, or ordered accepted set. The three Agent
+columns remain neutral and every atomic item remains separately decided.
+
+This projection narrowly supersedes the four-button and separate-checkbox presentation above.
+Each of the three buttons must visibly state that clicking it is the curator's explicit attestation
+that they personally checked the task, target-pre screenshot, cited visible evidence, and candidate
+action. There is no default, bulk choice, inferred click, note field, or hidden checkbox. Each click
+still appends exactly one existing candidate-decision event and MUST NOT write the solo annotation
+journal.
+
+After all atomic items have a non-legacy three-way decision and at least one item is retained, a
+separate `确认选择并锁定本任务` click may mechanically create one existing-schema solo `ACCEPT`
+payload. That click explicitly confirms every retained predicate field, screenshot region, evidence
+reference and rationale, plus closed-world completeness. The payload sets `human_selected`,
+`closed_world_confirmed`, and `all_reasonable_actions_enumerated` to true and calls the existing
+solo lock endpoint exactly once. It remains a non-formal precursor. All-wrong/all-ABSTAIN units,
+legacy `ADOPT_WITH_EDITS_TO_FORM`, duplicate material, invalid/stale inputs, and rejected locks fail
+closed into the preserved manual editor; the browser MUST NOT infer `EXCLUDE`, merge, deduplicate,
+repair, retry, or fabricate a predicate.
+
+Selecting or focusing a candidate must also persistently display an assignment-bound, non-
+interactive visual overlay on the target-pre screenshot. Agent A/B/C use distinct labels and
+colors; point predicates show every region and center mark; drag predicates show start/end regions
+and a direction arrow only when the endpoints are unambiguous; non-spatial predicates state that
+they have no fixed screenshot coordinate. This overlay is explanation only, never evidence or an
+executed coordinate, and it yields to the existing explicit manual coordinate picker.
+
 ## 6. HTTP boundary
 
 The only additive routes are:

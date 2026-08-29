@@ -220,18 +220,25 @@ copy the secret into tmux output, logs, STATUS, or the repository.
 
 ### Solo first-pass workflow
 
-During `ACTION_GOLD`, a configured D-031 campaign adds three neutral `Agent A/B/C` suggestion
-columns. They are untrusted AI candidates, not evidence and not independent reviews. Review every
-atomic item and explicitly choose `ADOPT_TO_FORM`, `ADOPT_WITH_EDITS_TO_FORM`,
-`USE_AS_SUPPLEMENT`, or `IGNORE`; there is no majority/default/bulk action. A non-ignore choice only
-copies the predicate into the browser's dirty form with all human confirmation controls unset.
-Candidate decisions go to a separate candidate journal. They do not save or lock the annotation
-form; use the existing solo draft/lock button separately after checking the screenshot, coordinates,
-evidence, accepted-set completeness, and every field. Opening these candidates records the
-principal as `AI_ASSISTED_SOLO_CURATOR`, which is ineligible for future formal G1.6 reviewer or
-adjudicator roles. With a campaign mounted, the server rejects an Action-Gold stage lock until every
-atomic candidate for that unit has one explicit decision; draft saves remain available while items
-are pending.
+During `ACTION_GOLD`, a configured D-031/D-032 campaign adds three neutral `Agent A/B/C` suggestion
+columns. They are untrusted AI candidates, not evidence and not independent reviews. For every
+atomic item, compare the task and target-pre screenshot, click the candidate to display its colored
+region/center or drag arrow on the screenshot, then choose exactly one: `最优（直接用）`,
+`正确（也可用）`, or `错误（不用）`. `最优` is only a solo UI preference; it is not a vote, formal
+rank, consensus winner, or Agent priority. The explicit choice also attests that the curator checked
+the visible task, screenshot, cited evidence and action; normal use requires no note, coordinate, or
+technical-field entry.
+
+Each three-way choice goes only to the separate candidate journal. After every item has a current
+choice and at least one action is retained, click `确认选择并锁定本任务` once. That second click
+confirms the retained fields/regions/evidence/rationales and closed-world accepted-set completeness,
+then writes one existing-schema non-formal solo lock. If all candidates are wrong/ABSTAIN, a legacy
+`修改后采用` remains, a location must be corrected, duplicate material exists, or validation fails,
+the simple path blocks and the advanced manual editor remains available; it never auto-excludes,
+merges, repairs, or retries. Opening these candidates records the principal as
+`AI_ASSISTED_SOLO_CURATOR`, which is ineligible for future formal G1.6 reviewer or adjudicator roles.
+With a campaign mounted, the server also rejects an Action-Gold stage lock until every atomic
+candidate for that unit has one explicit decision.
 
 The server enforces one global, irreversible order across all 190 units:
 

@@ -973,27 +973,42 @@ def test_web_has_no_generation_vote_bulk_accept_or_candidate_autosave() -> None:
     server = (PYTHON_ROOT / "src/mobile_world/offline/gold_curation/server.py").read_text(
         encoding="utf-8"
     )
-    assert "第 1 步 · 简易候选审核" in app_js
-    assert "逐条选择，不是在三个 Agent 中选一个" in app_js
-    assert "ADOPT_TO_FORM" in app_js
-    assert "ADOPT_WITH_EDITS_TO_FORM" in app_js
-    assert "USE_AS_SUPPLEMENT" in app_js
-    assert "IGNORE" in app_js
-    assert "data-ai-evidence-verified" in app_js
-    assert "if (!evidenceVerified?.checked)" in app_js
+    assert "第 1 步 · 只做选择" in app_js
+    assert "每条候选只点：最优 / 正确 / 错误" in app_js
+    assert '{quality: "BEST", decision: "ADOPT_TO_FORM", label: "最优"' in app_js
+    assert '{quality: "CORRECT", decision: "USE_AS_SUPPLEMENT", label: "正确"' in app_js
+    assert '{quality: "WRONG", decision: "IGNORE", label: "错误"' in app_js
+    assert "data-ai-evidence-verified" not in app_js
+    assert "data-ai-note" not in app_js
     assert "alreadyPresent" not in app_js
     assert "semanticPredicateFingerprint" not in app_js
-    assert "item.human_selected = false" in app_js
-    assert '$("#closed-world").checked = false' in app_js
-    assert '$("#all-actions").checked = false' in app_js
     assert 'api("/api/assist/candidate-decisions"' in app_js
     decision_slice = app_js[
-        app_js.index("async function decideAiCandidate") : app_js.index("function actionForm")
+        app_js.index("async function decideAiCandidate") : app_js.index(
+            "function simpleAiActionPayload"
+        )
     ]
     assert 'api("/api/solo/draft"' not in decision_slice
     assert 'api("/api/solo/lock"' not in decision_slice
     assert "persist(" not in decision_slice
     assert "window.confirm" not in decision_slice
+    assert 'human_note: ""' in decision_slice
+    for attestation in (
+        "human_confirmed_item_review: true",
+        "human_verified_visible_evidence: true",
+        "ai_candidate_is_not_evidence: true",
+        "annotation_form_not_saved_or_finalized: true",
+    ):
+        assert attestation in decision_slice
+    simple_lock = app_js[
+        app_js.index("function simpleAiActionPayload") : app_js.index("function actionForm")
+    ]
+    assert simple_lock.count('api("/api/solo/lock"') == 1
+    assert 'api("/api/assist/candidate-decisions"' not in simple_lock
+    assert "human_selected: true" in simple_lock
+    assert "closed_world_confirmed: true" in simple_lock
+    assert "all_reasonable_actions_enumerated: true" in simple_lock
+    assert "页面不会自动推断 EXCLUDE" in simple_lock
     for forbidden in ("/generate", "/regenerate", "/rank", "/merge", "/accept-all"):
         assert f'@app.post("{forbidden}' not in server
 
@@ -1007,27 +1022,27 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
     )
 
     candidate_card = app_js[
-        app_js.index("function aiCandidateCard") : app_js.index(
-            "function renderAiCandidateOverlays"
-        )
+        app_js.index("function aiCandidateCard") : app_js.index("function aiSlotClass")
     ]
-    assert "data-ai-evidence-verified" in candidate_card
-    assert 'type="checkbox"' in candidate_card
-    assert "checked" not in candidate_card
-    assert 'role="alert"' in candidate_card
-    assert 'aria-live="assertive"' in candidate_card
+    assert candidate_card.count("data-ai-quality=") == 1
+    assert "data-ai-view-overlay" in candidate_card
+    assert "点下面任一选项即表示" in candidate_card
+    assert "我已亲自核对左侧任务" in candidate_card
+    assert "data-ai-evidence-verified" not in candidate_card
+    assert "data-ai-note" not in candidate_card
+    assert "<input" not in candidate_card
+    assert "<textarea" not in candidate_card
+    assert "<select" not in candidate_card
+    assert 'aria-live="polite"' in candidate_card
     assert "查看技术字段" in app_js
-    assert "可选备注与 evidence ID" in candidate_card
+    assert "只查看 evidence ID（无需填写）" in candidate_card
 
     decision_slice = app_js[
-        app_js.index("async function decideAiCandidate") : app_js.index("function actionForm")
+        app_js.index("async function decideAiCandidate") : app_js.index(
+            "function simpleAiActionPayload"
+        )
     ]
-    assert "if (!evidenceVerified?.checked)" in decision_slice
     assert "itemFeedback.textContent = message" in decision_slice
-    assert "evidenceVerified.focus()" in decision_slice
-    assert (
-        'evidenceVerified.scrollIntoView({behavior: "smooth", block: "center"})' in decision_slice
-    )
     assert 'card.setAttribute("aria-busy", "true")' in decision_slice
     busy_controls = app_js[
         app_js.index("function setAiDecisionUiBusy") : app_js.index("function renderAiCandidates")
@@ -1050,6 +1065,31 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
     ):
         assert attestation in decision_slice
 
+    overlay_slice = app_js[
+        app_js.index("function aiSlotClass") : app_js.index("function aiCandidateNeedsChoice")
+    ]
+    assert "state.aiOverlaySelection.assignmentId" in overlay_slice
+    assert "candidateRegionBounds" in overlay_slice
+    assert "aiOverlayBox" in overlay_slice
+    assert "ai-overlay-center" in overlay_slice
+    assert "ai-drag-arrow" in overlay_slice
+    assert "marker-end" in overlay_slice
+    assert "没有固定截图坐标" in overlay_slice
+    assert "slot-a" in styles and "slot-b" in styles and "slot-c" in styles
+    assert ".ai-overlay-center" in styles
+    assert ".ai-drag-arrow line" in styles
+    assert "pointer-events: none" in styles
+    render_slice = app_js[
+        app_js.index("function renderAiCandidates") : app_js.index(
+            "async function loadAiCandidates"
+        )
+    ]
+    assert "selectAiCandidateOverlay(candidateToken)" in render_slice
+    assert "restoreAiCandidateOverlay()" in render_slice
+    assert "onpointerleave" not in render_slice
+    assert "onfocusout" not in render_slice
+    assert "persistSimpleAiAction" in render_slice
+
     action_form = app_js[app_js.index("function actionForm") : app_js.index("function spanList")]
     for required_id in (
         "advanced-action-form",
@@ -1066,9 +1106,9 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
     assert 'id="disposition"' in disposition_form
     assert 'id="exclusion-reason"' in disposition_form
     assert "<details" in action_form
-    assert "第 2 步 · 最终人工确认" in action_form
+    assert "候选无法直接使用时 · 人工处理" in action_form
     collect_payload = app_js[
-        app_js.index("function collectPayload") : app_js.index("async function persist")
+        app_js.index("function collectPayload") : app_js.index("async function persist(kind)")
     ]
     assert '$$(".predicate-card").map((card) => collectPredicate(card))' in collect_payload
     assert 'base.disposition === "EXCLUDE" ? [] : state.predicates' in collect_payload
@@ -1077,7 +1117,7 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
     assert 'all_reasonable_actions_enumerated: $("#all-actions").checked' in collect_payload
     assert 'const openDialogs = $$("dialog[open]")' in app_js
     assert ".ai-decision-actions button { min-height: 48px" in styles
-    assert ".ai-candidate-item.needs-attention" in styles
+    assert ".ai-candidate-item.is-overlay-selected" in styles
     assert ".ai-decision-actions button:disabled" in styles
     assert ".ai-inline-feedback.error" in styles
     assert ".advanced-action-form" in styles

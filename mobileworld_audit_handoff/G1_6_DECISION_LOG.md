@@ -181,3 +181,38 @@ Owner 随后于 2026-08-28 再次明确授权继续 ALE-324/G1.6 D-031、更新�
 进程后重启同一个 loopback annotation website。该运维确认不授权 GitHub push、formal G1.6
 completion/export/seal、GPU、真实 provider、external network、replay 或 MobileWorld action；旧
 solo workspace/registry/key 与已持久化记录必须保留，新进程只能在同一 workspace 上升级。
+
+## D-032 — Solo Action-Gold 候选改为三选一与无填表确认
+
+**状态：Locked（owner 于 2026-08-29 明确要求“只直接选择，不用填写”）**
+
+Owner 明确要求把 D-031 的单人候选网页进一步简化为每条 atomic candidate 只显示三个主要
+选择：`最优（直接用）`、`正确（也可用）`、`错误（不用）`。这三个中文质量标签只是
+`SOLO_FIRST_PASS` 的人机交互投影，分别写入既有 append-only decision 值
+`ADOPT_TO_FORM`、`USE_AS_SUPPLEMENT` 与 `IGNORE`；它们不改变 frozen candidate bytes 或
+decision schema。`最优` 不产生 formal rank、winner、vote 或 Agent 优先级；`最优` 与 `正确`
+在最终 accepted set 中都只是合理的一步动作。
+
+本条在 solo 简易界面内窄幅取代 D-031 的四按钮与独立 checkbox 呈现：每个三选一按钮必须
+明确写明“点击即表示本人已核对 task、target-pre screenshot、可见 evidence 与候选动作”，该
+显式点击本身承载原四项 human attestation；页面不得默认、批量或代点。技术 JSON、evidence ID、
+备注与数字坐标默认隐藏且不要求填写。点击或聚焦候选后，网页必须按 Agent A/B/C 明确标色，
+把 POINT 的所有合法区域与中心标记、DRAG 的起点/终点与方向持续叠加在 target-pre 截图上；
+无坐标动作必须明确说明没有固定点击位置。overlay 只是视觉解释，不是 evidence 或执行坐标。
+
+所有 atomic candidates 仍必须逐项选择，A/B/C 保持等权，不得 majority、consensus、自动选择、
+生成、regenerate、deduplicate 或 merge。三选一只写 candidate decision journal，不写 solo
+annotation journal。所有候选决定完成且至少一条为 `最优` 或 `正确` 后，页面可提供一个单独、
+不可逆、措辞完整的“确认并锁定本任务”按钮。该按钮的显式点击同时确认：保留候选的 exact
+字段/区域/evidence/rationale 均已由本人核对；保留项构成当前截图下完整 closed-world reasonable
+one-step set。网页随后才可机械构造既有 schema-valid `ACCEPT` solo payload，将保留 predicate 的
+`human_selected`、closed-world 与 completeness 设置为 true，并用页面展示的固定人工确认语句
+作为 aggregate evidence rationale，然后只调用一次既有 `/api/solo/lock`。这仍是
+`NON_FORMAL_SOLO_FIRST_PASS`，不计独立 review、不可晋升、不可 formal export/admit/seal/replay。
+
+若全部候选为 `错误`/`ABSTAIN`、存在旧版 `ADOPT_WITH_EDITS_TO_FORM`、candidate material
+duplicate、校验失败、候选缺失或人类认为位置/字段不准确，简易锁定必须 fail closed，并只允许
+打开保留的高级人工编辑器；不得自动推断 `EXCLUDE`、删除旧 journal 事件、修复坐标、合并候选
+或编造 gold。候选选择和最终锁定仍是两个独立动作。网页服务继续只允许 owner-authorized
+single-process loopback/tmux；GPU、target actor/provider、external network、replay、
+MobileWorld/generated action 与 treatment response 仍全部禁止。
