@@ -333,7 +333,11 @@ def _browser_transformation_preview(
 
 
 async def _closed_json_request(
-    request: Request, *, required: set[str], label: str
+    request: Request,
+    *,
+    required: set[str],
+    label: str,
+    alternative_shapes: tuple[set[str], ...] = (),
 ) -> dict[str, Any]:
     try:
         value = await request.json()
@@ -341,7 +345,11 @@ async def _closed_json_request(
         raise CurationError("REQUEST_INVALID", f"{label} is not valid JSON") from exc
     require(isinstance(value, dict), "REQUEST_INVALID", f"{label} must be an object")
     result = cast(dict[str, Any], value)
-    require(set(result) == required, "REQUEST_INVALID", f"{label} shape is not closed")
+    require(
+        set(result) in (required, *alternative_shapes),
+        "REQUEST_INVALID",
+        f"{label} shape is not closed",
+    )
     return result
 
 
@@ -1477,13 +1485,27 @@ def create_app(
             request,
             required={"assignment_id", "payload"},
             label="first-pass lock request" if lock else "draft request",
+            alternative_shapes=({"assignment_id", "ai_simple_lock"},)
+            if lock and solo_mode and ai_candidate_workspace is not None
+            else (),
         )
+        simple_lock = set(body) == {"assignment_id", "ai_simple_lock"}
+        if simple_lock:
+            require(
+                body["ai_simple_lock"] is True,
+                "AI_SIMPLE_LOCK_INVALID",
+                "simple lock must be an explicit true value",
+            )
         unit_id = store.resolve_assignment(body["assignment_id"], reviewer_role)
         channel = role_channel(reviewer_role)
-        if lock and solo_mode and channel == "ACTION_GOLD" and ai_candidate_workspace is not None:
-            ai_candidate_workspace.assert_unit_decisions_complete(
-                unit_id,
-                store.identity_commitment(reviewer_id),
+        if simple_lock:
+            require(
+                lock
+                and solo_mode
+                and channel == "ACTION_GOLD"
+                and ai_candidate_workspace is not None,
+                "AI_SIMPLE_LOCK_INVALID",
+                "simple lock is available only for mounted solo Action-Gold candidates",
             )
         try:
             projected = assignment_projection(
@@ -1517,7 +1539,35 @@ def create_app(
                 channel=channel,
                 enforce_solo_phase=False,
             )
+        if simple_lock:
+            assert ai_candidate_workspace is not None
+            with ai_candidate_workspace.simple_action_lock_payload(
+                unit_id,
+                store.identity_commitment(reviewer_id),
+            ) as payload:
+                event = store.submit_review(
+                    unit_id=unit_id,
+                    reviewer_id=reviewer_id,
+                    reviewer_role=reviewer_role,
+                    assignment_id=body["assignment_id"],
+                    source_packet_sha256=projected["source_packet_sha256"],
+                    assignment_packet_sha256=projected["assignment_packet_sha256"],
+                    payload=payload,
+                )
+            return {
+                "saved": False,
+                "locked": True,
+                "submitted": False,
+                "event_id": event["event_id"],
+                "payload_sha256": event["payload_sha256"],
+            }
+
         payload = body["payload"]
+        if lock and solo_mode and channel == "ACTION_GOLD" and ai_candidate_workspace is not None:
+            ai_candidate_workspace.assert_unit_decisions_complete(
+                unit_id,
+                store.identity_commitment(reviewer_id),
+            )
         if channel == "TRANSFORMATION":
             payload = _transform_payload_identities(
                 publication,

@@ -1929,6 +1929,80 @@ class AICandidateWorkspace:
             "every AI candidate for this unit requires an explicit human decision before lock",
         )
 
+    @contextmanager
+    def simple_action_lock_payload(
+        self,
+        unit_id: str,
+        human_identity_commitment: str,
+    ) -> Iterator[dict[str, Any]]:
+        """Derive one simple solo lock from the latest decisions under the journal lock.
+
+        The shared campaign lock is intentionally held until the caller has durably appended the
+        solo event.  A decision supersession takes the same lock exclusively, so another browser
+        tab cannot change the retained set between this derivation and the authoritative append.
+        """
+
+        require(
+            bool(_HEX_SHA256_RE.fullmatch(human_identity_commitment)),
+            "AI_DECISION_INVALID",
+            "candidate human identity commitment is invalid",
+        )
+        with self._campaign_lock(exclusive=False):
+            candidates = [
+                cast(dict[str, Any], item)
+                for output in self.outputs_for_unit(unit_id)
+                for item in output["candidate_items"]
+            ]
+            latest = self.latest_decisions(human_identity_commitment)
+            require(
+                all(item["candidate_id"] in latest for item in candidates),
+                "AI_CANDIDATE_DECISIONS_INCOMPLETE",
+                "every AI candidate for this unit requires an explicit human decision before lock",
+            )
+            decisions = [latest[cast(str, item["candidate_id"])]["decision"] for item in candidates]
+            require(
+                all(
+                    decision in {"ADOPT_TO_FORM", "USE_AS_SUPPLEMENT", "IGNORE"}
+                    for decision in decisions
+                ),
+                "AI_SIMPLE_LOCK_DECISION_INVALID",
+                "simple lock requires a current best, correct, or wrong choice for every candidate",
+            )
+            retained = [
+                item
+                for item, decision in zip(candidates, decisions, strict=True)
+                if decision in {"ADOPT_TO_FORM", "USE_AS_SUPPLEMENT"}
+            ]
+            require(
+                bool(retained),
+                "AI_SIMPLE_LOCK_NO_ACCEPTED_CANDIDATE",
+                "simple lock requires at least one human-retained candidate",
+            )
+            payload = validate_action_payload(
+                {
+                    "proposal_kind": "ACTION_GOLD",
+                    "disposition": "ACCEPT",
+                    "exclusion_reason": None,
+                    "predicates": [
+                        {
+                            **_semantic_predicate(item),
+                            "evidence_ids": json_copy(item["evidence_ids"]),
+                            "rationale": item["concise_rationale"],
+                            "human_selected": True,
+                        }
+                        for item in retained
+                    ],
+                    "evidence_rationale": (
+                        "我已逐条对照任务、target-pre 截图和可见 evidence，确认保留候选的动作、"
+                        "字段、截图位置和理由，并确认它们构成当前截图下完整的合理一步动作集合。"
+                    ),
+                    "closed_world_confirmed": True,
+                    "all_reasonable_actions_enumerated": True,
+                }
+            )
+            self.publication.validate_review_payload_binding(unit_id, "ACTION_GOLD", payload)
+            yield cast(dict[str, Any], json_copy(payload))
+
     def record_decision(
         self,
         *,

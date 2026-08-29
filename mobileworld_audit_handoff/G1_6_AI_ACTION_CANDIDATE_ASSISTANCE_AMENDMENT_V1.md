@@ -157,7 +157,13 @@ retaining the existing append-only decision schema: `BEST` / `最优（直接用
 create a rank, winner, vote, Agent priority, consensus, or ordered accepted set. The three Agent
 columns remain neutral and every atomic item remains separately decided.
 
-This projection narrowly supersedes the four-button and separate-checkbox presentation above.
+This projection narrowly supersedes both the four-button/separate-checkbox presentation above and,
+for the simple path only, the immediate candidate deep-copy plus `DIRTY_UNSAVED` lifecycle. A
+three-way choice appends only its candidate-decision event; it does not materialize an annotation
+form. Retained predicates are materialized only after the separate final lock click. Opening the
+manual editor continues to use the original dirty-form lifecycle and permanently disables the
+simple lock for that page.
+
 Each of the three buttons must visibly state that clicking it is the curator's explicit attestation
 that they personally checked the task, target-pre screenshot, cited visible evidence, and candidate
 action. There is no default, bulk choice, inferred click, note field, or hidden checkbox. Each click
@@ -167,9 +173,15 @@ journal.
 After all atomic items have a non-legacy three-way decision and at least one item is retained, a
 separate `确认选择并锁定本任务` click may mechanically create one existing-schema solo `ACCEPT`
 payload. That click explicitly confirms every retained predicate field, screenshot region, evidence
-reference and rationale, plus closed-world completeness. The payload sets `human_selected`,
-`closed_world_confirmed`, and `all_reasonable_actions_enumerated` to true and calls the existing
-solo lock endpoint exactly once. It remains a non-formal precursor. All-wrong/all-ABSTAIN units,
+reference and rationale, plus closed-world completeness. The browser sends only a closed
+`ai_simple_lock=true` request. While holding the candidate-decision journal's shared lock, the server
+re-reads the latest decision for every item, rejects missing or legacy states, derives the retained
+predicate set from frozen stable candidate bytes, validates the complete payload, and holds that
+lock through the durable solo append. Candidate-decision supersession requires the same lock in
+exclusive mode, so a second tab cannot change the selected set between validation and append. The
+derived payload sets `human_selected`, `closed_world_confirmed`, and
+`all_reasonable_actions_enumerated` to true and calls the existing solo lock operation exactly once.
+It remains a non-formal precursor. All-wrong/all-ABSTAIN units,
 legacy `ADOPT_WITH_EDITS_TO_FORM`, duplicate material, invalid/stale inputs, and rejected locks fail
 closed into the preserved manual editor; the browser MUST NOT infer `EXCLUDE`, merge, deduplicate,
 repair, retry, or fabricate a predicate.

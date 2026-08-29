@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import socket
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -595,6 +596,64 @@ def test_unit_decision_completion_is_identity_scoped_and_all_abstain_passes(
     )
 
 
+def test_simple_lock_payload_is_latest_server_derived_and_holds_decision_lock(
+    sealed_campaign: tuple[Path, CurationPublication],
+) -> None:
+    root, publication = sealed_campaign
+    workspace = AICandidateWorkspace(root, publication)
+    unit_id = sorted(item["unit_id"] for item in publication.list_units())[2]
+    identity = hashlib.sha256(b"atomic-simple-lock-curator").hexdigest()
+    candidates = [
+        item for output in workspace.outputs_for_unit(unit_id) for item in output["candidate_items"]
+    ]
+    for index, candidate in enumerate(candidates):
+        workspace.record_decision(
+            unit_id=unit_id,
+            candidate_id=candidate["candidate_id"],
+            candidate_sha256=candidate["candidate_sha256"],
+            human_identity_commitment=identity,
+            decision="ADOPT_TO_FORM" if index == 0 else "IGNORE",
+            human_note="Explicit three-way choice for the atomic simple-lock test.",
+        )
+
+    writer_started = threading.Event()
+    writer_finished = threading.Event()
+    writer_errors: list[BaseException] = []
+
+    def supersede_while_locked() -> None:
+        writer_started.set()
+        try:
+            workspace.record_decision(
+                unit_id=unit_id,
+                candidate_id=candidates[0]["candidate_id"],
+                candidate_sha256=candidates[0]["candidate_sha256"],
+                human_identity_commitment=identity,
+                decision="IGNORE",
+                human_note="Supersession must wait until the simple lock guard exits.",
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            writer_errors.append(exc)
+        finally:
+            writer_finished.set()
+
+    with workspace.simple_action_lock_payload(unit_id, identity) as payload:
+        assert payload["disposition"] == "ACCEPT"
+        assert len(payload["predicates"]) == 1
+        assert payload["predicates"][0]["human_selected"] is True
+        assert payload["predicates"][0]["evidence_ids"] == candidates[0]["evidence_ids"]
+        writer = threading.Thread(target=supersede_while_locked)
+        writer.start()
+        assert writer_started.wait(timeout=1)
+        assert not writer_finished.wait(timeout=0.05)
+    assert writer_finished.wait(timeout=1)
+    writer.join(timeout=1)
+    assert not writer_errors
+    with pytest.raises(Exception) as no_retained:
+        with workspace.simple_action_lock_payload(unit_id, identity):
+            pass
+    assert getattr(no_retained.value, "code", None) == "AI_SIMPLE_LOCK_NO_ACCEPTED_CANDIDATE"
+
+
 def test_capture_requires_explicit_attestation_and_invalid_last_row_leaves_no_orphan(
     tmp_path: Path,
 ) -> None:
@@ -966,6 +1025,114 @@ def test_solo_action_lock_requires_every_mounted_candidate_decision_but_draft_do
     asyncio.run(exercise())
 
 
+def test_simple_action_lock_is_server_derived_and_rejects_legacy_or_duplicate_choices(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sealed_campaign: tuple[Path, CurationPublication],
+) -> None:
+    root, publication = sealed_campaign
+    registry = SoloCuratorRegistry.load(_write_solo_registry(tmp_path / "simple-lock.json"))
+    store = SoloFirstPassStore(tmp_path / "simple-lock-state", publication, registry)
+    monkeypatch.setattr(store, "_verified_codec_gate_receipt_sha256", lambda: "a" * 64)
+    workspace = AICandidateWorkspace(root, publication, forbidden_roots=(store.root,))
+    app = create_app(publication, store, ai_candidate_workspace=workspace)
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 43210))
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:8766",
+        ) as client:
+            session = await client.post(
+                "/api/session",
+                json={
+                    "reviewer_id": "one-real-curator",
+                    "role": "ACTION_GOLD_PRIMARY",
+                    "access_secret": "solo-curator-secret-0001",
+                },
+            )
+            headers = {
+                "Origin": "http://127.0.0.1:8766",
+                "x-g1-csrf-token": session.json()["csrf_token"],
+            }
+            assignment_id = (await client.get("/api/assignments")).json()["items"][0][
+                "assignment_id"
+            ]
+            browser = (await client.get(f"/api/assist/action-gold/{assignment_id}")).json()
+            candidates = [
+                item for output in browser["agent_outputs"] for item in output["candidate_items"]
+            ]
+            assert len(candidates) == 3
+
+            async def decide(index: int, decision: str) -> None:
+                response = await client.post(
+                    "/api/assist/candidate-decisions",
+                    headers=headers,
+                    json={
+                        "assignment_id": assignment_id,
+                        "candidate_token": candidates[index]["candidate_token"],
+                        "decision": decision,
+                        "human_note": "",
+                        "human_confirmed_item_review": True,
+                        "human_verified_visible_evidence": True,
+                        "ai_candidate_is_not_evidence": True,
+                        "annotation_form_not_saved_or_finalized": True,
+                    },
+                )
+                assert response.status_code == 200, response.text
+
+            await decide(0, "ADOPT_WITH_EDITS_TO_FORM")
+            await decide(1, "ADOPT_TO_FORM")
+            await decide(2, "IGNORE")
+            before_lock = store.read_events()
+            legacy = await client.post(
+                "/api/solo/lock",
+                headers=headers,
+                json={"assignment_id": assignment_id, "ai_simple_lock": True},
+            )
+            assert legacy.status_code == 400
+            assert legacy.json()["error"] == "AI_SIMPLE_LOCK_DECISION_INVALID"
+            assert store.read_events() == before_lock
+
+            await decide(0, "ADOPT_TO_FORM")
+            duplicate = await client.post(
+                "/api/solo/lock",
+                headers=headers,
+                json={"assignment_id": assignment_id, "ai_simple_lock": True},
+            )
+            assert duplicate.status_code == 400
+            assert duplicate.json()["error"] == "PROPOSAL_INVALID"
+            assert store.read_events() == before_lock
+
+            await decide(1, "IGNORE")
+            locked = await client.post(
+                "/api/solo/lock",
+                headers=headers,
+                json={"assignment_id": assignment_id, "ai_simple_lock": True},
+            )
+            assert locked.status_code == 200, locked.text
+            assert locked.json()["locked"] is True
+            events = store.read_events()
+            assert len(events) == len(before_lock) + 1
+            payload = events[-1]["payload"]
+            assert payload["disposition"] == "ACCEPT"
+            assert len(payload["predicates"]) == 1
+            assert payload["predicates"][0]["human_selected"] is True
+            assert payload["predicates"][0]["evidence_ids"][0].startswith("evidence-")
+            assert "evidence_token" not in json.dumps(payload)
+
+            retry = await client.post(
+                "/api/solo/lock",
+                headers=headers,
+                json={"assignment_id": assignment_id, "ai_simple_lock": True},
+            )
+            assert retry.status_code == 200
+            assert retry.json()["event_id"] == locked.json()["event_id"]
+            assert store.read_events() == events
+
+    asyncio.run(exercise())
+
+
 def test_web_has_no_generation_vote_bulk_accept_or_candidate_autosave() -> None:
     app_js = (PYTHON_ROOT / "src/mobile_world/offline/gold_curation/web/app.js").read_text(
         encoding="utf-8"
@@ -985,7 +1152,7 @@ def test_web_has_no_generation_vote_bulk_accept_or_candidate_autosave() -> None:
     assert 'api("/api/assist/candidate-decisions"' in app_js
     decision_slice = app_js[
         app_js.index("async function decideAiCandidate") : app_js.index(
-            "function simpleAiActionPayload"
+            "function assertSimpleAiActionReady"
         )
     ]
     assert 'api("/api/solo/draft"' not in decision_slice
@@ -1001,14 +1168,23 @@ def test_web_has_no_generation_vote_bulk_accept_or_candidate_autosave() -> None:
     ):
         assert attestation in decision_slice
     simple_lock = app_js[
-        app_js.index("function simpleAiActionPayload") : app_js.index("function actionForm")
+        app_js.index("function assertSimpleAiActionReady") : app_js.index("function actionForm")
     ]
     assert simple_lock.count('api("/api/solo/lock"') == 1
     assert 'api("/api/assist/candidate-decisions"' not in simple_lock
-    assert "human_selected: true" in simple_lock
-    assert "closed_world_confirmed: true" in simple_lock
-    assert "all_reasonable_actions_enumerated: true" in simple_lock
+    assert "ai_simple_lock: true" in simple_lock
+    assert "human_selected: true" not in simple_lock
+    assert "closed_world_confirmed: true" not in simple_lock
+    assert "all_reasonable_actions_enumerated: true" not in simple_lock
+    assert "state.aiManualActionMode" in simple_lock
+    assert "response.locked !== true" in simple_lock
+    assert "committed = true" in simple_lock
+    assert "本任务已锁定，但列表刷新失败" in simple_lock
+    assert "锁定状态未知" in simple_lock
+    assert "definiteRejection" in simple_lock
+    assert "当前不会打开人工处理" in simple_lock
     assert "页面不会自动推断 EXCLUDE" in simple_lock
+    assert "simple_action_lock_payload" in server
     for forbidden in ("/generate", "/regenerate", "/rank", "/merge", "/accept-all"):
         assert f'@app.post("{forbidden}' not in server
 
@@ -1027,6 +1203,8 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
     assert candidate_card.count("data-ai-quality=") == 1
     assert "data-ai-view-overlay" in candidate_card
     assert "点下面任一选项即表示" in candidate_card
+    assert "点击即确认已核对" in candidate_card
+    assert "aria-describedby" in candidate_card
     assert "我已亲自核对左侧任务" in candidate_card
     assert "data-ai-evidence-verified" not in candidate_card
     assert "data-ai-note" not in candidate_card
@@ -1039,7 +1217,7 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
 
     decision_slice = app_js[
         app_js.index("async function decideAiCandidate") : app_js.index(
-            "function simpleAiActionPayload"
+            "function assertSimpleAiActionReady"
         )
     ]
     assert "itemFeedback.textContent = message" in decision_slice
@@ -1075,6 +1253,10 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
     assert "ai-drag-arrow" in overlay_slice
     assert "marker-end" in overlay_slice
     assert "没有固定截图坐标" in overlay_slice
+    assert "if (state.coordinateTarget) return" in overlay_slice
+    assert 'viewButton?.setAttribute("aria-current", "true")' in overlay_slice
+    assert 'aria-selected="false"' not in candidate_card
+    assert 'tabindex="0"' not in candidate_card
     assert "slot-a" in styles and "slot-b" in styles and "slot-c" in styles
     assert ".ai-overlay-center" in styles
     assert ".ai-drag-arrow line" in styles
@@ -1089,6 +1271,17 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
     assert "onpointerleave" not in render_slice
     assert "onfocusout" not in render_slice
     assert "persistSimpleAiAction" in render_slice
+    assert "!state.aiManualActionMode" in render_slice
+    assert "state.config.first_pass_lock_open" in render_slice
+
+    load_slice = app_js[
+        app_js.index("async function loadAiCandidates") : app_js.index(
+            "async function decideAiCandidate"
+        )
+    ]
+    assert "state.assignmentLoadMarker !== requestMarker" in load_slice
+    assert "state.active?.assignmentId !== assignmentId" in load_slice
+    assert "candidates.assignment_id !== assignmentId" in load_slice
 
     action_form = app_js[app_js.index("function actionForm") : app_js.index("function spanList")]
     for required_id in (

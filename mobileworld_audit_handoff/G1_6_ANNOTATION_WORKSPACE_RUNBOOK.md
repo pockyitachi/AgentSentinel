@@ -232,7 +232,15 @@ technical-field entry.
 Each three-way choice goes only to the separate candidate journal. After every item has a current
 choice and at least one action is retained, click `确认选择并锁定本任务` once. That second click
 confirms the retained fields/regions/evidence/rationales and closed-world accepted-set completeness,
-then writes one existing-schema non-formal solo lock. If all candidates are wrong/ABSTAIN, a legacy
+then sends only `ai_simple_lock=true`. The server holds the candidate-decision journal lock, re-reads
+the latest choices, derives the payload from frozen candidate bytes, validates it, and holds the
+same lock through one existing-schema non-formal solo append. Thus a stale second browser tab cannot
+change which predicates are locked. Opening the manual editor disables this simple path for that
+page; use the bottom manual lock button for any edited field or coordinate. If the browser loses the
+response after sending the final lock, it reports `锁定状态未知` and requires a page refresh; it must
+not claim failure or open the manual editor because the durable append may already exist. If all
+candidates are
+wrong/ABSTAIN, a legacy
 `修改后采用` remains, a location must be corrected, duplicate material exists, or validation fails,
 the simple path blocks and the advanced manual editor remains available; it never auto-excludes,
 merges, repairs, or retries. Opening these candidates records the principal as

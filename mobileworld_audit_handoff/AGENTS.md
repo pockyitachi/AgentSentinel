@@ -93,7 +93,9 @@ resolution、promotion、formal export、admission、replay 与 seal authority �
 `G1_6_DECISION_LOG.md` D-031 只再授权三路彼此隔离的 Codex stream 离线生成非权威
 `ACTION_GOLD` 候选，供同一个 solo curator 逐项判断。候选不得成为 evidence/review/gold，
 不得计入独立复核；网页只能读取冻结候选与写独立 candidate-decision journal，不能在线生成、
-排序、投票、自动应用、保存、锁定或晋升候选。
+排序、投票、自动应用、保存、锁定或晋升候选。唯一窄幅例外是 D-032：同一 solo curator 逐条
+三选一后，可另点一次明确的最终确认，由服务器在 decision-journal 锁内从冻结候选机械派生、
+校验并写入一个既有 schema 的非正式 solo lock；该操作仍不得成为 formal review、晋升或发布。
 
 必须：
 

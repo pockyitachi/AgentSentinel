@@ -205,9 +205,14 @@ decision schema。`最优` 不产生 formal rank、winner、vote 或 Agent 优�
 annotation journal。所有候选决定完成且至少一条为 `最优` 或 `正确` 后，页面可提供一个单独、
 不可逆、措辞完整的“确认并锁定本任务”按钮。该按钮的显式点击同时确认：保留候选的 exact
 字段/区域/evidence/rationale 均已由本人核对；保留项构成当前截图下完整 closed-world reasonable
-one-step set。网页随后才可机械构造既有 schema-valid `ACCEPT` solo payload，将保留 predicate 的
-`human_selected`、closed-world 与 completeness 设置为 true，并用页面展示的固定人工确认语句
-作为 aggregate evidence rationale，然后只调用一次既有 `/api/solo/lock`。这仍是
+one-step set。D-032 简易路径同时窄幅取代 D-031 的“点击后立即 deep-copy 至 dirty form”：三选一
+阶段只写 candidate journal，不物化 annotation form；只有单独最终确认才物化保留项，人工编辑
+fallback 仍沿用原 dirty-form 规则。网页最终只发送 closed `ai_simple_lock=true` 请求；服务器在
+candidate-decision journal 的 shared lock 内重读每条最新决定、从冻结 stable candidate bytes
+机械构造并完整校验既有 schema-valid `ACCEPT` solo payload，将保留 predicate 的
+`human_selected`、closed-world 与 completeness 设置为 true，并持锁直到 solo journal durable
+append 完成。decision supersession 使用同一把锁的 exclusive 模式，因此另一标签页不能在核验与
+append 之间改变 retained set。这仍是
 `NON_FORMAL_SOLO_FIRST_PASS`，不计独立 review、不可晋升、不可 formal export/admit/seal/replay。
 
 若全部候选为 `错误`/`ABSTAIN`、存在旧版 `ADOPT_WITH_EDITS_TO_FORM`、candidate material

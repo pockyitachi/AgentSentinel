@@ -98,7 +98,11 @@ promoted into the formal double-blind workspace.
 `G1_6_DECISION_LOG.md` D-031 additionally authorizes exactly three isolated Codex streams to
 prepare offline, non-authoritative `ACTION_GOLD` candidate predicates for the solo curator. The
 website may only display already frozen candidates and append separate per-item human decisions;
-it must never generate, rank, merge, auto-apply, save, lock, or promote a candidate. These streams
+it must never generate, rank, merge, auto-apply, save, lock, or promote a candidate. The only narrow
+exception is D-032: after the same solo curator makes every explicit three-way decision, one separate
+final click may let the server derive, validate, and append a non-formal solo lock from frozen
+candidate bytes while holding the decision-journal lock. It never becomes formal review or
+publication authority. These streams
 are not human reviewers, their outputs never count as independent review, and candidate exposure
 permanently excludes that principal from future formal G1.6 reviewer/adjudicator roles.
 
