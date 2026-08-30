@@ -1,11 +1,11 @@
 # G1 GPU Live Smoke Contract v1 — Amendment 2
 
-Status: **LOCKED narrow operational correction for ALE-322 / D-034**  
-Document type: Normative Git-controller and evidence-epoch amendment  
-Amendment ID: `mobileworld.g1.gpu-live-smoke/contract-v1-amendment-2`  
+Status: **LOCKED narrow operational correction for ALE-322 / D-034**
+Document type: Normative Git-controller and evidence-epoch amendment
+Amendment ID: `mobileworld.g1.gpu-live-smoke/contract-v1-amendment-2`
 Amends: `G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` and
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_1.md`  
-Authorization: `G1_4_DECISION_LOG.md` D-034 Amendment 2 dated 2026-08-30 UTC  
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_1.md`
+Authorization: `G1_4_DECISION_LOG.md` D-034 Amendment 2 dated 2026-08-30 UTC
 Decision date: 2026-08-30 UTC
 
 ## 1. Purpose, failure fact, and precedence
