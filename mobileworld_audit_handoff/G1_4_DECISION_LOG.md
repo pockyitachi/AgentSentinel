@@ -173,3 +173,37 @@ external network、credential、真实外部 provider、backend restore/prefix/l
 emulator/MobileWorld action、generated action、treatment generation、response feedback、formal
 publication 与任何他人进程操作继续禁止。任何扩大 GPU/UUID/model/endpoint/input/seed/repeat/
 arm/call count/retry/process/network/evidence 范围都需要新的 owner 决策和 contract version。
+
+### D-034 Amendment 1 — authority v3 保留 owner 已批准的 exact supplementary groups
+
+**状态：Locked narrow owner amendment（owner 于 2026-08-30 明确批准；不改写上方历史
+D-034 文本）**
+
+上方 D-034 的 authority v1/v2 generations 现为不可执行、不可重试的历史版本；v2 operational
+attempt 无法在 one-ID user namespace 内清空 host 已有 supplementary groups。该失败发生在任何
+GPU probe、模型加载、服务、
+请求、provider、replay 或 MobileWorld action 之前。owner 现只批准
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_1.md` 中的窄幅修正，并指定该 Amendment 1 与
+base contract 共同构成后续 D-034 尝试的规范合同。历史
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 保持 byte-frozen；冲突处由 Amendment 1 控制。
+
+后续唯一有效 authority 是
+`mobileworld.g1.gpu-live-smoke-authority/v3`。它必须锁定 host UID/GID
+`1035:1035`、primary-first group vector `[1035,109,999]`、实际 sorted
+`os.getgroups()` `[109,999,1035]`，以及 namespace 内 duplicate-preserving sorted vector
+`[0,65534,65534]`。owner 明确允许仅保留这组既有身份，并要求 `setgroups=deny`、
+`setpriv --keep-groups`、Stage2 五个 capability sets 全零及 `NoNewPrivs=1`。Stage1 只记录
+实际 capability/`NoNewPrivs` 值，不声称它们已完成 Stage2 门禁。
+
+保留 GID 109/KVM 与 GID 999/Docker 意味着存在已披露、非正式的 KVM device 与 Docker
+AF_UNIX capability residual；它不授权打开或使用 `/dev/kvm`、Docker socket/filesystem、执行
+Docker/KVM 操作，亦不授权对 foreign PID 增加任何读取、signal、修改或其他操作。D-034
+原有 pidfd own-process guard、foreign PID 最小读取范围、零 action、零 feedback、零 replay、
+无外部 provider 与 no-secret 规则全部不变。只有 external INET/INET6 不可用可作机械声明；
+Docker/KVM 的零 FD/socket/action 只是各 receipt 的 point observation，不得声称连续机械不可达。
+
+authority v3 只接受 launch-shim v2、`D034_STAGE0_V2`、authority.v3、evidence-v3 与
+runtime-scratch-v3 epoch。authority v1/v2、旧 shim、旧 evidence/scratch 均保持只读历史证据，
+禁止 retry、reuse、rename、overwrite、truncate 或 delete。Preparation、network namespace 与
+stored execution receipts 分别升级为 v2；execution v2 只接受 INET/INET6 限定网络语义，旧 v1
+receipt 不得按 v2 重新解释。任何进一步范围变化仍需新的 owner 决策与版本化合同修订。

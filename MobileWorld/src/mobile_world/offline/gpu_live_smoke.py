@@ -74,22 +74,28 @@ from mobile_world.offline.g1_history_codecs.codecs import (
     QwenFlatProgressHistoryCodec,
 )
 
-AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v2"
+AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v3"
 SMOKE_PACKET_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-packet/v1"
-PREPARATION_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-preparation/v1"
-EXECUTION_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-execution/v1"
+PREPARATION_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-preparation/v2"
+EXECUTION_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-execution/v2"
 DECISION_ID = "D-034"
 AUTHORIZED_SCOPE = "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"
 AUTHORIZED_GPU_UUID = "GPU-991ac45f-e9e9-1c25-590c-fb49ca752965"
 MINIMUM_FREE_MEMORY_BYTES = 68_719_476_736
-LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v1"
+LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v2"
 LAUNCH_SHIM_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"
 )
 LAUNCH_SHIM_AUTHORITY_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v3.json"
 )
-LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V1"
+LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V2"
+EVIDENCE_ROOT_V3 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/evidence-v3"
+)
+RUNTIME_SCRATCH_ROOT_V3 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/runtime-scratch-v3"
+)
 TOOL_SHELL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-tool-shell/v1"
 TOOL_SHELL_PATH = "/bin/sh"
 TOOL_SHELL_RESOLVED_PATH = "/usr/bin/dash"
@@ -250,6 +256,14 @@ EXACT_ENDPOINT = {
 _PIDFD_OPEN_SYSCALL_X86_64 = 434
 _PIDFD_SEND_SIGNAL_SYSCALL_X86_64 = 424
 _FD_CLOSE_UPPER_BOUND_EXCLUSIVE = 1_048_576
+_SUPPLEMENTARY_GROUPS_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-supplementary-groups/v1"
+_SUPPLEMENTARY_GROUPS_RUNTIME_SCHEMA_VERSION = (
+    "mobileworld.g1.gpu-live-smoke-supplementary-groups-runtime/v1"
+)
+_SUPPLEMENTARY_GROUP_POLICY = "OWNER_APPROVED_RETAIN_EXACT_GROUPS_ZERO_CAPS_V1"
+_HOST_GROUP_VECTOR = [1035, 109, 999]
+_HOST_SUPPLEMENTARY_GIDS = [109, 999]
+_INSIDE_SUPPLEMENTARY_GIDS_SORTED = [0, 65_534, 65_534]
 _ISOLATED_PYTHON_FLAGS = (
     "-I",
     "-S",
@@ -515,6 +529,7 @@ _NETWORK_NAMESPACE_KEYS = {
     "inside_unmapped_system_gid",
     "uid_map_line",
     "gid_map_line",
+    "supplementary_groups",
     "env_path",
     "env_sha256",
     "unshare_path",
@@ -535,6 +550,59 @@ _NETWORK_NAMESPACE_KEYS = {
     "python_pycache_prefix",
     "fd_close_upper_bound_exclusive",
     "outer_fd_closure_receipt_sha256",
+}
+_SUPPLEMENTARY_GROUP_KEYS = {
+    "schema_version",
+    "owner_approved",
+    "policy",
+    "host_group_vector",
+    "host_primary_gid",
+    "host_supplementary_gids",
+    "host_os_getgroups_sorted",
+    "inside_supplementary_gids_sorted",
+    "inside_groups_empty_required",
+    "setpriv_group_option",
+    "setgroups_control_expected",
+    "capability_sets_all_zero_required",
+    "no_new_privs_required",
+    "docker_group_gid",
+    "kvm_group_gid",
+    "docker_kvm_filesystem_access_allowed",
+    "docker_kvm_socket_access_allowed",
+    "docker_kvm_action_allowed",
+    "docker_af_unix_capability_retained",
+    "kvm_device_capability_retained",
+    "docker_kvm_invocation_allowed",
+    "docker_kvm_use_mechanically_proven_absent",
+    "formal_supplementary_group_isolation_proven",
+    "nonformal_residual_disclosed",
+}
+_SUPPLEMENTARY_GROUP_RUNTIME_KEYS = {
+    "schema_version",
+    "phase",
+    "policy",
+    "owner_approved",
+    "host_group_vector",
+    "expected_inside_supplementary_gids_sorted",
+    "observed_inside_supplementary_gids_sorted",
+    "proc_status_groups_sorted",
+    "inside_groups_empty_required",
+    "setpriv_group_option",
+    "setgroups_control",
+    "capability_drop_required_at_phase",
+    "capability_sets",
+    "capability_sets_all_zero",
+    "no_new_privs",
+    "docker_kvm_filesystem_fd_count",
+    "docker_kvm_unix_socket_fd_count",
+    "docker_kvm_action_count",
+    "foreign_process_operation_count",
+    "docker_af_unix_capability_retained",
+    "kvm_device_capability_retained",
+    "docker_kvm_invocation_allowed",
+    "docker_kvm_use_mechanically_proven_absent",
+    "formal_supplementary_group_isolation_proven",
+    "nonformal_residual_disclosed",
 }
 _LAUNCHER_ENVIRONMENT_KEYS = {
     "PATH",
@@ -2008,6 +2076,47 @@ def _outer_fd_closure_receipt() -> dict[str, JsonValue]:
     }
 
 
+def _validate_supplementary_group_authority(value: object) -> dict[str, JsonValue]:
+    policy = _closed(
+        value,
+        _SUPPLEMENTARY_GROUP_KEYS,
+        "$.network_namespace.supplementary_groups",
+    )
+    expected: dict[str, JsonValue] = {
+        "schema_version": _SUPPLEMENTARY_GROUPS_SCHEMA_VERSION,
+        "owner_approved": True,
+        "policy": _SUPPLEMENTARY_GROUP_POLICY,
+        "host_group_vector": _HOST_GROUP_VECTOR,
+        "host_primary_gid": 1035,
+        "host_supplementary_gids": _HOST_SUPPLEMENTARY_GIDS,
+        "host_os_getgroups_sorted": [109, 999, 1035],
+        "inside_supplementary_gids_sorted": _INSIDE_SUPPLEMENTARY_GIDS_SORTED,
+        "inside_groups_empty_required": False,
+        "setpriv_group_option": "--keep-groups",
+        "setgroups_control_expected": "deny",
+        "capability_sets_all_zero_required": True,
+        "no_new_privs_required": True,
+        "docker_group_gid": 999,
+        "kvm_group_gid": 109,
+        "docker_kvm_filesystem_access_allowed": False,
+        "docker_kvm_socket_access_allowed": False,
+        "docker_kvm_action_allowed": False,
+        "docker_af_unix_capability_retained": True,
+        "kvm_device_capability_retained": True,
+        "docker_kvm_invocation_allowed": False,
+        "docker_kvm_use_mechanically_proven_absent": False,
+        "formal_supplementary_group_isolation_proven": False,
+        "nonformal_residual_disclosed": True,
+    }
+    if canonical_json_bytes(cast(JsonValue, policy)) != canonical_json_bytes(expected):
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "owner-approved retained supplementary-group policy differs",
+            "$.network_namespace.supplementary_groups",
+        )
+    return policy
+
+
 def _validate_tool_shell_component_binding(
     value: object,
     *,
@@ -2218,7 +2327,7 @@ def _validate_tool_shell_authority(value: object) -> dict[str, JsonValue]:
         "shell_option": "-c",
         "login": False,
         "tty": False,
-        "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1",
+        "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V2",
         "command_prefix": command_prefix,
         "command_prefix_sha256": _sha256(command_prefix.encode("ascii")),
         "command_prefix_byte_count": len(command_prefix.encode("ascii")),
@@ -2256,7 +2365,7 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
     expires = _parse_utc(authority.get("expires_at_utc"), "$.expires_at_utc")
     if issued >= expires:
         _fail("GPU_SMOKE_AUTHORITY_TIME_INVALID", "authority interval is empty")
-    if authority.get("owner_uid") != 0:
+    if type(authority.get("owner_uid")) is not int or authority.get("owner_uid") != 0:
         _fail(
             "GPU_SMOKE_AUTHORITY_OWNER_INVALID",
             "the isolated execution owner UID must be exact namespace UID 0",
@@ -2563,6 +2672,12 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
     scratch_root = _absolute_lexical(
         authority.get("runtime_scratch_root"), "$.runtime_scratch_root"
     )
+    if not (evidence_root == EVIDENCE_ROOT_V3 and scratch_root == RUNTIME_SCRATCH_ROOT_V3):
+        _fail(
+            "GPU_SMOKE_SOURCE_BINDING_INVALID",
+            "v3 authority must use the fresh evidence and runtime-scratch roots",
+            "$.evidence_root",
+        )
     protected_paths: list[tuple[str, PurePosixPath]] = [
         ("repository", PurePosixPath(worktree_root)),
         ("evidence", PurePosixPath(evidence_root)),
@@ -2643,12 +2758,14 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
     host_gid = namespace.get("host_owner_gid")
     if not (
         namespace.get("required") is True
-        and namespace.get("implementation") == "LINUX_USER_NETNS_MAP_ROOT_V1"
+        and namespace.get("implementation") == "LINUX_USER_NETNS_MAP_ROOT_RETAIN_GROUPS_V2"
         and type(host_uid) is int
-        and cast(int, host_uid) > 0
+        and host_uid == 1035
         and type(host_gid) is int
-        and cast(int, host_gid) > 0
+        and host_gid == 1035
+        and type(namespace.get("inside_owner_uid")) is int
         and namespace.get("inside_owner_uid") == 0
+        and type(namespace.get("inside_owner_gid")) is int
         and namespace.get("inside_owner_gid") == 0
         and namespace.get("inside_unmapped_system_uid") == 65_534
         and namespace.get("inside_unmapped_system_gid") == 65_534
@@ -2668,6 +2785,7 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
             "network namespace authority differs from the frozen root mapping",
             "$.network_namespace",
         )
+    _validate_supplementary_group_authority(namespace.get("supplementary_groups"))
     launcher_environment = _closed(
         namespace.get("launcher_environment"),
         _LAUNCHER_ENVIRONMENT_KEYS,
@@ -3389,6 +3507,10 @@ def prepare_gpu_live_smoke(
         "launch_shim": _launch_shim_invocation_receipt(
             authority,
             execution_started=False,
+        ),
+        "supplementary_groups_policy": cast(
+            JsonValue,
+            _validate_supplementary_group_authority(namespace.get("supplementary_groups")),
         ),
         "validated": True,
         "prepared": True,
@@ -4251,7 +4373,7 @@ def _inspect_tool_shell(
             "shell_option": "-c",
             "login": False,
             "tty": False,
-            "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1",
+            "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V2",
             "command_prefix": command_prefix,
             "command_prefix_sha256": _sha256(command_prefix.encode("ascii")),
             "command_prefix_byte_count": len(command_prefix.encode("ascii")),
@@ -6230,6 +6352,73 @@ def _loopback_self_connect_receipt() -> dict[str, JsonValue]:
     }
 
 
+def _supplementary_group_runtime_receipt(
+    authority: GpuLiveAuthority,
+    *,
+    phase: str,
+    status_fields: dict[str, str],
+    file_descriptors: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    policy = _validate_supplementary_group_authority(
+        authority.network_namespace.get("supplementary_groups")
+    )
+    try:
+        status_groups = sorted(int(item) for item in status_fields.get("Groups", "").split())
+    except ValueError as exc:
+        raise GpuLiveSmokeError(
+            "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+            "runner supplementary groups are malformed",
+        ) from exc
+    observed_groups = sorted(os.getgroups())
+    capability_fields = ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")
+    capabilities = {key: status_fields.get(key) for key in capability_fields}
+    capabilities_zero = all(value == "0000000000000000" for value in capabilities.values())
+    no_new_privs = status_fields.get("NoNewPrivs") == "1"
+    setgroups_control = _read_small_text("/proc/self/setgroups").strip()
+    if not (
+        phase == "STAGE2_POST_SETPRIV"
+        and observed_groups == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
+        and status_groups == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
+        and setgroups_control == "deny"
+        and capabilities_zero
+        and no_new_privs
+        and file_descriptors.get("open_fd_count_above_stderr") == 0
+        and file_descriptors.get("standard_fd_socket_count") == 0
+        and policy.get("docker_kvm_invocation_allowed") is False
+    ):
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+            "retained supplementary-group runtime boundary differs",
+        )
+    return {
+        "schema_version": _SUPPLEMENTARY_GROUPS_RUNTIME_SCHEMA_VERSION,
+        "phase": phase,
+        "policy": _SUPPLEMENTARY_GROUP_POLICY,
+        "owner_approved": True,
+        "host_group_vector": _HOST_GROUP_VECTOR,
+        "expected_inside_supplementary_gids_sorted": _INSIDE_SUPPLEMENTARY_GIDS_SORTED,
+        "observed_inside_supplementary_gids_sorted": observed_groups,
+        "proc_status_groups_sorted": status_groups,
+        "inside_groups_empty_required": False,
+        "setpriv_group_option": "--keep-groups",
+        "setgroups_control": setgroups_control,
+        "capability_drop_required_at_phase": True,
+        "capability_sets": capabilities,
+        "capability_sets_all_zero": capabilities_zero,
+        "no_new_privs": no_new_privs,
+        "docker_kvm_filesystem_fd_count": 0,
+        "docker_kvm_unix_socket_fd_count": 0,
+        "docker_kvm_action_count": 0,
+        "foreign_process_operation_count": 0,
+        "docker_af_unix_capability_retained": True,
+        "kvm_device_capability_retained": True,
+        "docker_kvm_invocation_allowed": False,
+        "docker_kvm_use_mechanically_proven_absent": False,
+        "formal_supplementary_group_isolation_proven": False,
+        "nonformal_residual_disclosed": True,
+    }
+
+
 def _verify_network_namespace(authority: GpuLiveAuthority) -> dict[str, JsonValue]:
     namespace = authority.network_namespace
     launch_shim_runtime = _verify_launch_shim_runtime(authority)
@@ -6270,7 +6459,7 @@ def _verify_network_namespace(authority: GpuLiveAuthority) -> dict[str, JsonValu
     if not (
         os.getuid() == namespace["inside_owner_uid"] == authority.owner_uid
         and os.getgid() == namespace["inside_owner_gid"]
-        and os.getgroups() == []
+        and sorted(os.getgroups()) == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
     ):
         _fail(
             "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
@@ -6282,10 +6471,17 @@ def _verify_network_namespace(authority: GpuLiveAuthority) -> dict[str, JsonValu
             key, value = line.split(":", 1)
             status_fields[key] = value.strip()
     capability_fields = ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")
+    try:
+        status_groups = sorted(int(item) for item in status_fields.get("Groups", "").split())
+    except ValueError as exc:
+        raise GpuLiveSmokeError(
+            "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+            "runner supplementary groups are malformed",
+        ) from exc
     if not (
         all(status_fields.get(key) == "0000000000000000" for key in capability_fields)
         and status_fields.get("NoNewPrivs") == "1"
-        and status_fields.get("Groups") == ""
+        and status_groups == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
     ):
         _fail(
             "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
@@ -6398,8 +6594,14 @@ def _verify_network_namespace(authority: GpuLiveAuthority) -> dict[str, JsonValu
             "GPU_SMOKE_RUNTIME_SCRATCH_NOT_EMPTY",
             "namespace launcher scratch was not empty before live preflight",
         )
+    supplementary_groups = _supplementary_group_runtime_receipt(
+        authority,
+        phase="STAGE2_POST_SETPRIV",
+        status_fields=status_fields,
+        file_descriptors=file_descriptors,
+    )
     return {
-        "schema_version": "mobileworld.g1.gpu-live-smoke-network-namespace/v1",
+        "schema_version": "mobileworld.g1.gpu-live-smoke-network-namespace/v2",
         "implementation": namespace["implementation"],
         "host_owner_uid": namespace["host_owner_uid"],
         "host_owner_gid": namespace["host_owner_gid"],
@@ -6407,8 +6609,7 @@ def _verify_network_namespace(authority: GpuLiveAuthority) -> dict[str, JsonValu
         "inside_owner_gid": os.getgid(),
         "inside_unmapped_system_uid": namespace["inside_unmapped_system_uid"],
         "inside_unmapped_system_gid": namespace["inside_unmapped_system_gid"],
-        "supplementary_groups": [],
-        "supplementary_groups_empty": True,
+        "supplementary_groups": supplementary_groups,
         "capability_sets": {key: status_fields[key] for key in capability_fields},
         "no_new_privs": True,
         "python_isolated": True,
@@ -6437,7 +6638,7 @@ def _verify_network_namespace(authority: GpuLiveAuthority) -> dict[str, JsonValu
         "outer_fd_closure": outer_fd_closure,
         "outer_fd_closure_sha256": outer_fd_closure_sha256,
         "inherited_file_descriptors": file_descriptors,
-        "external_network_mechanically_unavailable": True,
+        "inet_inet6_external_network_mechanically_unavailable": True,
     }
 
 
@@ -9427,11 +9628,16 @@ def prepare_network_namespace_launcher(authority: GpuLiveAuthority) -> dict[str,
 
     namespace = authority.network_namespace
     host_identity = (
-        os.getuid() == namespace["host_owner_uid"] and os.getgid() == namespace["host_owner_gid"]
+        os.getuid() == namespace["host_owner_uid"]
+        and os.getgid() == namespace["host_owner_gid"]
+        and [os.getgid(), *sorted(group for group in os.getgroups() if group != os.getgid())]
+        == _HOST_GROUP_VECTOR
+        and sorted(os.getgroups()) == [109, 999, 1035]
     )
     inside_identity = (
         os.getuid() == namespace["inside_owner_uid"] == 0
         and os.getgid() == namespace["inside_owner_gid"] == 0
+        and sorted(os.getgroups()) == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
         and _normalized_id_map("/proc/self/uid_map") == namespace["uid_map_line"]
         and _normalized_id_map("/proc/self/gid_map") == namespace["gid_map_line"]
     )
@@ -10757,6 +10963,15 @@ def _execute_authorized_gpu_live_smoke(
                 dict[str, JsonValue],
                 cast(dict[str, JsonValue], runtime["implementation"])["source_tree_pre"],
             )
+            stage1_groups = cast(
+                dict[str, JsonValue], stage1_preexec_receipt["supplementary_groups"]
+            )
+            stage2_groups = cast(
+                dict[str, JsonValue], preimport_runtime_receipt["supplementary_groups"]
+            )
+            production_groups = cast(
+                dict[str, JsonValue], namespace_receipt["supplementary_groups"]
+            )
             if not (
                 stage1_tree["tree_sha256"]
                 == preimport_tree["tree_sha256"]
@@ -10765,10 +10980,19 @@ def _execute_authorized_gpu_live_smoke(
                 and preimport_source["tree_sha256"]
                 == production_source["tree_sha256"]
                 == authority.source["source_tree_sha256"]
+                and set(stage1_groups) == _SUPPLEMENTARY_GROUP_RUNTIME_KEYS
+                and set(stage2_groups) == _SUPPLEMENTARY_GROUP_RUNTIME_KEYS
+                and set(production_groups) == _SUPPLEMENTARY_GROUP_RUNTIME_KEYS
+                and stage1_groups["phase"] == "STAGE1_PRE_SETPRIV"
+                and stage2_groups == production_groups
+                and stage2_groups["phase"] == "STAGE2_POST_SETPRIV"
+                and stage1_groups["observed_inside_supplementary_gids_sorted"]
+                == stage2_groups["observed_inside_supplementary_gids_sorted"]
+                == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
             ):
                 _fail(
                     "GPU_SMOKE_RUNTIME_TREE_AUTHORITY_MISMATCH",
-                    "Stage1, Stage2, and production runtime/source censuses differ",
+                    "Stage1, Stage2, and production runtime/source/group censuses differ",
                 )
         operations.assert_authority_active(authority)
         baseline_device = operations.inspect_gpu(authority)
@@ -11830,7 +12054,7 @@ def _execute_authorized_gpu_live_smoke(
             "client_environment": namespace_ref,
             "server_environment_receipts": server_environment_refs,
             "runtime_scratch_preserved_for_audit": True,
-            "external_network_mechanically_unavailable": True,
+            "inet_inet6_external_network_mechanically_unavailable": True,
             "server_log_capture_complete": (
                 server_log_capture_succeeded == server_log_capture_expected == 2
             ),
@@ -12387,7 +12611,9 @@ def _execute_authorized_gpu_live_smoke(
                     "client_environment": cast(JsonValue, namespace_ref),
                     "server_environment_receipts": server_environment_refs,
                     "runtime_scratch_preserved_for_audit": True,
-                    "external_network_mechanically_unavailable": (namespace_ref is not None),
+                    "inet_inet6_external_network_mechanically_unavailable": (
+                        namespace_ref is not None
+                    ),
                     "server_log_capture_complete": server_log_capture_complete,
                     "attempt_receipt_closure_proven": attempt_receipt_closure_proven,
                     "snapshot_closure_proven": snapshot_closure_proven,

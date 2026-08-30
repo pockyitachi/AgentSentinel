@@ -30,15 +30,21 @@ _SOURCE_ROOT = _SCRIPT_PATH.parents[1] / "src"
 JsonValue = Any
 
 _EXECUTE_CONFIRMATION = "EXECUTE-D034-SYNTHETIC-22-CALL-SMOKE"
-_AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v2"
-_LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v1"
+_AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v3"
+_LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v2"
 _LAUNCH_SHIM_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"
 )
 _LAUNCH_SHIM_AUTHORITY_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v3.json"
 )
-_LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V1"
+_LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V2"
+_EVIDENCE_ROOT_V3 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/evidence-v3"
+)
+_RUNTIME_SCRATCH_ROOT_V3 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/runtime-scratch-v3"
+)
 _TOOL_SHELL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-tool-shell/v1"
 _TOOL_SHELL_PATH = "/bin/sh"
 _TOOL_SHELL_RESOLVED_PATH = "/usr/bin/dash"
@@ -90,8 +96,16 @@ _TOOL_SHELL_FORBIDDEN_ENVIRONMENT_NAMES = (
 )
 _TOOL_SHELL_FORBIDDEN_ENVIRONMENT_PREFIXES = ("BASH_FUNC_", "LD_")
 _FD_CLOSE_UPPER_BOUND_EXCLUSIVE = 1_048_576
+_SUPPLEMENTARY_GROUPS_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-supplementary-groups/v1"
+_SUPPLEMENTARY_GROUPS_RUNTIME_SCHEMA_VERSION = (
+    "mobileworld.g1.gpu-live-smoke-supplementary-groups-runtime/v1"
+)
+_SUPPLEMENTARY_GROUP_POLICY = "OWNER_APPROVED_RETAIN_EXACT_GROUPS_ZERO_CAPS_V1"
+_HOST_GROUP_VECTOR = [1035, 109, 999]
+_HOST_SUPPLEMENTARY_GIDS = [109, 999]
+_INSIDE_SUPPLEMENTARY_GIDS_SORTED = [0, 65_534, 65_534]
 _FORBIDDEN_PRE_UNSHARE_MODULE_ROOTS = ("mobile_world", "loguru", "PIL", "openai")
-_STAGE1_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-stage1-preexec/v1"
+_STAGE1_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-stage1-preexec/v2"
 _OWNED_COMMAND_GATE_CODE = (
     "import base64,json,os,sys;"
     "fd=int(sys.argv[1]);"
@@ -326,6 +340,7 @@ _OUTER_NETWORK_NAMESPACE_KEYS = {
     "inside_unmapped_system_gid",
     "uid_map_line",
     "gid_map_line",
+    "supplementary_groups",
     "env_path",
     "env_sha256",
     "unshare_path",
@@ -346,6 +361,59 @@ _OUTER_NETWORK_NAMESPACE_KEYS = {
     "python_pycache_prefix",
     "fd_close_upper_bound_exclusive",
     "outer_fd_closure_receipt_sha256",
+}
+_OUTER_SUPPLEMENTARY_GROUP_KEYS = {
+    "schema_version",
+    "owner_approved",
+    "policy",
+    "host_group_vector",
+    "host_primary_gid",
+    "host_supplementary_gids",
+    "host_os_getgroups_sorted",
+    "inside_supplementary_gids_sorted",
+    "inside_groups_empty_required",
+    "setpriv_group_option",
+    "setgroups_control_expected",
+    "capability_sets_all_zero_required",
+    "no_new_privs_required",
+    "docker_group_gid",
+    "kvm_group_gid",
+    "docker_kvm_filesystem_access_allowed",
+    "docker_kvm_socket_access_allowed",
+    "docker_kvm_action_allowed",
+    "docker_af_unix_capability_retained",
+    "kvm_device_capability_retained",
+    "docker_kvm_invocation_allowed",
+    "docker_kvm_use_mechanically_proven_absent",
+    "formal_supplementary_group_isolation_proven",
+    "nonformal_residual_disclosed",
+}
+_SUPPLEMENTARY_GROUP_RUNTIME_KEYS = {
+    "schema_version",
+    "phase",
+    "policy",
+    "owner_approved",
+    "host_group_vector",
+    "expected_inside_supplementary_gids_sorted",
+    "observed_inside_supplementary_gids_sorted",
+    "proc_status_groups_sorted",
+    "inside_groups_empty_required",
+    "setpriv_group_option",
+    "setgroups_control",
+    "capability_drop_required_at_phase",
+    "capability_sets",
+    "capability_sets_all_zero",
+    "no_new_privs",
+    "docker_kvm_filesystem_fd_count",
+    "docker_kvm_unix_socket_fd_count",
+    "docker_kvm_action_count",
+    "foreign_process_operation_count",
+    "docker_af_unix_capability_retained",
+    "kvm_device_capability_retained",
+    "docker_kvm_invocation_allowed",
+    "docker_kvm_use_mechanically_proven_absent",
+    "formal_supplementary_group_isolation_proven",
+    "nonformal_residual_disclosed",
 }
 _OUTER_LAUNCHER_ENVIRONMENT_KEYS = {
     "PATH",
@@ -460,6 +528,187 @@ def _canonical_json_bytes_stdlib(value: object) -> bytes:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _expected_supplementary_group_policy_stdlib() -> dict[str, object]:
+    return {
+        "schema_version": _SUPPLEMENTARY_GROUPS_SCHEMA_VERSION,
+        "owner_approved": True,
+        "policy": _SUPPLEMENTARY_GROUP_POLICY,
+        "host_group_vector": _HOST_GROUP_VECTOR,
+        "host_primary_gid": 1035,
+        "host_supplementary_gids": _HOST_SUPPLEMENTARY_GIDS,
+        "host_os_getgroups_sorted": [109, 999, 1035],
+        "inside_supplementary_gids_sorted": _INSIDE_SUPPLEMENTARY_GIDS_SORTED,
+        "inside_groups_empty_required": False,
+        "setpriv_group_option": "--keep-groups",
+        "setgroups_control_expected": "deny",
+        "capability_sets_all_zero_required": True,
+        "no_new_privs_required": True,
+        "docker_group_gid": 999,
+        "kvm_group_gid": 109,
+        "docker_kvm_filesystem_access_allowed": False,
+        "docker_kvm_socket_access_allowed": False,
+        "docker_kvm_action_allowed": False,
+        "docker_af_unix_capability_retained": True,
+        "kvm_device_capability_retained": True,
+        "docker_kvm_invocation_allowed": False,
+        "docker_kvm_use_mechanically_proven_absent": False,
+        "formal_supplementary_group_isolation_proven": False,
+        "nonformal_residual_disclosed": True,
+    }
+
+
+def _host_group_vector_stdlib() -> list[int]:
+    primary = os.getgid()
+    return [primary, *sorted(group for group in os.getgroups() if group != primary)]
+
+
+def _validate_namespace_stage_identity_stdlib(
+    namespace: dict[str, object],
+    *,
+    stage: str,
+) -> None:
+    if stage == "STAGE0":
+        valid = (
+            os.getuid() == namespace.get("host_owner_uid") == 1035
+            and os.getgid() == namespace.get("host_owner_gid") == 1035
+            and _host_group_vector_stdlib() == _HOST_GROUP_VECTOR
+            and sorted(os.getgroups()) == [109, 999, 1035]
+        )
+    elif stage == "STAGE1":
+        valid = (
+            type(namespace.get("inside_owner_uid")) is int
+            and os.getuid() == namespace.get("inside_owner_uid") == 0
+            and type(namespace.get("inside_owner_gid")) is int
+            and os.getgid() == namespace.get("inside_owner_gid") == 0
+            and sorted(os.getgroups()) == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
+            and _normalized_id_map_stdlib("/proc/self/uid_map") == namespace.get("uid_map_line")
+            and _normalized_id_map_stdlib("/proc/self/gid_map") == namespace.get("gid_map_line")
+        )
+    else:
+        valid = False
+    if not valid:
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+
+
+def _proc_self_status_stdlib() -> dict[str, str]:
+    try:
+        raw = Path("/proc/self/status").read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
+    result: dict[str, str] = {}
+    for line in raw.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            result[key] = value.strip()
+    return result
+
+
+def _retained_group_sensitive_fd_counts_stdlib() -> tuple[int, int]:
+    filesystem_count = 0
+    socket_inodes: set[str] = set()
+    try:
+        fd_names = sorted(os.listdir("/proc/self/fd"))
+        for name in fd_names:
+            if not name.isdecimal():
+                continue
+            try:
+                target = os.readlink(f"/proc/self/fd/{name}")
+            except FileNotFoundError:
+                continue
+            if target in {"/dev/kvm", "/run/docker.sock", "/var/run/docker.sock"}:
+                filesystem_count += 1
+            if target.startswith("socket:[") and target.endswith("]"):
+                socket_inodes.add(target[8:-1])
+        unix_rows = Path("/proc/net/unix").read_text(encoding="ascii").splitlines()[1:]
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
+    unix_inodes = {
+        fields[6] for row in unix_rows if len(fields := row.split()) >= 7 and fields[6].isdecimal()
+    }
+    return filesystem_count, len(socket_inodes & unix_inodes)
+
+
+def _supplementary_group_runtime_receipt_stdlib(
+    namespace: dict[str, object],
+    *,
+    phase: str,
+    capability_drop_required: bool,
+) -> dict[str, object]:
+    policy = namespace.get("supplementary_groups")
+    if not (
+        type(policy) is dict
+        and set(policy) == _OUTER_SUPPLEMENTARY_GROUP_KEYS
+        and _canonical_json_bytes_stdlib(policy)
+        == _canonical_json_bytes_stdlib(_expected_supplementary_group_policy_stdlib())
+        and phase in {"STAGE1_PRE_SETPRIV", "STAGE2_POST_SETPRIV"}
+    ):
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    status = _proc_self_status_stdlib()
+    try:
+        setgroups_control = Path("/proc/self/setgroups").read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
+    observed_groups = sorted(os.getgroups())
+    try:
+        status_groups = sorted(int(item) for item in status.get("Groups", "").split())
+    except ValueError as exc:
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
+    capability_fields = ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")
+    capabilities = {key: status.get(key) for key in capability_fields}
+    capability_values_valid = all(
+        type(value) is str
+        and len(value) == 16
+        and all(character in "0123456789abcdef" for character in value)
+        for value in capabilities.values()
+    )
+    capabilities_zero = all(value == "0000000000000000" for value in capabilities.values())
+    no_new_privs_raw = status.get("NoNewPrivs")
+    no_new_privs = no_new_privs_raw == "1"
+    phase_matches_capability_boundary = (
+        phase == "STAGE1_PRE_SETPRIV" and capability_drop_required is False
+    ) or (phase == "STAGE2_POST_SETPRIV" and capability_drop_required is True)
+    filesystem_fd_count, unix_socket_fd_count = _retained_group_sensitive_fd_counts_stdlib()
+    if not (
+        phase_matches_capability_boundary
+        and capability_values_valid
+        and no_new_privs_raw in {"0", "1"}
+        and observed_groups == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
+        and status_groups == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
+        and setgroups_control == "deny"
+        and filesystem_fd_count == 0
+        and unix_socket_fd_count == 0
+        and (not capability_drop_required or (capabilities_zero and no_new_privs))
+    ):
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    return {
+        "schema_version": _SUPPLEMENTARY_GROUPS_RUNTIME_SCHEMA_VERSION,
+        "phase": phase,
+        "policy": _SUPPLEMENTARY_GROUP_POLICY,
+        "owner_approved": True,
+        "host_group_vector": _HOST_GROUP_VECTOR,
+        "expected_inside_supplementary_gids_sorted": _INSIDE_SUPPLEMENTARY_GIDS_SORTED,
+        "observed_inside_supplementary_gids_sorted": observed_groups,
+        "proc_status_groups_sorted": status_groups,
+        "inside_groups_empty_required": False,
+        "setpriv_group_option": "--keep-groups",
+        "setgroups_control": setgroups_control,
+        "capability_drop_required_at_phase": capability_drop_required,
+        "capability_sets": capabilities,
+        "capability_sets_all_zero": capabilities_zero,
+        "no_new_privs": no_new_privs,
+        "docker_kvm_filesystem_fd_count": filesystem_fd_count,
+        "docker_kvm_unix_socket_fd_count": unix_socket_fd_count,
+        "docker_kvm_action_count": 0,
+        "foreign_process_operation_count": 0,
+        "docker_af_unix_capability_retained": True,
+        "kvm_device_capability_retained": True,
+        "docker_kvm_invocation_allowed": False,
+        "docker_kvm_use_mechanically_proven_absent": False,
+        "formal_supplementary_group_isolation_proven": False,
+        "nonformal_residual_disclosed": True,
+    }
 
 
 def _read_authority_stdlib(args: argparse.Namespace) -> dict[str, object]:
@@ -624,6 +873,8 @@ def _verify_launch_shim_binding_stdlib(
     bootstrap = _OUTER_STDLIB_BOOTSTRAP_CODE.encode("utf-8")
     if not (
         authority.get("schema_version") == _AUTHORITY_SCHEMA_VERSION
+        and type(authority.get("owner_uid")) is int
+        and authority.get("owner_uid") == 0
         and args.authority == _LAUNCH_SHIM_AUTHORITY_PATH
         and launch.get("schema_version") == _LAUNCH_SHIM_SCHEMA_VERSION
         and launch.get("path") == launch.get("resolved_path") == _LAUNCH_SHIM_PATH
@@ -1055,7 +1306,7 @@ def _verify_tool_shell_binding_stdlib(
         "shell_option": "-c",
         "login": False,
         "tty": False,
-        "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1",
+        "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V2",
         "command_prefix": command_prefix,
         "command_prefix_sha256": hashlib.sha256(command_prefix.encode("ascii")).hexdigest(),
         "command_prefix_byte_count": len(command_prefix.encode("ascii")),
@@ -2427,7 +2678,7 @@ def _runtime_census_stdlib(
             raise RuntimeError("GPU_SMOKE_RUNTIME_TREE_AUTHORITY_MISMATCH")
         site_inventories[role] = inventory
     return {
-        "schema_version": "mobileworld.g1.gpu-live-smoke-preimport-runtime-census/v1",
+        "schema_version": "mobileworld.g1.gpu-live-smoke-preimport-runtime-census/v2",
         "phase": phase,
         "private_runtime": private_inventory,
         "private_python": {
@@ -2489,6 +2740,8 @@ def _outer_execute_context(
     gpu = authority.get("gpu")
     if not (
         authority.get("schema_version") == _AUTHORITY_SCHEMA_VERSION
+        and type(authority.get("owner_uid")) is int
+        and authority.get("owner_uid") == 0
         and authority.get("decision_id") == "D-034"
         and authority.get("authorized_scope") == "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"
         and authority.get("authorized") is True
@@ -2529,13 +2782,20 @@ def _outer_execute_context(
     scratch_root = authority.get("runtime_scratch_root")
     if not (
         namespace.get("required") is True
-        and namespace.get("implementation") == "LINUX_USER_NETNS_MAP_ROOT_V1"
-        and namespace.get("host_owner_uid") == os.getuid()
-        and namespace.get("host_owner_gid") == os.getgid()
+        and namespace.get("implementation") == "LINUX_USER_NETNS_MAP_ROOT_RETAIN_GROUPS_V2"
+        and namespace.get("host_owner_uid") == 1035
+        and namespace.get("host_owner_gid") == 1035
+        and type(namespace.get("inside_owner_uid")) is int
         and namespace.get("inside_owner_uid") == 0
+        and type(namespace.get("inside_owner_gid")) is int
         and namespace.get("inside_owner_gid") == 0
-        and namespace.get("uid_map_line") == f"0 {os.getuid()} 1"
-        and namespace.get("gid_map_line") == f"0 {os.getgid()} 1"
+        and namespace.get("uid_map_line") == "0 1035 1"
+        and namespace.get("gid_map_line") == "0 1035 1"
+        and type(namespace.get("supplementary_groups")) is dict
+        and set(cast(dict[str, object], namespace["supplementary_groups"]))
+        == _OUTER_SUPPLEMENTARY_GROUP_KEYS
+        and _canonical_json_bytes_stdlib(namespace.get("supplementary_groups"))
+        == _canonical_json_bytes_stdlib(_expected_supplementary_group_policy_stdlib())
         and namespace.get("fd_close_upper_bound_exclusive") == _FD_CLOSE_UPPER_BOUND_EXCLUSIVE
         and namespace.get("python_pycache_prefix") == "/dev/null"
         and namespace.get("external_network_allowed") is False
@@ -2557,8 +2817,11 @@ def _outer_execute_context(
         and type(scratch_root) is str
         and cast(str, scratch_root).startswith("/")
         and str(Path(cast(str, scratch_root))) == scratch_root
+        and scratch_root == _RUNTIME_SCRATCH_ROOT_V3
+        and authority.get("evidence_root") == _EVIDENCE_ROOT_V3
     ):
         raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    _validate_namespace_stage_identity_stdlib(namespace, stage="STAGE0")
     outer_python_size = _hash_regular_nofollow_stdlib(
         "/usr/bin/python3.10",
         outer_runtime.get("python_sha256"),
@@ -2781,14 +3044,13 @@ def _stage1_preexec_context(
     source = cast(dict[str, object], authority["source"])
     bootstrap_bytes = _OUTER_STDLIB_BOOTSTRAP_CODE.encode("utf-8")
     pinned_bootstrap = globals().get("_PINNED_BOOTSTRAP")
+    _validate_namespace_stage_identity_stdlib(namespace, stage="STAGE1")
     if not (
         dict(os.environ) == pre_namespace_environment == {"LC_CTYPE": "C.UTF-8"}
         and str(Path(sys.executable).absolute()) == "/usr/bin/python3.10"
         and outer_runtime.get("python_path") == "/usr/bin/python3.10"
         and os.getuid() == namespace.get("inside_owner_uid") == 0
         and os.getgid() == namespace.get("inside_owner_gid") == 0
-        and _normalized_id_map_stdlib("/proc/self/uid_map") == namespace.get("uid_map_line")
-        and _normalized_id_map_stdlib("/proc/self/gid_map") == namespace.get("gid_map_line")
         and args.stage0_bootstrap_sha256 == hashlib.sha256(bootstrap_bytes).hexdigest()
         and source.get("outer_bootstrap_code_sha256") == args.stage0_bootstrap_sha256
         and source.get("outer_bootstrap_code_byte_count") == len(bootstrap_bytes)
@@ -2819,6 +3081,11 @@ def _stage1_preexec_context(
         expected_owner_uid=cast(int, namespace["inside_unmapped_system_uid"]),
         expected_owner_gid=cast(int, namespace["inside_unmapped_system_gid"]),
     )
+    supplementary_groups = _supplementary_group_runtime_receipt_stdlib(
+        namespace,
+        phase="STAGE1_PRE_SETPRIV",
+        capability_drop_required=False,
+    )
     runtime_preexec = _preexec_private_runtime_census_stdlib(authority)
     scratch = _prepare_stage1_launcher_scratch_stdlib(authority, environment)
     completed = _run_owned_command_stdlib(
@@ -2843,6 +3110,7 @@ def _stage1_preexec_context(
         "inside_unmapped_system_gid": namespace["inside_unmapped_system_gid"],
         "system_owner_role": "HOST_ROOT_UNMAPPED_INSIDE_USER_NAMESPACE",
         "system_owner_role_mapping_equivalent": True,
+        "supplementary_groups": supplementary_groups,
         "private_runtime_preexec": runtime_preexec,
         "launcher_scratch": scratch,
         "launch_shim_revalidation": launch_shim_revalidation,
@@ -2879,6 +3147,15 @@ def _decode_stage1_receipt(args: argparse.Namespace) -> dict[str, object]:
         and data == _canonical_json_bytes_stdlib(value)
         and value.get("schema_version") == _STAGE1_RECEIPT_SCHEMA_VERSION
         and value.get("authority_sha256") == args.authority_sha256
+        and type(value.get("supplementary_groups")) is dict
+        and set(cast(dict[str, object], value["supplementary_groups"]))
+        == _SUPPLEMENTARY_GROUP_RUNTIME_KEYS
+        and cast(dict[str, object], value["supplementary_groups"]).get("phase")
+        == "STAGE1_PRE_SETPRIV"
+        and cast(dict[str, object], value["supplementary_groups"]).get(
+            "observed_inside_supplementary_gids_sorted"
+        )
+        == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
         and value.get("private_interpreter_started_before_runtime_census") is False
         and value.get("third_party_or_project_module_imported") is False
     ):
@@ -2907,8 +3184,14 @@ def _bootstrap_import_paths(args: argparse.Namespace) -> None:
                 ):
                     raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
                 _STAGE1_PREEXEC_RECEIPT = _decode_stage1_receipt(args)
+                stage2_supplementary_groups = _supplementary_group_runtime_receipt_stdlib(
+                    cast(dict[str, object], authority["network_namespace"]),
+                    phase="STAGE2_POST_SETPRIV",
+                    capability_drop_required=True,
+                )
                 source_closure = _verify_source_closure_stdlib(authority)
             else:
+                stage2_supplementary_groups = None
                 source_closure = None
             runtime_census = _preimport_runtime_census_stdlib(
                 authority,
@@ -2935,6 +3218,7 @@ def _bootstrap_import_paths(args: argparse.Namespace) -> None:
                 else None
             )
             runtime_census["source_closure"] = source_closure
+            runtime_census["supplementary_groups"] = stage2_supplementary_groups
             _PREIMPORT_RUNTIME_RECEIPT = runtime_census
             source = authority["source"]
             client_runtime = authority["client_runtime"]
@@ -3293,7 +3577,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--bounding-set=-all",
                 "--ambient-caps=-all",
                 "--inh-caps=-all",
-                "--clear-groups",
+                "--keep-groups",
                 cast(str, private_runtime["python_path"]),
                 "-I",
                 "-S",

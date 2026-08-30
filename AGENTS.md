@@ -23,21 +23,22 @@ Before changing code, read these files completely:
 15. `mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
 16. `mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
 17. `mobileworld_audit_handoff/G1_GPU_LIVE_SMOKE_CONTRACT_V1.md`
-18. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
-19. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-20. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-21. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-22. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
-23. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-24. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
-25. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-26. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
-27. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
-28. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
-29. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
-30. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
-31. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
-32. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
+18. `mobileworld_audit_handoff/G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_1.md`
+19. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
+20. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
+21. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
+22. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+23. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+24. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+25. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+26. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+27. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
+28. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
+29. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
+30. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
+31. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
+32. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
+33. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
 
 The historical `replay_capsule.schema.json`, `capsule_manifest.schema.json`, and
 `capsule_integrity.schema.json` remain byte-frozen v1 references. Amendment 1
@@ -82,9 +83,9 @@ authorizes only that exact submatrix inside the shared 22-call non-formal smoke
 described below. ALE-323 remains incomplete until the D-034 evidence closure
 passes.
 
-`G1_4_DECISION_LOG.md` and `G1_5_DECISION_LOG.md` D-034 plus
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` authorize exactly one owner-bound,
-secret-free, synthetic non-case, loopback-only engineering smoke on shared
+`G1_4_DECISION_LOG.md` and `G1_5_DECISION_LOG.md` D-034 plus the byte-frozen
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` and its Amendment 1 authorize exactly one
+owner-bound, secret-free, synthetic non-case, loopback-only engineering smoke on shared
 physical GPU 0 / UUID `GPU-991ac45f-e9e9-1c25-590c-fb49ca752965`.
 The free-memory floor is exactly 64 GiB and must be rechecked before each model
 start; insufficient capacity blocks without touching another process.

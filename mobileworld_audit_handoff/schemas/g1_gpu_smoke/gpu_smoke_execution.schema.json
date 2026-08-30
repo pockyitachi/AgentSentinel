@@ -24,7 +24,7 @@
     "receipt_subject_sha256"
   ],
   "properties": {
-    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-execution/v1"},
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-execution/v2"},
     "run_id": {"$ref": "#/$defs/id"},
     "status": {"enum": ["PASS", "FAIL"]},
     "manifest": {"$ref": "#/$defs/contentRef"},
@@ -200,7 +200,7 @@
         "runtime_tree_post", "stage1_preexec", "stage2_preimport",
         "client_environment", "server_environment_receipts",
         "runtime_scratch_preserved_for_audit",
-        "external_network_mechanically_unavailable",
+        "inet_inet6_external_network_mechanically_unavailable",
         "server_log_capture_complete",
         "generated_action_execution_count",
         "mobileworld_action_count", "replay_count", "backend_restore_count",
@@ -260,7 +260,7 @@
           "items": {"$ref": "#/$defs/contentRef"}
         },
         "runtime_scratch_preserved_for_audit": {"const": true},
-        "external_network_mechanically_unavailable": {"const": true},
+        "inet_inet6_external_network_mechanically_unavailable": {"const": true},
         "server_log_capture_complete": {"const": true},
         "generated_action_execution_count": {"const": 0},
         "mobileworld_action_count": {"const": 0},
@@ -287,7 +287,7 @@
         "runtime_tree_post", "stage1_preexec", "stage2_preimport",
         "client_environment", "server_environment_receipts",
         "runtime_scratch_preserved_for_audit",
-        "external_network_mechanically_unavailable",
+        "inet_inet6_external_network_mechanically_unavailable",
         "server_log_capture_complete", "attempt_receipt_closure_proven",
         "snapshot_closure_proven", "scratch_closure_proven",
         "generated_action_execution_count", "mobileworld_action_count",
@@ -350,7 +350,7 @@
           "items": {"$ref": "#/$defs/contentRef"}
         },
         "runtime_scratch_preserved_for_audit": {"const": true},
-        "external_network_mechanically_unavailable": {"type": "boolean"},
+        "inet_inet6_external_network_mechanically_unavailable": {"type": "boolean"},
         "server_log_capture_complete": {"type": "boolean"},
         "attempt_receipt_closure_proven": {"type": "boolean"},
         "snapshot_closure_proven": {"type": "boolean"},

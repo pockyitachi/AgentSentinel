@@ -22,21 +22,22 @@
 18. `G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
 19. `G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
 20. `G1_GPU_LIVE_SMOKE_CONTRACT_V1.md`
-21. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
-22. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-23. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-24. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-25. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
-26. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-27. `G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
-28. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-29. `G1_SENTINEL_MVP_MIGRATION.md`
-30. `g1/registry.lock.v1.json`
-31. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-32. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-33. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-34. `schemas/g1_3/field_visibility.schema.json`
-35. `schemas/g1_3/capsule_exclusion.schema.json`
+21. `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_1.md`
+22. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
+23. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
+24. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
+25. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+26. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+27. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+28. `G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+29. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+30. `G1_SENTINEL_MVP_MIGRATION.md`
+31. `g1/registry.lock.v1.json`
+32. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+33. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+34. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+35. `schemas/g1_3/field_visibility.schema.json`
+36. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -81,9 +82,9 @@ G1.4 runner 的 fail-closed interface integration。两个 Codec 均须保持 `l
 exact 22-call 非正式 batch 的子矩阵执行。不得把 CPU checkpoint 或 D-034 smoke 冒充 formal
 replay、formal G1 data 或 G1.6 curation。
 
-`G1_4_DECISION_LOG.md`、`G1_5_DECISION_LOG.md` D-034 与
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 只授权一个 owner-bound、secret-free、synthetic non-case、
-loopback-only engineering smoke：共享物理 GPU 0 / UUID
+`G1_4_DECISION_LOG.md`、`G1_5_DECISION_LOG.md` D-034、byte-frozen
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 与其 Amendment 1 只授权一个
+owner-bound、secret-free、synthetic non-case、loopback-only engineering smoke：共享物理 GPU 0 / UUID
 `GPU-991ac45f-e9e9-1c25-590c-fb49ca752965` 上运行 12 个 G1.4 canary 加 10 个 G1.5 codec calls。
 free-memory floor 固定为 64 GiB，Qwen/MAI 各自启动前都必须重查；不足只能阻断，不能清理他人。
 必须 Qwen 完整运行并 guarded release 后才启动 MAI；SDK retry=0、non-stream、无额外调用，所有

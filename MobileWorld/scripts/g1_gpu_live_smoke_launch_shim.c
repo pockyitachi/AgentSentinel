@@ -44,12 +44,12 @@ typedef long isize;
 #ifndef D034_AUTHORITY_PATH
 #define D034_AUTHORITY_PATH \
     "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/" \
-    "d034-9845577c/authority.v2.json"
+    "d034-9845577c/authority.v3.json"
 #endif
 #ifndef D034_SHIM_PATH
 #define D034_SHIM_PATH \
     "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/" \
-    "d034-9845577c/launch-shim.v1"
+    "d034-9845577c/launch-shim.v2"
 #endif
 #ifndef D034_OUTER_PYTHON_UID
 #define D034_OUTER_PYTHON_UID 0
@@ -59,10 +59,10 @@ typedef long isize;
 #endif
 static const char AUTHORITY_PATH[] = D034_AUTHORITY_PATH;
 static const char SHIM_PATH[] = D034_SHIM_PATH;
-static const char TOKEN_PREFIX[] = "D034_STAGE0_V1";
-static const char AUTHORITY_SCHEMA[] = "mobileworld.g1.gpu-live-smoke-authority/v2";
+static const char TOKEN_PREFIX[] = "D034_STAGE0_V2";
+static const char AUTHORITY_SCHEMA[] = "mobileworld.g1.gpu-live-smoke-authority/v3";
 static const char AUTHORIZED_SCOPE[] = "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS";
-static const char SHIM_SCHEMA[] = "mobileworld.g1.gpu-live-smoke-launch-shim/v1";
+static const char SHIM_SCHEMA[] = "mobileworld.g1.gpu-live-smoke-launch-shim/v2";
 static const char CONFIRMATION[] = "EXECUTE-D034-SYNTHETIC-22-CALL-SMOKE";
 static const char BOOTSTRAP_SHA256[] =
     "70ac78cc43407933ff72b43925c309823fc852e654367d8576fb74b18811e63b";

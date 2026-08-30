@@ -13,7 +13,7 @@
     "source", "network_namespace", "evidence_root", "runtime_scratch_root"
   ],
   "properties": {
-    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-authority/v2"},
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-authority/v3"},
     "authority_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
     "decision_id": {"const": "D-034"},
     "authorized_scope": {"const": "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"},
@@ -92,9 +92,9 @@
         "executable_stack"
       ],
       "properties": {
-        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-launch-shim/v1"},
-        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"},
-        "resolved_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"},
+        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-launch-shim/v2"},
+        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"},
+        "resolved_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"},
         "sha256": {"$ref": "#/$defs/sha256"},
         "byte_count": {"type": "integer", "minimum": 1, "maximum": 4194304},
         "owner_uid": {"const": 1035},
@@ -109,7 +109,7 @@
         },
         "source_sha256": {"$ref": "#/$defs/sha256"},
         "shell_option": {"const": "-c"},
-        "token_prefix": {"const": "D034_STAGE0_V1"},
+        "token_prefix": {"const": "D034_STAGE0_V2"},
         "runner_cli_path": {
           "allOf": [
             {"$ref": "#/$defs/absolutePath"},
@@ -242,7 +242,7 @@
         "required", "implementation", "host_owner_uid", "host_owner_gid",
         "inside_owner_uid", "inside_owner_gid",
         "inside_unmapped_system_uid", "inside_unmapped_system_gid",
-        "uid_map_line", "gid_map_line",
+        "uid_map_line", "gid_map_line", "supplementary_groups",
         "env_path", "env_sha256", "unshare_path", "unshare_sha256",
         "ip_path", "ip_sha256", "setpriv_path", "setpriv_sha256",
         "nvidia_smi_path", "nvidia_smi_sha256", "nvidia_smi_byte_count",
@@ -252,7 +252,7 @@
       ],
       "properties": {
         "required": {"const": true},
-        "implementation": {"const": "LINUX_USER_NETNS_MAP_ROOT_V1"},
+        "implementation": {"const": "LINUX_USER_NETNS_MAP_ROOT_RETAIN_GROUPS_V2"},
         "host_owner_uid": {"const": 1035},
         "host_owner_gid": {"const": 1035},
         "inside_owner_uid": {"const": 0},
@@ -261,6 +261,7 @@
         "inside_unmapped_system_gid": {"const": 65534},
         "uid_map_line": {"const": "0 1035 1"},
         "gid_map_line": {"const": "0 1035 1"},
+        "supplementary_groups": {"$ref": "#/$defs/supplementaryGroupsAuthority"},
         "env_path": {"const": "/usr/bin/env"},
         "env_sha256": {"const": "854a8d7f147ff1bf3562edd1aa0b2f2ac28ef432811533f03c43dc9162fe3af3"},
         "unshare_path": {"const": "/usr/bin/unshare"},
@@ -285,8 +286,18 @@
         "outer_fd_closure_receipt_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
-    "evidence_root": {"$ref": "#/$defs/absolutePath"},
-    "runtime_scratch_root": {"$ref": "#/$defs/absolutePath"}
+    "evidence_root": {
+      "allOf": [
+        {"$ref": "#/$defs/absolutePath"},
+        {"pattern": "/evidence-v3$"}
+      ]
+    },
+    "runtime_scratch_root": {
+      "allOf": [
+        {"$ref": "#/$defs/absolutePath"},
+        {"pattern": "/runtime-scratch-v3$"}
+      ]
+    }
   },
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -301,6 +312,34 @@
       "properties": {
         "relative_path": {"type": "string", "minLength": 1},
         "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "supplementaryGroupsAuthority": {
+      "const": {
+        "schema_version": "mobileworld.g1.gpu-live-smoke-supplementary-groups/v1",
+        "owner_approved": true,
+        "policy": "OWNER_APPROVED_RETAIN_EXACT_GROUPS_ZERO_CAPS_V1",
+        "host_group_vector": [1035, 109, 999],
+        "host_os_getgroups_sorted": [109, 999, 1035],
+        "host_primary_gid": 1035,
+        "host_supplementary_gids": [109, 999],
+        "inside_supplementary_gids_sorted": [0, 65534, 65534],
+        "inside_groups_empty_required": false,
+        "setpriv_group_option": "--keep-groups",
+        "setgroups_control_expected": "deny",
+        "capability_sets_all_zero_required": true,
+        "no_new_privs_required": true,
+        "docker_group_gid": 999,
+        "kvm_group_gid": 109,
+        "docker_kvm_filesystem_access_allowed": false,
+        "docker_kvm_socket_access_allowed": false,
+        "docker_kvm_action_allowed": false,
+        "docker_af_unix_capability_retained": true,
+        "kvm_device_capability_retained": true,
+        "docker_kvm_invocation_allowed": false,
+        "docker_kvm_use_mechanically_proven_absent": false,
+        "formal_supplementary_group_isolation_proven": false,
+        "nonformal_residual_disclosed": true
       }
     },
     "toolPathComponent": {
@@ -615,9 +654,9 @@
             "shell_option": {"const": "-c"},
             "login": {"const": false},
             "tty": {"const": false},
-            "command_grammar": {"const": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1"},
-            "command_prefix": {"const": "exec /shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1 -c D034_STAGE0_V1:/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json:"},
-            "command_prefix_sha256": {"const": "13cf21104b8ced3951a8578b86a1d9ff6d505e4bae496b09a5ae3d6afa79bbf4"},
+            "command_grammar": {"const": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V2"},
+            "command_prefix": {"const": "exec /shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2 -c D034_STAGE0_V2:/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v3.json:"},
+            "command_prefix_sha256": {"const": "2644a709f15d095e364ce82a0920df770c9120bdde35e69a7d192534149405cf"},
             "command_prefix_byte_count": {"const": 206},
             "command_authority_sha256_byte_count": {"const": 64},
             "command_total_byte_count": {"const": 270}

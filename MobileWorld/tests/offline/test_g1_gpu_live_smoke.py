@@ -215,9 +215,9 @@ def _synthetic_tool_shell_binding() -> dict[str, JsonValue]:
     ]
     command_prefix = (
         "exec /shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
-        "d034-9845577c/launch-shim.v1 -c D034_STAGE0_V1:"
+        "d034-9845577c/launch-shim.v2 -c D034_STAGE0_V2:"
         "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
-        "d034-9845577c/authority.v2.json:"
+        "d034-9845577c/authority.v3.json:"
     )
     return {
         "schema_version": "mobileworld.g1.gpu-live-smoke-tool-shell/v1",
@@ -326,7 +326,7 @@ def _synthetic_tool_shell_binding() -> dict[str, JsonValue]:
             "shell_option": "-c",
             "login": False,
             "tty": False,
-            "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1",
+            "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V2",
             "command_prefix": command_prefix,
             "command_prefix_sha256": _sha256(command_prefix.encode("ascii")),
             "command_prefix_byte_count": len(command_prefix.encode("ascii")),
@@ -442,6 +442,17 @@ def _schema_validator(name: str) -> Draft202012Validator:
         store={cast(str, candidate["$id"]): candidate for candidate in schemas},
     )
     return Draft202012Validator(schema, resolver=resolver)
+
+
+def _schema_definition_required_keys(name: str, definition: str) -> set[str]:
+    schema = _load_schema(name)
+    definitions = schema.get("$defs")
+    assert isinstance(definitions, dict)
+    subject = definitions.get(definition)
+    assert isinstance(subject, dict)
+    required = subject.get("required")
+    assert isinstance(required, list) and all(isinstance(item, str) for item in required)
+    return set(cast(list[str], required))
 
 
 def _replace_tiny_image(value: JsonValue, data_url: str) -> JsonValue:
@@ -587,7 +598,7 @@ def _gpu_smoke_packet() -> dict[str, JsonValue]:
 
 
 def _authority(packet_sha256: str) -> dict[str, JsonValue]:
-    runtime_scratch_root = "/synthetic/runtime-scratch/g1-gpu-smoke"
+    runtime_scratch_root = gpu_live_smoke_module.RUNTIME_SCRATCH_ROOT_V3
     private_runtime_root = "/synthetic/private-runtime/g1-gpu-smoke"
     private_python = f"{private_runtime_root}/bin/python3.12"
     client_site_packages = f"{private_runtime_root}/site-packages/client"
@@ -651,8 +662,8 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
             "served_name": MODEL_SERVED_NAMES[model_id],
         }
     return {
-        "schema_version": "mobileworld.g1.gpu-live-smoke-authority/v2",
-        "authority_id": "owner-d034-gpu0-shared-v2",
+        "schema_version": "mobileworld.g1.gpu-live-smoke-authority/v3",
+        "authority_id": "owner-d034-gpu0-shared-v3",
         "decision_id": "D-034",
         "authorized_scope": "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS",
         "authorized": True,
@@ -753,14 +764,14 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
             "site_packages_hardlinks_allowed": False,
         },
         "launch_shim": {
-            "schema_version": "mobileworld.g1.gpu-live-smoke-launch-shim/v1",
+            "schema_version": "mobileworld.g1.gpu-live-smoke-launch-shim/v2",
             "path": (
                 "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
-                "d034-9845577c/launch-shim.v1"
+                "d034-9845577c/launch-shim.v2"
             ),
             "resolved_path": (
                 "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
-                "d034-9845577c/launch-shim.v1"
+                "d034-9845577c/launch-shim.v2"
             ),
             "sha256": "7" * 64,
             "byte_count": 1,
@@ -777,7 +788,7 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
                 ).read_bytes()
             ),
             "shell_option": "-c",
-            "token_prefix": "D034_STAGE0_V1",
+            "token_prefix": "D034_STAGE0_V2",
             "runner_cli_path": str(GPU_SMOKE_RUNNER_CLI),
             "smoke_packet_path": (
                 "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
@@ -851,7 +862,7 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
         },
         "network_namespace": {
             "required": True,
-            "implementation": "LINUX_USER_NETNS_MAP_ROOT_V1",
+            "implementation": "LINUX_USER_NETNS_MAP_ROOT_RETAIN_GROUPS_V2",
             "host_owner_uid": os.getuid(),
             "host_owner_gid": os.getgid(),
             "inside_owner_uid": 0,
@@ -860,6 +871,32 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
             "inside_unmapped_system_gid": 65_534,
             "uid_map_line": f"0 {os.getuid()} 1",
             "gid_map_line": f"0 {os.getgid()} 1",
+            "supplementary_groups": {
+                "schema_version": "mobileworld.g1.gpu-live-smoke-supplementary-groups/v1",
+                "owner_approved": True,
+                "policy": "OWNER_APPROVED_RETAIN_EXACT_GROUPS_ZERO_CAPS_V1",
+                "host_group_vector": [1035, 109, 999],
+                "host_os_getgroups_sorted": [109, 999, 1035],
+                "host_primary_gid": 1035,
+                "host_supplementary_gids": [109, 999],
+                "inside_supplementary_gids_sorted": [0, 65_534, 65_534],
+                "inside_groups_empty_required": False,
+                "setpriv_group_option": "--keep-groups",
+                "setgroups_control_expected": "deny",
+                "capability_sets_all_zero_required": True,
+                "no_new_privs_required": True,
+                "docker_group_gid": 999,
+                "kvm_group_gid": 109,
+                "docker_kvm_filesystem_access_allowed": False,
+                "docker_kvm_socket_access_allowed": False,
+                "docker_kvm_action_allowed": False,
+                "docker_af_unix_capability_retained": True,
+                "kvm_device_capability_retained": True,
+                "docker_kvm_invocation_allowed": False,
+                "docker_kvm_use_mechanically_proven_absent": False,
+                "formal_supplementary_group_isolation_proven": False,
+                "nonformal_residual_disclosed": True,
+            },
             "env_path": "/usr/bin/env",
             "env_sha256": ("854a8d7f147ff1bf3562edd1aa0b2f2ac28ef432811533f03c43dc9162fe3af3"),
             "unshare_path": "/usr/bin/unshare",
@@ -900,7 +937,7 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
             ),
             "outer_fd_closure_receipt_sha256": outer_fd_closure_sha256,
         },
-        "evidence_root": "/synthetic/evidence/g1-gpu-smoke",
+        "evidence_root": gpu_live_smoke_module.EVIDENCE_ROOT_V3,
         "runtime_scratch_root": runtime_scratch_root,
     }
 
@@ -985,7 +1022,10 @@ def _ownership_guard(root: Any) -> Any:
     )
 
 
-def _execution_files(tmp_path: Path) -> tuple[Path, str, Path, Path]:
+def _execution_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, str, Path, Path]:
     packet = compile_gpu_smoke_packet(
         QWEN_CAPTURED_FIXTURE,
         MAI_CAPTURED_FIXTURE,
@@ -993,9 +1033,21 @@ def _execution_files(tmp_path: Path) -> tuple[Path, str, Path, Path]:
     )
     packet_path = tmp_path / "compiled-execution-packet.json"
     packet_path.write_bytes(packet.canonical_bytes)
-    evidence_root = tmp_path / "evidence"
+    evidence_root = tmp_path / "evidence-v3"
+    runtime_scratch_root = tmp_path / "runtime-scratch-v3"
+    monkeypatch.setattr(
+        gpu_live_smoke_module,
+        "EVIDENCE_ROOT_V3",
+        str(evidence_root),
+    )
+    monkeypatch.setattr(
+        gpu_live_smoke_module,
+        "RUNTIME_SCRATCH_ROOT_V3",
+        str(runtime_scratch_root),
+    )
     authority_value = _authority(packet.sha256)
     authority_value["evidence_root"] = str(evidence_root)
+    authority_value["runtime_scratch_root"] = str(runtime_scratch_root)
     authority_path, authority_sha = _write_canonical_json(
         tmp_path,
         "execution-authority.json",
@@ -1038,7 +1090,7 @@ class _FakeGpuLiveOperations(GpuLiveSmokeOperations):
         namespace = cast(dict[str, JsonValue], authority.network_namespace)
         self.trace.append("network-namespace")
         return {
-            "schema_version": "mobileworld.g1.gpu-live-smoke-network-namespace/v1",
+            "schema_version": "mobileworld.g1.gpu-live-smoke-network-namespace/v2",
             "implementation": namespace["implementation"],
             "host_owner_uid": namespace["host_owner_uid"],
             "host_owner_gid": namespace["host_owner_gid"],
@@ -1046,7 +1098,8 @@ class _FakeGpuLiveOperations(GpuLiveSmokeOperations):
             "inside_owner_gid": 0,
             "inside_unmapped_system_uid": namespace["inside_unmapped_system_uid"],
             "inside_unmapped_system_gid": namespace["inside_unmapped_system_gid"],
-            "external_network_mechanically_unavailable": True,
+            "supplementary_groups": (_synthetic_supplementary_groups_runtime_receipt()),
+            "inet_inet6_external_network_mechanically_unavailable": True,
             "synthetic_cpu_fake": True,
         }
 
@@ -2076,6 +2129,51 @@ def _synthetic_tool_shell_runtime_receipt(authority: Any) -> dict[str, JsonValue
     }
 
 
+def _synthetic_supplementary_groups_runtime_receipt(
+    *,
+    phase: str = "STAGE2_POST_SETPRIV",
+) -> dict[str, JsonValue]:
+    post_setpriv = phase == "STAGE2_POST_SETPRIV"
+    capability_sets = (
+        {key: "0000000000000000" for key in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")}
+        if post_setpriv
+        else {
+            "CapInh": "0000000000000000",
+            "CapPrm": "000001ffffffffff",
+            "CapEff": "000001ffffffffff",
+            "CapBnd": "000001ffffffffff",
+            "CapAmb": "0000000000000000",
+        }
+    )
+    return {
+        "schema_version": ("mobileworld.g1.gpu-live-smoke-supplementary-groups-runtime/v1"),
+        "phase": phase,
+        "policy": "OWNER_APPROVED_RETAIN_EXACT_GROUPS_ZERO_CAPS_V1",
+        "owner_approved": True,
+        "host_group_vector": [1035, 109, 999],
+        "expected_inside_supplementary_gids_sorted": [0, 65_534, 65_534],
+        "observed_inside_supplementary_gids_sorted": [0, 65_534, 65_534],
+        "proc_status_groups_sorted": [0, 65_534, 65_534],
+        "inside_groups_empty_required": False,
+        "setpriv_group_option": "--keep-groups",
+        "setgroups_control": "deny",
+        "capability_drop_required_at_phase": post_setpriv,
+        "capability_sets": capability_sets,
+        "capability_sets_all_zero": post_setpriv,
+        "no_new_privs": post_setpriv,
+        "docker_kvm_filesystem_fd_count": 0,
+        "docker_kvm_unix_socket_fd_count": 0,
+        "docker_kvm_action_count": 0,
+        "foreign_process_operation_count": 0,
+        "docker_af_unix_capability_retained": True,
+        "kvm_device_capability_retained": True,
+        "docker_kvm_invocation_allowed": False,
+        "docker_kvm_use_mechanically_proven_absent": False,
+        "formal_supplementary_group_isolation_proven": False,
+        "nonformal_residual_disclosed": True,
+    }
+
+
 def _synthetic_stage1_tool_shell_revalidation(
     authority: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
@@ -2130,8 +2228,10 @@ def _mock_network_namespace_probe(
         "/proc/self/status": (
             "CapInh:\t0000000000000000\nCapPrm:\t0000000000000000\n"
             "CapEff:\t0000000000000000\nCapBnd:\t0000000000000000\n"
-            "CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nGroups:\t\n"
+            "CapAmb:\t0000000000000000\nNoNewPrivs:\t1\n"
+            "Groups:\t0 65534 65534\n"
         ),
+        "/proc/self/setgroups": "deny\n",
         "/proc/self/uid_map": f"{namespace['uid_map_line']}\n",
         "/proc/self/gid_map": f"{namespace['gid_map_line']}\n",
         "/proc/net/dev": (
@@ -2155,7 +2255,11 @@ def _mock_network_namespace_probe(
     )
     monkeypatch.setattr(gpu_live_smoke_module.os, "getuid", lambda: 0)
     monkeypatch.setattr(gpu_live_smoke_module.os, "getgid", lambda: 0)
-    monkeypatch.setattr(gpu_live_smoke_module.os, "getgroups", lambda: [])
+    monkeypatch.setattr(
+        gpu_live_smoke_module.os,
+        "getgroups",
+        lambda: [0, 65_534, 65_534],
+    )
     monkeypatch.setattr(
         gpu_live_smoke_module,
         "sys",
@@ -2275,7 +2379,7 @@ def test_static_launch_shim_elf_inspection_closes_pinned_bytes_and_metadata(
     tmp_path: Path,
 ) -> None:
     payload = _synthetic_static_launch_shim_elf()
-    shim = tmp_path / "launch-shim.v1"
+    shim = tmp_path / "launch-shim.v2"
     shim.write_bytes(payload)
     shim.chmod(0o500)
     receipt = gpu_live_smoke_module._inspect_launch_shim_elf(
@@ -2389,7 +2493,7 @@ def test_static_launch_shim_elf_inspection_rejects_path_or_metadata_drift(
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
 ) -> None:
-    shim = tmp_path / "launch-shim.v1"
+    shim = tmp_path / "launch-shim.v2"
     shim.write_bytes(_synthetic_static_launch_shim_elf())
     shim.chmod(0o500)
     expected_uid = os.getuid()
@@ -2463,7 +2567,7 @@ def test_static_launch_shim_elf_inspection_rejects_same_fd_midread_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shim = tmp_path / "launch-shim.v1"
+    shim = tmp_path / "launch-shim.v2"
     shim.write_bytes(_synthetic_static_launch_shim_elf())
     shim.chmod(0o500)
     real_read = gpu_live_smoke_module.os.read
@@ -2497,7 +2601,7 @@ def test_launch_shim_inspectors_reject_symlinked_parent_even_if_realpath_check_i
 ) -> None:
     real_parent = tmp_path / "sealed-parent"
     real_parent.mkdir()
-    shim = real_parent / "launch-shim.v1"
+    shim = real_parent / "launch-shim.v2"
     payload = _synthetic_static_launch_shim_elf()
     shim.write_bytes(payload)
     shim.chmod(0o500)
@@ -2538,7 +2642,7 @@ def test_launch_shim_inspectors_reject_symlinked_parent_even_if_realpath_check_i
         }
     )
     args = SimpleNamespace(
-        authority=str(tmp_path / "authority.v2.json"),
+        authority=str(tmp_path / "authority.v3.json"),
         authority_sha256="8" * 64,
         smoke_packet=launch["smoke_packet_path"],
         model_config_manifest=launch["model_config_manifest_path"],
@@ -2561,8 +2665,8 @@ def test_static_launch_shim_test_boundary_closes_argv_environment_fd_and_bound_f
     tmp_path: Path,
 ) -> None:
     shim_source = tmp_path / "launch-shim-source.c"
-    shim_path = tmp_path / "launch-shim.v1"
-    authority_path = tmp_path / "authority.v2.json"
+    shim_path = tmp_path / "launch-shim.v2"
+    authority_path = tmp_path / "authority.v3.json"
     runner_path = tmp_path / "run-g1-gpu-live-smoke.py"
     packet_path = tmp_path / "smoke-packet.json"
     manifest_path = tmp_path / "model-config-manifest.json"
@@ -2657,7 +2761,7 @@ def test_static_launch_shim_test_boundary_closes_argv_environment_fd_and_bound_f
         authority_path.write_bytes(authority_bytes)
         authority_path.chmod(0o600)
         authority_sha256 = _sha256(authority_bytes)
-        token = f"D034_STAGE0_V1:{authority_path}:{authority_sha256}"
+        token = f"D034_STAGE0_V2:{authority_path}:{authority_sha256}"
         argv = argv_override or [str(shim_path), "-c", token]
         environment = (
             {"LD_LIBRARY_PATH": "/usr/local/cuda-13.0/lib64"}
@@ -2684,7 +2788,7 @@ def test_static_launch_shim_test_boundary_closes_argv_environment_fd_and_bound_f
     assert positive.stdout == positive.stderr == b""
     assert not sentinel_path.exists()
 
-    shell_argument = f"D034_STAGE0_V1:{authority_path}:{_sha256(canonical_authority)}"
+    shell_argument = f"D034_STAGE0_V2:{authority_path}:{_sha256(canonical_authority)}"
     shell_command = f"exec {shim_path} -c {shell_argument}"
     assert os.path.realpath(gpu_live_smoke_module.TOOL_SHELL_PATH) == (
         gpu_live_smoke_module.TOOL_SHELL_RESOLVED_PATH
@@ -2736,7 +2840,7 @@ def test_static_launch_shim_test_boundary_closes_argv_environment_fd_and_bound_f
         assert not sentinel_path.exists(), label
 
     authority_sha256 = _sha256(canonical_authority)
-    valid_token = f"D034_STAGE0_V1:{authority_path}:{authority_sha256}"
+    valid_token = f"D034_STAGE0_V2:{authority_path}:{authority_sha256}"
     hostile_argv = {
         "wrong shell option": [str(shim_path), "-lc", valid_token],
         "extra argv": [str(shim_path), "-c", valid_token, "extra"],
@@ -2756,7 +2860,7 @@ def test_static_launch_shim_test_boundary_closes_argv_environment_fd_and_bound_f
         "token dot path": [
             str(shim_path),
             "-c",
-            f"D034_STAGE0_V1:{authority_path.parent}/./{authority_path.name}:{authority_sha256}",
+            f"D034_STAGE0_V2:{authority_path.parent}/./{authority_path.name}:{authority_sha256}",
         ],
     }
     for label, argv in hostile_argv.items():
@@ -2783,7 +2887,7 @@ def test_static_launch_shim_test_boundary_closes_argv_environment_fd_and_bound_f
             1,
         ).encode("utf-8"),
         "launch escaped ASCII": authority_text.replace(
-            '"token_prefix":"D034_STAGE0_V1"',
+            '"token_prefix":"D034_STAGE0_V2"',
             '"token_prefix":"D034_STAGE0_V\\u0031"',
             1,
         ).encode("utf-8"),
@@ -2845,7 +2949,7 @@ def test_static_launch_shim_builder_records_closed_cpu_only_receipt(
     synthetic_module_path.parent.mkdir(parents=True)
     output_parent = tmp_path / "sealed-output"
     output_parent.mkdir(mode=0o700)
-    output_path = output_parent / "launch-shim.v1"
+    output_path = output_parent / "launch-shim.v2"
     monkeypatch.setattr(gpu_live_smoke_module, "__file__", str(synthetic_module_path))
     monkeypatch.setattr(gpu_live_smoke_module, "LAUNCH_SHIM_PATH", str(output_path))
 
@@ -2920,7 +3024,7 @@ def test_static_launch_shim_builder_records_closed_cpu_only_receipt(
     assert binary["mode"] == 0o500
     assert binary["nlink"] == 1
     assert binary["sha256"] == _sha256(output_path.read_bytes())
-    assert binary["sha256"] == ("f0b645daa52279e46391a04444d617eb619f23b91f797d0710cb579fc5753f4c")
+    assert binary["sha256"] == ("b185e8cf881c792bcaea374a45ca73bec892c06caa04ff015e69797a7d8584b7")
     assert binary["byte_count"] == 26_272
     assert stat.S_IMODE(output_path.stat().st_mode) == 0o500
 
@@ -3035,8 +3139,8 @@ def test_authority_packet_and_preparation_match_published_schemas(
     ("field", "value"),
     (
         ("schema_version", "mobileworld.g1.gpu-live-smoke-launch-shim/v0"),
-        ("path", "/synthetic/launch-shim.v1"),
-        ("resolved_path", "/synthetic/launch-shim.v1"),
+        ("path", "/synthetic/launch-shim.v2"),
+        ("resolved_path", "/synthetic/launch-shim.v2"),
         ("sha256", "not-a-digest"),
         ("byte_count", 0),
         ("byte_count", 4 * 1024 * 1024 + 1),
@@ -3047,7 +3151,7 @@ def test_authority_packet_and_preparation_match_published_schemas(
         ("source_path", "relative/source.c"),
         ("source_sha256", "not-a-digest"),
         ("shell_option", "-lc"),
-        ("token_prefix", "D034_STAGE0_V1 "),
+        ("token_prefix", "D034_STAGE0_V2 "),
         ("runner_cli_path", "relative/runner.py"),
         ("smoke_packet_path", "relative/packet.json"),
         ("model_config_manifest_path", "relative/manifest.json"),
@@ -3191,6 +3295,143 @@ def test_authority_schema_requires_tool_shell_and_unmapped_system_identity() -> 
         assert list(validator.iter_errors(drifted))
 
 
+def test_authority_schema_closes_owner_approved_retained_group_policy() -> None:
+    validator = _schema_validator("gpu_smoke_authority.schema.json")
+    authority = _authority("1" * 64)
+    validator.validate(authority)
+    mutations: dict[str, JsonValue] = {
+        "schema_version": "mobileworld.g1.gpu-live-smoke-supplementary-groups/v0",
+        "owner_approved": False,
+        "policy": "CLEAR_ALL_GROUPS",
+        "host_group_vector": [1035, 999, 109],
+        "host_os_getgroups_sorted": [1035, 999, 109],
+        "host_primary_gid": 999,
+        "host_supplementary_gids": [999, 109],
+        "inside_supplementary_gids_sorted": [0, 65_534],
+        "inside_groups_empty_required": True,
+        "setpriv_group_option": "--clear-groups",
+        "setgroups_control_expected": "allow",
+        "capability_sets_all_zero_required": False,
+        "no_new_privs_required": False,
+        "docker_group_gid": 109,
+        "kvm_group_gid": 999,
+        "docker_kvm_filesystem_access_allowed": True,
+        "docker_kvm_socket_access_allowed": True,
+        "docker_kvm_action_allowed": True,
+        "docker_af_unix_capability_retained": False,
+        "kvm_device_capability_retained": False,
+        "docker_kvm_invocation_allowed": True,
+        "docker_kvm_use_mechanically_proven_absent": True,
+        "formal_supplementary_group_isolation_proven": True,
+        "nonformal_residual_disclosed": False,
+    }
+    for field, replacement in mutations.items():
+        drifted = copy.deepcopy(authority)
+        drifted_policy = cast(
+            dict[str, JsonValue],
+            cast(dict[str, JsonValue], drifted["network_namespace"])["supplementary_groups"],
+        )
+        drifted_policy[field] = replacement
+        assert list(validator.iter_errors(drifted)), field
+
+    missing = copy.deepcopy(authority)
+    cast(
+        dict[str, JsonValue],
+        cast(dict[str, JsonValue], missing["network_namespace"])["supplementary_groups"],
+    ).pop("owner_approved")
+    assert list(validator.iter_errors(missing))
+
+    extra = copy.deepcopy(authority)
+    cast(
+        dict[str, JsonValue],
+        cast(dict[str, JsonValue], extra["network_namespace"])["supplementary_groups"],
+    )["unreviewed_group_authority"] = True
+    assert list(validator.iter_errors(extra))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    (
+        ("policy_bool_as_int", "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID"),
+        ("inside_gid_bool", "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID"),
+        ("top_owner_uid_bool", "GPU_SMOKE_AUTHORITY_OWNER_INVALID"),
+        ("inside_owner_uid_bool", "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID"),
+        ("inside_owner_gid_bool", "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID"),
+    ),
+)
+def test_authority_loader_rejects_boolean_integer_aliases_in_owner_and_group_fields(
+    tmp_path: Path,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    authority = _authority("1" * 64)
+    namespace = cast(dict[str, JsonValue], authority["network_namespace"])
+    policy = cast(dict[str, JsonValue], namespace["supplementary_groups"])
+    if mutation == "policy_bool_as_int":
+        policy["owner_approved"] = 1
+    elif mutation == "inside_gid_bool":
+        policy["inside_supplementary_gids_sorted"] = [False, 65_534, 65_534]
+    elif mutation == "top_owner_uid_bool":
+        authority["owner_uid"] = False
+    elif mutation == "inside_owner_uid_bool":
+        namespace["inside_owner_uid"] = False
+    else:
+        namespace["inside_owner_gid"] = False
+    authority_path, authority_sha = _write_canonical_json(
+        tmp_path,
+        f"bool-alias-{mutation}.json",
+        cast(JsonValue, authority),
+    )
+    _assert_error_code(
+        expected_code,
+        lambda: load_gpu_live_authority(authority_path, authority_sha),
+    )
+
+
+@pytest.mark.parametrize("mutation", ("policy_bool_as_int", "inside_gid_bool"))
+def test_cli_group_policy_validator_rejects_boolean_integer_aliases_before_status_read(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    runner_cli = _load_runner_cli_module()
+    namespace = cast(dict[str, object], _authority("4" * 64)["network_namespace"])
+    policy = cast(dict[str, object], namespace["supplementary_groups"])
+    if mutation == "policy_bool_as_int":
+        policy["owner_approved"] = 1
+    else:
+        policy["inside_supplementary_gids_sorted"] = [False, 65_534, 65_534]
+    monkeypatch.setattr(
+        runner_cli,
+        "_proc_self_status_stdlib",
+        lambda: pytest.fail("invalid policy reached live status inspection"),
+    )
+    with pytest.raises(RuntimeError, match="GPU_SMOKE_NETWORK_NAMESPACE_INVALID"):
+        runner_cli._supplementary_group_runtime_receipt_stdlib(
+            namespace,
+            phase="STAGE1_PRE_SETPRIV",
+            capability_drop_required=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("schema_version", "mobileworld.g1.gpu-live-smoke-authority/v2"),
+        ("evidence_root", "/synthetic/evidence-v2"),
+        ("runtime_scratch_root", "/synthetic/runtime-scratch-v2"),
+    ),
+)
+def test_authority_schema_rejects_obsolete_epoch_or_root(
+    field: str,
+    value: JsonValue,
+) -> None:
+    validator = _schema_validator("gpu_smoke_authority.schema.json")
+    authority = _authority("1" * 64)
+    validator.validate(authority)
+    authority[field] = value
+    assert list(validator.iter_errors(authority))
+
+
 def test_actual_tool_shell_cpu_inspection_closes_three_elf_abis_loader_inputs_and_owner_role(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3314,9 +3555,9 @@ def test_authority_schema_closes_every_tool_shell_component_chain_entry_and_cens
     ("field", "value"),
     (
         ("schema_version", "mobileworld.g1.gpu-live-smoke-launch-invocation/v0"),
-        ("path", "/synthetic/launch-shim.v1"),
-        ("authority_path", "/synthetic/authority.v2.json"),
-        ("argument_prefix", "D034_STAGE0_V1 "),
+        ("path", "/synthetic/launch-shim.v2"),
+        ("authority_path", "/synthetic/authority.v3.json"),
+        ("argument_prefix", "D034_STAGE0_V2 "),
         ("shell_argument_sha256", "not-a-digest"),
         ("shell_argument_byte_count", 171),
         ("tool_shell_path", "/usr/bin/dash"),
@@ -3806,6 +4047,33 @@ def test_authority_rejects_gpu0_runtime_port_retry_and_process_policy_drift(
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("evidence_root", "/synthetic/evidence-v3"),
+        ("runtime_scratch_root", "/synthetic/runtime-scratch-v3"),
+    ),
+)
+def test_production_authority_loader_rejects_non_operational_v3_root(
+    tmp_path: Path,
+    field: str,
+    value: JsonValue,
+) -> None:
+    packet_value = _gpu_smoke_packet()
+    _, packet_sha = _write_canonical_json(tmp_path, "root-packet.json", packet_value)
+    authority = _authority(packet_sha)
+    authority[field] = value
+    authority_path, authority_sha = _write_canonical_json(
+        tmp_path,
+        f"wrong-{field}.json",
+        cast(JsonValue, authority),
+    )
+    _assert_error_code(
+        "GPU_SMOKE_SOURCE_BINDING_INVALID",
+        lambda: load_gpu_live_authority(authority_path, authority_sha),
+    )
+
+
 def test_prepare_is_deterministic_cpu_only_and_owner_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3866,9 +4134,15 @@ def test_prepare_is_deterministic_cpu_only_and_owner_bound(
     assert first["g1_4_call_count"] == 12
     assert first["g1_5_call_count"] == 10
     assert first["model_order"] == list(MODEL_ORDER)
+    assert first["schema_version"] == "mobileworld.g1.gpu-live-smoke-preparation/v2"
+    assert (
+        first["supplementary_groups_policy"]
+        == cast(dict[str, JsonValue], authority.network_namespace)["supplementary_groups"]
+    )
+    _schema_validator("gpu_smoke_preparation.schema.json").validate(first)
     assert first["validated"] is first["prepared"] is True
     launch_token = (
-        f"D034_STAGE0_V1:{gpu_live_smoke_module.LAUNCH_SHIM_AUTHORITY_PATH}:{authority.sha256}"
+        f"D034_STAGE0_V2:{gpu_live_smoke_module.LAUNCH_SHIM_AUTHORITY_PATH}:{authority.sha256}"
     )
     launch_command = f"exec {authority.launch_shim['path']} -c {launch_token}"
     tool_shell = authority.tool_shell
@@ -3881,7 +4155,7 @@ def test_prepare_is_deterministic_cpu_only_and_owner_bound(
         "byte_count": authority.launch_shim["byte_count"],
         "authority_path": gpu_live_smoke_module.LAUNCH_SHIM_AUTHORITY_PATH,
         "authority_sha256": authority.sha256,
-        "argument_prefix": "D034_STAGE0_V1",
+        "argument_prefix": "D034_STAGE0_V2",
         "shell_argument_sha256": _sha256(launch_token.encode("ascii")),
         "shell_argument_byte_count": len(launch_token.encode("ascii")),
         "tool_shell_path": "/bin/sh",
@@ -3934,14 +4208,9 @@ def test_prepare_is_deterministic_cpu_only_and_owner_bound(
     forged_path, forged_sha = _write_canonical_json(
         tmp_path, "foreign-owner-authority.json", cast(JsonValue, forged)
     )
-    foreign_authority = load_gpu_live_authority(forged_path, forged_sha)
     _assert_error_code(
-        "GPU_SMOKE_AUTHORITY_OWNER_MISMATCH",
-        lambda: prepare_gpu_live_smoke(
-            foreign_authority,
-            packet,
-            MODEL_CONFIG_PATH,
-        ),
+        "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+        lambda: load_gpu_live_authority(forged_path, forged_sha),
     )
 
 
@@ -3953,16 +4222,35 @@ def test_network_namespace_receipt_closes_identity_routes_tools_and_environment_
     _mock_network_namespace_probe(monkeypatch, authority)
     receipt = gpu_live_smoke_module._verify_network_namespace(authority)
     namespace = cast(dict[str, JsonValue], authority.network_namespace)
-    assert receipt["schema_version"] == ("mobileworld.g1.gpu-live-smoke-network-namespace/v1")
-    assert receipt["implementation"] == "LINUX_USER_NETNS_MAP_ROOT_V1"
+    assert receipt["schema_version"] == ("mobileworld.g1.gpu-live-smoke-network-namespace/v2")
+    assert receipt["implementation"] == "LINUX_USER_NETNS_MAP_ROOT_RETAIN_GROUPS_V2"
     assert receipt["host_owner_uid"] == 1035
     assert receipt["host_owner_gid"] == 1035
     assert receipt["inside_owner_uid"] == 0
     assert receipt["inside_owner_gid"] == 0
     assert receipt["inside_unmapped_system_uid"] == 65_534
     assert receipt["inside_unmapped_system_gid"] == 65_534
-    assert receipt["supplementary_groups"] == []
-    assert receipt["supplementary_groups_empty"] is True
+    supplementary_groups = cast(
+        dict[str, JsonValue],
+        receipt["supplementary_groups"],
+    )
+    assert supplementary_groups == _synthetic_supplementary_groups_runtime_receipt()
+    assert set(supplementary_groups) == gpu_live_smoke_module._SUPPLEMENTARY_GROUP_RUNTIME_KEYS
+    assert supplementary_groups["observed_inside_supplementary_gids_sorted"] == [
+        0,
+        65_534,
+        65_534,
+    ]
+    assert supplementary_groups["proc_status_groups_sorted"] == [0, 65_534, 65_534]
+    assert supplementary_groups["setgroups_control"] == "deny"
+    assert supplementary_groups["docker_kvm_filesystem_fd_count"] == 0
+    assert supplementary_groups["docker_kvm_unix_socket_fd_count"] == 0
+    assert supplementary_groups["docker_kvm_action_count"] == 0
+    assert supplementary_groups["foreign_process_operation_count"] == 0
+    assert supplementary_groups["docker_af_unix_capability_retained"] is True
+    assert supplementary_groups["kvm_device_capability_retained"] is True
+    assert supplementary_groups["docker_kvm_invocation_allowed"] is False
+    assert supplementary_groups["docker_kvm_use_mechanically_proven_absent"] is False
     assert receipt["uid_map_line"] == "0 1035 1"
     assert receipt["gid_map_line"] == "0 1035 1"
     assert receipt["interfaces"] == ["lo"]
@@ -3971,7 +4259,8 @@ def test_network_namespace_receipt_closes_identity_routes_tools_and_environment_
     assert receipt["default_route_count"] == 0
     assert receipt["ipv6_unreachable_default_sentinel_count"] == 2
     assert receipt["ipv6_loopback_host_route_count"] == 1
-    assert receipt["external_network_mechanically_unavailable"] is True
+    assert receipt["inet_inet6_external_network_mechanically_unavailable"] is True
+    assert "external_network_mechanically_unavailable" not in receipt
     assert receipt["loopback"] == {
         "address": "127.0.0.1",
         "protocol": "TCP",
@@ -4030,7 +4319,18 @@ def test_network_namespace_receipt_closes_identity_routes_tools_and_environment_
 
 @pytest.mark.parametrize(
     "mutation",
-    ("uid", "uid_map", "environment", "interface", "ipv4_route"),
+    (
+        "uid",
+        "uid_map",
+        "environment",
+        "interface",
+        "ipv4_route",
+        "groups_os",
+        "groups_status",
+        "setgroups",
+        "capability",
+        "no_new_privs",
+    ),
 )
 def test_network_namespace_probe_fails_closed_on_identity_or_network_drift_cpu_mock(
     tmp_path: Path,
@@ -4049,12 +4349,258 @@ def test_network_namespace_probe_fails_closed_on_identity_or_network_drift_cpu_m
         )
     elif mutation == "interface":
         readings["/proc/net/dev"] += "  eth0: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n"
-    else:
+    elif mutation == "ipv4_route":
         readings["/proc/net/route"] += "lo 00000000 00000000 0001 0 0 0 00000000 0 0 0\n"
+    elif mutation == "groups_os":
+        monkeypatch.setattr(gpu_live_smoke_module.os, "getgroups", lambda: [0, 65_534])
+    elif mutation == "groups_status":
+        readings["/proc/self/status"] = readings["/proc/self/status"].replace(
+            "Groups:\t0 65534 65534", "Groups:\t0 65534"
+        )
+    elif mutation == "setgroups":
+        readings["/proc/self/setgroups"] = "allow\n"
+    elif mutation == "capability":
+        readings["/proc/self/status"] = readings["/proc/self/status"].replace(
+            "CapEff:\t0000000000000000", "CapEff:\t0000000000000001"
+        )
+    else:
+        readings["/proc/self/status"] = readings["/proc/self/status"].replace(
+            "NoNewPrivs:\t1", "NoNewPrivs:\t0"
+        )
     _assert_error_code(
         "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
         lambda: gpu_live_smoke_module._verify_network_namespace(authority),
     )
+
+
+@pytest.mark.parametrize(
+    ("stage", "uid", "gid", "groups", "expected_map_paths"),
+    (
+        ("STAGE0", 1035, 1035, [109, 999, 1035], []),
+        (
+            "STAGE1",
+            0,
+            0,
+            [0, 65_534, 65_534],
+            ["/proc/self/uid_map", "/proc/self/gid_map"],
+        ),
+    ),
+)
+def test_stage0_stage1_identity_validator_locks_exact_groups_and_call_graph_cpu_mock(
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    uid: int,
+    gid: int,
+    groups: list[int],
+    expected_map_paths: list[str],
+) -> None:
+    runner_cli = _load_runner_cli_module()
+    namespace = cast(dict[str, object], _authority("4" * 64)["network_namespace"])
+    monkeypatch.setattr(runner_cli.os, "getuid", lambda: uid)
+    monkeypatch.setattr(runner_cli.os, "getgid", lambda: gid)
+    monkeypatch.setattr(runner_cli.os, "getgroups", lambda: groups.copy())
+    map_paths: list[str] = []
+
+    def normalized_map(path: str) -> str:
+        map_paths.append(path)
+        return cast(
+            str,
+            namespace["uid_map_line" if path.endswith("uid_map") else "gid_map_line"],
+        )
+
+    monkeypatch.setattr(runner_cli, "_normalized_id_map_stdlib", normalized_map)
+    runner_cli._validate_namespace_stage_identity_stdlib(namespace, stage=stage)
+    assert map_paths == expected_map_paths
+
+
+@pytest.mark.parametrize(
+    ("stage", "uid", "gid", "groups"),
+    (
+        ("STAGE0", 1035, 1035, [1035, 109]),
+        ("STAGE1", 0, 0, [0, 65_534]),
+        ("STAGE2", 0, 0, [0, 65_534, 65_534]),
+    ),
+)
+def test_stage0_stage1_identity_validator_rejects_group_or_wrong_stage_before_map_read(
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    uid: int,
+    gid: int,
+    groups: list[int],
+) -> None:
+    runner_cli = _load_runner_cli_module()
+    namespace = cast(dict[str, object], _authority("4" * 64)["network_namespace"])
+    monkeypatch.setattr(runner_cli.os, "getuid", lambda: uid)
+    monkeypatch.setattr(runner_cli.os, "getgid", lambda: gid)
+    monkeypatch.setattr(runner_cli.os, "getgroups", lambda: groups.copy())
+    monkeypatch.setattr(
+        runner_cli,
+        "_normalized_id_map_stdlib",
+        lambda _path: pytest.fail("identity drift must fail before map inspection"),
+    )
+    with pytest.raises(RuntimeError, match="GPU_SMOKE_NETWORK_NAMESPACE_INVALID"):
+        runner_cli._validate_namespace_stage_identity_stdlib(namespace, stage=stage)
+
+
+@pytest.mark.parametrize(
+    ("cap_eff", "no_new_privs", "expected_caps_zero", "expected_nnp"),
+    (
+        ("000001ffffffffff", "0", False, False),
+        ("0000000000000000", "1", True, True),
+    ),
+)
+def test_stage1_supplementary_group_receipt_records_caps_and_nnp_without_zero_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    cap_eff: str,
+    no_new_privs: str,
+    expected_caps_zero: bool,
+    expected_nnp: bool,
+) -> None:
+    runner_cli = _load_runner_cli_module()
+    namespace = cast(dict[str, object], _authority("4" * 64)["network_namespace"])
+    status = {
+        "Groups": "0 65534 65534",
+        "CapInh": "0000000000000000",
+        "CapPrm": cap_eff,
+        "CapEff": cap_eff,
+        "CapBnd": cap_eff,
+        "CapAmb": "0000000000000000",
+        "NoNewPrivs": no_new_privs,
+    }
+    monkeypatch.setattr(runner_cli.os, "getgroups", lambda: [0, 65_534, 65_534])
+    monkeypatch.setattr(runner_cli, "_proc_self_status_stdlib", lambda: status.copy())
+    monkeypatch.setattr(
+        runner_cli.Path,
+        "read_text",
+        lambda _path, *, encoding: "deny\n",
+    )
+    monkeypatch.setattr(
+        runner_cli,
+        "_retained_group_sensitive_fd_counts_stdlib",
+        lambda: (0, 0),
+    )
+    receipt = runner_cli._supplementary_group_runtime_receipt_stdlib(
+        namespace,
+        phase="STAGE1_PRE_SETPRIV",
+        capability_drop_required=False,
+    )
+    assert receipt["capability_sets_all_zero"] is expected_caps_zero
+    assert receipt["no_new_privs"] is expected_nnp
+    assert receipt["capability_drop_required_at_phase"] is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("groups_os", "groups_status", "setgroups", "filesystem_fd", "unix_socket_fd"),
+)
+@pytest.mark.parametrize(
+    ("phase", "capability_drop_required"),
+    (("STAGE1_PRE_SETPRIV", False), ("STAGE2_POST_SETPRIV", True)),
+)
+def test_stage1_stage2_group_receipt_rejects_group_setgroups_or_retained_fd_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    phase: str,
+    capability_drop_required: bool,
+) -> None:
+    runner_cli = _load_runner_cli_module()
+    namespace = cast(dict[str, object], _authority("4" * 64)["network_namespace"])
+    status = {
+        "Groups": "0 65534 65534",
+        "CapInh": "0000000000000000",
+        "CapPrm": ("0000000000000000" if capability_drop_required else "000001ffffffffff"),
+        "CapEff": ("0000000000000000" if capability_drop_required else "000001ffffffffff"),
+        "CapBnd": ("0000000000000000" if capability_drop_required else "000001ffffffffff"),
+        "CapAmb": "0000000000000000",
+        "NoNewPrivs": "1" if capability_drop_required else "0",
+    }
+    groups = [0, 65_534, 65_534]
+    setgroups = "deny\n"
+    retained_fd_counts = (0, 0)
+    if mutation == "groups_os":
+        groups = [0, 65_534]
+    elif mutation == "groups_status":
+        status["Groups"] = "0 65534"
+    elif mutation == "setgroups":
+        setgroups = "allow\n"
+    elif mutation == "filesystem_fd":
+        retained_fd_counts = (1, 0)
+    else:
+        retained_fd_counts = (0, 1)
+    monkeypatch.setattr(runner_cli.os, "getgroups", lambda: groups.copy())
+    monkeypatch.setattr(runner_cli, "_proc_self_status_stdlib", lambda: status.copy())
+    monkeypatch.setattr(
+        runner_cli.Path,
+        "read_text",
+        lambda _path, *, encoding: setgroups,
+    )
+    monkeypatch.setattr(
+        runner_cli,
+        "_retained_group_sensitive_fd_counts_stdlib",
+        lambda: retained_fd_counts,
+    )
+    with pytest.raises(RuntimeError, match="GPU_SMOKE_NETWORK_NAMESPACE_INVALID"):
+        runner_cli._supplementary_group_runtime_receipt_stdlib(
+            namespace,
+            phase=phase,
+            capability_drop_required=capability_drop_required,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "phase", "capability_drop_required"),
+    (
+        ("missing_capability", "STAGE1_PRE_SETPRIV", False),
+        ("malformed_capability", "STAGE1_PRE_SETPRIV", False),
+        ("missing_nnp", "STAGE1_PRE_SETPRIV", False),
+        ("bad_nnp", "STAGE1_PRE_SETPRIV", False),
+        ("wrong_stage1_drop", "STAGE1_PRE_SETPRIV", True),
+        ("wrong_stage2_drop", "STAGE2_POST_SETPRIV", False),
+    ),
+)
+def test_group_runtime_receipt_rejects_malformed_caps_nnp_or_phase_drop_pair(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    phase: str,
+    capability_drop_required: bool,
+) -> None:
+    runner_cli = _load_runner_cli_module()
+    namespace = cast(dict[str, object], _authority("4" * 64)["network_namespace"])
+    status = {
+        "Groups": "0 65534 65534",
+        "CapInh": "0000000000000000",
+        "CapPrm": "000001ffffffffff",
+        "CapEff": "000001ffffffffff",
+        "CapBnd": "000001ffffffffff",
+        "CapAmb": "0000000000000000",
+        "NoNewPrivs": "0",
+    }
+    if mutation == "missing_capability":
+        status.pop("CapEff")
+    elif mutation == "malformed_capability":
+        status["CapEff"] = "000000000000000G"
+    elif mutation == "missing_nnp":
+        status.pop("NoNewPrivs")
+    elif mutation == "bad_nnp":
+        status["NoNewPrivs"] = "2"
+    monkeypatch.setattr(runner_cli.os, "getgroups", lambda: [0, 65_534, 65_534])
+    monkeypatch.setattr(runner_cli, "_proc_self_status_stdlib", lambda: status.copy())
+    monkeypatch.setattr(
+        runner_cli.Path,
+        "read_text",
+        lambda _path, *, encoding: "deny\n",
+    )
+    monkeypatch.setattr(
+        runner_cli,
+        "_retained_group_sensitive_fd_counts_stdlib",
+        lambda: (0, 0),
+    )
+    with pytest.raises(RuntimeError, match="GPU_SMOKE_NETWORK_NAMESPACE_INVALID"):
+        runner_cli._supplementary_group_runtime_receipt_stdlib(
+            namespace,
+            phase=phase,
+            capability_drop_required=capability_drop_required,
+        )
 
 
 def test_outer_fd_closure_removes_synthetic_inheritable_inet_socket_before_unshare(
@@ -4112,16 +4658,18 @@ def test_outer_fd_closure_removes_synthetic_inheritable_inet_socket_before_unsha
 def test_three_stage_production_candidate_hash_sentinel() -> None:
     runner_cli = _load_runner_cli_module()
     runner_module_path = REPOSITORY_ROOT / "MobileWorld/src/mobile_world/offline/gpu_live_smoke.py"
+    assert len(runner_module_path.read_bytes()) == 520_831
     assert _sha256(runner_module_path.read_bytes()) == (
-        "634d62a048d9cd0621419602b39ee92cc6b70e1d87fac72b954dbc6de8e2f824"
+        "f3b0ebce657361ddc997ae85e3ad7f890a5e66f41623f52dd00470f594c99f3d"
     )
+    assert len(GPU_SMOKE_RUNNER_CLI.read_bytes()) == 152_412
     assert _sha256(GPU_SMOKE_RUNNER_CLI.read_bytes()) == (
-        "1c61b4496a857e1942fb314450a724f14b7d68263295455b7e13922a4671e823"
+        "4b9830312dba1852ef0d5477a9a6d25418ee594d08080fda6888c522373fc776"
     )
     shim_source = REPOSITORY_ROOT / "MobileWorld/scripts/g1_gpu_live_smoke_launch_shim.c"
     assert len(shim_source.read_bytes()) == 55_526
     assert _sha256(shim_source.read_bytes()) == (
-        "7e7f2ab5356a50a00c2a28beacfb8fda96402c51b1daa5fb245dff187f35c390"
+        "a01656dcd41feeef3e4d78921fbb61993f4f4fff3f0d52555dffa781cc80c831"
     )
     bootstrap_bytes = runner_cli._OUTER_STDLIB_BOOTSTRAP_CODE.encode("utf-8")
     assert len(bootstrap_bytes) == 4_645
@@ -4300,6 +4848,7 @@ def test_stage1_system_python_censuses_private_runtime_before_private_exec(
     monkeypatch.setattr(runner_cli.os, "environ", pre_namespace_environment.copy())
     monkeypatch.setattr(runner_cli.os, "getuid", lambda: 0)
     monkeypatch.setattr(runner_cli.os, "getgid", lambda: 0)
+    monkeypatch.setattr(runner_cli.os, "getgroups", lambda: [0, 65_534, 65_534])
     monkeypatch.setattr(
         runner_cli,
         "_outer_authority_namespace_values",
@@ -4377,8 +4926,18 @@ def test_stage1_system_python_censuses_private_runtime_before_private_exec(
         "_verify_tool_shell_binding_stdlib",
         fake_tool_shell_revalidation,
     )
+    stage1_groups = _synthetic_supplementary_groups_runtime_receipt(phase="STAGE1_PRE_SETPRIV")
+    monkeypatch.setattr(
+        runner_cli,
+        "_supplementary_group_runtime_receipt_stdlib",
+        lambda _namespace, *, phase, capability_drop_required: (
+            copy.deepcopy(stage1_groups)
+            if phase == "STAGE1_PRE_SETPRIV" and capability_drop_required is False
+            else pytest.fail("unexpected Stage1 supplementary-group receipt request")
+        ),
+    )
     preexec_receipt: dict[str, JsonValue] = {
-        "schema_version": "mobileworld.g1.gpu-live-smoke-preimport-runtime-census/v1",
+        "schema_version": "mobileworld.g1.gpu-live-smoke-preimport-runtime-census/v2",
         "phase": "PRE_PRIVATE_EXEC",
         "private_runtime": {"tree_sha256": "c" * 64},
         "private_python": {"sha256": "b" * 64},
@@ -4424,6 +4983,11 @@ def test_stage1_system_python_censuses_private_runtime_before_private_exec(
         runner_cli,
         "_bootstrap_import_paths",
         lambda _args: pytest.fail("private/source imports ran in system stage1"),
+    )
+    monkeypatch.setattr(
+        runner_cli,
+        "_outer_execute_context",
+        lambda _args: pytest.fail("Stage1 reached the Stage0 full context"),
     )
 
     class ExecveIntercept(BaseException):
@@ -4479,7 +5043,7 @@ def test_stage1_system_python_censuses_private_runtime_before_private_exec(
         "--bounding-set=-all",
         "--ambient-caps=-all",
         "--inh-caps=-all",
-        "--clear-groups",
+        "--keep-groups",
         "/synthetic/private-runtime/g1-gpu-smoke/bin/python3.12",
     ]
     assert sandbox_argv[setpriv_index + 7 : setpriv_index + 12] == [
@@ -4497,6 +5061,7 @@ def test_stage1_system_python_censuses_private_runtime_before_private_exec(
     )
     assert decoded_stage1_receipt["launch_shim_revalidation"] == (launch_shim_revalidation)
     assert decoded_stage1_receipt["tool_shell_revalidation"] == tool_shell_revalidation
+    assert decoded_stage1_receipt["supplementary_groups"] == stage1_groups
     assert decoded_stage1_receipt["inside_unmapped_system_uid"] == 65_534
     assert decoded_stage1_receipt["inside_unmapped_system_gid"] == 65_534
     assert decoded_stage1_receipt["system_owner_role"] == (
@@ -4537,6 +5102,7 @@ def test_stage1_encodings_tree_drift_fails_before_all_side_effects(
     monkeypatch.setattr(runner_cli.os, "environ", pre_namespace_environment.copy())
     monkeypatch.setattr(runner_cli.os, "getuid", lambda: 0)
     monkeypatch.setattr(runner_cli.os, "getgid", lambda: 0)
+    monkeypatch.setattr(runner_cli.os, "getgroups", lambda: [0, 65_534, 65_534])
     monkeypatch.setattr(
         runner_cli,
         "_outer_authority_namespace_values",
@@ -4571,6 +5137,15 @@ def test_stage1_encodings_tree_drift_fails_before_all_side_effects(
         runner_cli,
         "_verify_tool_shell_binding_stdlib",
         lambda *_args, **_kwargs: _synthetic_stage1_tool_shell_revalidation(authority),
+    )
+    monkeypatch.setattr(
+        runner_cli,
+        "_supplementary_group_runtime_receipt_stdlib",
+        lambda _namespace, *, phase, capability_drop_required: (
+            _synthetic_supplementary_groups_runtime_receipt(phase=phase)
+            if phase == "STAGE1_PRE_SETPRIV" and capability_drop_required is False
+            else pytest.fail("unexpected Stage1 supplementary-group receipt request")
+        ),
     )
     census_calls: list[str] = []
 
@@ -4646,6 +5221,7 @@ def test_stage1_launch_shim_drift_fails_before_runtime_or_live_side_effects(
     monkeypatch.setattr(runner_cli.os, "environ", pre_namespace_environment.copy())
     monkeypatch.setattr(runner_cli.os, "getuid", lambda: 0)
     monkeypatch.setattr(runner_cli.os, "getgid", lambda: 0)
+    monkeypatch.setattr(runner_cli.os, "getgroups", lambda: [0, 65_534, 65_534])
     monkeypatch.setattr(
         runner_cli,
         "_outer_authority_namespace_values",
@@ -4777,6 +5353,15 @@ def test_inner_namespace_bootstrap_inserts_exact_bound_paths_without_executing_p
         runner_cli,
         "_decode_stage1_receipt",
         lambda _args: order.append("DECODE_STAGE1") or stage1_receipt,
+    )
+    monkeypatch.setattr(
+        runner_cli,
+        "_supplementary_group_runtime_receipt_stdlib",
+        lambda _namespace, *, phase, capability_drop_required: (
+            _synthetic_supplementary_groups_runtime_receipt(phase=phase)
+            if phase == "STAGE2_POST_SETPRIV" and capability_drop_required is True
+            else pytest.fail("unexpected Stage2 supplementary-group receipt request")
+        ),
     )
     monkeypatch.setattr(
         runner_cli,
@@ -7020,7 +7605,9 @@ def test_injected_executor_closes_exact_sequential_22_call_pass_evidence_cpu_onl
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authority_path, authority_sha, packet_path, evidence_root = _execution_files(tmp_path)
+    authority_path, authority_sha, packet_path, evidence_root = _execution_files(
+        tmp_path, monkeypatch
+    )
     operations = _FakeGpuLiveOperations()
     _block_real_live_boundaries(monkeypatch)
     terminal = execute_gpu_live_smoke(
@@ -7114,6 +7701,17 @@ def test_injected_executor_closes_exact_sequential_22_call_pass_evidence_cpu_onl
         cast(JsonValue, terminal["terminal_receipt"]),
         schema_name="gpu_smoke_execution.schema.json",
     )
+    assert stored_terminal["schema_version"] == ("mobileworld.g1.gpu-live-smoke-execution/v2")
+    obsolete_execution = copy.deepcopy(stored_terminal)
+    obsolete_execution["schema_version"] = "mobileworld.g1.gpu-live-smoke-execution/v1"
+    assert list(
+        _schema_validator("gpu_smoke_execution.schema.json").iter_errors(obsolete_execution)
+    )
+    obsolete_locator = copy.deepcopy(terminal)
+    obsolete_locator["schema_version"] = "mobileworld.g1.gpu-live-smoke-execution/v1"
+    assert list(
+        _schema_validator("gpu_smoke_execution_locator.schema.json").iter_errors(obsolete_locator)
+    )
     assert locator_keys.isdisjoint(stored_terminal)
     assert stored_terminal == {
         key: value for key, value in terminal.items() if key not in locator_keys
@@ -7138,6 +7736,10 @@ def test_injected_executor_closes_exact_sequential_22_call_pass_evidence_cpu_onl
         lifecycle_count=2,
     )
     ledger = cast(dict[str, JsonValue], terminal["operation_ledger"])
+    assert set(ledger) == _schema_definition_required_keys(
+        "gpu_smoke_execution.schema.json", "passLedger"
+    )
+    assert "external_network_mechanically_unavailable" not in ledger
     assert ledger["model_launch_count"] == 2
     assert ledger["logical_call_count"] == 22
     assert ledger["physical_http_request_count"] == 22
@@ -7149,7 +7751,7 @@ def test_injected_executor_closes_exact_sequential_22_call_pass_evidence_cpu_onl
     assert ledger["runtime_scratch_post_receipts"] == terminal["runtime_scratch_post_receipts"]
     assert ledger["server_environment_receipts"] == terminal["server_environment_receipts"]
     assert ledger["runtime_scratch_preserved_for_audit"] is True
-    assert ledger["external_network_mechanically_unavailable"] is True
+    assert ledger["inet_inet6_external_network_mechanically_unavailable"] is True
     assert ledger["server_log_capture_complete"] is True
     for key in (
         "foreign_process_target_count",
@@ -7362,7 +7964,9 @@ def test_injected_executor_failure_is_terminal_no_retry_and_still_sealed_cpu_onl
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authority_path, authority_sha, packet_path, evidence_root = _execution_files(tmp_path)
+    authority_path, authority_sha, packet_path, evidence_root = _execution_files(
+        tmp_path, monkeypatch
+    )
     operations = _FakeGpuLiveOperations(fail_at_call=3)
     _block_real_live_boundaries(monkeypatch)
     with pytest.raises(GpuLiveSmokeError) as raised:
@@ -7405,6 +8009,12 @@ def test_injected_executor_failure_is_terminal_no_retry_and_still_sealed_cpu_onl
     assert terminal["logical_call_count"] == 3
     assert terminal["physical_http_request_count"] == 3
     assert terminal["sdk_hidden_retry_count"] == 0
+    failure_ledger = cast(dict[str, JsonValue], terminal["operation_ledger"])
+    assert set(failure_ledger) == _schema_definition_required_keys(
+        "gpu_smoke_execution.schema.json", "failLedger"
+    )
+    assert "inet_inet6_external_network_mechanically_unavailable" in failure_ledger
+    assert "external_network_mechanically_unavailable" not in failure_ledger
     assert len(cast(list[JsonValue], terminal["call_receipts"])) == 3
     assert len(cast(list[JsonValue], terminal["lifecycle_receipts"])) == 1
     assert operations.invoke_count == 3
@@ -7475,7 +8085,9 @@ def test_provisional_failed_launch_freeze_is_persisted_before_any_cleanup_signal
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authority_path, authority_sha, packet_path, evidence_root = _execution_files(tmp_path)
+    authority_path, authority_sha, packet_path, evidence_root = _execution_files(
+        tmp_path, monkeypatch
+    )
     order: list[str] = []
     operations = _FailedLaunchGpuLiveOperations(order)
     original_event = gpu_live_smoke_module._EvidenceStore.event
@@ -7531,7 +8143,9 @@ def test_failed_launch_freeze_failure_sends_nothing_and_marks_closure_unproven(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authority_path, authority_sha, packet_path, evidence_root = _execution_files(tmp_path)
+    authority_path, authority_sha, packet_path, evidence_root = _execution_files(
+        tmp_path, monkeypatch
+    )
     operations = _UnfrozenFailedLaunchGpuLiveOperations([])
     _block_real_live_boundaries(monkeypatch)
     with pytest.raises(GpuLiveSmokeError) as raised:
@@ -7651,7 +8265,9 @@ def test_primary_partial_cleanup_failure_is_retained_and_outer_retry_closes_exac
                 "signal_trace": retry_trace,
             }
 
-    authority_path, authority_sha, packet_path, evidence_root = _execution_files(tmp_path)
+    authority_path, authority_sha, packet_path, evidence_root = _execution_files(
+        tmp_path, monkeypatch
+    )
     operations = PartialCleanupFailureOperations()
     _block_real_live_boundaries(monkeypatch)
     with pytest.raises(GpuLiveSmokeError) as raised:
@@ -7738,7 +8354,9 @@ def test_model_stage_owned_command_signal_trace_is_consumed_once_across_outer_re
             error.execution_detail = {"owned_command": receipt}
             raise error
 
-    authority_path, authority_sha, packet_path, evidence_root = _execution_files(tmp_path)
+    authority_path, authority_sha, packet_path, evidence_root = _execution_files(
+        tmp_path, monkeypatch
+    )
     operations = ModelStageOwnedCommandFailureOperations()
     _block_real_live_boundaries(monkeypatch)
     with pytest.raises(GpuLiveSmokeError) as raised:
@@ -7798,7 +8416,9 @@ def test_unpersisted_launch_and_cleanup_freeze_never_reach_stop_or_signal(
             self.stop_attempt_count += 1
             raise AssertionError("no signal-capable cleanup may run without persisted freeze")
 
-    authority_path, authority_sha, packet_path, evidence_root = _execution_files(tmp_path)
+    authority_path, authority_sha, packet_path, evidence_root = _execution_files(
+        tmp_path, monkeypatch
+    )
     operations = NoUnfrozenStopOperations()
     original_event = gpu_live_smoke_module._EvidenceStore.event
 
@@ -7866,7 +8486,9 @@ def test_preseal_schema_validation_reads_referenced_on_disk_call_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authority_path, authority_sha, packet_path, _evidence_root = _execution_files(tmp_path)
+    authority_path, authority_sha, packet_path, _evidence_root = _execution_files(
+        tmp_path, monkeypatch
+    )
     operations = _FakeGpuLiveOperations()
     _block_real_live_boundaries(monkeypatch)
     original_seal = gpu_live_smoke_module._EvidenceStore.seal
@@ -7935,7 +8557,9 @@ def test_post_response_parser_failure_retains_raw_http_evidence_and_validates_sc
                 "generated_action_executed": False,
             }
 
-    authority_path, authority_sha, packet_path, evidence_root = _execution_files(tmp_path)
+    authority_path, authority_sha, packet_path, evidence_root = _execution_files(
+        tmp_path, monkeypatch
+    )
     operations = PostResponseFailureOperations()
     _block_real_live_boundaries(monkeypatch)
     with pytest.raises(GpuLiveSmokeError) as raised:
@@ -8059,7 +8683,7 @@ def test_popen_success_then_pidfd_open_failure_retains_exact_handle_without_sign
             authority,
             plan,
             cast(Any, object()),
-            "/synthetic/runtime-scratch/g1-gpu-smoke/run/qwen3vl_8b",
+            f"{authority.runtime_scratch_root}/g1-gpu-smoke/run/qwen3vl_8b",
             environment,
         )
     assert raised.value.code == "GPU_SMOKE_SERVER_GUARD_CAPTURE_FAILED"
