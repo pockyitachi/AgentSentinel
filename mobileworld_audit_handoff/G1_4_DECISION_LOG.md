@@ -207,3 +207,29 @@ runtime-scratch-v3 epoch。authority v1/v2、旧 shim、旧 evidence/scratch 均
 禁止 retry、reuse、rename、overwrite、truncate 或 delete。Preparation、network namespace 与
 stored execution receipts 分别升级为 v2；execution v2 只接受 INET/INET6 限定网络语义，旧 v1
 receipt 不得按 v2 重新解释。任何进一步范围变化仍需新的 owner 决策与版本化合同修订。
+
+### D-034 Amendment 2 — authority v4 使用 Git no-spawn empty fsmonitor override
+
+**状态：Locked narrow owner amendment（owner 于 2026-08-30 明确批准；不改写上方历史
+D-034 或 Amendment 1 文本）**
+
+authority-v3 live attempt 因 host Git 2.34 将 `core.fsmonitor=false` 解释为可执行 fsmonitor
+hook path 并生成 `/usr/bin/false` child 而由 owned-command controller fail closed。该 attempt
+完成 `0/22` calls，且失败发生在任何 GPU probe、模型加载、服务、请求、provider、replay 或
+MobileWorld action 之前。其 authority-v3、launch-shim-v2、evidence-v3 与 runtime-scratch-v3
+及全部失败 receipt/content objects 必须保持只读历史事实，禁止 retry、reuse、rename、overwrite、
+truncate 或 delete。
+
+Owner 只额外授权 `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_2.md` 的窄修。后续唯一可审
+generation 是 authority v4、launch-shim v3、token `D034_STAGE0_V3`、authority.v4.json、
+evidence-v4 与 runtime-scratch-v4。所有 production Git argv 必须使用 exact
+`-c core.fsmonitor= -c core.hooksPath=/dev/null`；literal `core.fsmonitor=false` 被禁止，且 actual
+Git CPU regression 必须证明较低优先级的 executable fsmonitor 配置被空值 override、clean
+rev-parse/status 均成功并观察到零 descendants。任何 v3/v4 mixed epoch 都必须由 schema、loader、
+preparation、shim 或 entrypoint fail closed。
+
+Amendment 1 的 exact retained supplementary groups、zero-capabilities/Stage2 NNP、Docker/KVM
+residual disclosure 与 invocation prohibition、INET/INET6、pidfd own-process、foreign PID、GPU0/
+UUID/64-GiB、模型顺序、22-call、zero-retry、no-action/no-feedback/no-replay/no-secret 规则全部不变。
+v4 必须从新的 sealed source、NO_REPLACE shim、fresh canonical authority 与 fresh evidence/scratch
+roots 重新构建并独立复核；本 amendment 不把 artifact 或 live gate 标为已通过。

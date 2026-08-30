@@ -13,7 +13,7 @@
     "source", "network_namespace", "evidence_root", "runtime_scratch_root"
   ],
   "properties": {
-    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-authority/v3"},
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-authority/v4"},
     "authority_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
     "decision_id": {"const": "D-034"},
     "authorized_scope": {"const": "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"},
@@ -92,9 +92,9 @@
         "executable_stack"
       ],
       "properties": {
-        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-launch-shim/v2"},
-        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"},
-        "resolved_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"},
+        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-launch-shim/v3"},
+        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v3"},
+        "resolved_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v3"},
         "sha256": {"$ref": "#/$defs/sha256"},
         "byte_count": {"type": "integer", "minimum": 1, "maximum": 4194304},
         "owner_uid": {"const": 1035},
@@ -109,7 +109,7 @@
         },
         "source_sha256": {"$ref": "#/$defs/sha256"},
         "shell_option": {"const": "-c"},
-        "token_prefix": {"const": "D034_STAGE0_V2"},
+        "token_prefix": {"const": "D034_STAGE0_V3"},
         "runner_cli_path": {
           "allOf": [
             {"$ref": "#/$defs/absolutePath"},
@@ -289,13 +289,13 @@
     "evidence_root": {
       "allOf": [
         {"$ref": "#/$defs/absolutePath"},
-        {"pattern": "/evidence-v3$"}
+        {"pattern": "/evidence-v4$"}
       ]
     },
     "runtime_scratch_root": {
       "allOf": [
         {"$ref": "#/$defs/absolutePath"},
-        {"pattern": "/runtime-scratch-v3$"}
+        {"pattern": "/runtime-scratch-v4$"}
       ]
     }
   },
@@ -655,8 +655,8 @@
             "login": {"const": false},
             "tty": {"const": false},
             "command_grammar": {"const": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V2"},
-            "command_prefix": {"const": "exec /shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2 -c D034_STAGE0_V2:/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v3.json:"},
-            "command_prefix_sha256": {"const": "2644a709f15d095e364ce82a0920df770c9120bdde35e69a7d192534149405cf"},
+            "command_prefix": {"const": "exec /shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v3 -c D034_STAGE0_V3:/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v4.json:"},
+            "command_prefix_sha256": {"const": "3ead503db63494cc2cb5b03edbe49b616725a5acdf41fcd726bed9393927aa1d"},
             "command_prefix_byte_count": {"const": 206},
             "command_authority_sha256_byte_count": {"const": 64},
             "command_total_byte_count": {"const": 270}

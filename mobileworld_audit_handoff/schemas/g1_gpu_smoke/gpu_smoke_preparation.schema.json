@@ -98,12 +98,12 @@
       ],
       "properties": {
         "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-launch-invocation/v1"},
-        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"},
+        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v3"},
         "sha256": {"$ref": "#/$defs/sha256"},
         "byte_count": {"type": "integer", "minimum": 1, "maximum": 4194304},
-        "authority_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v3.json"},
+        "authority_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v4.json"},
         "authority_sha256": {"$ref": "#/$defs/sha256"},
-        "argument_prefix": {"const": "D034_STAGE0_V2"},
+        "argument_prefix": {"const": "D034_STAGE0_V3"},
         "shell_argument_sha256": {"$ref": "#/$defs/sha256"},
         "shell_argument_byte_count": {"const": 172},
         "tool_shell_path": {"const": "/bin/sh"},
@@ -111,14 +111,14 @@
         "tool_shell_sha256": {"const": "4f291296e89b784cd35479fca606f228126e3641f5bcaee68dee36583d7c9483"},
         "shell_command_sha256": {"$ref": "#/$defs/sha256"},
         "shell_command_byte_count": {"const": 270},
-        "shell_command_prefix_sha256": {"const": "2644a709f15d095e364ce82a0920df770c9120bdde35e69a7d192534149405cf"},
+        "shell_command_prefix_sha256": {"const": "3ead503db63494cc2cb5b03edbe49b616725a5acdf41fcd726bed9393927aa1d"},
         "shell_command_prefix_byte_count": {"const": 206},
         "command_grammar": {"const": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V2"},
         "argc": {"const": 3},
         "argv_prefix": {
           "type": "array",
           "prefixItems": [
-            {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"},
+            {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v3"},
             {"const": "-c"}
           ],
           "items": false,

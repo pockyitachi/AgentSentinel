@@ -74,7 +74,7 @@ from mobile_world.offline.g1_history_codecs.codecs import (
     QwenFlatProgressHistoryCodec,
 )
 
-AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v3"
+AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v4"
 SMOKE_PACKET_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-packet/v1"
 PREPARATION_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-preparation/v2"
 EXECUTION_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-execution/v2"
@@ -82,19 +82,19 @@ DECISION_ID = "D-034"
 AUTHORIZED_SCOPE = "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"
 AUTHORIZED_GPU_UUID = "GPU-991ac45f-e9e9-1c25-590c-fb49ca752965"
 MINIMUM_FREE_MEMORY_BYTES = 68_719_476_736
-LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v2"
+LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v3"
 LAUNCH_SHIM_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v3"
 )
 LAUNCH_SHIM_AUTHORITY_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v3.json"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v4.json"
 )
-LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V2"
-EVIDENCE_ROOT_V3 = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/evidence-v3"
+LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V3"
+EVIDENCE_ROOT_V4 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/evidence-v4"
 )
-RUNTIME_SCRATCH_ROOT_V3 = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/runtime-scratch-v3"
+RUNTIME_SCRATCH_ROOT_V4 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/runtime-scratch-v4"
 )
 TOOL_SHELL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-tool-shell/v1"
 TOOL_SHELL_PATH = "/bin/sh"
@@ -2672,10 +2672,10 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
     scratch_root = _absolute_lexical(
         authority.get("runtime_scratch_root"), "$.runtime_scratch_root"
     )
-    if not (evidence_root == EVIDENCE_ROOT_V3 and scratch_root == RUNTIME_SCRATCH_ROOT_V3):
+    if not (evidence_root == EVIDENCE_ROOT_V4 and scratch_root == RUNTIME_SCRATCH_ROOT_V4):
         _fail(
             "GPU_SMOKE_SOURCE_BINDING_INVALID",
-            "v3 authority must use the fresh evidence and runtime-scratch roots",
+            "v4 authority must use the fresh evidence and runtime-scratch roots",
             "$.evidence_root",
         )
     protected_paths: list[tuple[str, PurePosixPath]] = [
@@ -6096,7 +6096,7 @@ def _verify_runtime_bindings(authority: GpuLiveAuthority) -> dict[str, JsonValue
         [
             git_path,
             "-c",
-            "core.fsmonitor=false",
+            "core.fsmonitor=",
             "-c",
             "core.hooksPath=/dev/null",
             "-C",
@@ -6112,7 +6112,7 @@ def _verify_runtime_bindings(authority: GpuLiveAuthority) -> dict[str, JsonValue
         [
             git_path,
             "-c",
-            "core.fsmonitor=false",
+            "core.fsmonitor=",
             "-c",
             "core.hooksPath=/dev/null",
             "-C",
@@ -7098,7 +7098,7 @@ def inspect_authority_inputs(
         [
             "/usr/bin/git",
             "-c",
-            "core.fsmonitor=false",
+            "core.fsmonitor=",
             "-c",
             "core.hooksPath=/dev/null",
             "-C",
