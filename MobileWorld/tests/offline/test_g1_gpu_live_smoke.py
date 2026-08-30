@@ -2520,7 +2520,7 @@ def test_three_stage_production_candidate_hash_sentinel() -> None:
     runner_cli = _load_runner_cli_module()
     runner_module_path = REPOSITORY_ROOT / "MobileWorld/src/mobile_world/offline/gpu_live_smoke.py"
     assert _sha256(runner_module_path.read_bytes()) == (
-        "124be9cccff91ae8170ec51d603746a0f379d2c626ffc8a6c7e26fb399071970"
+        "616303e34d3158ea2ff7e5b376cb1177d1e058da7fcb8cc97cfc9fe9b2679f02"
     )
     assert _sha256(GPU_SMOKE_RUNNER_CLI.read_bytes()) == (
         "9e763c9d776795836bb71c4ef2a2311b0d1e4a016749cc37409f2e19fc1b4504"
@@ -4175,6 +4175,515 @@ def test_private_runtime_reflink_failure_has_no_byte_copy_fallback(
     assert ioctl_calls == [gpu_live_smoke_module._FICLONE]
     assert source.read_bytes() == source_bytes
     assert destination.read_bytes() == b""
+
+
+def _cpu_fake_reflink(destination_fd: int, request: int, source_fd: int) -> None:
+    """Copy synthetic bytes through pinned FDs while exercising reflink guards."""
+
+    assert request == gpu_live_smoke_module._FICLONE
+    os.lseek(source_fd, 0, os.SEEK_SET)
+    while True:
+        chunk = os.read(source_fd, 64 * 1024)
+        if not chunk:
+            break
+        written = 0
+        while written < len(chunk):
+            written += os.write(destination_fd, chunk[written:])
+    os.lseek(source_fd, 0, os.SEEK_SET)
+
+
+def _minimal_private_runtime_builder_inputs(root: Path) -> dict[str, Path]:
+    source_root = root / "source-runtime"
+    python = source_root / "bin/python3.12"
+    stdlib = source_root / "lib/python3.12"
+    client_site = root / "client-site"
+    server_site = root / "server-site"
+    python.parent.mkdir(parents=True)
+    stdlib.mkdir(parents=True)
+    client_site.mkdir(parents=True)
+    server_site.mkdir(parents=True)
+    python.write_bytes(b"synthetic Python 3.12 ELF")
+    python.chmod(0o500)
+    (stdlib / "stdlib.py").write_bytes(b"STDLIB = True\n")
+    (client_site / "client.py").write_bytes(b"CLIENT = True\n")
+    (server_site / "server.py").write_bytes(b"SERVER = True\n")
+    return {
+        "python": python,
+        "stdlib": stdlib,
+        "stdlib_file": stdlib / "stdlib.py",
+        "client_site": client_site,
+        "client_file": client_site / "client.py",
+        "server_site": server_site,
+        "server_file": server_site / "server.py",
+        "output": root / "private-runtime",
+    }
+
+
+def test_reflink_copy_accepts_explicit_source_nlink3_for_copy_only_and_seals_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = source_root / "python3.12"
+    source_bytes = b"synthetic hardlinked Python ELF bytes"
+    source.write_bytes(source_bytes)
+    source.chmod(0o500)
+    os.link(source, tmp_path / "python-alias-1")
+    os.link(source, tmp_path / "python-alias-2")
+    source_metadata = source.stat()
+    assert source_metadata.st_nlink == 3
+    monkeypatch.setattr(gpu_live_smoke_module.fcntl, "ioctl", _cpu_fake_reflink)
+
+    rejected_destination = tmp_path / "rejected-private-python"
+    _assert_error_code(
+        "GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED",
+        lambda: gpu_live_smoke_module._copy_regular_file_by_reflink(
+            source,
+            rejected_destination,
+            expected_source_identity=gpu_live_smoke_module._tree_entry_identity(source_metadata),
+        ),
+    )
+    assert not rejected_destination.exists()
+
+    destination = tmp_path / "private-python"
+    binding = gpu_live_smoke_module._copy_regular_file_by_reflink(
+        source,
+        destination,
+        expected_source_identity=gpu_live_smoke_module._tree_entry_identity(source_metadata),
+        allow_source_hardlinks=True,
+    )
+    assert binding == {
+        "byte_count": len(source_bytes),
+        "sha256": _sha256(source_bytes),
+        "executable": True,
+        "source_link_count": 3,
+        "source_hardlink_observed": True,
+        "source_hardlinks_accepted_for_copy_only": True,
+        "destination_link_count": 1,
+        "source_destination_distinct_inodes": True,
+        "source_pre_equals_source_post": True,
+        "source_equals_destination": True,
+    }
+    assert source.stat().st_nlink == 3
+    assert destination.stat().st_nlink == 1
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o500
+    assert destination.read_bytes() == source_bytes
+
+
+def test_private_runtime_tree_records_source_hardlink_census_but_output_is_single_linked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source-tree"
+    source_root.mkdir()
+    source = source_root / "module.py"
+    source_bytes = b"value = 'synthetic'\n"
+    source.write_bytes(source_bytes)
+    source.chmod(0o400)
+    os.link(source, tmp_path / "module-alias-1")
+    os.link(source, tmp_path / "module-alias-2")
+    assert source.stat().st_nlink == 3
+    monkeypatch.setattr(gpu_live_smoke_module.fcntl, "ioctl", _cpu_fake_reflink)
+
+    destination_root = tmp_path / "private-tree"
+    binding = gpu_live_smoke_module._reflink_runtime_tree(
+        source_root,
+        destination_root,
+        exclude_site_packages=False,
+        allow_source_hardlinks=True,
+    )
+    source_link_census = [{"path": source.name, "nlink": 3}]
+    assert binding["source_hardlinked_entry_count"] == 1
+    assert binding["source_max_nlink"] == 3
+    assert binding["source_link_census_sha256"] == _canonical_sha256(
+        cast(JsonValue, source_link_census)
+    )
+    assert binding["source_hardlinks_accepted_for_copy_only"] is True
+    assert binding["destination_regular_files_single_linked"] is True
+    assert binding["source_pre_equals_source_post"] is True
+    assert binding["source_equals_destination"] is True
+    assert (
+        binding["source_pre_content_sha256"]
+        == binding["source_post_content_sha256"]
+        == binding["destination_content_sha256"]
+    )
+    destination = destination_root / source.name
+    assert destination.read_bytes() == source_bytes
+    assert destination.stat().st_nlink == 1
+    inventory = gpu_live_smoke_module._enumerate_bound_runtime_tree(
+        str(destination_root),
+        owner_uid=os.getuid(),
+        owner_gid=os.getgid(),
+        recorded_owner_uid=0,
+        recorded_owner_gid=0,
+        directory_mode=0o500,
+        regular_mode=0o400,
+        executable_mode=0o500,
+        symlinks_allowed=False,
+        hardlinks_allowed=False,
+        forbid_bytecode_and_pth=True,
+        include_entries=True,
+    )
+    assert inventory["hardlinks_allowed"] is False
+
+
+def test_private_runtime_builder_allows_hardlinks_only_for_stdlib_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _minimal_private_runtime_builder_inputs(tmp_path)
+    aliases = tmp_path / "stdlib-aliases"
+    aliases.mkdir()
+    os.link(paths["stdlib_file"], aliases / "stdlib-alias-1")
+    os.link(paths["stdlib_file"], aliases / "stdlib-alias-2")
+    assert paths["stdlib_file"].stat().st_nlink == 3
+    monkeypatch.setattr(gpu_live_smoke_module.fcntl, "ioctl", _cpu_fake_reflink)
+
+    receipt = gpu_live_smoke_module.build_private_runtime(
+        source_python_path=str(paths["python"]),
+        client_site_packages_path=str(paths["client_site"]),
+        server_site_packages_path=str(paths["server_site"]),
+        output_root=str(paths["output"]),
+    )
+    assert receipt["stdlib_source_hardlinks_allowed_for_copy_only"] is True
+    assert receipt["python_and_site_source_hardlinks_allowed"] is False
+    assert receipt["destination_hardlinks_allowed"] is False
+    bindings = cast(
+        dict[str, dict[str, JsonValue]],
+        receipt["source_destination_content_bindings"],
+    )
+    python_binding = bindings["python"]
+    assert python_binding["source_link_count"] == 1
+    assert python_binding["source_hardlink_observed"] is False
+    assert python_binding["source_hardlinks_accepted_for_copy_only"] is False
+    assert python_binding["destination_link_count"] == 1
+    assert python_binding["source_destination_distinct_inodes"] is True
+    stdlib_binding = bindings["stdlib"]
+    expected_census = [{"path": "stdlib.py", "nlink": 3}]
+    assert stdlib_binding["source_hardlinked_entry_count"] == 1
+    assert stdlib_binding["source_max_nlink"] == 3
+    assert stdlib_binding["source_link_census_sha256"] == _canonical_sha256(
+        cast(JsonValue, expected_census)
+    )
+    assert stdlib_binding["source_hardlinks_accepted_for_copy_only"] is True
+    for name in ("client_site_packages", "server_site_packages"):
+        site_binding = bindings[name]
+        assert site_binding["source_hardlinked_entry_count"] == 0
+        assert site_binding["source_max_nlink"] == 1
+        assert site_binding["source_hardlinks_accepted_for_copy_only"] is False
+        assert site_binding["destination_regular_files_single_linked"] is True
+    for inventory_name in (
+        "private_runtime_inventory",
+        "client_site_packages_inventory",
+        "server_site_packages_inventory",
+    ):
+        inventory = cast(dict[str, JsonValue], receipt[inventory_name])
+        assert inventory["hardlinks_allowed"] is False
+    destination_python = paths["output"] / "bin/python3.12"
+    assert (destination_python.stat().st_dev, destination_python.stat().st_ino) != (
+        paths["python"].stat().st_dev,
+        paths["python"].stat().st_ino,
+    )
+    for destination in paths["output"].rglob("*"):
+        if destination.is_file():
+            assert destination.stat().st_nlink == 1
+            assert stat.S_IMODE(destination.stat().st_mode) in {0o400, 0o500}
+
+
+@pytest.mark.parametrize("hardlinked_source", ("python", "client_file", "server_file"))
+def test_private_runtime_builder_rejects_hardlinked_python_and_site_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    hardlinked_source: str,
+) -> None:
+    paths = _minimal_private_runtime_builder_inputs(tmp_path)
+    os.link(paths[hardlinked_source], tmp_path / f"{hardlinked_source}-alias")
+    assert paths[hardlinked_source].stat().st_nlink == 2
+    monkeypatch.setattr(gpu_live_smoke_module.fcntl, "ioctl", _cpu_fake_reflink)
+    _assert_error_code(
+        "GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED",
+        lambda: gpu_live_smoke_module.build_private_runtime(
+            source_python_path=str(paths["python"]),
+            client_site_packages_path=str(paths["client_site"]),
+            server_site_packages_path=str(paths["server_site"]),
+            output_root=str(paths["output"]),
+        ),
+    )
+    assert not paths["output"].exists()
+
+
+@pytest.mark.parametrize("restore_source", (False, True))
+def test_private_runtime_builder_rejects_same_fd_source_drift_during_reflink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    restore_source: bool,
+) -> None:
+    source = tmp_path / "source-runtime-file"
+    original = b"stable-source-bytes"
+    mutated = b"mutated-source-byte"
+    assert len(original) == len(mutated)
+    source.write_bytes(original)
+    source.chmod(0o400)
+    source_alias = tmp_path / "source-runtime-alias"
+    os.link(source, source_alias)
+    source_metadata = source.stat()
+    assert source_metadata.st_nlink == 2
+
+    def drift_during_clone(destination_fd: int, request: int, source_fd: int) -> None:
+        if restore_source:
+            source_alias.write_bytes(mutated)
+            _cpu_fake_reflink(destination_fd, request, source_fd)
+            source_alias.write_bytes(original)
+        else:
+            _cpu_fake_reflink(destination_fd, request, source_fd)
+            source_alias.write_bytes(mutated)
+
+    monkeypatch.setattr(gpu_live_smoke_module.fcntl, "ioctl", drift_during_clone)
+    _assert_error_code(
+        "GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED",
+        lambda: gpu_live_smoke_module._copy_regular_file_by_reflink(
+            source,
+            tmp_path / "private-runtime-file",
+            expected_source_identity=gpu_live_smoke_module._tree_entry_identity(source_metadata),
+            allow_source_hardlinks=True,
+        ),
+    )
+
+
+def test_private_runtime_builder_rejects_source_alias_unlink_relink_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source-runtime-file"
+    source.write_bytes(b"stable-source-bytes")
+    source.chmod(0o400)
+    source_alias = tmp_path / "source-runtime-alias"
+    os.link(source, source_alias)
+    source_metadata = source.stat()
+    assert source_metadata.st_nlink == 2
+
+    def relink_during_clone(destination_fd: int, request: int, source_fd: int) -> None:
+        _cpu_fake_reflink(destination_fd, request, source_fd)
+        for _ in range(4096):
+            source_alias.unlink()
+            os.link(source, source_alias)
+            if os.fstat(source_fd).st_ctime_ns != source_metadata.st_ctime_ns:
+                break
+        assert os.fstat(source_fd).st_ctime_ns != source_metadata.st_ctime_ns
+
+    monkeypatch.setattr(gpu_live_smoke_module.fcntl, "ioctl", relink_during_clone)
+    _assert_error_code(
+        "GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED",
+        lambda: gpu_live_smoke_module._copy_regular_file_by_reflink(
+            source,
+            tmp_path / "private-runtime-file",
+            expected_source_identity=gpu_live_smoke_module._tree_entry_identity(source_metadata),
+            allow_source_hardlinks=True,
+        ),
+    )
+    assert source.stat().st_nlink == 2
+
+
+@pytest.mark.parametrize("destination_mutation", ("content", "hardlink"))
+def test_private_runtime_builder_rejects_destination_drift_before_reopen(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    destination_mutation: str,
+) -> None:
+    source = tmp_path / "source-runtime-file"
+    source.write_bytes(b"stable-source-bytes")
+    source.chmod(0o400)
+    destination = tmp_path / "private-runtime-file"
+    external_alias = tmp_path / "external-private-runtime-alias"
+
+    def mutate_destination(destination_fd: int, request: int, source_fd: int) -> None:
+        _cpu_fake_reflink(destination_fd, request, source_fd)
+        if destination_mutation == "content":
+            assert os.pwrite(destination_fd, b"X", 0) == 1
+        else:
+            os.link(destination, external_alias)
+
+    monkeypatch.setattr(gpu_live_smoke_module.fcntl, "ioctl", mutate_destination)
+    _assert_error_code(
+        "GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED",
+        lambda: gpu_live_smoke_module._copy_regular_file_by_reflink(
+            source,
+            destination,
+        ),
+    )
+
+
+def test_private_runtime_tree_records_exact_mixed_and_empty_source_link_census(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "mixed-source-tree"
+    source_root.mkdir()
+    sources = {
+        "nlink1.py": b"ONE = 1\n",
+        "nlink2.py": b"TWO = 2\n",
+        "nlink3.py": b"THREE = 3\n",
+    }
+    for name, content in sources.items():
+        path = source_root / name
+        path.write_bytes(content)
+        path.chmod(0o400)
+    os.link(source_root / "nlink2.py", tmp_path / "nlink2-alias")
+    os.link(source_root / "nlink3.py", tmp_path / "nlink3-alias-1")
+    os.link(source_root / "nlink3.py", tmp_path / "nlink3-alias-2")
+    monkeypatch.setattr(gpu_live_smoke_module.fcntl, "ioctl", _cpu_fake_reflink)
+
+    destination_root = tmp_path / "mixed-private-tree"
+    binding = gpu_live_smoke_module._reflink_runtime_tree(
+        source_root,
+        destination_root,
+        exclude_site_packages=False,
+        allow_source_hardlinks=True,
+    )
+    expected_census = [
+        {"path": "nlink1.py", "nlink": 1},
+        {"path": "nlink2.py", "nlink": 2},
+        {"path": "nlink3.py", "nlink": 3},
+    ]
+    assert binding["source_hardlinked_entry_count"] == 2
+    assert binding["source_max_nlink"] == 3
+    assert binding["source_link_census_sha256"] == _canonical_sha256(
+        cast(JsonValue, expected_census)
+    )
+    assert binding["source_pre_equals_source_post"] is True
+    assert binding["source_equals_destination"] is True
+    assert (
+        binding["source_pre_content_sha256"]
+        == binding["source_post_content_sha256"]
+        == binding["destination_content_sha256"]
+    )
+    for name, content in sources.items():
+        destination = destination_root / name
+        assert destination.read_bytes() == content
+        assert destination.stat().st_nlink == 1
+
+    empty_source = tmp_path / "empty-source-tree"
+    empty_source.mkdir()
+    empty_binding = gpu_live_smoke_module._reflink_runtime_tree(
+        empty_source,
+        tmp_path / "empty-private-tree",
+        exclude_site_packages=False,
+        allow_source_hardlinks=True,
+    )
+    assert empty_binding["source_hardlinked_entry_count"] == 0
+    assert empty_binding["source_max_nlink"] == 1
+    assert empty_binding["source_link_census_sha256"] == _canonical_sha256([])
+    assert empty_binding["destination_regular_files_single_linked"] is True
+
+
+def test_private_runtime_tree_rejects_source_path_swap_before_and_after_pinned_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_copy = gpu_live_smoke_module._copy_regular_file_by_reflink
+
+    before_root = tmp_path / "before-open-source"
+    before_root.mkdir()
+    before_source = before_root / "module.py"
+    before_source.write_bytes(b"pinned-before-open")
+    before_source.chmod(0o400)
+    before_replacement = tmp_path / "before-open-replacement"
+    before_replacement.write_bytes(b"replacement-before")
+    before_replacement.chmod(0o400)
+    before_backup = tmp_path / "before-open-backup"
+    ioctl_count = 0
+
+    def unexpected_ioctl(destination_fd: int, request: int, source_fd: int) -> None:
+        nonlocal ioctl_count
+        ioctl_count += 1
+        _cpu_fake_reflink(destination_fd, request, source_fd)
+
+    def swap_before_open(
+        source: Path,
+        destination: Path,
+        **kwargs: Any,
+    ) -> dict[str, JsonValue]:
+        before_source.rename(before_backup)
+        before_replacement.rename(before_source)
+        return original_copy(source, destination, **kwargs)
+
+    with monkeypatch.context() as before_context:
+        before_context.setattr(gpu_live_smoke_module.fcntl, "ioctl", unexpected_ioctl)
+        before_context.setattr(
+            gpu_live_smoke_module,
+            "_copy_regular_file_by_reflink",
+            swap_before_open,
+        )
+        _assert_error_code(
+            "GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED",
+            lambda: gpu_live_smoke_module._reflink_runtime_tree(
+                before_root,
+                tmp_path / "before-open-destination",
+                exclude_site_packages=False,
+                allow_source_hardlinks=True,
+            ),
+        )
+    assert ioctl_count == 0
+
+    after_root = tmp_path / "after-open-source"
+    after_root.mkdir()
+    after_source = after_root / "module.py"
+    original_bytes = b"pinned-after-open"
+    after_source.write_bytes(original_bytes)
+    after_source.chmod(0o400)
+    after_replacement = tmp_path / "after-open-replacement"
+    after_replacement.write_bytes(b"replacement-after")
+    after_replacement.chmod(0o400)
+    after_backup = tmp_path / "after-open-backup"
+    after_destination_root = tmp_path / "after-open-destination"
+
+    def swap_after_pinned_copy(
+        source: Path,
+        destination: Path,
+        **kwargs: Any,
+    ) -> dict[str, JsonValue]:
+        binding = original_copy(source, destination, **kwargs)
+        after_source.rename(after_backup)
+        after_replacement.rename(after_source)
+        return binding
+
+    with monkeypatch.context() as after_context:
+        after_context.setattr(gpu_live_smoke_module.fcntl, "ioctl", _cpu_fake_reflink)
+        after_context.setattr(
+            gpu_live_smoke_module,
+            "_copy_regular_file_by_reflink",
+            swap_after_pinned_copy,
+        )
+        _assert_error_code(
+            "GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED",
+            lambda: gpu_live_smoke_module._reflink_runtime_tree(
+                after_root,
+                after_destination_root,
+                exclude_site_packages=False,
+                allow_source_hardlinks=True,
+            ),
+        )
+    assert (after_destination_root / "module.py").read_bytes() == original_bytes
+    assert after_source.read_bytes() == b"replacement-after"
+
+
+def test_builder_source_hardlink_exception_does_not_relax_private_authority_schema() -> None:
+    validator = _schema_validator("gpu_smoke_authority.schema.json")
+    authority = _authority("4" * 64)
+    validator.validate(authority)
+    fields = (
+        ("private_runtime", "hardlinks_allowed"),
+        ("client_runtime", "site_packages_hardlinks_allowed"),
+        ("server_runtime", "site_packages_hardlinks_allowed"),
+    )
+    for section, field in fields:
+        mutated = copy.deepcopy(authority)
+        cast(dict[str, JsonValue], mutated[section])[field] = True
+        errors = list(validator.iter_errors(mutated))
+        assert any(
+            list(error.path) == [section, field] and error.validator == "const" for error in errors
+        )
 
 
 def test_gpu_capacity_probe_rechecks_exact_gpu0_uuid_and_64_gib_floor_cpu_fake(

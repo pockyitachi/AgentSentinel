@@ -3302,6 +3302,8 @@ def _copy_regular_file_by_reflink(
     *,
     source_dir_fd: int | None = None,
     destination_dir_fd: int | None = None,
+    expected_source_identity: tuple[int, ...] | None = None,
+    allow_source_hardlinks: bool = False,
 ) -> dict[str, JsonValue]:
     """Clone one pinned regular file; never fall back to a byte-copy."""
 
@@ -3313,7 +3315,15 @@ def _copy_regular_file_by_reflink(
         )
         try:
             source_before = os.fstat(source_fd)
-            if not stat.S_ISREG(source_before.st_mode) or source_before.st_nlink != 1:
+            if not (
+                stat.S_ISREG(source_before.st_mode)
+                and source_before.st_nlink >= 1
+                and (allow_source_hardlinks or source_before.st_nlink == 1)
+                and (
+                    expected_source_identity is None
+                    or _tree_entry_identity(source_before) == expected_source_identity
+                )
+            ):
                 _fail("GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED", "copy source is not regular")
             if source_before.st_size < 0:
                 _fail("GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED", "copy source size is invalid")
@@ -3369,6 +3379,8 @@ def _copy_regular_file_by_reflink(
         and destination_after.st_uid == os.getuid()
         and destination_after.st_gid == os.getgid()
         and destination_after.st_nlink == 1
+        and (destination_after.st_dev, destination_after.st_ino)
+        != (source_before.st_dev, source_before.st_ino)
         and _tree_entry_identity(destination_after)
         == _tree_entry_identity(destination_reopened)
         == _tree_entry_identity(destination_reopened_after)
@@ -3381,6 +3393,11 @@ def _copy_regular_file_by_reflink(
         "byte_count": source_before.st_size,
         "sha256": source_digest_before,
         "executable": bool(stat.S_IMODE(source_before.st_mode) & 0o111),
+        "source_link_count": source_before.st_nlink,
+        "source_hardlink_observed": source_before.st_nlink > 1,
+        "source_hardlinks_accepted_for_copy_only": allow_source_hardlinks,
+        "destination_link_count": destination_after.st_nlink,
+        "source_destination_distinct_inodes": True,
         "source_pre_equals_source_post": True,
         "source_equals_destination": True,
     }
@@ -3391,6 +3408,7 @@ def _reflink_runtime_tree(
     destination_root: Path,
     *,
     exclude_site_packages: bool,
+    allow_source_hardlinks: bool,
 ) -> dict[str, JsonValue]:
     try:
         source_metadata = source_root.lstat()
@@ -3414,6 +3432,7 @@ def _reflink_runtime_tree(
         os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
     )
     content_entries: list[dict[str, JsonValue]] = []
+    source_link_census: list[dict[str, JsonValue]] = []
     excluded_counts = {
         "__pycache__": 0,
         ".pyc": 0,
@@ -3512,16 +3531,24 @@ def _reflink_runtime_tree(
                     os.close(destination_child_fd)
                     os.close(source_child_fd)
             elif stat.S_ISREG(before.st_mode):
-                if before.st_nlink != 1:
+                if before.st_nlink < 1 or (not allow_source_hardlinks and before.st_nlink != 1):
                     _fail(
                         "GPU_SMOKE_PRIVATE_RUNTIME_BUILD_FAILED",
-                        "source runtime hardlink is forbidden",
+                        "source runtime regular file has a forbidden link count",
                     )
                 copied = _copy_regular_file_by_reflink(
                     source_name,
                     destination_name,
                     source_dir_fd=source_directory_fd,
                     destination_dir_fd=destination_directory_fd,
+                    expected_source_identity=_tree_entry_identity(before),
+                    allow_source_hardlinks=allow_source_hardlinks,
+                )
+                source_link_census.append(
+                    {
+                        "path": relative,
+                        "nlink": cast(int, copied["source_link_count"]),
+                    }
                 )
                 content_entries.append(
                     {
@@ -3569,7 +3596,13 @@ def _reflink_runtime_tree(
         os.close(destination_fd)
         os.close(source_fd)
     content_entries.sort(key=lambda item: cast(str, item["path"]))
+    source_link_census.sort(key=lambda item: cast(str, item["path"]))
     content_sha256 = canonical_sha256(content_entries)
+    source_hardlinked_entry_count = sum(cast(int, item["nlink"]) > 1 for item in source_link_census)
+    source_max_nlink = max(
+        (cast(int, item["nlink"]) for item in source_link_census),
+        default=1,
+    )
     return {
         "source_pre_content_sha256": content_sha256,
         "source_post_content_sha256": content_sha256,
@@ -3577,6 +3610,11 @@ def _reflink_runtime_tree(
         "content_entry_count": len(content_entries),
         "content_byte_count": sum(cast(int, item["byte_count"]) for item in content_entries),
         "excluded_entry_counts": excluded_counts,
+        "source_hardlinked_entry_count": source_hardlinked_entry_count,
+        "source_max_nlink": source_max_nlink,
+        "source_link_census_sha256": canonical_sha256(source_link_census),
+        "source_hardlinks_accepted_for_copy_only": allow_source_hardlinks,
+        "destination_regular_files_single_linked": True,
         "source_pre_equals_source_post": True,
         "source_equals_destination": True,
         "source_traversal": "NOFOLLOW_RECURSIVE_DIRFD",
@@ -3648,6 +3686,7 @@ def build_private_runtime(
             source_stdlib,
             staging / "lib/python3.12",
             exclude_site_packages=True,
+            allow_source_hardlinks=True,
         )
         os.mkdir(staging / "site-packages", 0o700)
         client_site_copy = _reflink_runtime_tree(
@@ -3659,6 +3698,7 @@ def build_private_runtime(
             ),
             staging / "site-packages/client",
             exclude_site_packages=False,
+            allow_source_hardlinks=False,
         )
         server_site_copy = _reflink_runtime_tree(
             Path(
@@ -3669,6 +3709,7 @@ def build_private_runtime(
             ),
             staging / "site-packages/server",
             exclude_site_packages=False,
+            allow_source_hardlinks=False,
         )
         for directory in (staging / "bin", staging / "lib", staging / "site-packages", staging):
             directory_fd = os.open(
@@ -3776,6 +3817,8 @@ def build_private_runtime(
             "stdlib/site-packages",
         ],
         "source_symlinks_allowed": False,
+        "stdlib_source_hardlinks_allowed_for_copy_only": True,
+        "python_and_site_source_hardlinks_allowed": False,
         "destination_symlinks_allowed": False,
         "destination_hardlinks_allowed": False,
         "destination_reopened_after_atomic_install": True,

@@ -90,6 +90,20 @@ policy, with matching pre/post censuses. The private runtime, both site-package
 trees, repository, evidence root, runtime scratch, and both model snapshots
 must be pairwise disjoint in both ancestor directions.
 
+The private-runtime builder has one narrow source-only hardlink exception:
+regular files in the Conda Python 3.12 **stdlib source tree** may have
+`st_nlink >= 1`. Source Python ELF and client/server site-package hardlinks
+remain forbidden. For every copied stdlib regular file, the builder binds the
+caller-observed no-follow identity to the opened source FD, hashes and rechecks
+that same FD and its full identity (including link count, mtime, and ctime)
+before and after `FICLONE`, reopens and hashes the destination, and requires
+equal content with distinct source/destination device-inode identity. It also
+records the canonical per-path source-link census, hardlinked-entry count, and
+maximum link count. This exception is copy-only: every private destination
+regular file must still be owner-only, sealed to its exact mode, independently
+reopened, and `st_nlink=1`; no source hardlink is installed or accepted in the
+private runtime.
+
 Those private copies materially narrow ambient-runtime drift but do not turn
 D-034 into a formal execution seal. Namespace root is the same mapped owner
 and can in principle change owner-read-only modes between the two censuses;
@@ -116,7 +130,7 @@ configuration, hooks, credential prompts, pagers, and fsmonitor execution are
 not admissible.
 
 The three-stage production freeze binds runner-module SHA-256
-`124be9cccff91ae8170ec51d603746a0f379d2c626ffc8a6c7e26fb399071970`,
+`616303e34d3158ea2ff7e5b376cb1177d1e058da7fcb8cc97cfc9fe9b2679f02`,
 CLI SHA-256
 `9e763c9d776795836bb71c4ef2a2311b0d1e4a016749cc37409f2e19fc1b4504`,
 and outer stdlib-bootstrap SHA-256

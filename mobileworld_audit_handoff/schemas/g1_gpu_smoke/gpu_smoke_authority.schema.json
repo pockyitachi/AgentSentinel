@@ -295,7 +295,10 @@
         "regular_mode": {"const": 256},
         "executable_mode": {"const": 320},
         "symlinks_allowed": {"const": false},
-        "hardlinks_allowed": {"const": false}
+        "hardlinks_allowed": {
+          "const": false,
+          "description": "Every sealed private-runtime destination file is single-linked; the builder's separately recorded stdlib-source hardlinks are copy-only inputs and are never preserved."
+        }
       }
     },
     "model": {
@@ -341,7 +344,10 @@
         "site_packages_regular_mode": {"const": 256},
         "site_packages_executable_mode": {"const": 320},
         "site_packages_symlinks_allowed": {"const": false},
-        "site_packages_hardlinks_allowed": {"const": false}
+        "site_packages_hardlinks_allowed": {
+          "const": false,
+          "description": "Client site-package source and sealed destination hardlinks are forbidden."
+        }
       }
     },
     "serverRuntime": {
@@ -373,7 +379,10 @@
         "site_packages_regular_mode": {"const": 256},
         "site_packages_executable_mode": {"const": 320},
         "site_packages_symlinks_allowed": {"const": false},
-        "site_packages_hardlinks_allowed": {"const": false}
+        "site_packages_hardlinks_allowed": {
+          "const": false,
+          "description": "Server site-package source and sealed destination hardlinks are forbidden."
+        }
       }
     },
     "launcherEnvironment": {
