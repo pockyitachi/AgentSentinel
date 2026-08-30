@@ -13,7 +13,7 @@
     "source", "network_namespace", "evidence_root", "runtime_scratch_root"
   ],
   "properties": {
-    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-authority/v2"},
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-authority/v3"},
     "authority_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
     "decision_id": {"const": "D-034"},
     "authorized_scope": {"const": "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"},
@@ -92,9 +92,9 @@
         "executable_stack"
       ],
       "properties": {
-        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-launch-shim/v1"},
-        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"},
-        "resolved_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"},
+        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-launch-shim/v2"},
+        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"},
+        "resolved_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"},
         "sha256": {"$ref": "#/$defs/sha256"},
         "byte_count": {"type": "integer", "minimum": 1, "maximum": 4194304},
         "owner_uid": {"const": 1035},
@@ -109,7 +109,7 @@
         },
         "source_sha256": {"$ref": "#/$defs/sha256"},
         "shell_option": {"const": "-c"},
-        "token_prefix": {"const": "D034_STAGE0_V1"},
+        "token_prefix": {"const": "D034_STAGE0_V2"},
         "runner_cli_path": {
           "allOf": [
             {"$ref": "#/$defs/absolutePath"},
@@ -242,8 +242,8 @@
         "required", "implementation", "host_owner_uid", "host_owner_gid",
         "inside_owner_uid", "inside_owner_gid",
         "inside_unmapped_system_uid", "inside_unmapped_system_gid",
-        "uid_map_line", "gid_map_line",
-        "env_path", "env_sha256", "unshare_path", "unshare_sha256",
+        "uid_map_extents", "gid_map_extents", "uid_map_text", "gid_map_text",
+        "stage0_coordinator", "env_path", "env_sha256",
         "ip_path", "ip_sha256", "setpriv_path", "setpriv_sha256",
         "nvidia_smi_path", "nvidia_smi_sha256", "nvidia_smi_byte_count",
         "pre_namespace_environment", "launcher_environment", "expected_interfaces", "loopback_up_required",
@@ -252,19 +252,20 @@
       ],
       "properties": {
         "required": {"const": true},
-        "implementation": {"const": "LINUX_USER_NETNS_MAP_ROOT_V1"},
+        "implementation": {"const": "CTYPES_USER_NETNS_NEWIDMAP_GATE_V2"},
         "host_owner_uid": {"const": 1035},
         "host_owner_gid": {"const": 1035},
         "inside_owner_uid": {"const": 0},
         "inside_owner_gid": {"const": 0},
         "inside_unmapped_system_uid": {"const": 65534},
         "inside_unmapped_system_gid": {"const": 65534},
-        "uid_map_line": {"const": "0 1035 1"},
-        "gid_map_line": {"const": "0 1035 1"},
+        "uid_map_extents": {"$ref": "#/$defs/stage0IdMapExtents"},
+        "gid_map_extents": {"$ref": "#/$defs/stage0IdMapExtents"},
+        "uid_map_text": {"const": "0 1035 1\n1 1672864 1"},
+        "gid_map_text": {"const": "0 1035 1\n1 1672864 1"},
+        "stage0_coordinator": {"$ref": "#/$defs/stage0Coordinator"},
         "env_path": {"const": "/usr/bin/env"},
         "env_sha256": {"const": "854a8d7f147ff1bf3562edd1aa0b2f2ac28ef432811533f03c43dc9162fe3af3"},
-        "unshare_path": {"const": "/usr/bin/unshare"},
-        "unshare_sha256": {"const": "72a34e6ba98a59f1da0c7b4d8c9722b746b5ade54e4d7e8de8e519c2993858ad"},
         "ip_path": {"const": "/usr/bin/ip"},
         "ip_sha256": {"const": "40cd6fd071451ae104d23783b6ae22efff4f1099167d73b41ce900fc49c8abaa"},
         "setpriv_path": {"const": "/usr/bin/setpriv"},
@@ -301,6 +302,330 @@
       "properties": {
         "relative_path": {"type": "string", "minLength": 1},
         "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "stage0IdMapExtents": {
+      "const": [
+        {
+          "inside_id": 0,
+          "outside_id": 1035,
+          "length": 1,
+          "purpose": "AUTHORIZED_OWNER_ROOT"
+        },
+        {
+          "inside_id": 1,
+          "outside_id": 1672864,
+          "length": 1,
+          "purpose": "SETGROUPS_ALLOW_SUBID_SENTINEL_ONLY"
+        }
+      ]
+    },
+    "stage0Coordinator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "implementation", "clone_flags", "clone_flags_value",
+        "single_thread_required", "sigchld_default_required",
+        "sigchld_nocldwait_allowed", "no_exec_between_unshare_and_mapping",
+        "child_postfork_import_allowed", "child_failure_exit_code", "protocol",
+        "mapping_helpers", "loaded_objects", "supervision", "restrictions"
+      ],
+      "properties": {
+        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-stage0-coordinator/v1"},
+        "implementation": {"const": "CTYPES_USER_NETNS_NEWIDMAP_GATE_V2"},
+        "clone_flags": {"const": ["CLONE_NEWUSER", "CLONE_NEWNET"]},
+        "clone_flags_value": {"const": 1342177280},
+        "single_thread_required": {"const": true},
+        "sigchld_default_required": {"const": true},
+        "sigchld_nocldwait_allowed": {"const": false},
+        "no_exec_between_unshare_and_mapping": {"const": true},
+        "child_postfork_import_allowed": {"const": false},
+        "child_failure_exit_code": {"const": 125},
+        "protocol": {"$ref": "#/$defs/stage0Protocol"},
+        "mapping_helpers": {"$ref": "#/$defs/stage0MappingHelpers"},
+        "loaded_objects": {"$ref": "#/$defs/stage0LoadedObjects"},
+        "supervision": {"$ref": "#/$defs/stage0Supervision"},
+        "restrictions": {"$ref": "#/$defs/stage0Restrictions"}
+      }
+    },
+    "stage0Protocol": {
+      "const": {
+        "schema_version": "mobileworld.g1.gpu-live-smoke-stage0-protocol/v1",
+        "encoding": "U32BE_CANONICAL_JSON_V1",
+        "nonce_byte_count": 32,
+        "maximum_frame_byte_count": 65536,
+        "timeout_milliseconds": 30000,
+        "pipe_count": 2,
+        "pipe_cloexec": true,
+        "parent_to_child_message_order": [
+          "UNSHARE_REQUEST", "CLEAR_GROUPS_REQUEST", "EXEC_STAGE1_REQUEST"
+        ],
+        "child_to_parent_message_order": [
+          "ACQUIRED", "UNSHARED_BLOCKED", "GROUPS_CLEARED"
+        ],
+        "gate_fds_closed_before_stage1": true
+      }
+    },
+    "stage0HelperElf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "machine", "type", "elf_osabi", "pt_interp", "dt_needed",
+        "rpath_runpath_allowed", "bind_now", "pie", "nx_stack"
+      ],
+      "properties": {
+        "machine": {"const": "EM_X86_64"},
+        "type": {"const": "ET_DYN"},
+        "elf_osabi": {"enum": [0, 3]},
+        "pt_interp": {"const": "/lib64/ld-linux-x86-64.so.2"},
+        "dt_needed": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9._+-]+$"},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "rpath_runpath_allowed": {"const": false},
+        "bind_now": {"type": "boolean"},
+        "pie": {"const": true},
+        "nx_stack": {"const": true}
+      }
+    },
+    "stage0HelperBinary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "resolved_path", "sha256", "byte_count", "owner_uid",
+        "owner_gid", "mode", "nlink", "setuid_required", "elf"
+      ],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "resolved_path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "owner_uid": {"const": 0},
+        "owner_gid": {"const": 0},
+        "mode": {"const": 2541},
+        "nlink": {"const": 1},
+        "setuid_required": {"const": true},
+        "elf": {"$ref": "#/$defs/stage0HelperElf"}
+      }
+    },
+    "stage0ConfigBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "resolved_path", "sha256", "byte_count", "owner_uid",
+        "owner_gid", "mode", "nlink", "required_record"
+      ],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "resolved_path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "owner_uid": {"const": 0},
+        "owner_gid": {"const": 0},
+        "mode": {"const": 420},
+        "nlink": {"const": 1},
+        "required_record": {"type": "string", "minLength": 1}
+      }
+    },
+    "stage0Dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "soname", "path", "resolved_path", "sha256", "byte_count",
+        "owner_uid", "owner_gid", "mode", "nlink", "elf_osabi", "dt_needed"
+      ],
+      "properties": {
+        "soname": {"type": "string", "pattern": "^[A-Za-z0-9._+-]+$"},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "resolved_path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "owner_uid": {"const": 0},
+        "owner_gid": {"const": 0},
+        "mode": {"const": 493},
+        "nlink": {"const": 1},
+        "elf_osabi": {"enum": [0, 3]},
+        "dt_needed": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9._+-]+$"},
+          "uniqueItems": true
+        }
+      }
+    },
+    "stage0MappingHelpers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_order", "newuidmap", "newgidmap", "subuid", "subgid",
+        "passwd", "group", "nsswitch", "dynamic_dependencies",
+        "dynamic_dependency_census_sha256", "helper_environment", "helper_cwd",
+        "timeout_milliseconds", "stdout_byte_cap", "stderr_byte_cap",
+        "stage0_no_new_privs", "helper_mount_nosuid_allowed",
+        "expected_real_uid", "expected_effective_uid", "expected_saved_uid",
+        "expected_fsuid", "setgroups_policy_before_clear", "setgroups_after_clear"
+      ],
+      "properties": {
+        "execution_order": {"const": ["UID_MAP", "GID_MAP"]},
+        "newuidmap": {
+          "allOf": [
+            {"$ref": "#/$defs/stage0HelperBinary"},
+            {"properties": {"path": {"const": "/usr/bin/newuidmap"}, "resolved_path": {"const": "/usr/bin/newuidmap"}}}
+          ]
+        },
+        "newgidmap": {
+          "allOf": [
+            {"$ref": "#/$defs/stage0HelperBinary"},
+            {"properties": {"path": {"const": "/usr/bin/newgidmap"}, "resolved_path": {"const": "/usr/bin/newgidmap"}}}
+          ]
+        },
+        "subuid": {
+          "allOf": [
+            {"$ref": "#/$defs/stage0ConfigBinding"},
+            {"properties": {"path": {"const": "/etc/subuid"}, "resolved_path": {"const": "/etc/subuid"}, "required_record": {"const": "linqiang:1672864:65536"}}}
+          ]
+        },
+        "subgid": {
+          "allOf": [
+            {"$ref": "#/$defs/stage0ConfigBinding"},
+            {"properties": {"path": {"const": "/etc/subgid"}, "resolved_path": {"const": "/etc/subgid"}, "required_record": {"const": "linqiang:1672864:65536"}}}
+          ]
+        },
+        "passwd": {
+          "allOf": [
+            {"$ref": "#/$defs/stage0ConfigBinding"},
+            {"properties": {"path": {"const": "/etc/passwd"}, "resolved_path": {"const": "/etc/passwd"}, "required_record": {"const": "linqiang:x:1035:1035::/home/linqiang:/bin/bash"}}}
+          ]
+        },
+        "group": {
+          "allOf": [
+            {"$ref": "#/$defs/stage0ConfigBinding"},
+            {"properties": {"path": {"const": "/etc/group"}, "resolved_path": {"const": "/etc/group"}, "required_record": {"const": "linqiang:x:1035:"}}}
+          ]
+        },
+        "nsswitch": {
+          "allOf": [
+            {"$ref": "#/$defs/stage0ConfigBinding"},
+            {"properties": {"path": {"const": "/etc/nsswitch.conf"}, "resolved_path": {"const": "/etc/nsswitch.conf"}, "required_record": {"const": "passwd: files systemd\ngroup: files systemd"}}}
+          ]
+        },
+        "dynamic_dependencies": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/stage0Dependency"},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "dynamic_dependency_census_sha256": {"$ref": "#/$defs/sha256"},
+        "helper_environment": {"const": {"LC_CTYPE": "C.UTF-8"}},
+        "helper_cwd": {"const": "/"},
+        "timeout_milliseconds": {"const": 10000},
+        "stdout_byte_cap": {"const": 65536},
+        "stderr_byte_cap": {"const": 65536},
+        "stage0_no_new_privs": {"const": 0},
+        "helper_mount_nosuid_allowed": {"const": false},
+        "expected_real_uid": {"const": 1035},
+        "expected_effective_uid": {"const": 0},
+        "expected_saved_uid": {"const": 0},
+        "expected_fsuid": {"const": 0},
+        "setgroups_policy_before_clear": {"const": "allow"},
+        "setgroups_after_clear": {"const": []}
+      }
+    },
+    "stage0LoadedEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "resolved_path", "sha256", "byte_count", "owner_uid",
+        "owner_gid", "mode", "nlink"
+      ],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "resolved_path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "owner_uid": {"const": 0},
+        "owner_gid": {"const": 0},
+        "mode": {"enum": [420, 493]},
+        "nlink": {"const": 1}
+      }
+    },
+    "stage0Segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "permissions", "file_offset", "device", "inode"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "permissions": {"type": "string", "pattern": "^[r-][w-][x-][ps]$"},
+        "file_offset": {"type": "integer", "minimum": 0},
+        "device": {"type": "string", "pattern": "^[0-9a-f]+:[0-9a-f]+$"},
+        "inode": {"type": "integer", "minimum": 1}
+      }
+    },
+    "stage0LoadedObjects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "entries", "normalized_segments", "object_count",
+        "segment_count", "object_census_sha256", "segment_census_sha256",
+        "ancestor_components", "ancestor_census_sha256",
+        "address_values_excluded", "runtime_rehash_required"
+      ],
+      "properties": {
+        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-stage0-loaded-objects/v1"},
+        "entries": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/stage0LoadedEntry"},
+          "minItems": 15,
+          "maxItems": 15,
+          "uniqueItems": true
+        },
+        "normalized_segments": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/stage0Segment"},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "object_count": {"const": 15},
+        "segment_count": {"type": "integer", "minimum": 1},
+        "object_census_sha256": {"$ref": "#/$defs/sha256"},
+        "segment_census_sha256": {"$ref": "#/$defs/sha256"},
+        "ancestor_components": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/toolPathComponent"},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "ancestor_census_sha256": {"$ref": "#/$defs/sha256"},
+        "address_values_excluded": {"const": true},
+        "runtime_rehash_required": {"const": true}
+      }
+    },
+    "stage0Supervision": {
+      "const": {
+        "direct_fork_required": true,
+        "target_pidfd_required": true,
+        "target_procdir_required": true,
+        "target_unreaped_until_mapping_closed": true,
+        "pidfd_only_signals": true,
+        "numeric_pid_signal_allowed": false,
+        "waitpid_any_allowed": false,
+        "descendant_poll_interval_milliseconds": 10,
+        "subreaper_required": true,
+        "target_pdeathsig": "SIGKILL",
+        "orphaned_descendant_allowed": false,
+        "child_first_cleanup": true,
+        "exact_exit_wait_required": true
+      }
+    },
+    "stage0Restrictions": {
+      "const": {
+        "parent_network_socket_allowed": false,
+        "parent_gpu_probe_allowed": false,
+        "parent_nvidia_smi_allowed": false,
+        "parent_provider_import_allowed": false,
+        "parent_model_launch_allowed": false,
+        "parent_process_signal_scope": "PIDFD_PINNED_OWN_DESCENDANTS_ONLY"
       }
     },
     "toolPathComponent": {
@@ -615,9 +940,9 @@
             "shell_option": {"const": "-c"},
             "login": {"const": false},
             "tty": {"const": false},
-            "command_grammar": {"const": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1"},
-            "command_prefix": {"const": "exec /shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1 -c D034_STAGE0_V1:/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json:"},
-            "command_prefix_sha256": {"const": "13cf21104b8ced3951a8578b86a1d9ff6d505e4bae496b09a5ae3d6afa79bbf4"},
+            "command_grammar": {"const": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V2"},
+            "command_prefix": {"const": "exec /shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2 -c D034_STAGE0_V2:/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v3.json:"},
+            "command_prefix_sha256": {"const": "2644a709f15d095e364ce82a0920df770c9120bdde35e69a7d192534149405cf"},
             "command_prefix_byte_count": {"const": 206},
             "command_authority_sha256_byte_count": {"const": 64},
             "command_total_byte_count": {"const": 270}

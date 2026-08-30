@@ -215,9 +215,9 @@ def _synthetic_tool_shell_binding() -> dict[str, JsonValue]:
     ]
     command_prefix = (
         "exec /shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
-        "d034-9845577c/launch-shim.v1 -c D034_STAGE0_V1:"
+        "d034-9845577c/launch-shim.v2 -c D034_STAGE0_V2:"
         "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
-        "d034-9845577c/authority.v2.json:"
+        "d034-9845577c/authority.v3.json:"
     )
     return {
         "schema_version": "mobileworld.g1.gpu-live-smoke-tool-shell/v1",
@@ -326,7 +326,7 @@ def _synthetic_tool_shell_binding() -> dict[str, JsonValue]:
             "shell_option": "-c",
             "login": False,
             "tty": False,
-            "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1",
+            "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V2",
             "command_prefix": command_prefix,
             "command_prefix_sha256": _sha256(command_prefix.encode("ascii")),
             "command_prefix_byte_count": len(command_prefix.encode("ascii")),
@@ -336,6 +336,214 @@ def _synthetic_tool_shell_binding() -> dict[str, JsonValue]:
         "formal_claims": {
             "direct_exec_formally_proven": False,
             "pre_gate_dynamic_loader_closure_formally_proven": False,
+        },
+    }
+
+
+def _synthetic_stage0_coordinator() -> dict[str, JsonValue]:
+    helper_elf: dict[str, JsonValue] = {
+        "machine": "EM_X86_64",
+        "type": "ET_DYN",
+        "elf_osabi": 0,
+        "pt_interp": "/lib64/ld-linux-x86-64.so.2",
+        "dt_needed": ["libaudit.so.1", "libselinux.so.1", "libc.so.6"],
+        "rpath_runpath_allowed": False,
+        "bind_now": False,
+        "pie": True,
+        "nx_stack": True,
+    }
+
+    def helper(path: str, digest_digit: str) -> dict[str, JsonValue]:
+        return {
+            "path": path,
+            "resolved_path": path,
+            "sha256": digest_digit * 64,
+            "byte_count": 28_136,
+            "owner_uid": 0,
+            "owner_gid": 0,
+            "mode": 0o4755,
+            "nlink": 1,
+            "setuid_required": True,
+            "elf": copy.deepcopy(helper_elf),
+        }
+
+    def config(
+        path: str,
+        required_record: str,
+        digest_digit: str,
+    ) -> dict[str, JsonValue]:
+        return {
+            "path": path,
+            "resolved_path": path,
+            "sha256": digest_digit * 64,
+            "byte_count": 1,
+            "owner_uid": 0,
+            "owner_gid": 0,
+            "mode": 0o644,
+            "nlink": 1,
+            "required_record": required_record,
+        }
+
+    dependencies: list[JsonValue] = [
+        {
+            "soname": "libc.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "resolved_path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "9" * 64,
+            "byte_count": 2_220_400,
+            "owner_uid": 0,
+            "owner_gid": 0,
+            "mode": 0o755,
+            "nlink": 1,
+            "elf_osabi": 3,
+            "dt_needed": ["ld-linux-x86-64.so.2"],
+        }
+    ]
+    loaded_entries: list[JsonValue] = []
+    loaded_segments: list[JsonValue] = []
+    for index in range(15):
+        path = f"/synthetic/stage0-loaded/{index:02d}"
+        loaded_entries.append(
+            {
+                "path": path,
+                "resolved_path": path,
+                "sha256": f"{index + 1:x}"[-1] * 64,
+                "byte_count": index + 1,
+                "owner_uid": 0,
+                "owner_gid": 0,
+                "mode": 0o444,
+                "nlink": 1,
+            }
+        )
+        loaded_segments.append(
+            {
+                "path": path,
+                "permissions": "r--p",
+                "file_offset": 0,
+                "device": "00:00",
+                "inode": index + 1,
+            }
+        )
+    ancestors: list[JsonValue] = [
+        {
+            "path": path,
+            "type": "directory",
+            "symlink_target": None,
+            "resolved_path": path,
+            "owner_uid": 0,
+            "owner_gid": 0,
+            "mode": 0o755,
+            "nlink": 2,
+        }
+        for path in ("/", "/synthetic", "/synthetic/stage0-loaded")
+    ]
+    return {
+        "schema_version": "mobileworld.g1.gpu-live-smoke-stage0-coordinator/v1",
+        "implementation": "CTYPES_USER_NETNS_NEWIDMAP_GATE_V2",
+        "clone_flags": ["CLONE_NEWUSER", "CLONE_NEWNET"],
+        "clone_flags_value": 1_342_177_280,
+        "single_thread_required": True,
+        "sigchld_default_required": True,
+        "sigchld_nocldwait_allowed": False,
+        "no_exec_between_unshare_and_mapping": True,
+        "child_postfork_import_allowed": False,
+        "child_failure_exit_code": 125,
+        "protocol": {
+            "schema_version": "mobileworld.g1.gpu-live-smoke-stage0-protocol/v1",
+            "encoding": "U32BE_CANONICAL_JSON_V1",
+            "nonce_byte_count": 32,
+            "maximum_frame_byte_count": 65_536,
+            "timeout_milliseconds": 30_000,
+            "pipe_count": 2,
+            "pipe_cloexec": True,
+            "parent_to_child_message_order": [
+                "UNSHARE_REQUEST",
+                "CLEAR_GROUPS_REQUEST",
+                "EXEC_STAGE1_REQUEST",
+            ],
+            "child_to_parent_message_order": [
+                "ACQUIRED",
+                "UNSHARED_BLOCKED",
+                "GROUPS_CLEARED",
+            ],
+            "gate_fds_closed_before_stage1": True,
+        },
+        "mapping_helpers": {
+            "execution_order": ["UID_MAP", "GID_MAP"],
+            "newuidmap": helper("/usr/bin/newuidmap", "1"),
+            "newgidmap": helper("/usr/bin/newgidmap", "2"),
+            "subuid": config(
+                "/etc/subuid",
+                "linqiang:1672864:65536",
+                "3",
+            ),
+            "subgid": config(
+                "/etc/subgid",
+                "linqiang:1672864:65536",
+                "4",
+            ),
+            "passwd": config(
+                "/etc/passwd",
+                "linqiang:x:1035:1035::/home/linqiang:/bin/bash",
+                "5",
+            ),
+            "group": config("/etc/group", "linqiang:x:1035:", "6"),
+            "nsswitch": config(
+                "/etc/nsswitch.conf",
+                "passwd: files systemd\ngroup: files systemd",
+                "7",
+            ),
+            "dynamic_dependencies": dependencies,
+            "dynamic_dependency_census_sha256": _canonical_sha256(dependencies),
+            "helper_environment": {"LC_CTYPE": "C.UTF-8"},
+            "helper_cwd": "/",
+            "timeout_milliseconds": 10_000,
+            "stdout_byte_cap": 65_536,
+            "stderr_byte_cap": 65_536,
+            "stage0_no_new_privs": 0,
+            "helper_mount_nosuid_allowed": False,
+            "expected_real_uid": 1035,
+            "expected_effective_uid": 0,
+            "expected_saved_uid": 0,
+            "expected_fsuid": 0,
+            "setgroups_policy_before_clear": "allow",
+            "setgroups_after_clear": [],
+        },
+        "loaded_objects": {
+            "schema_version": "mobileworld.g1.gpu-live-smoke-stage0-loaded-objects/v1",
+            "entries": loaded_entries,
+            "normalized_segments": loaded_segments,
+            "object_count": 15,
+            "segment_count": 15,
+            "object_census_sha256": _canonical_sha256(loaded_entries),
+            "segment_census_sha256": _canonical_sha256(loaded_segments),
+            "ancestor_components": ancestors,
+            "ancestor_census_sha256": _canonical_sha256(ancestors),
+            "address_values_excluded": True,
+            "runtime_rehash_required": True,
+        },
+        "supervision": {
+            "direct_fork_required": True,
+            "target_pidfd_required": True,
+            "target_procdir_required": True,
+            "target_unreaped_until_mapping_closed": True,
+            "pidfd_only_signals": True,
+            "numeric_pid_signal_allowed": False,
+            "waitpid_any_allowed": False,
+            "descendant_poll_interval_milliseconds": 10,
+            "subreaper_required": True,
+            "target_pdeathsig": "SIGKILL",
+            "orphaned_descendant_allowed": False,
+            "child_first_cleanup": True,
+            "exact_exit_wait_required": True,
+        },
+        "restrictions": {
+            "parent_network_socket_allowed": False,
+            "parent_gpu_probe_allowed": False,
+            "parent_nvidia_smi_allowed": False,
+            "parent_provider_import_allowed": False,
+            "parent_model_launch_allowed": False,
+            "parent_process_signal_scope": "PIDFD_PINNED_OWN_DESCENDANTS_ONLY",
         },
     }
 
@@ -587,7 +795,7 @@ def _gpu_smoke_packet() -> dict[str, JsonValue]:
 
 
 def _authority(packet_sha256: str) -> dict[str, JsonValue]:
-    runtime_scratch_root = "/synthetic/runtime-scratch/g1-gpu-smoke"
+    runtime_scratch_root = "/synthetic/runtime-scratch/g1-gpu-smoke-v3"
     private_runtime_root = "/synthetic/private-runtime/g1-gpu-smoke"
     private_python = f"{private_runtime_root}/bin/python3.12"
     client_site_packages = f"{private_runtime_root}/site-packages/client"
@@ -651,8 +859,8 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
             "served_name": MODEL_SERVED_NAMES[model_id],
         }
     return {
-        "schema_version": "mobileworld.g1.gpu-live-smoke-authority/v2",
-        "authority_id": "owner-d034-gpu0-shared-v2",
+        "schema_version": "mobileworld.g1.gpu-live-smoke-authority/v3",
+        "authority_id": "owner-d034-gpu0-shared-v3",
         "decision_id": "D-034",
         "authorized_scope": "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS",
         "authorized": True,
@@ -753,14 +961,14 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
             "site_packages_hardlinks_allowed": False,
         },
         "launch_shim": {
-            "schema_version": "mobileworld.g1.gpu-live-smoke-launch-shim/v1",
+            "schema_version": "mobileworld.g1.gpu-live-smoke-launch-shim/v2",
             "path": (
                 "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
-                "d034-9845577c/launch-shim.v1"
+                "d034-9845577c/launch-shim.v2"
             ),
             "resolved_path": (
                 "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
-                "d034-9845577c/launch-shim.v1"
+                "d034-9845577c/launch-shim.v2"
             ),
             "sha256": "7" * 64,
             "byte_count": 1,
@@ -777,7 +985,7 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
                 ).read_bytes()
             ),
             "shell_option": "-c",
-            "token_prefix": "D034_STAGE0_V1",
+            "token_prefix": "D034_STAGE0_V2",
             "runner_cli_path": str(GPU_SMOKE_RUNNER_CLI),
             "smoke_packet_path": (
                 "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
@@ -851,19 +1059,46 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
         },
         "network_namespace": {
             "required": True,
-            "implementation": "LINUX_USER_NETNS_MAP_ROOT_V1",
+            "implementation": "CTYPES_USER_NETNS_NEWIDMAP_GATE_V2",
             "host_owner_uid": os.getuid(),
             "host_owner_gid": os.getgid(),
             "inside_owner_uid": 0,
             "inside_owner_gid": 0,
             "inside_unmapped_system_uid": 65_534,
             "inside_unmapped_system_gid": 65_534,
-            "uid_map_line": f"0 {os.getuid()} 1",
-            "gid_map_line": f"0 {os.getgid()} 1",
+            "uid_map_extents": [
+                {
+                    "inside_id": 0,
+                    "outside_id": 1035,
+                    "length": 1,
+                    "purpose": "AUTHORIZED_OWNER_ROOT",
+                },
+                {
+                    "inside_id": 1,
+                    "outside_id": 1_672_864,
+                    "length": 1,
+                    "purpose": "SETGROUPS_ALLOW_SUBID_SENTINEL_ONLY",
+                },
+            ],
+            "gid_map_extents": [
+                {
+                    "inside_id": 0,
+                    "outside_id": 1035,
+                    "length": 1,
+                    "purpose": "AUTHORIZED_OWNER_ROOT",
+                },
+                {
+                    "inside_id": 1,
+                    "outside_id": 1_672_864,
+                    "length": 1,
+                    "purpose": "SETGROUPS_ALLOW_SUBID_SENTINEL_ONLY",
+                },
+            ],
+            "uid_map_text": "0 1035 1\n1 1672864 1",
+            "gid_map_text": "0 1035 1\n1 1672864 1",
+            "stage0_coordinator": _synthetic_stage0_coordinator(),
             "env_path": "/usr/bin/env",
             "env_sha256": ("854a8d7f147ff1bf3562edd1aa0b2f2ac28ef432811533f03c43dc9162fe3af3"),
-            "unshare_path": "/usr/bin/unshare",
-            "unshare_sha256": ("72a34e6ba98a59f1da0c7b4d8c9722b746b5ade54e4d7e8de8e519c2993858ad"),
             "ip_path": "/usr/bin/ip",
             "ip_sha256": ("40cd6fd071451ae104d23783b6ae22efff4f1099167d73b41ce900fc49c8abaa"),
             "setpriv_path": "/usr/bin/setpriv",
@@ -900,7 +1135,7 @@ def _authority(packet_sha256: str) -> dict[str, JsonValue]:
             ),
             "outer_fd_closure_receipt_sha256": outer_fd_closure_sha256,
         },
-        "evidence_root": "/synthetic/evidence/g1-gpu-smoke",
+        "evidence_root": "/synthetic/evidence/g1-gpu-smoke-v3",
         "runtime_scratch_root": runtime_scratch_root,
     }
 

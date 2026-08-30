@@ -30,15 +30,15 @@ _SOURCE_ROOT = _SCRIPT_PATH.parents[1] / "src"
 JsonValue = Any
 
 _EXECUTE_CONFIRMATION = "EXECUTE-D034-SYNTHETIC-22-CALL-SMOKE"
-_AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v2"
-_LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v1"
+_AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v3"
+_LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v2"
 _LAUNCH_SHIM_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"
 )
 _LAUNCH_SHIM_AUTHORITY_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v3.json"
 )
-_LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V1"
+_LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V2"
 _TOOL_SHELL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-tool-shell/v1"
 _TOOL_SHELL_PATH = "/bin/sh"
 _TOOL_SHELL_RESOLVED_PATH = "/usr/bin/dash"
@@ -90,8 +90,32 @@ _TOOL_SHELL_FORBIDDEN_ENVIRONMENT_NAMES = (
 )
 _TOOL_SHELL_FORBIDDEN_ENVIRONMENT_PREFIXES = ("BASH_FUNC_", "LD_")
 _FD_CLOSE_UPPER_BOUND_EXCLUSIVE = 1_048_576
+_CLONE_NEWUSER = 0x10000000
+_CLONE_NEWNET = 0x40000000
+_STAGE0_CLONE_FLAGS = _CLONE_NEWUSER | _CLONE_NEWNET
+_STAGE0_COORDINATOR_SCHEMA_VERSION = (
+    "mobileworld.g1.gpu-live-smoke-stage0-coordinator/v1"
+)
+_STAGE0_PROTOCOL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-stage0-protocol/v1"
+_STAGE0_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-stage0-receipt/v1"
+_STAGE0_UID_MAP_EXTENTS = (
+    (0, 1035, 1, "AUTHORIZED_OWNER_ROOT"),
+    (1, 1_672_864, 1, "SETGROUPS_ALLOW_SUBID_SENTINEL_ONLY"),
+)
+_STAGE0_GID_MAP_EXTENTS = _STAGE0_UID_MAP_EXTENTS
+_STAGE0_ID_MAP_TEXT = "0 1035 1\n1 1672864 1"
+_STAGE0_NEWUIDMAP_PATH = "/usr/bin/newuidmap"
+_STAGE0_NEWGIDMAP_PATH = "/usr/bin/newgidmap"
+_STAGE0_SUBUID_PATH = "/etc/subuid"
+_STAGE0_SUBGID_PATH = "/etc/subgid"
+_STAGE0_PASSWD_PATH = "/etc/passwd"
+_STAGE0_GROUP_PATH = "/etc/group"
+_STAGE0_NSSWITCH_PATH = "/etc/nsswitch.conf"
+_STAGE0_PROTOCOL_MAX_FRAME_BYTES = 65_536
+_STAGE0_PROTOCOL_TIMEOUT_SECONDS = 30.0
+_STAGE0_CHILD_FAILURE_EXIT_CODE = 125
 _FORBIDDEN_PRE_UNSHARE_MODULE_ROOTS = ("mobile_world", "loguru", "PIL", "openai")
-_STAGE1_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-stage1-preexec/v1"
+_STAGE1_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-stage1-preexec/v2"
 _OWNED_COMMAND_GATE_CODE = (
     "import base64,json,os,sys;"
     "fd=int(sys.argv[1]);"
@@ -142,7 +166,7 @@ def read_exact(path,limit):
 if not (sys.flags.isolated==1 and sys.flags.ignore_environment==1 and sys.flags.no_site==1 and sys.flags.dont_write_bytecode==1 and sys.pycache_prefix=='/dev/null'):
     raise SystemExit('GPU_SMOKE_SOURCE_BINDING_INVALID')
 stage,authority_path,authority_sha,bootstrap_sha,cli_path,stage_payload,*cli_args=sys.argv[1:]
-internal_flags={'--inside-network-namespace-stage1','--inside-network-namespace','--namespace-sandboxed','--stage1-receipt-b64','--stage0-bootstrap-sha256','--pinned-bootstrap-stage'}
+internal_flags={'--inside-network-namespace-stage1','--inside-network-namespace','--namespace-sandboxed','--stage0-receipt-b64','--stage1-receipt-b64','--stage0-bootstrap-sha256','--pinned-bootstrap-stage'}
 if stage not in {'STAGE0','STAGE1','STAGE2'} or any(any(item==flag or item.startswith(flag+'=') for flag in internal_flags) for item in cli_args):
     raise SystemExit('GPU_SMOKE_SOURCE_BINDING_INVALID')
 authority_bytes,authority_meta=read_exact(authority_path,131072)
@@ -167,8 +191,8 @@ expected_cli=source['worktree_root']+'/'+binding['relative_path']
 cli_bytes,cli_meta=read_exact(cli_path,1048576)
 if not (cli_path==expected_cli and hashlib.sha256(cli_bytes).hexdigest()==binding['sha256'] and cli_meta.st_uid==expected_uid and cli_meta.st_gid==expected_gid and cli_meta.st_nlink==1 and stat.S_IMODE(cli_meta.st_mode)&0o022==0):
     raise SystemExit('GPU_SMOKE_SOURCE_BINDING_INVALID')
-stage_args={'STAGE0':[],'STAGE1':['--inside-network-namespace-stage1'],'STAGE2':['--inside-network-namespace','--namespace-sandboxed','--stage1-receipt-b64',stage_payload]}[stage]
-if (stage in {'STAGE0','STAGE1'} and stage_payload!='-') or (stage=='STAGE2' and not 0<len(stage_payload)<=262144):
+stage_args={'STAGE0':[],'STAGE1':['--inside-network-namespace-stage1','--stage0-receipt-b64',stage_payload],'STAGE2':['--inside-network-namespace','--namespace-sandboxed','--stage1-receipt-b64',stage_payload]}[stage]
+if (stage=='STAGE0' and stage_payload!='-') or (stage in {'STAGE1','STAGE2'} and not 0<len(stage_payload)<=262144):
     raise SystemExit('GPU_SMOKE_SOURCE_BINDING_INVALID')
 sys.argv=[cli_path,*cli_args,'--stage0-bootstrap-sha256',bootstrap_sha,'--pinned-bootstrap-stage',stage,*stage_args]
 scope={'__name__':'__main__','__file__':cli_path,'__package__':None,'__cached__':None,'__builtins__':__builtins__,'_PINNED_BOOTSTRAP':{'authority_sha256':authority_sha,'cli_sha256':binding['sha256'],'bootstrap_sha256':bootstrap_sha,'stage':stage,'cli_opened_nofollow':True,'cli_compiled_from_verified_bytes':True}}
@@ -324,12 +348,13 @@ _OUTER_NETWORK_NAMESPACE_KEYS = {
     "inside_owner_gid",
     "inside_unmapped_system_uid",
     "inside_unmapped_system_gid",
-    "uid_map_line",
-    "gid_map_line",
+    "uid_map_extents",
+    "gid_map_extents",
+    "uid_map_text",
+    "gid_map_text",
+    "stage0_coordinator",
     "env_path",
     "env_sha256",
-    "unshare_path",
-    "unshare_sha256",
     "ip_path",
     "ip_sha256",
     "setpriv_path",
@@ -346,6 +371,153 @@ _OUTER_NETWORK_NAMESPACE_KEYS = {
     "python_pycache_prefix",
     "fd_close_upper_bound_exclusive",
     "outer_fd_closure_receipt_sha256",
+}
+_OUTER_ID_MAP_EXTENT_KEYS = {"inside_id", "outside_id", "length", "purpose"}
+_OUTER_STAGE0_COORDINATOR_KEYS = {
+    "schema_version",
+    "implementation",
+    "clone_flags",
+    "clone_flags_value",
+    "single_thread_required",
+    "sigchld_default_required",
+    "sigchld_nocldwait_allowed",
+    "no_exec_between_unshare_and_mapping",
+    "child_postfork_import_allowed",
+    "child_failure_exit_code",
+    "protocol",
+    "mapping_helpers",
+    "loaded_objects",
+    "supervision",
+    "restrictions",
+}
+_OUTER_STAGE0_PROTOCOL_KEYS = {
+    "schema_version",
+    "encoding",
+    "nonce_byte_count",
+    "maximum_frame_byte_count",
+    "timeout_milliseconds",
+    "pipe_count",
+    "pipe_cloexec",
+    "parent_to_child_message_order",
+    "child_to_parent_message_order",
+    "gate_fds_closed_before_stage1",
+}
+_OUTER_STAGE0_MAPPING_HELPER_KEYS = {
+    "execution_order",
+    "newuidmap",
+    "newgidmap",
+    "subuid",
+    "subgid",
+    "passwd",
+    "group",
+    "nsswitch",
+    "dynamic_dependencies",
+    "dynamic_dependency_census_sha256",
+    "helper_environment",
+    "helper_cwd",
+    "timeout_milliseconds",
+    "stdout_byte_cap",
+    "stderr_byte_cap",
+    "stage0_no_new_privs",
+    "helper_mount_nosuid_allowed",
+    "expected_real_uid",
+    "expected_effective_uid",
+    "expected_saved_uid",
+    "expected_fsuid",
+    "setgroups_policy_before_clear",
+    "setgroups_after_clear",
+}
+_OUTER_STAGE0_HELPER_BINARY_KEYS = {
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+    "setuid_required",
+    "elf",
+}
+_OUTER_STAGE0_CONFIG_BINDING_KEYS = {
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+    "required_record",
+}
+_OUTER_STAGE0_DEPENDENCY_KEYS = {
+    "soname",
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+    "elf_osabi",
+    "dt_needed",
+}
+_OUTER_STAGE0_LOADED_OBJECT_KEYS = {
+    "schema_version",
+    "entries",
+    "normalized_segments",
+    "object_count",
+    "segment_count",
+    "object_census_sha256",
+    "segment_census_sha256",
+    "ancestor_components",
+    "ancestor_census_sha256",
+    "address_values_excluded",
+    "runtime_rehash_required",
+}
+_OUTER_STAGE0_LOADED_ENTRY_KEYS = {
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+}
+_OUTER_STAGE0_SEGMENT_KEYS = {
+    "path",
+    "permissions",
+    "file_offset",
+    "device",
+    "inode",
+}
+_OUTER_STAGE0_SUPERVISION_KEYS = {
+    "direct_fork_required",
+    "target_pidfd_required",
+    "target_procdir_required",
+    "target_unreaped_until_mapping_closed",
+    "pidfd_only_signals",
+    "numeric_pid_signal_allowed",
+    "waitpid_any_allowed",
+    "descendant_poll_interval_milliseconds",
+    "subreaper_required",
+    "target_pdeathsig",
+    "orphaned_descendant_allowed",
+    "child_first_cleanup",
+    "exact_exit_wait_required",
+    "stdout_stderr_proxy_required",
+    "stdout_byte_cap",
+    "stderr_byte_cap",
+}
+_OUTER_STAGE0_RESTRICTION_KEYS = {
+    "parent_network_socket_allowed",
+    "parent_gpu_probe_allowed",
+    "parent_nvidia_smi_allowed",
+    "parent_provider_import_allowed",
+    "parent_model_launch_allowed",
+    "parent_process_signal_scope",
 }
 _OUTER_LAUNCHER_ENVIRONMENT_KEYS = {
     "PATH",
@@ -460,6 +632,24 @@ def _canonical_json_bytes_stdlib(value: object) -> bytes:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _closed_stdlib(value: object, keys: set[str], error_code: str) -> dict[str, object]:
+    if type(value) is not dict or set(value) != keys:
+        raise RuntimeError(error_code)
+    return cast(dict[str, object], value)
+
+
+def _expected_stage0_id_map_extents_stdlib() -> list[dict[str, object]]:
+    return [
+        {
+            "inside_id": inside_id,
+            "outside_id": outside_id,
+            "length": length,
+            "purpose": purpose,
+        }
+        for inside_id, outside_id, length, purpose in _STAGE0_UID_MAP_EXTENTS
+    ]
 
 
 def _read_authority_stdlib(args: argparse.Namespace) -> dict[str, object]:
@@ -2471,6 +2661,462 @@ def _preimport_runtime_census_stdlib(
     )
 
 
+def _stage0_file_identity_stdlib(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _verify_stage0_file_binding_stdlib(
+    value: object,
+    *,
+    keys: set[str],
+    expected_path: str | None,
+    expected_owner_uid: int,
+    expected_owner_gid: int,
+) -> tuple[dict[str, object], bytes]:
+    binding = _closed_stdlib(value, keys, "GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    path = binding.get("path")
+    resolved_path = binding.get("resolved_path", path)
+    if not (
+        type(path) is str
+        and type(resolved_path) is str
+        and (expected_path is None or path == expected_path)
+        and path.startswith("/")
+        and str(Path(path)) == path
+        and resolved_path.startswith("/")
+        and str(Path(resolved_path)) == resolved_path
+        and type(binding.get("sha256")) is str
+        and type(binding.get("byte_count")) is int
+        and type(binding.get("mode")) is int
+        and type(binding.get("nlink")) is int
+    ):
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    try:
+        if os.path.realpath(path) != resolved_path:
+            raise ValueError("resolved path differs")
+        before = os.lstat(resolved_path)
+        fd = _open_absolute_nofollow_file_stdlib(
+            resolved_path,
+            os.O_RDONLY | os.O_CLOEXEC,
+        )
+        try:
+            opened = os.fstat(fd)
+            remaining = opened.st_size
+            digest = hashlib.sha256()
+            chunks: list[bytes] = []
+            while remaining:
+                chunk = os.read(fd, min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ValueError("bound file truncated")
+                chunks.append(chunk)
+                digest.update(chunk)
+                remaining -= len(chunk)
+            after = os.fstat(fd)
+        finally:
+            os.close(fd)
+        path_after = os.lstat(resolved_path)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
+    if not (
+        _stage0_file_identity_stdlib(before)
+        == _stage0_file_identity_stdlib(opened)
+        == _stage0_file_identity_stdlib(after)
+        == _stage0_file_identity_stdlib(path_after)
+        and stat.S_ISREG(opened.st_mode)
+        and opened.st_uid == expected_owner_uid
+        and opened.st_gid == expected_owner_gid
+        and binding.get("owner_uid") == 0
+        and binding.get("owner_gid") == 0
+        and opened.st_size == binding["byte_count"]
+        and stat.S_IMODE(opened.st_mode) == binding["mode"]
+        and opened.st_nlink == binding["nlink"] == 1
+        and digest.hexdigest() == binding["sha256"]
+    ):
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    return binding, b"".join(chunks)
+
+
+def _normalized_stage0_mapped_segments_stdlib() -> list[dict[str, object]]:
+    try:
+        fd = os.open("/proc/self/maps", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(fd, 65_536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 4 * 1024 * 1024:
+                    raise ValueError("maps exceeds cap")
+                chunks.append(chunk)
+        finally:
+            os.close(fd)
+        raw = b"".join(chunks).decode("utf-8")
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
+    result: list[dict[str, object]] = []
+    for line in raw.splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) < 5:
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+        if len(fields) == 5:
+            continue
+        _addresses, permissions, raw_offset, device, raw_inode, path = fields
+        if not path.startswith("/"):
+            continue
+        if path.endswith(" (deleted)") or str(Path(path)) != path:
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+        try:
+            file_offset = int(raw_offset, 16)
+            inode = int(raw_inode, 10)
+        except ValueError as exc:
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
+        if not (
+            len(permissions) == 4
+            and permissions[0] in "r-"
+            and permissions[1] in "w-"
+            and permissions[2] in "x-"
+            and permissions[3] in "ps"
+            and file_offset >= 0
+            and inode > 0
+        ):
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+        result.append(
+            {
+                "path": path,
+                "permissions": permissions,
+                "file_offset": file_offset,
+                "device": device,
+                "inode": inode,
+            }
+        )
+    result.sort(
+        key=lambda item: (
+            cast(str, item["path"]),
+            cast(int, item["file_offset"]),
+            cast(str, item["permissions"]),
+            cast(str, item["device"]),
+            cast(int, item["inode"]),
+        )
+    )
+    return result
+
+
+def _verify_stage0_loaded_objects_stdlib(
+    value: object,
+    *,
+    expected_owner_uid: int,
+    expected_owner_gid: int,
+) -> dict[str, object]:
+    loaded = _closed_stdlib(
+        value,
+        _OUTER_STAGE0_LOADED_OBJECT_KEYS,
+        "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+    )
+    raw_entries = loaded.get("entries")
+    raw_segments = loaded.get("normalized_segments")
+    raw_ancestors = loaded.get("ancestor_components")
+    if not (
+        type(raw_entries) is list
+        and type(raw_segments) is list
+        and type(raw_ancestors) is list
+    ):
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    entries = cast(list[object], raw_entries)
+    recorded_segments = cast(list[object], raw_segments)
+    ancestors = cast(list[object], raw_ancestors)
+    before_segments = _normalized_stage0_mapped_segments_stdlib()
+    observed_entries: list[dict[str, object]] = []
+    paths: list[str] = []
+    for raw_entry in entries:
+        entry, _content = _verify_stage0_file_binding_stdlib(
+            raw_entry,
+            keys=_OUTER_STAGE0_LOADED_ENTRY_KEYS,
+            expected_path=None,
+            expected_owner_uid=expected_owner_uid,
+            expected_owner_gid=expected_owner_gid,
+        )
+        observed_entries.append(entry)
+        paths.append(cast(str, entry["path"]))
+    observed_ancestors: list[dict[str, object]] = []
+    ancestor_paths: list[str] = []
+    for raw_component in ancestors:
+        component = _closed_stdlib(
+            raw_component,
+            _OUTER_TOOL_PATH_COMPONENT_KEYS,
+            "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+        )
+        path = component.get("path")
+        if type(path) is not str or not path.startswith("/") or str(Path(path)) != path:
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+        try:
+            metadata = os.lstat(path)
+            entry_type = (
+                "symlink"
+                if stat.S_ISLNK(metadata.st_mode)
+                else "directory"
+                if stat.S_ISDIR(metadata.st_mode)
+                else "other"
+            )
+            target = os.readlink(path) if entry_type == "symlink" else None
+            resolved = os.path.realpath(path)
+        except OSError as exc:
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
+        if not (
+            entry_type in {"symlink", "directory"}
+            and component.get("type") == entry_type
+            and component.get("symlink_target") == target
+            and component.get("resolved_path") == resolved
+            and metadata.st_uid == expected_owner_uid
+            and metadata.st_gid == expected_owner_gid
+            and component.get("owner_uid") == 0
+            and component.get("owner_gid") == 0
+            and component.get("mode") == stat.S_IMODE(metadata.st_mode)
+            and component.get("nlink") == metadata.st_nlink
+            and (entry_type != "directory" or not stat.S_IMODE(metadata.st_mode) & 0o022)
+        ):
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+        observed_ancestors.append(component)
+        ancestor_paths.append(path)
+    after_segments = _normalized_stage0_mapped_segments_stdlib()
+    if not (
+        loaded.get("schema_version")
+        == "mobileworld.g1.gpu-live-smoke-stage0-loaded-objects/v1"
+        and len(observed_entries) == loaded.get("object_count") == 15
+        and len(before_segments) == loaded.get("segment_count")
+        and paths == sorted(set(paths))
+        and ancestor_paths == sorted(set(ancestor_paths))
+        and before_segments == after_segments == recorded_segments
+        and loaded.get("object_census_sha256")
+        == hashlib.sha256(_canonical_json_bytes_stdlib(observed_entries)).hexdigest()
+        and loaded.get("segment_census_sha256")
+        == hashlib.sha256(_canonical_json_bytes_stdlib(before_segments)).hexdigest()
+        and loaded.get("ancestor_census_sha256")
+        == hashlib.sha256(_canonical_json_bytes_stdlib(observed_ancestors)).hexdigest()
+        and loaded.get("address_values_excluded") is True
+        and loaded.get("runtime_rehash_required") is True
+    ):
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    return {
+        "schema_version": loaded["schema_version"],
+        "object_count": len(observed_entries),
+        "segment_count": len(before_segments),
+        "object_census_sha256": loaded["object_census_sha256"],
+        "segment_census_sha256": loaded["segment_census_sha256"],
+        "ancestor_census_sha256": loaded["ancestor_census_sha256"],
+        "same_fd_hash_revalidated": True,
+        "maps_path_and_segment_census_stable": True,
+        "foreign_process_maps_read": 0,
+    }
+
+
+def _verify_stage0_coordinator_authority_stdlib(
+    namespace: dict[str, object],
+) -> dict[str, object]:
+    coordinator = _closed_stdlib(
+        namespace.get("stage0_coordinator"),
+        _OUTER_STAGE0_COORDINATOR_KEYS,
+        "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+    )
+    protocol = _closed_stdlib(
+        coordinator.get("protocol"),
+        _OUTER_STAGE0_PROTOCOL_KEYS,
+        "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+    )
+    if not (
+        coordinator.get("schema_version") == _STAGE0_COORDINATOR_SCHEMA_VERSION
+        and coordinator.get("implementation") == "CTYPES_USER_NETNS_NEWIDMAP_GATE_V2"
+        and coordinator.get("clone_flags") == ["CLONE_NEWUSER", "CLONE_NEWNET"]
+        and coordinator.get("clone_flags_value") == _STAGE0_CLONE_FLAGS
+        and coordinator.get("single_thread_required") is True
+        and coordinator.get("sigchld_default_required") is True
+        and coordinator.get("sigchld_nocldwait_allowed") is False
+        and coordinator.get("no_exec_between_unshare_and_mapping") is True
+        and coordinator.get("child_postfork_import_allowed") is False
+        and coordinator.get("child_failure_exit_code") == _STAGE0_CHILD_FAILURE_EXIT_CODE
+        and protocol
+        == {
+            "schema_version": _STAGE0_PROTOCOL_SCHEMA_VERSION,
+            "encoding": "U32BE_CANONICAL_JSON_V1",
+            "nonce_byte_count": 32,
+            "maximum_frame_byte_count": _STAGE0_PROTOCOL_MAX_FRAME_BYTES,
+            "timeout_milliseconds": int(_STAGE0_PROTOCOL_TIMEOUT_SECONDS * 1000),
+            "pipe_count": 2,
+            "pipe_cloexec": True,
+            "parent_to_child_message_order": [
+                "UNSHARE_REQUEST",
+                "CLEAR_GROUPS_REQUEST",
+                "EXEC_STAGE1_REQUEST",
+            ],
+            "child_to_parent_message_order": [
+                "ACQUIRED",
+                "UNSHARED_BLOCKED",
+                "GROUPS_CLEARED",
+            ],
+            "gate_fds_closed_before_stage1": True,
+        }
+    ):
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    helpers = _closed_stdlib(
+        coordinator.get("mapping_helpers"),
+        _OUTER_STAGE0_MAPPING_HELPER_KEYS,
+        "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+    )
+    for key, expected_path in (
+        ("newuidmap", _STAGE0_NEWUIDMAP_PATH),
+        ("newgidmap", _STAGE0_NEWGIDMAP_PATH),
+    ):
+        helper, _content = _verify_stage0_file_binding_stdlib(
+            helpers.get(key),
+            keys=_OUTER_STAGE0_HELPER_BINARY_KEYS,
+            expected_path=expected_path,
+            expected_owner_uid=0,
+            expected_owner_gid=0,
+        )
+        if not (
+            helper.get("resolved_path") == expected_path
+            and helper.get("mode") == 0o4755
+            and helper.get("setuid_required") is True
+            and type(helper.get("elf")) is dict
+        ):
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    expected_configs = {
+        "subuid": (_STAGE0_SUBUID_PATH, "linqiang:1672864:65536"),
+        "subgid": (_STAGE0_SUBGID_PATH, "linqiang:1672864:65536"),
+        "passwd": (_STAGE0_PASSWD_PATH, "linqiang:x:1035:1035::/home/linqiang:/bin/bash"),
+        "group": (_STAGE0_GROUP_PATH, "linqiang:x:1035:"),
+        "nsswitch": (_STAGE0_NSSWITCH_PATH, "passwd: files systemd\ngroup: files systemd"),
+    }
+    for key, (expected_path, required_record) in expected_configs.items():
+        config, content = _verify_stage0_file_binding_stdlib(
+            helpers.get(key),
+            keys=_OUTER_STAGE0_CONFIG_BINDING_KEYS,
+            expected_path=expected_path,
+            expected_owner_uid=0,
+            expected_owner_gid=0,
+        )
+        try:
+            lines = content.decode("utf-8").splitlines()
+        except UnicodeDecodeError as exc:
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
+        required_lines = cast(str, required_record).splitlines()
+        if not (
+            config.get("resolved_path") == expected_path
+            and config.get("mode") == 0o644
+            and config.get("required_record") == required_record
+            and all(line in lines for line in required_lines)
+        ):
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    raw_dependencies = helpers.get("dynamic_dependencies")
+    if type(raw_dependencies) is not list or not raw_dependencies:
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    dependencies = cast(list[object], raw_dependencies)
+    dependency_paths: list[str] = []
+    for raw_dependency in dependencies:
+        dependency, _content = _verify_stage0_file_binding_stdlib(
+            raw_dependency,
+            keys=_OUTER_STAGE0_DEPENDENCY_KEYS,
+            expected_path=None,
+            expected_owner_uid=0,
+            expected_owner_gid=0,
+        )
+        if not (
+            type(dependency.get("soname")) is str
+            and type(dependency.get("elf_osabi")) is int
+            and dependency.get("elf_osabi") in {0, 3}
+            and type(dependency.get("dt_needed")) is list
+        ):
+            raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+        dependency_paths.append(cast(str, dependency["path"]))
+    if not (
+        dependency_paths == sorted(set(dependency_paths))
+        and helpers.get("dynamic_dependency_census_sha256")
+        == hashlib.sha256(_canonical_json_bytes_stdlib(dependencies)).hexdigest()
+        and helpers.get("execution_order") == ["UID_MAP", "GID_MAP"]
+        and helpers.get("helper_environment") == {"LC_CTYPE": "C.UTF-8"}
+        and helpers.get("helper_cwd") == "/"
+        and helpers.get("timeout_milliseconds") == 10_000
+        and helpers.get("stdout_byte_cap") == 65_536
+        and helpers.get("stderr_byte_cap") == 65_536
+        and helpers.get("stage0_no_new_privs") == 0
+        and helpers.get("helper_mount_nosuid_allowed") is False
+        and helpers.get("expected_real_uid") == 1035
+        and helpers.get("expected_effective_uid") == 0
+        and helpers.get("expected_saved_uid") == 0
+        and helpers.get("expected_fsuid") == 0
+        and helpers.get("setgroups_policy_before_clear") == "allow"
+        and helpers.get("setgroups_after_clear") == []
+    ):
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    loaded_receipt = _verify_stage0_loaded_objects_stdlib(
+        coordinator.get("loaded_objects"),
+        expected_owner_uid=0,
+        expected_owner_gid=0,
+    )
+    supervision = _closed_stdlib(
+        coordinator.get("supervision"),
+        _OUTER_STAGE0_SUPERVISION_KEYS,
+        "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+    )
+    restrictions = _closed_stdlib(
+        coordinator.get("restrictions"),
+        _OUTER_STAGE0_RESTRICTION_KEYS,
+        "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+    )
+    if not (
+        supervision
+        == {
+            "direct_fork_required": True,
+            "target_pidfd_required": True,
+            "target_procdir_required": True,
+            "target_unreaped_until_mapping_closed": True,
+            "pidfd_only_signals": True,
+            "numeric_pid_signal_allowed": False,
+            "waitpid_any_allowed": False,
+            "descendant_poll_interval_milliseconds": 10,
+            "subreaper_required": True,
+            "target_pdeathsig": "SIGKILL",
+            "orphaned_descendant_allowed": False,
+            "child_first_cleanup": True,
+            "exact_exit_wait_required": True,
+            "stdout_stderr_proxy_required": True,
+            "stdout_byte_cap": 16_777_216,
+            "stderr_byte_cap": 16_777_216,
+        }
+        and restrictions
+        == {
+            "parent_network_socket_allowed": False,
+            "parent_gpu_probe_allowed": False,
+            "parent_nvidia_smi_allowed": False,
+            "parent_provider_import_allowed": False,
+            "parent_model_launch_allowed": False,
+            "parent_process_signal_scope": "PIDFD_PINNED_OWN_DESCENDANTS_ONLY",
+        }
+    ):
+        raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
+    return {
+        "schema_version": coordinator["schema_version"],
+        "implementation": coordinator["implementation"],
+        "loaded_objects": loaded_receipt,
+        "mapping_helper_dependency_census_sha256": helpers[
+            "dynamic_dependency_census_sha256"
+        ],
+        "authority_binding_sha256": hashlib.sha256(
+            _canonical_json_bytes_stdlib(coordinator)
+        ).hexdigest(),
+    }
+
+
 def _outer_execute_context(
     args: argparse.Namespace,
 ) -> tuple[dict[str, object], dict[str, object], dict[str, str], dict[str, str]]:
@@ -2527,15 +3173,18 @@ def _outer_execute_context(
     pre_namespace_environment = cast(dict[str, object], pre_namespace_environment)
     gpu = cast(dict[str, object], gpu)
     scratch_root = authority.get("runtime_scratch_root")
+    expected_extents = _expected_stage0_id_map_extents_stdlib()
     if not (
         namespace.get("required") is True
-        and namespace.get("implementation") == "LINUX_USER_NETNS_MAP_ROOT_V1"
+        and namespace.get("implementation") == "CTYPES_USER_NETNS_NEWIDMAP_GATE_V2"
         and namespace.get("host_owner_uid") == os.getuid()
         and namespace.get("host_owner_gid") == os.getgid()
         and namespace.get("inside_owner_uid") == 0
         and namespace.get("inside_owner_gid") == 0
-        and namespace.get("uid_map_line") == f"0 {os.getuid()} 1"
-        and namespace.get("gid_map_line") == f"0 {os.getgid()} 1"
+        and namespace.get("uid_map_extents") == expected_extents
+        and namespace.get("gid_map_extents") == expected_extents
+        and namespace.get("uid_map_text") == _STAGE0_ID_MAP_TEXT
+        and namespace.get("gid_map_text") == _STAGE0_ID_MAP_TEXT
         and namespace.get("fd_close_upper_bound_exclusive") == _FD_CLOSE_UPPER_BOUND_EXCLUSIVE
         and namespace.get("python_pycache_prefix") == "/dev/null"
         and namespace.get("external_network_allowed") is False
@@ -2557,6 +3206,12 @@ def _outer_execute_context(
         and type(scratch_root) is str
         and cast(str, scratch_root).startswith("/")
         and str(Path(cast(str, scratch_root))) == scratch_root
+        and scratch_root
+        == "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
+        "d034-9845577c/runtime-scratch-v3"
+        and authority.get("evidence_root")
+        == "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
+        "d034-9845577c/evidence-v3"
     ):
         raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
     outer_python_size = _hash_regular_nofollow_stdlib(
@@ -2625,7 +3280,6 @@ def _outer_execute_context(
         and pre_namespace_environment == {"LC_CTYPE": "C.UTF-8"}
         and namespace.get("outer_fd_closure_receipt_sha256") == closure_sha256
         and namespace.get("env_path") == "/usr/bin/env"
-        and namespace.get("unshare_path") == "/usr/bin/unshare"
         and source.get("worktree_root") == str(_SCRIPT_PATH.parents[2])
         and source.get("source_root") == str(_SOURCE_ROOT)
     ):
@@ -2638,7 +3292,7 @@ def _outer_execute_context(
         and cast(int, namespace["nvidia_smi_byte_count"]) > 0
     ):
         raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
-    for role in ("env", "unshare", "nvidia_smi"):
+    for role in ("env", "nvidia_smi"):
         byte_count = _hash_regular_nofollow_stdlib(
             cast(str, namespace[f"{role}_path"]),
             namespace[f"{role}_sha256"],
@@ -2685,6 +3339,7 @@ def _outer_execute_context(
         expected_owner_uid=0,
         expected_owner_gid=0,
     )
+    _verify_stage0_coordinator_authority_stdlib(namespace)
     return (
         authority,
         namespace,
@@ -2698,9 +3353,9 @@ def _normalized_id_map_stdlib(path: str) -> str:
         fields = Path(path).read_text(encoding="ascii").split()
     except (OSError, UnicodeDecodeError) as exc:
         raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID") from exc
-    if len(fields) != 3 or not all(item.isdecimal() for item in fields):
+    if len(fields) != 6 or not all(item.isdecimal() for item in fields):
         raise RuntimeError("GPU_SMOKE_NETWORK_NAMESPACE_INVALID")
-    return " ".join(fields)
+    return f"{' '.join(fields[:3])}\n{' '.join(fields[3:])}"
 
 
 def _ensure_owner_only_directory_stdlib(path: str, *, exclusive: bool) -> None:
@@ -2787,8 +3442,8 @@ def _stage1_preexec_context(
         and outer_runtime.get("python_path") == "/usr/bin/python3.10"
         and os.getuid() == namespace.get("inside_owner_uid") == 0
         and os.getgid() == namespace.get("inside_owner_gid") == 0
-        and _normalized_id_map_stdlib("/proc/self/uid_map") == namespace.get("uid_map_line")
-        and _normalized_id_map_stdlib("/proc/self/gid_map") == namespace.get("gid_map_line")
+        and _normalized_id_map_stdlib("/proc/self/uid_map") == namespace.get("uid_map_text")
+        and _normalized_id_map_stdlib("/proc/self/gid_map") == namespace.get("gid_map_text")
         and args.stage0_bootstrap_sha256 == hashlib.sha256(bootstrap_bytes).hexdigest()
         and source.get("outer_bootstrap_code_sha256") == args.stage0_bootstrap_sha256
         and source.get("outer_bootstrap_code_byte_count") == len(bootstrap_bytes)
@@ -2835,8 +3490,8 @@ def _stage1_preexec_context(
         "stage": "INSIDE_NETNS_ROOT_STDLIB_PRE_PRIVATE_EXEC",
         "outer_python_path": "/usr/bin/python3.10",
         "outer_python_sha256": outer_runtime["python_sha256"],
-        "uid_map_line": namespace["uid_map_line"],
-        "gid_map_line": namespace["gid_map_line"],
+        "uid_map_text": namespace["uid_map_text"],
+        "gid_map_text": namespace["gid_map_text"],
         "inside_owner_uid": 0,
         "inside_owner_gid": 0,
         "inside_unmapped_system_uid": namespace["inside_unmapped_system_uid"],

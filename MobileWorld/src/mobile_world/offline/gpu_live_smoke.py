@@ -74,7 +74,7 @@ from mobile_world.offline.g1_history_codecs.codecs import (
     QwenFlatProgressHistoryCodec,
 )
 
-AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v2"
+AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v3"
 SMOKE_PACKET_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-packet/v1"
 PREPARATION_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-preparation/v1"
 EXECUTION_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-execution/v1"
@@ -82,14 +82,14 @@ DECISION_ID = "D-034"
 AUTHORIZED_SCOPE = "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"
 AUTHORIZED_GPU_UUID = "GPU-991ac45f-e9e9-1c25-590c-fb49ca752965"
 MINIMUM_FREE_MEMORY_BYTES = 68_719_476_736
-LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v1"
+LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v2"
 LAUNCH_SHIM_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v2"
 )
 LAUNCH_SHIM_AUTHORITY_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v3.json"
 )
-LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V1"
+LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V2"
 TOOL_SHELL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-tool-shell/v1"
 TOOL_SHELL_PATH = "/bin/sh"
 TOOL_SHELL_RESOLVED_PATH = "/usr/bin/dash"
@@ -250,6 +250,30 @@ EXACT_ENDPOINT = {
 _PIDFD_OPEN_SYSCALL_X86_64 = 434
 _PIDFD_SEND_SIGNAL_SYSCALL_X86_64 = 424
 _FD_CLOSE_UPPER_BOUND_EXCLUSIVE = 1_048_576
+_CLONE_NEWUSER = 0x10000000
+_CLONE_NEWNET = 0x40000000
+_STAGE0_CLONE_FLAGS = _CLONE_NEWUSER | _CLONE_NEWNET
+_STAGE0_COORDINATOR_SCHEMA_VERSION = (
+    "mobileworld.g1.gpu-live-smoke-stage0-coordinator/v1"
+)
+_STAGE0_PROTOCOL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-stage0-protocol/v1"
+_STAGE0_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-stage0-receipt/v1"
+_STAGE0_UID_MAP_EXTENTS = (
+    (0, 1035, 1, "AUTHORIZED_OWNER_ROOT"),
+    (1, 1_672_864, 1, "SETGROUPS_ALLOW_SUBID_SENTINEL_ONLY"),
+)
+_STAGE0_GID_MAP_EXTENTS = _STAGE0_UID_MAP_EXTENTS
+_STAGE0_ID_MAP_TEXT = "0 1035 1\n1 1672864 1"
+_STAGE0_NEWUIDMAP_PATH = "/usr/bin/newuidmap"
+_STAGE0_NEWGIDMAP_PATH = "/usr/bin/newgidmap"
+_STAGE0_SUBUID_PATH = "/etc/subuid"
+_STAGE0_SUBGID_PATH = "/etc/subgid"
+_STAGE0_PASSWD_PATH = "/etc/passwd"
+_STAGE0_GROUP_PATH = "/etc/group"
+_STAGE0_NSSWITCH_PATH = "/etc/nsswitch.conf"
+_STAGE0_PROTOCOL_MAX_FRAME_BYTES = 65_536
+_STAGE0_PROTOCOL_TIMEOUT_SECONDS = 30.0
+_STAGE0_CHILD_FAILURE_EXIT_CODE = 125
 _ISOLATED_PYTHON_FLAGS = (
     "-I",
     "-S",
@@ -513,12 +537,13 @@ _NETWORK_NAMESPACE_KEYS = {
     "inside_owner_gid",
     "inside_unmapped_system_uid",
     "inside_unmapped_system_gid",
-    "uid_map_line",
-    "gid_map_line",
+    "uid_map_extents",
+    "gid_map_extents",
+    "uid_map_text",
+    "gid_map_text",
+    "stage0_coordinator",
     "env_path",
     "env_sha256",
-    "unshare_path",
-    "unshare_sha256",
     "ip_path",
     "ip_sha256",
     "setpriv_path",
@@ -535,6 +560,153 @@ _NETWORK_NAMESPACE_KEYS = {
     "python_pycache_prefix",
     "fd_close_upper_bound_exclusive",
     "outer_fd_closure_receipt_sha256",
+}
+_ID_MAP_EXTENT_KEYS = {"inside_id", "outside_id", "length", "purpose"}
+_STAGE0_COORDINATOR_KEYS = {
+    "schema_version",
+    "implementation",
+    "clone_flags",
+    "clone_flags_value",
+    "single_thread_required",
+    "sigchld_default_required",
+    "sigchld_nocldwait_allowed",
+    "no_exec_between_unshare_and_mapping",
+    "child_postfork_import_allowed",
+    "child_failure_exit_code",
+    "protocol",
+    "mapping_helpers",
+    "loaded_objects",
+    "supervision",
+    "restrictions",
+}
+_STAGE0_PROTOCOL_KEYS = {
+    "schema_version",
+    "encoding",
+    "nonce_byte_count",
+    "maximum_frame_byte_count",
+    "timeout_milliseconds",
+    "pipe_count",
+    "pipe_cloexec",
+    "parent_to_child_message_order",
+    "child_to_parent_message_order",
+    "gate_fds_closed_before_stage1",
+}
+_STAGE0_MAPPING_HELPER_KEYS = {
+    "execution_order",
+    "newuidmap",
+    "newgidmap",
+    "subuid",
+    "subgid",
+    "passwd",
+    "group",
+    "nsswitch",
+    "dynamic_dependencies",
+    "dynamic_dependency_census_sha256",
+    "helper_environment",
+    "helper_cwd",
+    "timeout_milliseconds",
+    "stdout_byte_cap",
+    "stderr_byte_cap",
+    "stage0_no_new_privs",
+    "helper_mount_nosuid_allowed",
+    "expected_real_uid",
+    "expected_effective_uid",
+    "expected_saved_uid",
+    "expected_fsuid",
+    "setgroups_policy_before_clear",
+    "setgroups_after_clear",
+}
+_STAGE0_HELPER_BINARY_KEYS = {
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+    "setuid_required",
+    "elf",
+}
+_STAGE0_CONFIG_BINDING_KEYS = {
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+    "required_record",
+}
+_STAGE0_DEPENDENCY_KEYS = {
+    "soname",
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+    "elf_osabi",
+    "dt_needed",
+}
+_STAGE0_LOADED_OBJECT_KEYS = {
+    "schema_version",
+    "entries",
+    "normalized_segments",
+    "object_count",
+    "segment_count",
+    "object_census_sha256",
+    "segment_census_sha256",
+    "ancestor_components",
+    "ancestor_census_sha256",
+    "address_values_excluded",
+    "runtime_rehash_required",
+}
+_STAGE0_LOADED_ENTRY_KEYS = {
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+}
+_STAGE0_SEGMENT_KEYS = {
+    "path",
+    "permissions",
+    "file_offset",
+    "device",
+    "inode",
+}
+_STAGE0_SUPERVISION_KEYS = {
+    "direct_fork_required",
+    "target_pidfd_required",
+    "target_procdir_required",
+    "target_unreaped_until_mapping_closed",
+    "pidfd_only_signals",
+    "numeric_pid_signal_allowed",
+    "waitpid_any_allowed",
+    "descendant_poll_interval_milliseconds",
+    "subreaper_required",
+    "target_pdeathsig",
+    "orphaned_descendant_allowed",
+    "child_first_cleanup",
+    "exact_exit_wait_required",
+    "stdout_stderr_proxy_required",
+    "stdout_byte_cap",
+    "stderr_byte_cap",
+}
+_STAGE0_RESTRICTION_KEYS = {
+    "parent_network_socket_allowed",
+    "parent_gpu_probe_allowed",
+    "parent_nvidia_smi_allowed",
+    "parent_provider_import_allowed",
+    "parent_model_launch_allowed",
+    "parent_process_signal_scope",
 }
 _LAUNCHER_ENVIRONMENT_KEYS = {
     "PATH",
@@ -2008,6 +2180,357 @@ def _outer_fd_closure_receipt() -> dict[str, JsonValue]:
     }
 
 
+def _expected_stage0_id_map_extents() -> list[dict[str, JsonValue]]:
+    return [
+        {
+            "inside_id": inside_id,
+            "outside_id": outside_id,
+            "length": length,
+            "purpose": purpose,
+        }
+        for inside_id, outside_id, length, purpose in _STAGE0_UID_MAP_EXTENTS
+    ]
+
+
+def _validate_stage0_file_binding(
+    value: object,
+    *,
+    keys: set[str],
+    path: str,
+    expected_path: str | None = None,
+) -> dict[str, JsonValue]:
+    binding = _closed(value, keys, path)
+    lexical_path = _absolute_lexical(binding.get("path"), f"{path}.path")
+    resolved_path = _absolute_lexical(
+        binding.get("resolved_path", lexical_path),
+        f"{path}.resolved_path",
+    )
+    if expected_path is not None and lexical_path != expected_path:
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "Stage0 bound path differs",
+            f"{path}.path",
+        )
+    if not (
+        _is_sha256(binding.get("sha256"))
+        and type(binding.get("byte_count")) is int
+        and cast(int, binding["byte_count"]) > 0
+        and binding.get("owner_uid") == 0
+        and binding.get("owner_gid") == 0
+        and type(binding.get("mode")) is int
+        and cast(int, binding["mode"]) & 0o022 == 0
+        and binding.get("nlink") == 1
+        and lexical_path == str(PurePosixPath(lexical_path))
+        and resolved_path == str(PurePosixPath(resolved_path))
+    ):
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "Stage0 file binding is not root-owned and closed",
+            path,
+        )
+    return binding
+
+
+def _validate_stage0_coordinator_authority(
+    value: object,
+    *,
+    host_uid: int,
+    host_gid: int,
+) -> dict[str, JsonValue]:
+    coordinator = _closed(value, _STAGE0_COORDINATOR_KEYS, "$.network_namespace.stage0_coordinator")
+    protocol = _closed(
+        coordinator.get("protocol"),
+        _STAGE0_PROTOCOL_KEYS,
+        "$.network_namespace.stage0_coordinator.protocol",
+    )
+    if not (
+        coordinator.get("schema_version") == _STAGE0_COORDINATOR_SCHEMA_VERSION
+        and coordinator.get("implementation") == "CTYPES_USER_NETNS_NEWIDMAP_GATE_V2"
+        and coordinator.get("clone_flags") == ["CLONE_NEWUSER", "CLONE_NEWNET"]
+        and coordinator.get("clone_flags_value") == _STAGE0_CLONE_FLAGS
+        and coordinator.get("single_thread_required") is True
+        and coordinator.get("sigchld_default_required") is True
+        and coordinator.get("sigchld_nocldwait_allowed") is False
+        and coordinator.get("no_exec_between_unshare_and_mapping") is True
+        and coordinator.get("child_postfork_import_allowed") is False
+        and coordinator.get("child_failure_exit_code") == _STAGE0_CHILD_FAILURE_EXIT_CODE
+        and protocol
+        == {
+            "schema_version": _STAGE0_PROTOCOL_SCHEMA_VERSION,
+            "encoding": "U32BE_CANONICAL_JSON_V1",
+            "nonce_byte_count": 32,
+            "maximum_frame_byte_count": _STAGE0_PROTOCOL_MAX_FRAME_BYTES,
+            "timeout_milliseconds": int(_STAGE0_PROTOCOL_TIMEOUT_SECONDS * 1000),
+            "pipe_count": 2,
+            "pipe_cloexec": True,
+            "parent_to_child_message_order": [
+                "UNSHARE_REQUEST",
+                "CLEAR_GROUPS_REQUEST",
+                "EXEC_STAGE1_REQUEST",
+            ],
+            "child_to_parent_message_order": [
+                "ACQUIRED",
+                "UNSHARED_BLOCKED",
+                "GROUPS_CLEARED",
+            ],
+            "gate_fds_closed_before_stage1": True,
+        }
+    ):
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "Stage0 coordinator/protocol binding differs",
+            "$.network_namespace.stage0_coordinator",
+        )
+
+    helpers = _closed(
+        coordinator.get("mapping_helpers"),
+        _STAGE0_MAPPING_HELPER_KEYS,
+        "$.network_namespace.stage0_coordinator.mapping_helpers",
+    )
+    for key, expected_path in (
+        ("newuidmap", _STAGE0_NEWUIDMAP_PATH),
+        ("newgidmap", _STAGE0_NEWGIDMAP_PATH),
+    ):
+        helper = _validate_stage0_file_binding(
+            helpers.get(key),
+            keys=_STAGE0_HELPER_BINARY_KEYS,
+            path=f"$.network_namespace.stage0_coordinator.mapping_helpers.{key}",
+            expected_path=expected_path,
+        )
+        if not (
+            helper.get("resolved_path") == expected_path
+            and helper.get("mode") == 0o4755
+            and helper.get("setuid_required") is True
+            and type(helper.get("elf")) is dict
+        ):
+            _fail(
+                "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+                "Stage0 mapping helper binding differs",
+                f"$.network_namespace.stage0_coordinator.mapping_helpers.{key}",
+            )
+    expected_config_paths = {
+        "subuid": (_STAGE0_SUBUID_PATH, "linqiang:1672864:65536"),
+        "subgid": (_STAGE0_SUBGID_PATH, "linqiang:1672864:65536"),
+        "passwd": (_STAGE0_PASSWD_PATH, "linqiang:x:1035:1035::/home/linqiang:/bin/bash"),
+        "group": (_STAGE0_GROUP_PATH, "linqiang:x:1035:"),
+        "nsswitch": (_STAGE0_NSSWITCH_PATH, "passwd: files systemd\ngroup: files systemd"),
+    }
+    for key, (expected_path, expected_record) in expected_config_paths.items():
+        config = _validate_stage0_file_binding(
+            helpers.get(key),
+            keys=_STAGE0_CONFIG_BINDING_KEYS,
+            path=f"$.network_namespace.stage0_coordinator.mapping_helpers.{key}",
+            expected_path=expected_path,
+        )
+        if not (
+            config.get("resolved_path") == expected_path
+            and config.get("mode") == 0o644
+            and config.get("required_record") == expected_record
+        ):
+            _fail(
+                "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+                "Stage0 mapping config binding differs",
+                f"$.network_namespace.stage0_coordinator.mapping_helpers.{key}",
+            )
+    dependencies = helpers.get("dynamic_dependencies")
+    if type(dependencies) is not list or not cast(list[JsonValue], dependencies):
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "Stage0 helper dependency closure is empty",
+            "$.network_namespace.stage0_coordinator.mapping_helpers.dynamic_dependencies",
+        )
+    dependency_paths: list[str] = []
+    for index, raw_dependency in enumerate(cast(list[JsonValue], dependencies)):
+        dependency = _validate_stage0_file_binding(
+            raw_dependency,
+            keys=_STAGE0_DEPENDENCY_KEYS,
+            path=(
+                "$.network_namespace.stage0_coordinator.mapping_helpers."
+                f"dynamic_dependencies[{index}]"
+            ),
+        )
+        if not (
+            type(dependency.get("soname")) is str
+            and cast(str, dependency["soname"])
+            and type(dependency.get("elf_osabi")) is int
+            and dependency.get("elf_osabi") in {0, 3}
+            and type(dependency.get("dt_needed")) is list
+        ):
+            _fail(
+                "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+                "Stage0 helper dependency metadata differs",
+                (
+                    "$.network_namespace.stage0_coordinator.mapping_helpers."
+                    f"dynamic_dependencies[{index}]"
+                ),
+            )
+        dependency_paths.append(cast(str, dependency["path"]))
+    if not (
+        dependency_paths == sorted(set(dependency_paths))
+        and helpers.get("dynamic_dependency_census_sha256")
+        == canonical_sha256(cast(JsonValue, dependencies))
+        and helpers.get("execution_order") == ["UID_MAP", "GID_MAP"]
+        and helpers.get("helper_environment") == {"LC_CTYPE": "C.UTF-8"}
+        and helpers.get("helper_cwd") == "/"
+        and helpers.get("timeout_milliseconds") == 10_000
+        and helpers.get("stdout_byte_cap") == 65_536
+        and helpers.get("stderr_byte_cap") == 65_536
+        and helpers.get("stage0_no_new_privs") == 0
+        and helpers.get("helper_mount_nosuid_allowed") is False
+        and helpers.get("expected_real_uid") == host_uid == 1035
+        and helpers.get("expected_effective_uid") == 0
+        and helpers.get("expected_saved_uid") == 0
+        and helpers.get("expected_fsuid") == 0
+        and helpers.get("setgroups_policy_before_clear") == "allow"
+        and helpers.get("setgroups_after_clear") == []
+        and host_gid == 1035
+    ):
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "Stage0 mapping helper policy differs",
+            "$.network_namespace.stage0_coordinator.mapping_helpers",
+        )
+
+    loaded = _closed(
+        coordinator.get("loaded_objects"),
+        _STAGE0_LOADED_OBJECT_KEYS,
+        "$.network_namespace.stage0_coordinator.loaded_objects",
+    )
+    raw_entries = loaded.get("entries")
+    raw_segments = loaded.get("normalized_segments")
+    raw_ancestors = loaded.get("ancestor_components")
+    if not (
+        type(raw_entries) is list
+        and type(raw_segments) is list
+        and type(raw_ancestors) is list
+    ):
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "Stage0 loaded-object census is absent",
+            "$.network_namespace.stage0_coordinator.loaded_objects",
+        )
+    entries = cast(list[JsonValue], raw_entries)
+    segments = cast(list[JsonValue], raw_segments)
+    ancestors = cast(list[JsonValue], raw_ancestors)
+    entry_paths: list[str] = []
+    for index, raw_entry in enumerate(entries):
+        entry = _validate_stage0_file_binding(
+            raw_entry,
+            keys=_STAGE0_LOADED_ENTRY_KEYS,
+            path=f"$.network_namespace.stage0_coordinator.loaded_objects.entries[{index}]",
+        )
+        entry_paths.append(cast(str, entry["path"]))
+    for index, raw_segment in enumerate(segments):
+        segment = _closed(
+            raw_segment,
+            _STAGE0_SEGMENT_KEYS,
+            f"$.network_namespace.stage0_coordinator.loaded_objects.normalized_segments[{index}]",
+        )
+        if not (
+            segment.get("path") in entry_paths
+            and type(segment.get("permissions")) is str
+            and type(segment.get("file_offset")) is int
+            and cast(int, segment["file_offset"]) >= 0
+            and type(segment.get("device")) is str
+            and type(segment.get("inode")) is int
+            and cast(int, segment["inode"]) > 0
+        ):
+            _fail(
+                "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+                "Stage0 normalized mapped segment differs",
+                f"$.network_namespace.stage0_coordinator.loaded_objects.normalized_segments[{index}]",
+            )
+    ancestor_paths: list[str] = []
+    for index, raw_component in enumerate(ancestors):
+        component = _closed(
+            raw_component,
+            _TOOL_PATH_COMPONENT_KEYS,
+            f"$.network_namespace.stage0_coordinator.loaded_objects.ancestor_components[{index}]",
+        )
+        if not (
+            type(component.get("path")) is str
+            and component.get("owner_uid") == 0
+            and component.get("owner_gid") == 0
+            and type(component.get("mode")) is int
+            and cast(int, component["mode"]) & 0o022 == 0
+            and type(component.get("nlink")) is int
+            and cast(int, component["nlink"]) > 0
+        ):
+            _fail(
+                "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+                "Stage0 loaded-object ancestor binding differs",
+                f"$.network_namespace.stage0_coordinator.loaded_objects.ancestor_components[{index}]",
+            )
+        ancestor_paths.append(cast(str, component["path"]))
+    if not (
+        loaded.get("schema_version")
+        == "mobileworld.g1.gpu-live-smoke-stage0-loaded-objects/v1"
+        and len(entries) == loaded.get("object_count") == 15
+        and len(segments) == loaded.get("segment_count")
+        and entry_paths == sorted(set(entry_paths))
+        and ancestor_paths == sorted(set(ancestor_paths))
+        and loaded.get("object_census_sha256") == canonical_sha256(cast(JsonValue, entries))
+        and loaded.get("segment_census_sha256") == canonical_sha256(cast(JsonValue, segments))
+        and loaded.get("ancestor_census_sha256")
+        == canonical_sha256(cast(JsonValue, ancestors))
+        and loaded.get("address_values_excluded") is True
+        and loaded.get("runtime_rehash_required") is True
+    ):
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "Stage0 loaded-object closure differs",
+            "$.network_namespace.stage0_coordinator.loaded_objects",
+        )
+
+    supervision = _closed(
+        coordinator.get("supervision"),
+        _STAGE0_SUPERVISION_KEYS,
+        "$.network_namespace.stage0_coordinator.supervision",
+    )
+    if supervision != {
+        "direct_fork_required": True,
+        "target_pidfd_required": True,
+        "target_procdir_required": True,
+        "target_unreaped_until_mapping_closed": True,
+        "pidfd_only_signals": True,
+        "numeric_pid_signal_allowed": False,
+        "waitpid_any_allowed": False,
+        "descendant_poll_interval_milliseconds": 10,
+        "subreaper_required": True,
+        "target_pdeathsig": "SIGKILL",
+        "orphaned_descendant_allowed": False,
+        "child_first_cleanup": True,
+        "exact_exit_wait_required": True,
+        "stdout_stderr_proxy_required": True,
+        "stdout_byte_cap": 16_777_216,
+        "stderr_byte_cap": 16_777_216,
+    }:
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "Stage0 supervision policy differs",
+            "$.network_namespace.stage0_coordinator.supervision",
+        )
+    restrictions = _closed(
+        coordinator.get("restrictions"),
+        _STAGE0_RESTRICTION_KEYS,
+        "$.network_namespace.stage0_coordinator.restrictions",
+    )
+    if restrictions != {
+        "parent_network_socket_allowed": False,
+        "parent_gpu_probe_allowed": False,
+        "parent_nvidia_smi_allowed": False,
+        "parent_provider_import_allowed": False,
+        "parent_model_launch_allowed": False,
+        "parent_process_signal_scope": "PIDFD_PINNED_OWN_DESCENDANTS_ONLY",
+    }:
+        _fail(
+            "GPU_SMOKE_NETWORK_NAMESPACE_AUTHORITY_INVALID",
+            "Stage0 parent restriction policy differs",
+            "$.network_namespace.stage0_coordinator.restrictions",
+        )
+    return coordinator
+
+
 def _validate_tool_shell_component_binding(
     value: object,
     *,
@@ -2563,6 +3086,19 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
     scratch_root = _absolute_lexical(
         authority.get("runtime_scratch_root"), "$.runtime_scratch_root"
     )
+    if not (
+        evidence_root
+        == "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
+        "d034-9845577c/evidence-v3"
+        and scratch_root
+        == "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/"
+        "d034-9845577c/runtime-scratch-v3"
+    ):
+        _fail(
+            "GPU_SMOKE_SOURCE_BINDING_INVALID",
+            "v3 authority must use the fresh evidence and runtime-scratch roots",
+            "$.evidence_root",
+        )
     protected_paths: list[tuple[str, PurePosixPath]] = [
         ("repository", PurePosixPath(worktree_root)),
         ("evidence", PurePosixPath(evidence_root)),
@@ -2612,7 +3148,6 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
         )
     for key, expected_path in (
         ("env_path", "/usr/bin/env"),
-        ("unshare_path", "/usr/bin/unshare"),
         ("ip_path", "/usr/bin/ip"),
         ("setpriv_path", "/usr/bin/setpriv"),
     ):
@@ -2641,19 +3176,22 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
         )
     host_uid = namespace.get("host_owner_uid")
     host_gid = namespace.get("host_owner_gid")
+    expected_extents = _expected_stage0_id_map_extents()
     if not (
         namespace.get("required") is True
-        and namespace.get("implementation") == "LINUX_USER_NETNS_MAP_ROOT_V1"
+        and namespace.get("implementation") == "CTYPES_USER_NETNS_NEWIDMAP_GATE_V2"
         and type(host_uid) is int
-        and cast(int, host_uid) > 0
+        and host_uid == 1035
         and type(host_gid) is int
-        and cast(int, host_gid) > 0
+        and host_gid == 1035
         and namespace.get("inside_owner_uid") == 0
         and namespace.get("inside_owner_gid") == 0
         and namespace.get("inside_unmapped_system_uid") == 65_534
         and namespace.get("inside_unmapped_system_gid") == 65_534
-        and namespace.get("uid_map_line") == f"0 {host_uid} 1"
-        and namespace.get("gid_map_line") == f"0 {host_gid} 1"
+        and namespace.get("uid_map_extents") == expected_extents
+        and namespace.get("gid_map_extents") == expected_extents
+        and namespace.get("uid_map_text") == _STAGE0_ID_MAP_TEXT
+        and namespace.get("gid_map_text") == _STAGE0_ID_MAP_TEXT
         and namespace.get("expected_interfaces") == ["lo"]
         and namespace.get("loopback_up_required") is True
         and namespace.get("default_route_allowed") is False
@@ -2668,6 +3206,11 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
             "network namespace authority differs from the frozen root mapping",
             "$.network_namespace",
         )
+    _validate_stage0_coordinator_authority(
+        namespace.get("stage0_coordinator"),
+        host_uid=cast(int, host_uid),
+        host_gid=cast(int, host_gid),
+    )
     launcher_environment = _closed(
         namespace.get("launcher_environment"),
         _LAUNCHER_ENVIRONMENT_KEYS,
@@ -6096,12 +6639,16 @@ def _read_small_text(path: str, *, maximum_bytes: int = 64 * 1024) -> str:
 
 def _normalized_id_map(path: str) -> str:
     lines = [" ".join(line.split()) for line in _read_small_text(path).splitlines() if line.strip()]
-    if len(lines) != 1:
+    if not (
+        len(lines) == 2
+        and all(len(line.split()) == 3 for line in lines)
+        and all(field.isdecimal() for line in lines for field in line.split())
+    ):
         _fail(
             "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
-            "namespace owner mapping is not one exact extent",
+            "namespace owner mapping is not the exact two-extent form",
         )
-    return lines[0]
+    return "\n".join(lines)
 
 
 def _initial_environment() -> dict[str, str]:
@@ -6293,7 +6840,7 @@ def _verify_network_namespace(authority: GpuLiveAuthority) -> dict[str, JsonValu
         )
     uid_map = _normalized_id_map("/proc/self/uid_map")
     gid_map = _normalized_id_map("/proc/self/gid_map")
-    if not (uid_map == namespace["uid_map_line"] and gid_map == namespace["gid_map_line"]):
+    if not (uid_map == namespace["uid_map_text"] and gid_map == namespace["gid_map_text"]):
         _fail(
             "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
             "runner user namespace mapping differs from authority",
@@ -6417,8 +6964,8 @@ def _verify_network_namespace(authority: GpuLiveAuthority) -> dict[str, JsonValu
         "python_dont_write_bytecode": True,
         "python_pycache_prefix": sys.pycache_prefix,
         "site_module_loaded": False,
-        "uid_map_line": uid_map,
-        "gid_map_line": gid_map,
+        "uid_map_text": uid_map,
+        "gid_map_text": gid_map,
         "user_namespace_inode": user_namespace_inode,
         "network_namespace_inode": network_namespace_inode,
         "interfaces": interfaces,
@@ -9432,8 +9979,8 @@ def prepare_network_namespace_launcher(authority: GpuLiveAuthority) -> dict[str,
     inside_identity = (
         os.getuid() == namespace["inside_owner_uid"] == 0
         and os.getgid() == namespace["inside_owner_gid"] == 0
-        and _normalized_id_map("/proc/self/uid_map") == namespace["uid_map_line"]
-        and _normalized_id_map("/proc/self/gid_map") == namespace["gid_map_line"]
+        and _normalized_id_map("/proc/self/uid_map") == namespace["uid_map_text"]
+        and _normalized_id_map("/proc/self/gid_map") == namespace["gid_map_text"]
     )
     if not (host_identity or inside_identity):
         _fail(
