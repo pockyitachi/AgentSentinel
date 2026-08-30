@@ -1196,6 +1196,9 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
     styles = (PYTHON_ROOT / "src/mobile_world/offline/gold_curation/web/styles.css").read_text(
         encoding="utf-8"
     )
+    server = (PYTHON_ROOT / "src/mobile_world/offline/gold_curation/server.py").read_text(
+        encoding="utf-8"
+    )
 
     candidate_card = app_js[
         app_js.index("function aiCandidateCard") : app_js.index("function aiSlotClass")
@@ -1249,6 +1252,18 @@ def test_simple_candidate_review_is_explicit_visible_and_keeps_advanced_form() -
     assert "state.aiOverlaySelection.assignmentId" in overlay_slice
     assert "candidateRegionBounds" in overlay_slice
     assert "aiOverlayBox" in overlay_slice
+    assert "applyAiOverlayGeometry(layer)" in overlay_slice
+    assert 'style="${style}"' not in overlay_slice
+    assert "data-ai-left" in overlay_slice
+    assert "data-ai-top" in overlay_slice
+    assert "data-ai-width" in overlay_slice
+    assert "data-ai-height" in overlay_slice
+    for property_name in ("left", "top", "width", "height"):
+        assert f"box.style.{property_name}" in overlay_slice
+    assert "#ai-candidate-overlays .ai-candidate-overlay" in overlay_slice
+    assert 'block: "center", inline: "nearest"' in overlay_slice
+    assert "style-src 'self'" in server
+    assert "unsafe-inline" not in server
     assert "ai-overlay-center" in overlay_slice
     assert "ai-drag-arrow" in overlay_slice
     assert "marker-end" in overlay_slice

@@ -478,8 +478,24 @@ function aiOverlayBox(bounds, label, slotClass, centered = false) {
   const height = state.active?.data.packet.current_screenshot.height;
   const values = [bounds?.x_min, bounds?.y_min, bounds?.x_max, bounds?.y_max];
   if (!values.every(Number.isFinite) || !(bounds.x_max > bounds.x_min && bounds.y_max > bounds.y_min) || bounds.x_min < 0 || bounds.y_min < 0 || bounds.x_max > width || bounds.y_max > height) return "";
-  const style = `left:${100 * bounds.x_min / width}%;top:${100 * bounds.y_min / height}%;width:${100 * (bounds.x_max - bounds.x_min) / width}%;height:${100 * (bounds.y_max - bounds.y_min) / height}%`;
-  return `<div class="ai-candidate-overlay ${slotClass}" style="${style}"><span>${escapeHtml(label)}</span>${centered ? '<i class="ai-overlay-center" aria-hidden="true"></i>' : ""}</div>`;
+  const left = 100 * bounds.x_min / width;
+  const top = 100 * bounds.y_min / height;
+  const boxWidth = 100 * (bounds.x_max - bounds.x_min) / width;
+  const boxHeight = 100 * (bounds.y_max - bounds.y_min) / height;
+  return `<div class="ai-candidate-overlay ${slotClass}" data-ai-left="${left}" data-ai-top="${top}" data-ai-width="${boxWidth}" data-ai-height="${boxHeight}"><span>${escapeHtml(label)}</span>${centered ? '<i class="ai-overlay-center" aria-hidden="true"></i>' : ""}</div>`;
+}
+
+function applyAiOverlayGeometry(layer) {
+  // Strict CSP blocks style attributes parsed through innerHTML; trusted CSSOM
+  // property assignments preserve the same geometry without relaxing policy.
+  layer.querySelectorAll(".ai-candidate-overlay").forEach((box) => {
+    const values = [box.dataset.aiLeft, box.dataset.aiTop, box.dataset.aiWidth, box.dataset.aiHeight].map(Number);
+    if (!values.every(Number.isFinite)) return;
+    box.style.left = `${values[0]}%`;
+    box.style.top = `${values[1]}%`;
+    box.style.width = `${values[2]}%`;
+    box.style.height = `${values[3]}%`;
+  });
 }
 
 function renderAiCandidateOverlays(entry) {
@@ -526,6 +542,7 @@ function renderAiCandidateOverlays(entry) {
     statusText += " · 这个动作没有固定点击位置，请按动作内容判断。";
   }
   layer.innerHTML = pieces.join("");
+  applyAiOverlayGeometry(layer);
   layer.hidden = false;
   if (status) status.textContent = statusText;
 }
@@ -560,7 +577,10 @@ function selectAiCandidateOverlay(candidateToken, scroll = false) {
   if (state.coordinateTarget) return;
   state.aiOverlaySelection = {assignmentId: state.active.assignmentId, candidateToken};
   restoreAiCandidateOverlay();
-  if (scroll) $("#target-screenshot")?.scrollIntoView({behavior: "smooth", block: "center"});
+  if (scroll) {
+    const target = $("#ai-candidate-overlays .ai-candidate-overlay") || $("#ai-candidate-overlays .ai-coordinate-banner") || $("#target-screenshot");
+    target?.scrollIntoView({behavior: "smooth", block: "center", inline: "nearest"});
+  }
 }
 
 function aiCandidateNeedsChoice({item}) {
