@@ -126,6 +126,16 @@ Docker/KVM point counts and the foreign-operation count MUST be zero. These are
 point observations, not proof that retained Docker AF_UNIX or KVM capability is
 continuously mechanically absent.
 
+The descriptor point facts MUST be measured rather than emitted as fixed zero
+values. Each stage enumerates only `/proc/self/fd`: an exact `/dev/kvm`,
+`/run/docker.sock`, or `/var/run/docker.sock` target increments the sensitive
+filesystem-descriptor count. Socket inodes from those own descriptors are
+intersected with the live AF_UNIX inode table in `/proc/net/unix` to produce the
+AF_UNIX descriptor count. A self descriptor that disappears between listing
+and `readlink` is an admissible transient; no `/proc/<foreign-pid>/fd` traversal
+is permitted. Both actual counts are persisted in the receipt and MUST be zero
+at the boundary. A hard-coded or inferred zero is not conforming evidence.
+
 The Stage1 pre-exec receipt is v2 because it embeds the Stage1 group receipt.
 The generic pre-import runtime census is likewise v2 because its Stage2 form
 embeds the Stage2 group receipt. A v1 census cannot be accepted as evidence for
@@ -162,11 +172,11 @@ same-file-descriptor validation, exact `shell=/bin/sh`, `login=false`,
 `tty=false`, environment, inherited-FD, no-follow, source/runtime, packet,
 model, GPU, endpoint, matrix, and no-action requirements remain in force.
 
-The pre-freeze v3 implementation binding is exact:
+The frozen v3 implementation binding is exact:
 
 - runner module SHA-256
-  `f3b0ebce657361ddc997ae85e3ad7f890a5e66f41623f52dd00470f594c99f3d`
-  over 520,831 bytes;
+  `17b5576a0bb63979478b641cffd4b052369054500233f2bd5703446d65eb6d72`
+  over 522,310 bytes;
 - runner CLI SHA-256
   `4b9830312dba1852ef0d5477a9a6d25418ee594d08080fda6888c522373fc776`
   over 152,412 bytes;
@@ -202,9 +212,13 @@ In addition to every unchanged base-contract test, conformance MUST prove that:
    call graph, and Stage1 observes exact mapped identity/groups without entering
    the Stage0 call graph;
 4. Stage1 rejects group, `setgroups`, retained Docker/KVM descriptor, and AF_UNIX
-   socket drift while faithfully recording capability and `NoNewPrivs` values;
+   socket drift while faithfully recording capability, `NoNewPrivs`, and the
+   measured self-only descriptor counts;
 5. Stage2 rejects any nonzero capability, missing `NoNewPrivs`, group,
-   `setgroups`, descriptor, socket, namespace, route, or interface drift;
+   `setgroups`, descriptor, socket, namespace, route, or interface drift; its
+   census rejects a standard descriptor targeting `/dev/kvm` and an owned
+   socket inode present in the AF_UNIX table, accepts benign `/dev/null` and
+   FIFO targets, and tolerates only transient disappearance of a listed own FD;
 6. PASS and FAIL execution ledgers contain the INET/INET6-specific key and no
    broad all-channel network claim;
 7. no CPU test touches GPU, model, provider, external network, service, signal,

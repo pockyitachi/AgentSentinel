@@ -6320,6 +6320,37 @@ def _runner_file_descriptor_census() -> dict[str, JsonValue]:
     }
 
 
+def _retained_group_sensitive_fd_counts() -> tuple[int, int]:
+    """Count this runner's KVM/Docker-path FDs and live AF_UNIX socket FDs."""
+
+    filesystem_count = 0
+    socket_inodes: set[str] = set()
+    try:
+        fd_names = sorted(os.listdir("/proc/self/fd"))
+        for name in fd_names:
+            if not name.isdecimal():
+                continue
+            try:
+                target = os.readlink(f"/proc/self/fd/{name}")
+            except FileNotFoundError:
+                # The descriptor used by listdir can disappear before readlink.
+                continue
+            if target in {"/dev/kvm", "/run/docker.sock", "/var/run/docker.sock"}:
+                filesystem_count += 1
+            if target.startswith("socket:[") and target.endswith("]"):
+                socket_inodes.add(target[8:-1])
+        unix_rows = _read_small_text("/proc/net/unix").splitlines()[1:]
+    except OSError as exc:
+        raise GpuLiveSmokeError(
+            "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
+            "retained-group self-descriptor census is unavailable",
+        ) from exc
+    unix_inodes = {
+        fields[6] for row in unix_rows if len(fields := row.split()) >= 7 and fields[6].isdecimal()
+    }
+    return filesystem_count, len(socket_inodes & unix_inodes)
+
+
 def _loopback_self_connect_receipt() -> dict[str, JsonValue]:
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -6375,6 +6406,7 @@ def _supplementary_group_runtime_receipt(
     capabilities_zero = all(value == "0000000000000000" for value in capabilities.values())
     no_new_privs = status_fields.get("NoNewPrivs") == "1"
     setgroups_control = _read_small_text("/proc/self/setgroups").strip()
+    filesystem_fd_count, unix_socket_fd_count = _retained_group_sensitive_fd_counts()
     if not (
         phase == "STAGE2_POST_SETPRIV"
         and observed_groups == _INSIDE_SUPPLEMENTARY_GIDS_SORTED
@@ -6384,6 +6416,8 @@ def _supplementary_group_runtime_receipt(
         and no_new_privs
         and file_descriptors.get("open_fd_count_above_stderr") == 0
         and file_descriptors.get("standard_fd_socket_count") == 0
+        and filesystem_fd_count == 0
+        and unix_socket_fd_count == 0
         and policy.get("docker_kvm_invocation_allowed") is False
     ):
         _fail(
@@ -6406,8 +6440,8 @@ def _supplementary_group_runtime_receipt(
         "capability_sets": capabilities,
         "capability_sets_all_zero": capabilities_zero,
         "no_new_privs": no_new_privs,
-        "docker_kvm_filesystem_fd_count": 0,
-        "docker_kvm_unix_socket_fd_count": 0,
+        "docker_kvm_filesystem_fd_count": filesystem_fd_count,
+        "docker_kvm_unix_socket_fd_count": unix_socket_fd_count,
         "docker_kvm_action_count": 0,
         "foreign_process_operation_count": 0,
         "docker_af_unix_capability_retained": True,

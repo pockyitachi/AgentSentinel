@@ -2318,6 +2318,11 @@ def _mock_network_namespace_probe(
     )
     monkeypatch.setattr(
         gpu_live_smoke_module,
+        "_retained_group_sensitive_fd_counts",
+        lambda: (0, 0),
+    )
+    monkeypatch.setattr(
+        gpu_live_smoke_module,
         "_read_small_text",
         lambda path: readings[path],
     )
@@ -4318,6 +4323,83 @@ def test_network_namespace_receipt_closes_identity_routes_tools_and_environment_
 
 
 @pytest.mark.parametrize(
+    ("fd_targets", "unix_rows", "expected"),
+    (
+        (
+            {"0": "/dev/kvm", "1": "pipe:[100]", "2": "/dev/null"},
+            "Num RefCount Protocol Flags Type St Inode Path\n",
+            (1, 0),
+        ),
+        (
+            {"0": "/dev/null", "1": "socket:[4242]", "2": "pipe:[100]"},
+            (
+                "Num RefCount Protocol Flags Type St Inode Path\n"
+                "0000000000000000: 00000002 00000000 00010000 0001 01 4242 "
+                "/run/docker.sock\n"
+            ),
+            (0, 1),
+        ),
+        (
+            {"0": "/dev/null", "1": "pipe:[100]", "2": "/tmp/benign.fifo"},
+            "Num RefCount Protocol Flags Type St Inode Path\n",
+            (0, 0),
+        ),
+    ),
+    ids=("standard-fd-kvm", "owned-docker-unix-socket", "benign-null-and-fifo"),
+)
+def test_retained_group_sensitive_fd_census_is_self_only_and_exact_cpu_mock(
+    monkeypatch: pytest.MonkeyPatch,
+    fd_targets: dict[str, str],
+    unix_rows: str,
+    expected: tuple[int, int],
+) -> None:
+    monkeypatch.setattr(
+        gpu_live_smoke_module.os,
+        "listdir",
+        lambda path: sorted(fd_targets) if path == "/proc/self/fd" else pytest.fail(path),
+    )
+    monkeypatch.setattr(
+        gpu_live_smoke_module.os,
+        "readlink",
+        lambda path: fd_targets[path.rsplit("/", 1)[1]],
+    )
+    monkeypatch.setattr(
+        gpu_live_smoke_module,
+        "_read_small_text",
+        lambda path: unix_rows if path == "/proc/net/unix" else pytest.fail(path),
+    )
+    assert gpu_live_smoke_module._retained_group_sensitive_fd_counts() == expected
+
+
+def test_retained_group_sensitive_fd_census_tolerates_transient_self_fd_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gpu_live_smoke_module.os,
+        "listdir",
+        lambda path: ["0", "3"] if path == "/proc/self/fd" else pytest.fail(path),
+    )
+
+    def readlink(path: str) -> str:
+        if path == "/proc/self/fd/3":
+            raise FileNotFoundError(path)
+        assert path == "/proc/self/fd/0"
+        return "/dev/null"
+
+    monkeypatch.setattr(gpu_live_smoke_module.os, "readlink", readlink)
+    monkeypatch.setattr(
+        gpu_live_smoke_module,
+        "_read_small_text",
+        lambda path: (
+            "Num RefCount Protocol Flags Type St Inode Path\n"
+            if path == "/proc/net/unix"
+            else pytest.fail(path)
+        ),
+    )
+    assert gpu_live_smoke_module._retained_group_sensitive_fd_counts() == (0, 0)
+
+
+@pytest.mark.parametrize(
     "mutation",
     (
         "uid",
@@ -4330,6 +4412,8 @@ def test_network_namespace_receipt_closes_identity_routes_tools_and_environment_
         "setgroups",
         "capability",
         "no_new_privs",
+        "filesystem_fd",
+        "unix_socket_fd",
     ),
 )
 def test_network_namespace_probe_fails_closed_on_identity_or_network_drift_cpu_mock(
@@ -4363,9 +4447,21 @@ def test_network_namespace_probe_fails_closed_on_identity_or_network_drift_cpu_m
         readings["/proc/self/status"] = readings["/proc/self/status"].replace(
             "CapEff:\t0000000000000000", "CapEff:\t0000000000000001"
         )
-    else:
+    elif mutation == "no_new_privs":
         readings["/proc/self/status"] = readings["/proc/self/status"].replace(
             "NoNewPrivs:\t1", "NoNewPrivs:\t0"
+        )
+    elif mutation == "filesystem_fd":
+        monkeypatch.setattr(
+            gpu_live_smoke_module,
+            "_retained_group_sensitive_fd_counts",
+            lambda: (1, 0),
+        )
+    else:
+        monkeypatch.setattr(
+            gpu_live_smoke_module,
+            "_retained_group_sensitive_fd_counts",
+            lambda: (0, 1),
         )
     _assert_error_code(
         "GPU_SMOKE_NETWORK_NAMESPACE_INVALID",
@@ -4658,9 +4754,9 @@ def test_outer_fd_closure_removes_synthetic_inheritable_inet_socket_before_unsha
 def test_three_stage_production_candidate_hash_sentinel() -> None:
     runner_cli = _load_runner_cli_module()
     runner_module_path = REPOSITORY_ROOT / "MobileWorld/src/mobile_world/offline/gpu_live_smoke.py"
-    assert len(runner_module_path.read_bytes()) == 520_831
+    assert len(runner_module_path.read_bytes()) == 522_310
     assert _sha256(runner_module_path.read_bytes()) == (
-        "f3b0ebce657361ddc997ae85e3ad7f890a5e66f41623f52dd00470f594c99f3d"
+        "17b5576a0bb63979478b641cffd4b052369054500233f2bd5703446d65eb6d72"
     )
     assert len(GPU_SMOKE_RUNNER_CLI.read_bytes()) == 152_412
     assert _sha256(GPU_SMOKE_RUNNER_CLI.read_bytes()) == (
