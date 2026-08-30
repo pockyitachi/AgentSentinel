@@ -81,7 +81,7 @@
       "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
     },
     "server_environment_receipts": {
-      "type": "array", "maxItems": 2,
+      "type": "array", "maxItems": 2, "uniqueItems": true,
       "items": {"$ref": "#/$defs/contentRef"}
     },
     "gpu_preflight": {"$ref": "#/$defs/contentRef"},
@@ -256,7 +256,7 @@
         },
         "client_environment": {"$ref": "#/$defs/contentRef"},
         "server_environment_receipts": {
-          "type": "array", "minItems": 2, "maxItems": 2,
+          "type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true,
           "items": {"$ref": "#/$defs/contentRef"}
         },
         "runtime_scratch_preserved_for_audit": {"const": true},
@@ -346,7 +346,7 @@
           "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
         },
         "server_environment_receipts": {
-          "type": "array", "maxItems": 2,
+          "type": "array", "maxItems": 2, "uniqueItems": true,
           "items": {"$ref": "#/$defs/contentRef"}
         },
         "runtime_scratch_preserved_for_audit": {"const": true},

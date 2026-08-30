@@ -24,21 +24,22 @@
 20. `G1_GPU_LIVE_SMOKE_CONTRACT_V1.md`
 21. `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_1.md`
 22. `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_2.md`
-23. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
-24. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-25. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-26. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-27. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
-28. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-29. `G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
-30. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-31. `G1_SENTINEL_MVP_MIGRATION.md`
-32. `g1/registry.lock.v1.json`
-33. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-34. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-35. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-36. `schemas/g1_3/field_visibility.schema.json`
-37. `schemas/g1_3/capsule_exclusion.schema.json`
+23. `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_3.md`
+24. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
+25. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
+26. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
+27. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+28. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+29. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+30. `G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+31. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+32. `G1_SENTINEL_MVP_MIGRATION.md`
+33. `g1/registry.lock.v1.json`
+34. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+35. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+36. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+37. `schemas/g1_3/field_visibility.schema.json`
+38. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -84,7 +85,7 @@ exact 22-call 非正式 batch 的子矩阵执行。不得把 CPU checkpoint 或 
 replay、formal G1 data 或 G1.6 curation。
 
 `G1_4_DECISION_LOG.md`、`G1_5_DECISION_LOG.md` D-034、byte-frozen
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 与其 Amendment 1、Amendment 2 只授权一个
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 与其 Amendment 1、Amendment 2、Amendment 3 只授权一个
 owner-bound、secret-free、synthetic non-case、loopback-only engineering smoke：共享物理 GPU 0 / UUID
 `GPU-991ac45f-e9e9-1c25-590c-fb49ca752965` 上运行 12 个 G1.4 canary 加 10 个 G1.5 codec calls。
 free-memory floor 固定为 64 GiB，Qwen/MAI 各自启动前都必须重查；不足只能阻断，不能清理他人。
@@ -103,6 +104,16 @@ runtime-scratch-v4 generation，并要求所有 production Git argv 使用 exact
 `-c core.fsmonitor= -c core.hooksPath=/dev/null`。v3 authority、shim、failure evidence 与 scratch
 只读保留且禁止重试或复用；任何 mixed epoch 必须 fail closed。Amendment 1 的 retained-group、
 Docker/KVM residual、foreign-process 与全部其他 D-034 范围限制保持不变。
+
+D-034 authority-v4 attempt 已执行 GPU0 只读 baseline probe 并启动 Qwen 自有 API-server
+root process，但其非 isolated registry child 因 closed server environment 未暴露 sealed server
+site-packages 而以 `ModuleNotFoundError: No module named 'vllm'` 自行退出。readiness、during-service
+GPU receipt、model-load proof 与 HTTP request 均未产生，完成 `0/22`；signal intent/sent 与 foreign
+target 均为零，own resource release 已证明。Amendment 3 只授权 fresh authority v5 /
+launch-shim v4 / `D034_STAGE0_V4` / evidence-v5 / runtime-scratch-v5，并把 exact single sealed
+`PYTHONPATH`、safe-path、no-bytecode、no-user-site、startup-customization absence 与 child import
+receipt 绑定到 server environment v2。v4 authority、shim、failure evidence、server log 与 scratch
+必须只读保留，禁止 retry 或复用；全部其他 D-034 安全边界不变。
 
 `G1_6_DECISION_LOG.md` D-029 与
 `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md` 授权 **ALE-324 / G1.6

@@ -233,3 +233,34 @@ residual disclosure 与 invocation prohibition、INET/INET6、pidfd own-process�
 UUID/64-GiB、模型顺序、22-call、zero-retry、no-action/no-feedback/no-replay/no-secret 规则全部不变。
 v4 必须从新的 sealed source、NO_REPLACE shim、fresh canonical authority 与 fresh evidence/scratch
 roots 重新构建并独立复核；本 amendment 不把 artifact 或 live gate 标为已通过。
+
+### D-034 Amendment 3 — authority v5 server child sealed import path
+
+**状态：Locked narrow owner amendment（owner 于 2026-08-30 明确批准；不改写历史 D-034、
+Amendment 1 或 Amendment 2 文本）**
+
+authority-v4 live attempt 已执行 GPU0 只读 baseline probe，并启动 Qwen 自有 vLLM API-server
+root process，但 readiness、during-service GPU receipt 与 model-load proof 均未成立。其自有 internal
+registry child 使用 private Python 运行 `-m vllm.model_executor.models.registry`，因 closed server
+environment 未暴露 authority-bound sealed server site-packages，以
+`ModuleNotFoundError: No module named 'vllm'` 和 exit 1 结束；terminal error 是
+`GPU_SMOKE_SERVER_EXITED_EARLY`，logical/physical HTTP 均为 `0/22`。service 自行退出，signal
+intent/sent、foreign target、replay 与 action 均为零，port/session/own-GPU release 已证明。不得把
+该失败描述为 GPU probe 或 process launch 之前，也不得声称模型已加载。
+
+Owner 只额外授权 `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_3.md` 的 server-child import
+窄修。后续唯一可审 generation 是 authority v5、launch-shim v4、token `D034_STAGE0_V4`、
+authority.v5.json、evidence-v5 与 runtime-scratch-v5。server closed environment 必须从现有
+authority-bound private server tree 唯一推导 exact single `PYTHONPATH`，并锁
+`PYTHONSAFEPATH=1`、`PYTHONDONTWRITEBYTECODE=1`、`PYTHONNOUSERSITE=1`；server-environment
+receipt 升级为 v2 并携带 closed child-import/startup-policy evidence。parent 继续由 isolated flags
+忽略环境路径并手工插入 sealed path；non-isolated registry child 必须继承 exact environment，禁止
+cwd/empty-path import、bytecode 与 startup customization。AST 与 CPU child probe 必须机械验证该
+边界。authority-v4、launch-shim-v3、evidence-v4、runtime-scratch-v4、terminal/server-log 及全部
+content objects 必须只读保留，禁止 retry、reuse、rename、overwrite、truncate 或 delete。
+
+Amendment 1/2 的 retained groups、Stage2 caps/NNP、Docker/KVM residual 与 invocation prohibition、
+external INET/INET6 isolation、pidfd own-process、foreign PID、GPU0/UUID/64-GiB、模型顺序、22-call、
+zero-retry、no-provider/no-action/no-feedback/no-replay/no-secret 规则全部不变。v5 必须从新的 sealed
+source、NO_REPLACE shim、fresh canonical authority 和 fresh evidence/scratch roots 构建并独立
+复核；本 amendment 本身不把 code、artifact 或 live gate 标为已通过。

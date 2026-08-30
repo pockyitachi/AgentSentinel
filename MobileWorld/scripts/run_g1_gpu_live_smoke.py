@@ -30,20 +30,20 @@ _SOURCE_ROOT = _SCRIPT_PATH.parents[1] / "src"
 JsonValue = Any
 
 _EXECUTE_CONFIRMATION = "EXECUTE-D034-SYNTHETIC-22-CALL-SMOKE"
-_AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v4"
-_LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v3"
+_AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v5"
+_LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v4"
 _LAUNCH_SHIM_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v3"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v4"
 )
 _LAUNCH_SHIM_AUTHORITY_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v4.json"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v5.json"
 )
-_LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V3"
-_EVIDENCE_ROOT_V4 = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/evidence-v4"
+_LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V4"
+_EVIDENCE_ROOT_V5 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/evidence-v5"
 )
-_RUNTIME_SCRATCH_ROOT_V4 = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/runtime-scratch-v4"
+_RUNTIME_SCRATCH_ROOT_V5 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/runtime-scratch-v5"
 )
 _TOOL_SHELL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-tool-shell/v1"
 _TOOL_SHELL_PATH = "/bin/sh"
@@ -2817,8 +2817,8 @@ def _outer_execute_context(
         and type(scratch_root) is str
         and cast(str, scratch_root).startswith("/")
         and str(Path(cast(str, scratch_root))) == scratch_root
-        and scratch_root == _RUNTIME_SCRATCH_ROOT_V4
-        and authority.get("evidence_root") == _EVIDENCE_ROOT_V4
+        and scratch_root == _RUNTIME_SCRATCH_ROOT_V5
+        and authority.get("evidence_root") == _EVIDENCE_ROOT_V5
     ):
         raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
     _validate_namespace_stage_identity_stdlib(namespace, stage="STAGE0")

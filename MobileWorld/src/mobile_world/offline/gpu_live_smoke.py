@@ -74,7 +74,7 @@ from mobile_world.offline.g1_history_codecs.codecs import (
     QwenFlatProgressHistoryCodec,
 )
 
-AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v4"
+AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v5"
 SMOKE_PACKET_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-packet/v1"
 PREPARATION_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-preparation/v2"
 EXECUTION_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-execution/v2"
@@ -82,20 +82,25 @@ DECISION_ID = "D-034"
 AUTHORIZED_SCOPE = "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"
 AUTHORIZED_GPU_UUID = "GPU-991ac45f-e9e9-1c25-590c-fb49ca752965"
 MINIMUM_FREE_MEMORY_BYTES = 68_719_476_736
-LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v3"
+LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v4"
 LAUNCH_SHIM_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v3"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v4"
 )
 LAUNCH_SHIM_AUTHORITY_PATH = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v4.json"
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v5.json"
 )
-LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V3"
-EVIDENCE_ROOT_V4 = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/evidence-v4"
+LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V4"
+EVIDENCE_ROOT_V5 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/evidence-v5"
 )
-RUNTIME_SCRATCH_ROOT_V4 = (
-    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/runtime-scratch-v4"
+RUNTIME_SCRATCH_ROOT_V5 = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/runtime-scratch-v5"
 )
+SERVER_ENVIRONMENT_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-server-environment/v2"
+_VLLM_REGISTRY_MODULE = "vllm.model_executor.models.registry"
+_VLLM_REGISTRY_RELATIVE_PATH = "vllm/model_executor/models/registry.py"
+_VLLM_REGISTRY_SHA256 = "66cc1cd3245239328c86af49dde46ac98bfefa3b5e52d038eb683c2d06076c25"
+_VLLM_REGISTRY_BYTE_COUNT = 43_556
 TOOL_SHELL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-tool-shell/v1"
 TOOL_SHELL_PATH = "/bin/sh"
 TOOL_SHELL_RESOLVED_PATH = "/usr/bin/dash"
@@ -1572,6 +1577,7 @@ _FINAL_SCHEMA_FILES = {
     "call": "gpu_smoke_call.schema.json",
     "lifecycle": "gpu_smoke_lifecycle.schema.json",
     "owned_command": "gpu_smoke_owned_command.schema.json",
+    "server_environment": "gpu_smoke_server_environment.schema.json",
     "manifest": "gpu_smoke_manifest.schema.json",
     "execution": "gpu_smoke_execution.schema.json",
     "error": "gpu_smoke_error.schema.json",
@@ -1800,6 +1806,15 @@ def _preseal_schema_validation(
             json.loads(_read_evidence_bytes(store, reference)),
             label="owned command",
         )
+    server_environment_refs = cast(
+        list[dict[str, JsonValue]], terminal_payload["server_environment_receipts"]
+    )
+    for reference in server_environment_refs:
+        _schema_validate(
+            schemas["server_environment"],
+            json.loads(_read_evidence_bytes(store, reference)),
+            label="server environment",
+        )
     if status == "FAIL":
         _schema_validate(schemas["error"], terminal_payload["error_code"], label="error")
     return {
@@ -1816,6 +1831,8 @@ def _preseal_schema_validation(
         "lifecycle_count_validated": len(lifecycle_refs),
         "owned_command_receipt_count_validated": len(owned_command_refs),
         "owned_command_receipts_validated": cast(JsonValue, owned_command_refs),
+        "server_environment_receipt_count_validated": len(server_environment_refs),
+        "server_environment_receipts_validated": cast(JsonValue, server_environment_refs),
         "manifest_validated_before_terminal_publish": True,
         "stored_execution_validated_before_terminal_publish": True,
         "actual_content_bytes_read": True,
@@ -1862,6 +1879,34 @@ def _validate_final_schema_objects(
             json.loads(_read_evidence_bytes(store, reference)),
             label="owned command",
         )
+    raw_server_environment_refs = receipt.get("server_environment_receipts")
+    if type(raw_server_environment_refs) is not list:
+        _fail(
+            "GPU_SMOKE_EVIDENCE_TERMINAL_INVALID",
+            "server-environment receipt references are absent",
+        )
+    server_environment_refs = cast(list[dict[str, JsonValue]], raw_server_environment_refs)
+    if len(
+        {canonical_json_bytes(cast(JsonValue, reference)) for reference in server_environment_refs}
+    ) != len(server_environment_refs):
+        _fail(
+            "GPU_SMOKE_EVIDENCE_TERMINAL_INVALID",
+            "server-environment receipt census is not deduplicated",
+        )
+    if not (
+        validation.get("server_environment_receipt_count_validated") == len(server_environment_refs)
+        and validation.get("server_environment_receipts_validated") == server_environment_refs
+    ):
+        _fail(
+            "GPU_SMOKE_EVIDENCE_TERMINAL_INVALID",
+            "server-environment validation census changed during seal",
+        )
+    for reference in server_environment_refs:
+        _schema_validate(
+            schemas["server_environment"],
+            json.loads(_read_evidence_bytes(store, reference)),
+            label="server environment",
+        )
     _schema_validate(schemas["manifest"], manifest, label="manifest")
     _schema_validate(schemas["execution"], receipt, label="stored execution")
     raw_operation_ledger = receipt.get("operation_ledger")
@@ -1875,6 +1920,11 @@ def _validate_final_schema_objects(
         _fail(
             "GPU_SMOKE_EVIDENCE_TERMINAL_INVALID",
             "operation ledger does not bind the owned-command receipt census",
+        )
+    if operation_ledger.get("server_environment_receipts") != server_environment_refs:
+        _fail(
+            "GPU_SMOKE_EVIDENCE_TERMINAL_INVALID",
+            "operation ledger does not bind the server-environment receipt census",
         )
     manifest_subject = {
         key: value for key, value in manifest.items() if key != "manifest_subject_sha256"
@@ -2672,10 +2722,10 @@ def _validate_authority(value: dict[str, JsonValue], canonical: bytes) -> GpuLiv
     scratch_root = _absolute_lexical(
         authority.get("runtime_scratch_root"), "$.runtime_scratch_root"
     )
-    if not (evidence_root == EVIDENCE_ROOT_V4 and scratch_root == RUNTIME_SCRATCH_ROOT_V4):
+    if not (evidence_root == EVIDENCE_ROOT_V5 and scratch_root == RUNTIME_SCRATCH_ROOT_V5):
         _fail(
             "GPU_SMOKE_SOURCE_BINDING_INVALID",
-            "v4 authority must use the fresh evidence and runtime-scratch roots",
+            "v5 authority must use the fresh evidence and runtime-scratch roots",
             "$.evidence_root",
         )
     protected_paths: list[tuple[str, PurePosixPath]] = [
@@ -5966,6 +6016,117 @@ def _verify_runtime_bindings(authority: GpuLiveAuthority) -> dict[str, JsonValue
         authority,
         str(Path(authority.runtime_scratch_root) / "namespace-launcher"),
     )
+    startup_policy = _verify_server_python_startup_roots(authority)
+    registry_path = str(Path(server_site_packages) / _VLLM_REGISTRY_RELATIVE_PATH)
+    registry_sha256, registry_byte_count = _hash_source_regular_file(
+        Path(registry_path),
+        expected_sha256=_VLLM_REGISTRY_SHA256,
+    )
+    if registry_byte_count != _VLLM_REGISTRY_BYTE_COUNT:
+        _fail(
+            "GPU_SMOKE_SERVER_RUNTIME_MISMATCH",
+            "vLLM registry subprocess source byte count differs",
+        )
+    child_probe_code = (
+        "import json,os,sys;"
+        "print(json.dumps({'cwd_or_empty_path_present':"
+        "('' in sys.path or os.getcwd() in sys.path),"
+        "'dont_write_bytecode':bool(sys.flags.dont_write_bytecode),"
+        "'no_user_site':bool(sys.flags.no_user_site),"
+        "'safe_path':bool(sys.flags.safe_path),"
+        "'site_module_loaded':'site' in sys.modules,"
+        "'sys_path':sys.path,"
+        "'vllm_module_loaded':any(k=='vllm' or k.startswith('vllm.') for k in sys.modules)},"
+        "sort_keys=True,separators=(',',':')))"
+    )
+    try:
+        child_probe = _run_owned_command(
+            [server_path, "-c", child_probe_code],
+            env=env,
+            timeout_seconds=30,
+            error_code="GPU_SMOKE_SERVER_RUNTIME_PROBE_FAILED",
+        )
+    except BaseException as child_probe_error:
+        startup_policy_after_failed_child = _verify_server_python_startup_roots(authority)
+        if canonical_json_bytes(
+            cast(JsonValue, startup_policy_after_failed_child)
+        ) != canonical_json_bytes(cast(JsonValue, startup_policy)):
+            _fail(
+                "GPU_SMOKE_SERVER_RUNTIME_MISMATCH",
+                "server Python startup roots changed across a failed child import probe",
+            )
+        raise child_probe_error
+    startup_policy_after_child = _verify_server_python_startup_roots(authority)
+    if canonical_json_bytes(cast(JsonValue, startup_policy_after_child)) != canonical_json_bytes(
+        cast(JsonValue, startup_policy)
+    ):
+        _fail(
+            "GPU_SMOKE_SERVER_RUNTIME_MISMATCH",
+            "server Python startup roots changed across the child import probe",
+        )
+    try:
+        child_observation = json.loads(child_probe.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GpuLiveSmokeError(
+            "GPU_SMOKE_SERVER_RUNTIME_PROBE_FAILED",
+            "non-isolated server child probe output is invalid",
+        ) from exc
+    private_runtime = cast(dict[str, JsonValue], authority.value["private_runtime"])
+    private_root = cast(str, private_runtime["root"])
+    stdlib_root = cast(str, private_runtime["stdlib_root"])
+    expected_child_sys_path = [
+        server_site_packages,
+        f"{private_root}/lib/python312.zip",
+        stdlib_root,
+        f"{stdlib_root}/lib-dynload",
+    ]
+    expected_child_observation: dict[str, JsonValue] = {
+        "cwd_or_empty_path_present": False,
+        "dont_write_bytecode": True,
+        "no_user_site": True,
+        "safe_path": True,
+        "site_module_loaded": True,
+        "sys_path": expected_child_sys_path,
+        "vllm_module_loaded": False,
+    }
+    if not (
+        child_probe.returncode == 0
+        and child_probe.stderr == b""
+        and type(child_observation) is dict
+        and canonical_json_bytes(cast(JsonValue, child_observation))
+        == canonical_json_bytes(cast(JsonValue, expected_child_observation))
+        and child_probe.receipt["observed_descendant_count"] == 0
+        and child_probe.receipt["release_proven"] is True
+    ):
+        _fail(
+            "GPU_SMOKE_SERVER_RUNTIME_MISMATCH",
+            "non-isolated vLLM registry child import boundary differs",
+        )
+    registry_expected_argv = [server_path, "-m", _VLLM_REGISTRY_MODULE]
+    startup_policy_sha256 = canonical_sha256(cast(JsonValue, startup_policy))
+    python_child_import: dict[str, JsonValue] = {
+        "schema_version": "mobileworld.g1.gpu-live-smoke-vllm-registry-subprocess/v1",
+        "module": _VLLM_REGISTRY_MODULE,
+        "relative_path": _VLLM_REGISTRY_RELATIVE_PATH,
+        "path": registry_path,
+        "sha256": registry_sha256,
+        "byte_count": registry_byte_count,
+        "expected_argv": registry_expected_argv,
+        "expected_argv_sha256": canonical_sha256(cast(JsonValue, registry_expected_argv)),
+        "inherits_exact_server_environment": True,
+        "subprocess_environment_override_present": False,
+        "parent_isolated_mode_ignores_pythonpath": True,
+        "startup_policy": startup_policy,
+        "startup_policy_revalidated_after_child": True,
+        "startup_policy_pre_sha256": startup_policy_sha256,
+        "startup_policy_post_sha256": canonical_sha256(cast(JsonValue, startup_policy_after_child)),
+        "startup_policy_pre_post_identical": True,
+        "child_observation": cast(JsonValue, child_observation),
+        "child_sys_path_sha256": canonical_sha256(cast(JsonValue, child_observation["sys_path"])),
+        "child_probe_imported_vllm": False,
+        "child_probe_owned_command_sha256": canonical_sha256(cast(JsonValue, child_probe.receipt)),
+        "registry_subprocess_argv_source_ast_proven": True,
+    }
     completed = _run_owned_command(
         [
             server_path,
@@ -6171,9 +6332,11 @@ def _verify_runtime_bindings(authority: GpuLiveAuthority) -> dict[str, JsonValue
                     )
                 },
             ),
+            "python_child_import": python_child_import,
         },
         "pidfd": pidfd_runtime,
         "owned_commands": [
+            child_probe.receipt,
             completed.receipt,
             revision_probe.receipt,
             status_probe.receipt,
@@ -9852,6 +10015,141 @@ def _prepare_runtime_scratch(authority: GpuLiveAuthority, run_id: str) -> _Runti
     )
 
 
+def _verify_server_python_startup_roots(
+    authority: GpuLiveAuthority,
+) -> dict[str, JsonValue]:
+    private_runtime = cast(dict[str, JsonValue], authority.value["private_runtime"])
+    server_runtime = cast(dict[str, JsonValue], authority.value["server_runtime"])
+    server_site_packages = Path(cast(str, server_runtime["site_packages_path"]))
+    stdlib_root = Path(cast(str, private_runtime["stdlib_root"]))
+    lib_dynload_root = stdlib_root / "lib-dynload"
+    default_site_packages = stdlib_root / "site-packages"
+    required_roots = (server_site_packages, stdlib_root, lib_dynload_root)
+    startup_roots = (
+        server_site_packages,
+        stdlib_root,
+        lib_dynload_root,
+        default_site_packages,
+    )
+    forbidden_customization_names = ("sitecustomize", "usercustomize")
+    startup_root_censuses: list[JsonValue] = []
+    default_site_packages_exists = False
+    for root in startup_roots:
+        try:
+            root_fd = _open_absolute_nofollow_file(
+                str(root),
+                os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY,
+            )
+        except FileNotFoundError:
+            if root in required_roots:
+                _fail(
+                    "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+                    "required server Python startup root is unavailable",
+                )
+            startup_root_censuses.append(
+                {
+                    "path": str(root),
+                    "exists": False,
+                    "top_level_entry_count": 0,
+                    "top_level_names_sha256": canonical_sha256([]),
+                    "forbidden_customization_present_count": 0,
+                    "top_level_pth_present_count": 0,
+                }
+            )
+            continue
+        except OSError as exc:
+            raise GpuLiveSmokeError(
+                "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+                "server Python startup root cannot be pinned without following links",
+            ) from exc
+        try:
+            before = os.fstat(root_fd)
+            if not stat.S_ISDIR(before.st_mode):
+                _fail(
+                    "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+                    "server Python startup root is not a directory",
+                )
+            root_names = sorted(os.listdir(root_fd))
+            after = os.fstat(root_fd)
+        except OSError as exc:
+            raise GpuLiveSmokeError(
+                "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+                "server Python startup root census failed",
+            ) from exc
+        finally:
+            os.close(root_fd)
+        if _tree_entry_identity(before) != _tree_entry_identity(after):
+            _fail(
+                "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+                "server Python startup root changed during its census",
+            )
+        customization_names = [
+            name
+            for name in root_names
+            if any(
+                name == prefix or name.startswith(f"{prefix}.")
+                for prefix in forbidden_customization_names
+            )
+        ]
+        pth_names = [name for name in root_names if name.endswith(".pth")]
+        if customization_names or pth_names:
+            _fail(
+                "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+                "server Python startup root contains executable customization",
+            )
+        if root == default_site_packages:
+            default_site_packages_exists = True
+        startup_root_censuses.append(
+            {
+                "path": str(root),
+                "exists": True,
+                "top_level_entry_count": len(root_names),
+                "top_level_names_sha256": canonical_sha256(root_names),
+                "forbidden_customization_present_count": 0,
+                "top_level_pth_present_count": 0,
+            }
+        )
+    python_stdlib_zip = Path(cast(str, private_runtime["root"])) / "lib/python312.zip"
+    try:
+        zip_fd = _open_absolute_nofollow_file(
+            str(python_stdlib_zip),
+            os.O_RDONLY | os.O_CLOEXEC,
+        )
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise GpuLiveSmokeError(
+            "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+            "server Python stdlib zip absence cannot be checked without following links",
+        ) from exc
+    else:
+        os.close(zip_fd)
+        _fail(
+            "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+            "server Python stdlib zip is forbidden unless separately bound and parsed",
+        )
+    return {
+        "schema_version": "mobileworld.g1.gpu-live-smoke-server-python-startup-policy/v1",
+        "pythonpath": str(server_site_packages),
+        "pythonpath_authority_match": True,
+        "pythonpath_single_absolute_resolved_entry": True,
+        "python_safe_path_environment": "1",
+        "python_dont_write_bytecode_environment": "1",
+        "python_no_user_site_environment": "1",
+        "startup_roots": [str(root) for root in startup_roots],
+        "required_existing_startup_roots": [str(root) for root in required_roots],
+        "startup_root_censuses": startup_root_censuses,
+        "default_site_packages_root_exists": default_site_packages_exists,
+        "forbidden_customization_name_prefixes": list(forbidden_customization_names),
+        "forbidden_customization_present_count": 0,
+        "top_level_pth_present_count": 0,
+        "python_stdlib_zip_path": str(python_stdlib_zip),
+        "python_stdlib_zip_absent": True,
+        "sealed_runtime_tree_forbidden_bytecode_or_pth_count": 0,
+        "pinned_nofollow_startup_root_census": True,
+    }
+
+
 def _server_environment(
     authority: GpuLiveAuthority,
     model_scratch_root: str,
@@ -9869,6 +10167,18 @@ def _server_environment(
     launcher_environment = cast(
         dict[str, JsonValue], authority.network_namespace["launcher_environment"]
     )
+    private_runtime = cast(dict[str, JsonValue], authority.value["private_runtime"])
+    server_runtime = cast(dict[str, JsonValue], authority.value["server_runtime"])
+    server_site_packages_path = cast(str, server_runtime["site_packages_path"])
+    if not (
+        server_site_packages_path == f"{cast(str, private_runtime['root'])}/site-packages/server"
+        and os.pathsep not in server_site_packages_path
+    ):
+        _fail(
+            "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+            "server PYTHONPATH is not the single authority-bound private site-packages tree",
+        )
+    _verify_server_python_startup_roots(authority)
     env: dict[str, str] = {
         "PATH": "/usr/bin:/bin",
         "CUDA_VISIBLE_DEVICES": cast(str, authority.gpu["uuid"]),
@@ -9883,6 +10193,9 @@ def _server_environment(
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost",
         "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": server_site_packages_path,
+        "PYTHONSAFEPATH": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
         "LC_ALL": "C.UTF-8",
         "LANG": "C.UTF-8",
         "VLLM_HOST_IP": "127.0.0.1",
@@ -11122,15 +11435,37 @@ def _execute_authorized_gpu_live_smoke(
                     authority,
                     model_scratch_root,
                 )
+                python_child_import = cast(
+                    dict[str, JsonValue],
+                    cast(dict[str, JsonValue], runtime["server"])["python_child_import"],
+                )
+                server_python_startup_policy = cast(
+                    dict[str, JsonValue], python_child_import["startup_policy"]
+                )
+                if not (
+                    server_environment.get("PYTHONPATH")
+                    == server_python_startup_policy["pythonpath"]
+                    and server_environment.get("PYTHONSAFEPATH")
+                    == server_python_startup_policy["python_safe_path_environment"]
+                    and server_environment.get("PYTHONDONTWRITEBYTECODE")
+                    == server_python_startup_policy["python_dont_write_bytecode_environment"]
+                    and server_environment.get("PYTHONNOUSERSITE")
+                    == server_python_startup_policy["python_no_user_site_environment"]
+                ):
+                    _fail(
+                        "GPU_SMOKE_SERVER_ENVIRONMENT_INVALID",
+                        "server Python startup environment differs from its measured policy",
+                    )
                 _scan_for_secrets(cast(JsonValue, server_environment))
                 server_environment_receipt: dict[str, JsonValue] = {
-                    "schema_version": ("mobileworld.g1.gpu-live-smoke-server-environment/v1"),
+                    "schema_version": SERVER_ENVIRONMENT_RECEIPT_SCHEMA_VERSION,
                     "run_id": run_id,
                     "model_id": model_id,
                     "model_scratch_root": model_scratch_root,
                     "environment": cast(JsonValue, server_environment),
                     "environment_keys": sorted(server_environment),
                     "environment_sha256": canonical_sha256(cast(JsonValue, server_environment)),
+                    "python_child_import": python_child_import,
                     "closed_allowlist": True,
                     "ambient_environment_inherited": False,
                     "credential_field_count": 0,
