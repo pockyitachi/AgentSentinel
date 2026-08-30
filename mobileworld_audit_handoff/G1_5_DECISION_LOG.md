@@ -73,3 +73,28 @@ authority、owner 指定的 GPU/lease、通过的 G1.4 serving/seed/provider/par
 G1.6/G1.7 downstream seals，以及显式启用且 hash-bound 的 live Codec capability。任一前置项缺失
 都必须在 client、model load 和 GPU 使用前阻断。矩阵调用数、输入或验收规则的任何扩展都需要
 新的 owner 决策，不得在看到结果后补定。
+
+## D-034 — 将 D-028 的精确 10-call 项纳入 GPU0 非正式 22-call smoke
+
+**状态：Locked narrow owner authority（owner 于 2026-08-30 明确授权；规范边界见
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 与 `G1_4_DECISION_LOG.md` D-034）**
+
+D-028 的 10 个逻辑调用现在只在 D-034 的同一个 synthetic、secret-free、non-case、loopback
+batch 内获得执行授权：Qwen flat-progress 与 MAI raw-replay 各按
+`ORIGINAL/MASK/MASK_CORRECTION/ORACLE_CLEAN/SHAM_BENIGN_EDIT` 顺序调用一次，seed 固定为
+`1729`，SDK hidden retry 为 0，non-stream，失败不得补跑。该 10-call 子矩阵与 G1.4 的 12-call
+canary 合并为 exact 22-call packet；必须按 Qwen 的 6+5 calls、guarded full release、MAI 的
+6+5 calls 严格串行。
+
+本条只允许验证 frozen CPU Codec 对 secret-free fixture 的 live request/diff/reversible-mapping
+binding 和 inert response/parser classification。它不允许 formal G1.3 capsule、真实 task、G1.6
+curated plan/gold、treatment response、formal replay、backend、GUI/tool/action 或 response
+feedback。两个 CPU publication 中的历史 `live_ready=false`/`live_smoke_completed=false` 记录保持
+不可变；D-034 evidence 只能作为新的独立 repo-external engineering receipt，不能回写旧
+publication 或冒充 human review/gold。
+
+共享 GPU、UUID、client/server runtime、loopback、可写 cache pre/post 全树 hash、只停 exact
+己方 PID、foreign PID 零 target（只可读其 UID 与 `/proc/<pid>/stat` start time 作 invariance/PID-reuse
+防护，不得读其他 `/proc` 面）、零 external network/secret/action、证据闭包以及 formal gates
+不变等全部规则，以 D-034 canonical contract 为准。只有完整 22-call closure PASS 才能判断本
+10-call deferred smoke item 通过；任何缺失或安全/绑定失败都保持 fail closed。

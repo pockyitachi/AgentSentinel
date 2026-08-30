@@ -1,0 +1,364 @@
+{
+  "schema_version": "mobileworld.g1.gpu-live-smoke-negative-test-fixture/v1",
+  "fixture_id": "synthetic-non-case-loader-mutation-template-v1",
+  "intended_use": "NEGATIVE_LOADER_MUTATION_ONLY",
+  "g1_5_live_proof": false,
+  "handwritten_render_evidence_authoritative": false,
+  "synthetic_non_case": true,
+  "secret_free": true,
+  "formal_capsule": false,
+  "contains_real_task_data": false,
+  "tiny_png_data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "source_requests": {
+    "qwen3vl_8b": {
+      "model": "Qwen3-VL-8B-Instruct",
+      "temperature": 0.0,
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Synthetic non-case GPU smoke. Return inert action data only."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Query: point to the synthetic blue square\nTask progress: Step 1: Synthetic calibration only; \n"
+            },
+            {
+              "type": "image_url",
+              "image_url": {
+                "url": "__TINY_PNG_DATA_URL__"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "mai_ui_8b": {
+      "model": "MAI-UI-8B",
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "max_tokens": 2048,
+      "messages": [
+        {
+          "role": "system",
+          "content": "Synthetic non-case GPU smoke. Return inert action data only."
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Synthetic task: point to the blue square."
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": "<thinking>Synthetic calibration only.</thinking><tool_call>{\"name\":\"click\",\"arguments\":{\"x\":0.5,\"y\":0.5}}</tool_call>"
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "image_url",
+              "image_url": {
+                "url": "__TINY_PNG_DATA_URL__"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "rendered_history_text_by_arm": {
+    "ORIGINAL": "Synthetic calibration only.",
+    "MASK": "",
+    "MASK_CORRECTION": "Synthetic correction: use only the visible blue square.",
+    "ORACLE_CLEAN": "Synthetic clean context.",
+    "SHAM_BENIGN_EDIT": "Synthetic calibration."
+  },
+  "diff_by_arm": {
+    "ORIGINAL": [],
+    "MASK": [
+      {
+        "op": "DELETE",
+        "path": "$.messages[1].content[0].text",
+        "synthetic": true
+      }
+    ],
+    "MASK_CORRECTION": [
+      {
+        "op": "DELETE",
+        "path": "$.messages[1].content[0].text",
+        "synthetic": true
+      },
+      {
+        "op": "INSERT",
+        "path": "$.messages[1].content[0].text",
+        "synthetic": true
+      }
+    ],
+    "ORACLE_CLEAN": [
+      {
+        "op": "REPLACE",
+        "path": "$.messages[1].content[0].text",
+        "synthetic": true
+      }
+    ],
+    "SHAM_BENIGN_EDIT": [
+      {
+        "op": "REPLACE",
+        "path": "$.messages[1].content[0].text",
+        "synthetic": true
+      }
+    ]
+  },
+  "mapping_by_arm": {
+    "ORIGINAL": {
+      "version": 1,
+      "synthetic": true,
+      "reversible": true,
+      "edits": []
+    },
+    "MASK": {
+      "version": 1,
+      "synthetic": true,
+      "reversible": true,
+      "edits": [
+        "mask"
+      ]
+    },
+    "MASK_CORRECTION": {
+      "version": 1,
+      "synthetic": true,
+      "reversible": true,
+      "edits": [
+        "mask",
+        "correction"
+      ]
+    },
+    "ORACLE_CLEAN": {
+      "version": 1,
+      "synthetic": true,
+      "reversible": true,
+      "edits": [
+        "oracle_clean"
+      ]
+    },
+    "SHAM_BENIGN_EDIT": {
+      "version": 1,
+      "synthetic": true,
+      "reversible": true,
+      "edits": [
+        "sham_benign_edit"
+      ]
+    }
+  },
+  "expected_calls": [
+    {
+      "call_id": "g14-qwen-s1729-r1",
+      "phase": "G1_4_CANARY",
+      "model_id": "qwen3vl_8b",
+      "seed": 1729,
+      "repeat_index": 1,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-qwen-s1729-r2",
+      "phase": "G1_4_CANARY",
+      "model_id": "qwen3vl_8b",
+      "seed": 1729,
+      "repeat_index": 2,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-qwen-s2718-r1",
+      "phase": "G1_4_CANARY",
+      "model_id": "qwen3vl_8b",
+      "seed": 2718,
+      "repeat_index": 1,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-qwen-s2718-r2",
+      "phase": "G1_4_CANARY",
+      "model_id": "qwen3vl_8b",
+      "seed": 2718,
+      "repeat_index": 2,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-qwen-s31415-r1",
+      "phase": "G1_4_CANARY",
+      "model_id": "qwen3vl_8b",
+      "seed": 31415,
+      "repeat_index": 1,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-qwen-s31415-r2",
+      "phase": "G1_4_CANARY",
+      "model_id": "qwen3vl_8b",
+      "seed": 31415,
+      "repeat_index": 2,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g15-qwen-original-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "qwen3vl_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "ORIGINAL",
+      "codec_id": "mobileworld.g1.history-codec.qwen-flat-progress"
+    },
+    {
+      "call_id": "g15-qwen-mask-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "qwen3vl_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "MASK",
+      "codec_id": "mobileworld.g1.history-codec.qwen-flat-progress"
+    },
+    {
+      "call_id": "g15-qwen-mask-correction-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "qwen3vl_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "MASK_CORRECTION",
+      "codec_id": "mobileworld.g1.history-codec.qwen-flat-progress"
+    },
+    {
+      "call_id": "g15-qwen-oracle-clean-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "qwen3vl_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "ORACLE_CLEAN",
+      "codec_id": "mobileworld.g1.history-codec.qwen-flat-progress"
+    },
+    {
+      "call_id": "g15-qwen-sham-benign-edit-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "qwen3vl_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "SHAM_BENIGN_EDIT",
+      "codec_id": "mobileworld.g1.history-codec.qwen-flat-progress"
+    },
+    {
+      "call_id": "g14-mai-s1729-r1",
+      "phase": "G1_4_CANARY",
+      "model_id": "mai_ui_8b",
+      "seed": 1729,
+      "repeat_index": 1,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-mai-s1729-r2",
+      "phase": "G1_4_CANARY",
+      "model_id": "mai_ui_8b",
+      "seed": 1729,
+      "repeat_index": 2,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-mai-s2718-r1",
+      "phase": "G1_4_CANARY",
+      "model_id": "mai_ui_8b",
+      "seed": 2718,
+      "repeat_index": 1,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-mai-s2718-r2",
+      "phase": "G1_4_CANARY",
+      "model_id": "mai_ui_8b",
+      "seed": 2718,
+      "repeat_index": 2,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-mai-s31415-r1",
+      "phase": "G1_4_CANARY",
+      "model_id": "mai_ui_8b",
+      "seed": 31415,
+      "repeat_index": 1,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g14-mai-s31415-r2",
+      "phase": "G1_4_CANARY",
+      "model_id": "mai_ui_8b",
+      "seed": 31415,
+      "repeat_index": 2,
+      "arm": null,
+      "codec_id": null
+    },
+    {
+      "call_id": "g15-mai-original-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "mai_ui_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "ORIGINAL",
+      "codec_id": "mobileworld.g1.history-codec.mai-raw-replay"
+    },
+    {
+      "call_id": "g15-mai-mask-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "mai_ui_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "MASK",
+      "codec_id": "mobileworld.g1.history-codec.mai-raw-replay"
+    },
+    {
+      "call_id": "g15-mai-mask-correction-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "mai_ui_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "MASK_CORRECTION",
+      "codec_id": "mobileworld.g1.history-codec.mai-raw-replay"
+    },
+    {
+      "call_id": "g15-mai-oracle-clean-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "mai_ui_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "ORACLE_CLEAN",
+      "codec_id": "mobileworld.g1.history-codec.mai-raw-replay"
+    },
+    {
+      "call_id": "g15-mai-sham-benign-edit-s1729",
+      "phase": "G1_5_CODEC",
+      "model_id": "mai_ui_8b",
+      "seed": 1729,
+      "repeat_index": null,
+      "arm": "SHAM_BENIGN_EDIT",
+      "codec_id": "mobileworld.g1.history-codec.mai-raw-replay"
+    }
+  ]
+}

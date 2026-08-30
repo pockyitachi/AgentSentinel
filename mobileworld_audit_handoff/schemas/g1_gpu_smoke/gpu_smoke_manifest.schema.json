@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_gpu_smoke/gpu_smoke_manifest.schema.json",
+  "title": "G1 D-034 exact evidence file-set manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "status", "exact_event_files", "event_count",
+    "exact_content_objects", "content_object_count",
+    "self_excluded_content_object_roles", "self_excluded_content_object_count",
+    "content_object_census_rule", "manifest_subject_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-manifest-subject/v1"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "status": {"enum": ["PASS", "FAIL"]},
+    "exact_event_files": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[0-9]{4}-[0-9a-f]{64}\\.json$"}
+    },
+    "event_count": {"type": "integer", "minimum": 1},
+    "exact_content_objects": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/contentRef"}
+    },
+    "content_object_count": {"type": "integer", "minimum": 1},
+    "self_excluded_content_object_roles": {
+      "const": ["MANIFEST_OBJECT", "TERMINAL_RECEIPT_OBJECT"]
+    },
+    "self_excluded_content_object_count": {"const": 2},
+    "content_object_census_rule": {
+      "const": "EXACT_PRESEAL_OBJECTS_PLUS_TWO_EXPLICIT_SELF_EXCLUSIONS"
+    },
+    "manifest_subject_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "media_type"],
+      "properties": {
+        "relative_path": {
+          "type": "string",
+          "pattern": "^objects/sha256/[0-9a-f]{2}/[0-9a-f]{64}$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

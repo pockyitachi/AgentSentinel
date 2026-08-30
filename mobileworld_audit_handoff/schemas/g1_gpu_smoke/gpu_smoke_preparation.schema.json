@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_gpu_smoke/gpu_smoke_preparation.schema.json",
+  "title": "G1 D-034 CPU-only live-smoke preparation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "decision_id", "authority_id", "authority_sha256",
+    "smoke_packet_sha256", "live_preparation_receipt_sha256", "model_order",
+    "call_count", "g1_4_call_count", "g1_5_call_count",
+    "call_descriptors_sha256", "launch_plans_sha256", "validated", "prepared",
+    "execution_started", "client_created", "socket_opened", "subprocess_started",
+    "gpu_probed", "gpu_used", "model_loaded", "provider_invoked",
+    "generated_action_executed", "replay_executed",
+    "provider_invocation_allowed", "execute_requires_explicit_entrypoint"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-preparation/v1"},
+    "decision_id": {"const": "D-034"},
+    "authority_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "authority_sha256": {"$ref": "#/$defs/sha256"},
+    "smoke_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "live_preparation_receipt_sha256": {
+      "const": "4f3cbd2d0369288c7507b77c54766bf536b620156196df770c428891280b9819"
+    },
+    "model_order": {"const": ["qwen3vl_8b", "mai_ui_8b"]},
+    "call_count": {"const": 22},
+    "g1_4_call_count": {"const": 12},
+    "g1_5_call_count": {"const": 10},
+    "call_descriptors_sha256": {"$ref": "#/$defs/sha256"},
+    "launch_plans_sha256": {"$ref": "#/$defs/sha256"},
+    "validated": {"const": true},
+    "prepared": {"const": true},
+    "execution_started": {"const": false},
+    "client_created": {"const": false},
+    "socket_opened": {"const": false},
+    "subprocess_started": {"const": false},
+    "gpu_probed": {"const": false},
+    "gpu_used": {"const": false},
+    "model_loaded": {"const": false},
+    "provider_invoked": {"const": false},
+    "generated_action_executed": {"const": false},
+    "replay_executed": {"const": false},
+    "provider_invocation_allowed": {"const": false},
+    "execute_requires_explicit_entrypoint": {"const": true}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_gpu_smoke/gpu_smoke_execution.schema.json",
+  "title": "G1 D-034 terminal GPU live-smoke execution receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "status", "manifest", "decision_id",
+    "authority_id", "authority_sha256", "smoke_packet_sha256",
+    "started_at_utc", "finished_at_utc", "model_order",
+    "logical_call_count", "physical_http_request_count",
+    "sdk_hidden_retry_count", "lifecycle_receipts", "call_receipts",
+    "snapshot_pre_receipts", "snapshot_post_receipts", "network_namespace",
+    "runtime_scratch_pre_receipts", "runtime_scratch_post_receipts",
+    "launcher_scratch_post", "runtime_tree_post", "stage1_preexec",
+    "stage2_preimport", "client_environment",
+    "server_environment_receipts", "operation_ledger",
+    "schema_validation",
+    "formal_model_immutability_proven", "toctou_free_model_binding_proven",
+    "formal_runtime_immutability_proven", "toctou_free_runtime_binding_proven",
+    "native_dt_needed_dependency_closure_proven",
+    "generated_action_executed", "replay_executed",
+    "evidence_closure_proven", "own_service_release_proven",
+    "receipt_subject_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-execution/v1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "status": {"enum": ["PASS", "FAIL"]},
+    "manifest": {"$ref": "#/$defs/contentRef"},
+    "decision_id": {"const": "D-034"},
+    "authority_id": {"$ref": "#/$defs/id"},
+    "authority_sha256": {"$ref": "#/$defs/sha256"},
+    "smoke_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "started_at_utc": {"$ref": "#/$defs/utc"},
+    "finished_at_utc": {"$ref": "#/$defs/utc"},
+    "model_order": {"const": ["qwen3vl_8b", "mai_ui_8b"]},
+    "logical_call_count": {"type": "integer", "minimum": 0, "maximum": 22},
+    "physical_http_request_count": {"type": "integer", "minimum": 0},
+    "sdk_hidden_retry_count": {"const": 0},
+    "lifecycle_receipts": {
+      "type": "array", "maxItems": 2,
+      "items": {"$ref": "#/$defs/contentRef"}
+    },
+    "call_receipts": {
+      "type": "array", "maxItems": 22,
+      "items": {"$ref": "#/$defs/contentRef"}
+    },
+    "snapshot_pre_receipts": {
+      "type": "array", "maxItems": 2,
+      "items": {"$ref": "#/$defs/contentRef"}
+    },
+    "snapshot_post_receipts": {
+      "type": "array", "maxItems": 2,
+      "items": {"$ref": "#/$defs/contentRef"}
+    },
+    "network_namespace": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "runtime_scratch_pre_receipts": {
+      "type": "array", "maxItems": 2,
+      "items": {"$ref": "#/$defs/contentRef"}
+    },
+    "runtime_scratch_post_receipts": {
+      "type": "array", "maxItems": 2,
+      "items": {"$ref": "#/$defs/contentRef"}
+    },
+    "launcher_scratch_post": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "runtime_tree_post": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "stage1_preexec": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "stage2_preimport": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "client_environment": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "server_environment_receipts": {
+      "type": "array", "maxItems": 2,
+      "items": {"$ref": "#/$defs/contentRef"}
+    },
+    "gpu_preflight": {"$ref": "#/$defs/contentRef"},
+    "gpu_postflight": {"$ref": "#/$defs/contentRef"},
+    "error_code": {
+      "type": "string",
+      "pattern": "^GPU_SMOKE_[A-Z0-9_]+$",
+      "description": "Production values must also validate against gpu_smoke_error.schema.json."
+    },
+    "error_json_path": {"type": "string", "minLength": 1},
+    "error_detail": {"type": ["object", "null"]},
+    "operation_ledger": {
+      "oneOf": [
+        {"$ref": "#/$defs/passLedger"},
+        {"$ref": "#/$defs/failLedger"}
+      ]
+    },
+    "schema_validation": {"$ref": "#/$defs/contentRef"},
+    "formal_model_immutability_proven": {"const": false},
+    "toctou_free_model_binding_proven": {"const": false},
+    "formal_runtime_immutability_proven": {"const": false},
+    "toctou_free_runtime_binding_proven": {"const": false},
+    "native_dt_needed_dependency_closure_proven": {"const": false},
+    "generated_action_executed": {"const": false},
+    "replay_executed": {"const": false},
+    "evidence_closure_proven": {"type": "boolean"},
+    "own_service_release_proven": {"type": "boolean"},
+    "receipt_subject_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "oneOf": [
+    {
+      "required": [
+        "gpu_preflight", "gpu_postflight", "network_namespace",
+        "launcher_scratch_post", "runtime_tree_post", "client_environment"
+      ],
+      "properties": {
+        "status": {"const": "PASS"},
+        "logical_call_count": {"const": 22},
+        "physical_http_request_count": {"const": 22},
+        "lifecycle_receipts": {"minItems": 2, "maxItems": 2},
+        "call_receipts": {"minItems": 22, "maxItems": 22},
+        "snapshot_pre_receipts": {"minItems": 2, "maxItems": 2},
+        "snapshot_post_receipts": {"minItems": 2, "maxItems": 2},
+        "runtime_scratch_pre_receipts": {"minItems": 2, "maxItems": 2},
+        "runtime_scratch_post_receipts": {"minItems": 2, "maxItems": 2},
+        "server_environment_receipts": {"minItems": 2, "maxItems": 2},
+        "network_namespace": {"$ref": "#/$defs/contentRef"},
+        "launcher_scratch_post": {"$ref": "#/$defs/contentRef"},
+        "runtime_tree_post": {"$ref": "#/$defs/contentRef"},
+        "client_environment": {"$ref": "#/$defs/contentRef"},
+        "evidence_closure_proven": {"const": true},
+        "own_service_release_proven": {"const": true},
+        "operation_ledger": {"$ref": "#/$defs/passLedger"}
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["error_code"]},
+          {"required": ["error_json_path"]}
+        ]
+      }
+    },
+    {
+      "required": ["error_code", "error_json_path", "error_detail"],
+      "properties": {
+        "status": {"const": "FAIL"},
+        "operation_ledger": {"$ref": "#/$defs/failLedger"}
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["gpu_preflight"]},
+          {"required": ["gpu_postflight"]}
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "utc": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "pidList": {
+      "type": "array", "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 1}
+    },
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "media_type"],
+      "properties": {
+        "relative_path": {
+          "type": "string",
+          "pattern": "^objects/sha256/[0-9a-f]{2}/[0-9a-f]{64}$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1}
+      }
+    },
+    "passLedger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_launch_count", "logical_call_count",
+        "physical_http_request_count", "sdk_hidden_retry_count",
+        "signal_target_pids", "signal_sent_pids",
+        "signal_intent_count", "signal_sent_count", "signal_trace",
+        "recorded_launch_tree_pids",
+        "signal_targets_subset_of_launch_trees", "foreign_process_target_count",
+        "broad_process_signal_count", "request_observation_count",
+        "network_observations", "non_loopback_connection_count",
+        "socket_observation_count", "socket_observations",
+        "non_loopback_inet_socket_count", "credential_read_count",
+        "credential_scan_count", "credential_scan_receipts",
+        "owned_command_receipt_count", "owned_command_receipts",
+        "network_namespace", "runtime_scratch_pre_receipts",
+        "runtime_scratch_post_receipts", "launcher_scratch_post",
+        "runtime_tree_post", "stage1_preexec", "stage2_preimport",
+        "client_environment", "server_environment_receipts",
+        "runtime_scratch_preserved_for_audit",
+        "external_network_mechanically_unavailable",
+        "server_log_capture_complete",
+        "generated_action_execution_count",
+        "mobileworld_action_count", "replay_count", "backend_restore_count",
+        "response_feedback_count"
+      ],
+      "properties": {
+        "model_launch_count": {"const": 2},
+        "logical_call_count": {"const": 22},
+        "physical_http_request_count": {"const": 22},
+        "sdk_hidden_retry_count": {"const": 0},
+        "signal_target_pids": {"$ref": "#/$defs/pidList"},
+        "signal_sent_pids": {"$ref": "#/$defs/pidList"},
+        "signal_intent_count": {"type": "integer", "minimum": 0},
+        "signal_sent_count": {"type": "integer", "minimum": 0},
+        "signal_trace": {"$ref": "#/$defs/contentRef"},
+        "recorded_launch_tree_pids": {"$ref": "#/$defs/pidList"},
+        "signal_targets_subset_of_launch_trees": {"const": true},
+        "foreign_process_target_count": {"const": 0},
+        "broad_process_signal_count": {"const": 0},
+        "request_observation_count": {"const": 22},
+        "network_observations": {"$ref": "#/$defs/contentRef"},
+        "non_loopback_connection_count": {"const": 0},
+        "socket_observation_count": {"const": 46},
+        "socket_observations": {"$ref": "#/$defs/contentRef"},
+        "non_loopback_inet_socket_count": {"const": 0},
+        "credential_read_count": {"const": 0},
+        "credential_scan_count": {"const": 24},
+        "credential_scan_receipts": {
+          "type": "array", "minItems": 24, "maxItems": 24,
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "owned_command_receipt_count": {"type": "integer", "minimum": 0},
+        "owned_command_receipts": {
+          "type": "array", "uniqueItems": true,
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "network_namespace": {"$ref": "#/$defs/contentRef"},
+        "runtime_scratch_pre_receipts": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "runtime_scratch_post_receipts": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "launcher_scratch_post": {"$ref": "#/$defs/contentRef"},
+        "runtime_tree_post": {"$ref": "#/$defs/contentRef"},
+        "stage1_preexec": {
+          "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+        },
+        "stage2_preimport": {
+          "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+        },
+        "client_environment": {"$ref": "#/$defs/contentRef"},
+        "server_environment_receipts": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "runtime_scratch_preserved_for_audit": {"const": true},
+        "external_network_mechanically_unavailable": {"const": true},
+        "server_log_capture_complete": {"const": true},
+        "generated_action_execution_count": {"const": 0},
+        "mobileworld_action_count": {"const": 0},
+        "replay_count": {"const": 0},
+        "backend_restore_count": {"const": 0},
+        "response_feedback_count": {"const": 0}
+      }
+    },
+    "failLedger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signal_target_pids", "signal_sent_pids",
+        "signal_intent_count", "signal_sent_count", "signal_trace",
+        "recorded_launch_tree_pids", "foreign_process_target_count",
+        "broad_process_signal_count", "request_observation_count",
+        "network_observations", "non_loopback_connection_count",
+        "socket_observation_count", "socket_observations",
+        "non_loopback_inet_socket_count", "credential_read_count",
+        "credential_scan_count", "credential_scan_receipts",
+        "owned_command_receipt_count", "owned_command_receipts",
+        "network_namespace", "runtime_scratch_pre_receipts",
+        "runtime_scratch_post_receipts", "launcher_scratch_post",
+        "runtime_tree_post", "stage1_preexec", "stage2_preimport",
+        "client_environment", "server_environment_receipts",
+        "runtime_scratch_preserved_for_audit",
+        "external_network_mechanically_unavailable",
+        "server_log_capture_complete", "attempt_receipt_closure_proven",
+        "snapshot_closure_proven", "scratch_closure_proven",
+        "generated_action_execution_count", "mobileworld_action_count",
+        "replay_count", "backend_restore_count", "response_feedback_count"
+      ],
+      "properties": {
+        "signal_target_pids": {"$ref": "#/$defs/pidList"},
+        "signal_sent_pids": {"$ref": "#/$defs/pidList"},
+        "signal_intent_count": {"type": "integer", "minimum": 0},
+        "signal_sent_count": {"type": "integer", "minimum": 0},
+        "signal_trace": {"$ref": "#/$defs/contentRef"},
+        "recorded_launch_tree_pids": {"$ref": "#/$defs/pidList"},
+        "foreign_process_target_count": {"const": 0},
+        "broad_process_signal_count": {"const": 0},
+        "request_observation_count": {"type": "integer", "minimum": 0},
+        "network_observations": {"$ref": "#/$defs/contentRef"},
+        "non_loopback_connection_count": {"const": 0},
+        "socket_observation_count": {"type": "integer", "minimum": 0},
+        "socket_observations": {"$ref": "#/$defs/contentRef"},
+        "non_loopback_inet_socket_count": {"const": 0},
+        "credential_read_count": {"const": 0},
+        "credential_scan_count": {"type": "integer", "minimum": 0},
+        "credential_scan_receipts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "owned_command_receipt_count": {"type": "integer", "minimum": 0},
+        "owned_command_receipts": {
+          "type": "array", "uniqueItems": true,
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "network_namespace": {
+          "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+        },
+        "runtime_scratch_pre_receipts": {
+          "type": "array", "maxItems": 2,
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "runtime_scratch_post_receipts": {
+          "type": "array", "maxItems": 2,
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "launcher_scratch_post": {
+          "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+        },
+        "runtime_tree_post": {
+          "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+        },
+        "stage1_preexec": {
+          "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+        },
+        "stage2_preimport": {
+          "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+        },
+        "client_environment": {
+          "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+        },
+        "server_environment_receipts": {
+          "type": "array", "maxItems": 2,
+          "items": {"$ref": "#/$defs/contentRef"}
+        },
+        "runtime_scratch_preserved_for_audit": {"const": true},
+        "external_network_mechanically_unavailable": {"type": "boolean"},
+        "server_log_capture_complete": {"type": "boolean"},
+        "attempt_receipt_closure_proven": {"type": "boolean"},
+        "snapshot_closure_proven": {"type": "boolean"},
+        "scratch_closure_proven": {"type": "boolean"},
+        "generated_action_execution_count": {"const": 0},
+        "mobileworld_action_count": {"const": 0},
+        "replay_count": {"const": 0},
+        "backend_restore_count": {"const": 0},
+        "response_feedback_count": {"const": 0}
+      }
+    }
+  }
+}

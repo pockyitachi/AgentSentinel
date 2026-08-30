@@ -119,3 +119,57 @@ seal 和新的 versioned live-execution authority 齐备并经 owner 再次明�
 `GPU_LIVE_BACKLOG_RECORDED_NOT_AUTHORIZED`，queue item 是 `QUEUED_NOT_AUTHORIZED`；ALE-322
 继续保持 `IN_PROGRESS_LIVE_PROOF_DEFERRED`，现有
 `OpenAICompatibleProviderCodec.send` 与 `execute_live_arm` 继续机械 fail-only。
+
+## D-034 — 仅授权 GPU0 上 22-call 非正式、无秘密、非 case loopback smoke
+
+**状态：Locked narrow owner authority（owner 于 2026-08-30 明确指定共享物理 GPU 0，并再次
+要求不得停止、修改或干扰任何其他用户进程）**
+
+本条只把 D-027 中 `GPU_LIVE_BACKLOG_RECORDED_NOT_AUTHORIZED` 的一个封闭工程 smoke 项改为
+`AUTHORIZED_NON_FORMAL_SECRET_FREE_LOOPBACK_SMOKE_ONLY`。规范合同是
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md`；执行前必须由 owner UID、有效期和 out-of-band SHA-256
+共同绑定 closed-shape `mobileworld.g1.gpu-live-smoke-authority/v1` 与 exact synthetic packet。
+任何字段漂移、未知字段、secret-bearing 字段、hash/owner/time 不匹配都必须在 GPU probe、client、
+socket、subprocess 或 model load 前以稳定 `GPU_SMOKE_*` code 阻断。
+仅对这个 synthetic non-case smoke，D-027 中 formal replay 所需的 G1.6/G1.7 downstream seals
+不作为输入门槛；D-034 不生成或翻转这些 seals，它们对未来任何 formal/case replay 仍是强制门禁。
+
+授权资源固定为共享物理 GPU 0、UUID
+`GPU-991ac45f-e9e9-1c25-590c-fb49ca752965`，并以该 UUID（不是易漂移的 ordinal 字符串）设置
+`CUDA_VISIBLE_DEVICES`。API 只允许 `127.0.0.1:18007`；client 固定 MobileWorld venv 的
+`openai==1.106.1`，server 固定 SkyRL venv 的 `openai==2.15.0`、`vllm==0.11.0`、
+`torch==2.8.0+cu126`。本机 cache 可写这一现状仅能用于非正式 smoke：Qwen/MAI 每个 snapshot
+必须在服务前后做完整树 inventory/hash 且 bytes 全等，同时明确
+`formal_model_immutability_proven=false`、`toctou_free_model_binding_proven=false`。
+authority 的 free-memory floor 固定为 64 GiB（`68719476736` bytes），必须在 Qwen 与 MAI 各自
+启动前重新检查；低于阈值只可阻断，不得通过停止或修改其他用户进程释放显存。
+
+调用矩阵在任何输出出现前固定为 22 次、零 SDK hidden retry、non-stream、失败不补跑：
+G1.4 是 2 models × seeds `1729/2718/31415` × 2 fresh repeats = 12；G1.5 是 2 codecs ×
+5 arms × seed `1729` = 10。严格先启动 Qwen，完成其 11 个 calls 后按 exact own-process guard
+停服并证明进程、port、GPU allocation 释放，才可启动 MAI 的 11 个 calls。不得两模型共驻，
+不得 warm-up generation、probe generation、额外 invocation 或 result-dependent call。
+
+GPU 0 是共享资源，不要求或声称 exclusive lease。已有 foreign PID 只可进入最小 GPU process
+snapshot，绝不是清理目标；为共享卡 invariance 与 PID reuse 防护，唯一允许的 foreign 身份读取是
+当前 UID 与 `/proc/<pid>/stat` start time。不得 signal、renice、attach、改变 cgroup，亦不得读取
+foreign `cmdline`、`exe`、`environ`、`fd`、`cwd`、`mem`、maps、stack 或其他 `/proc` 文件/链接。
+只有同时匹配本 batch launch receipt 的 PID、UID、`/proc` start time、PGID、SID、
+executable/command hash、model、GPU UUID 与 port 的进程才可被 stop；任一不匹配必须不发送信号
+并 fail closed。port 已被占用时同样只报错，不得 kill listener 或换端口规避。
+
+输入只能是 versioned、secret-free、synthetic、non-case packet；禁止 formal capsule、真实 task
+或 190-unit replay。response/action/parser output 只作为 inert evidence 保存，绝不执行或反馈给后续
+call。证据必须在 repo 外形成 exact-file-set content-addressed closure，覆盖 authority/packet、
+环境、GPU/port/process snapshots、两模型 pre/post tree hash、两个 service lifecycle、22 个 call
+request/response/usage/error/parser receipts、零 foreign-PID target/零 action/零 feedback/零
+non-loopback/零 secret ledger 以及最终 manifest；失败证据不得改写成 PASS。
+
+本条不翻转 formal G1.3 capsule 的 `execution_ready=false`、
+`provider_invocation_allowed=false`、`treatment_response_generation_allowed=false`，不解锁 G1.4
+formal send/replay、G1.6 gold/admission 或 G1.7。`OpenAICompatibleProviderCodec.send` 与
+`execute_live_arm` 的 formal path 继续 fail-only；D-034 必须使用独立 smoke-only entrypoint。
+external network、credential、真实外部 provider、backend restore/prefix/live replay、Docker/
+emulator/MobileWorld action、generated action、treatment generation、response feedback、formal
+publication 与任何他人进程操作继续禁止。任何扩大 GPU/UUID/model/endpoint/input/seed/repeat/
+arm/call count/retry/process/network/evidence 范围都需要新的 owner 决策和 contract version。

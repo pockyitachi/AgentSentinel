@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_gpu_smoke/gpu_smoke_packet.schema.json",
+  "title": "G1 D-034 secret-free synthetic 22-call smoke packet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "packet_id", "synthetic_non_case", "secret_free",
+    "formal_capsule", "contains_real_task_data",
+    "generated_action_execution_allowed", "source_bindings", "calls"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-packet/v1"},
+    "packet_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "synthetic_non_case": {"const": true},
+    "secret_free": {"const": true},
+    "formal_capsule": {"const": false},
+    "contains_real_task_data": {"const": false},
+    "generated_action_execution_allowed": {"const": false},
+    "source_bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["g1_5_cpu_publication_sha256", "compiler_contract", "fixtures"],
+      "properties": {
+        "g1_5_cpu_publication_sha256": {
+          "const": "cffd7f24bf09f2e18c012b2a96591064e8ba200378c7e9c920d6fdd8f068d018"
+        },
+        "compiler_contract": {"const": "mobileworld.g1.gpu-live-smoke-packet-compiler/v1"},
+        "fixtures": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["qwen3vl_8b", "mai_ui_8b"],
+          "properties": {
+            "qwen3vl_8b": {
+              "const": {
+                "relative_path": "MobileWorld/tests/offline/fixtures/g1_5_history_codecs/qwen_flat_progress.captured.v1.json",
+                "file_sha256": "60f19821f782cd20ded8a926ea4466dff151cc5163a4728f9d0c761ae08b34be",
+                "fixture_id": "g15-qwen-flat-progress-captured-redacted-v1",
+                "fixture_request_sha256": "72f1396204e56c05b49a2a8564650f915c780d9bfa32f455f1cef3320abd6a33"
+              }
+            },
+            "mai_ui_8b": {
+              "const": {
+                "relative_path": "MobileWorld/tests/offline/fixtures/g1_5_history_codecs/mai_raw_replay.captured.v1.json",
+                "file_sha256": "b9e025b0b4990e9e3fe259b7dd21e2919de6538c00b42f2936c7b9fe403e9b40",
+                "fixture_id": "g15-mai-raw-replay-captured-redacted-v1",
+                "fixture_request_sha256": "c2ee086c6e5e659c4f904fbb74afefc9c89f7aabcfd47441ce65cce332d37a7d"
+              }
+            }
+          }
+        }
+      }
+    },
+    "calls": {
+      "type": "array",
+      "minItems": 22,
+      "maxItems": 22,
+      "prefixItems": [
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-qwen-s1729-r1"}, "model_id": {"const": "qwen3vl_8b"}, "seed": {"const": 1729}, "repeat_index": {"const": 1}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-qwen-s1729-r2"}, "model_id": {"const": "qwen3vl_8b"}, "seed": {"const": 1729}, "repeat_index": {"const": 2}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-qwen-s2718-r1"}, "model_id": {"const": "qwen3vl_8b"}, "seed": {"const": 2718}, "repeat_index": {"const": 1}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-qwen-s2718-r2"}, "model_id": {"const": "qwen3vl_8b"}, "seed": {"const": 2718}, "repeat_index": {"const": 2}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-qwen-s31415-r1"}, "model_id": {"const": "qwen3vl_8b"}, "seed": {"const": 31415}, "repeat_index": {"const": 1}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-qwen-s31415-r2"}, "model_id": {"const": "qwen3vl_8b"}, "seed": {"const": 31415}, "repeat_index": {"const": 2}}},
+        {"$ref": "#/$defs/qwenG15Call", "properties": {"call_id": {"const": "g15-qwen-original-s1729"}, "arm": {"const": "ORIGINAL"}}},
+        {"$ref": "#/$defs/qwenG15Call", "properties": {"call_id": {"const": "g15-qwen-mask-s1729"}, "arm": {"const": "MASK"}}},
+        {"$ref": "#/$defs/qwenG15Call", "properties": {"call_id": {"const": "g15-qwen-mask-correction-s1729"}, "arm": {"const": "MASK_CORRECTION"}}},
+        {"$ref": "#/$defs/qwenG15Call", "properties": {"call_id": {"const": "g15-qwen-oracle-clean-s1729"}, "arm": {"const": "ORACLE_CLEAN"}}},
+        {"$ref": "#/$defs/qwenG15Call", "properties": {"call_id": {"const": "g15-qwen-sham-benign-edit-s1729"}, "arm": {"const": "SHAM_BENIGN_EDIT"}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-mai-s1729-r1"}, "model_id": {"const": "mai_ui_8b"}, "seed": {"const": 1729}, "repeat_index": {"const": 1}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-mai-s1729-r2"}, "model_id": {"const": "mai_ui_8b"}, "seed": {"const": 1729}, "repeat_index": {"const": 2}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-mai-s2718-r1"}, "model_id": {"const": "mai_ui_8b"}, "seed": {"const": 2718}, "repeat_index": {"const": 1}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-mai-s2718-r2"}, "model_id": {"const": "mai_ui_8b"}, "seed": {"const": 2718}, "repeat_index": {"const": 2}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-mai-s31415-r1"}, "model_id": {"const": "mai_ui_8b"}, "seed": {"const": 31415}, "repeat_index": {"const": 1}}},
+        {"$ref": "#/$defs/g14Call", "properties": {"call_id": {"const": "g14-mai-s31415-r2"}, "model_id": {"const": "mai_ui_8b"}, "seed": {"const": 31415}, "repeat_index": {"const": 2}}},
+        {"$ref": "#/$defs/maiG15Call", "properties": {"call_id": {"const": "g15-mai-original-s1729"}, "arm": {"const": "ORIGINAL"}}},
+        {"$ref": "#/$defs/maiG15Call", "properties": {"call_id": {"const": "g15-mai-mask-s1729"}, "arm": {"const": "MASK"}}},
+        {"$ref": "#/$defs/maiG15Call", "properties": {"call_id": {"const": "g15-mai-mask-correction-s1729"}, "arm": {"const": "MASK_CORRECTION"}}},
+        {"$ref": "#/$defs/maiG15Call", "properties": {"call_id": {"const": "g15-mai-oracle-clean-s1729"}, "arm": {"const": "ORACLE_CLEAN"}}},
+        {"$ref": "#/$defs/maiG15Call", "properties": {"call_id": {"const": "g15-mai-sham-benign-edit-s1729"}, "arm": {"const": "SHAM_BENIGN_EDIT"}}}
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "arm": {"enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+    "call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "call_id", "phase", "model_id", "codec_id", "seed", "repeat_index",
+        "arm", "application_request", "diff", "mapping", "render_evidence"
+      ],
+      "properties": {
+        "call_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+        "phase": {"enum": ["G1_4_CANARY", "G1_5_CODEC"]},
+        "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+        "codec_id": {
+          "oneOf": [
+            {"enum": ["mobileworld.g1.history-codec.qwen-flat-progress", "mobileworld.g1.history-codec.mai-raw-replay"]},
+            {"type": "null"}
+          ]
+        },
+        "seed": {"enum": [1729, 2718, 31415]},
+        "repeat_index": {"type": ["integer", "null"], "minimum": 1, "maximum": 2},
+        "arm": {"oneOf": [{"$ref": "#/$defs/arm"}, {"type": "null"}]},
+        "application_request": {"type": "object"},
+        "diff": {"type": ["array", "null"]},
+        "mapping": {"type": ["object", "null"]},
+        "render_evidence": {
+          "oneOf": [{"$ref": "#/$defs/renderEvidence"}, {"type": "null"}]
+        }
+      }
+    },
+    "g14Call": {
+      "$ref": "#/$defs/call",
+      "properties": {
+        "phase": {"const": "G1_4_CANARY"},
+        "codec_id": {"type": "null"},
+        "repeat_index": {"type": "integer", "minimum": 1, "maximum": 2},
+        "arm": {"type": "null"},
+        "diff": {"type": "null"},
+        "mapping": {"type": "null"},
+        "render_evidence": {"type": "null"}
+      }
+    },
+    "g15Call": {
+      "$ref": "#/$defs/call",
+      "properties": {
+        "phase": {"const": "G1_5_CODEC"},
+        "seed": {"const": 1729},
+        "repeat_index": {"type": "null"},
+        "arm": {"$ref": "#/$defs/arm"},
+        "diff": {"type": "array"},
+        "mapping": {"type": "object"},
+        "render_evidence": {"$ref": "#/$defs/renderEvidence"}
+      }
+    },
+    "qwenG15Call": {
+      "$ref": "#/$defs/g15Call",
+      "properties": {
+        "model_id": {"const": "qwen3vl_8b"},
+        "codec_id": {"const": "mobileworld.g1.history-codec.qwen-flat-progress"}
+      }
+    },
+    "maiG15Call": {
+      "$ref": "#/$defs/g15Call",
+      "properties": {
+        "model_id": {"const": "mai_ui_8b"},
+        "codec_id": {"const": "mobileworld.g1.history-codec.mai-raw-replay"}
+      }
+    },
+    "renderEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_application_request_sha256", "rendered_application_request_sha256",
+        "diff_sha256", "mapping_sha256", "target_only_diff",
+        "source_mapping_reversible", "provider_invocation_allowed"
+      ],
+      "properties": {
+        "source_application_request_sha256": {"$ref": "#/$defs/sha256"},
+        "rendered_application_request_sha256": {"$ref": "#/$defs/sha256"},
+        "diff_sha256": {"$ref": "#/$defs/sha256"},
+        "mapping_sha256": {"$ref": "#/$defs/sha256"},
+        "target_only_diff": {"const": true},
+        "source_mapping_reversible": {"const": true},
+        "provider_invocation_allowed": {"const": false}
+      }
+    }
+  }
+}

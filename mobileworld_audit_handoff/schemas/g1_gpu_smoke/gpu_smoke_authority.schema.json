@@ -1,0 +1,406 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_gpu_smoke/gpu_smoke_authority.schema.json",
+  "title": "G1 D-034 non-formal GPU0 live-smoke authority",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "authority_id", "decision_id", "authorized_scope",
+    "authorized", "issued_at_utc", "expires_at_utc", "owner_uid", "gpu",
+    "endpoint", "model_order", "models", "outer_runtime", "private_runtime",
+    "client_runtime", "server_runtime", "bindings", "matrix", "policies",
+    "source", "network_namespace", "evidence_root", "runtime_scratch_root"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-authority/v1"},
+    "authority_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "decision_id": {"const": "D-034"},
+    "authorized_scope": {"const": "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"},
+    "authorized": {"const": true},
+    "issued_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "expires_at_utc": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "owner_uid": {"const": 0},
+    "gpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "physical_index", "uuid", "cuda_visible_devices", "shared", "exclusive",
+        "minimum_free_memory_bytes", "foreign_process_signaling_allowed"
+      ],
+      "properties": {
+        "physical_index": {"const": 0},
+        "uuid": {"const": "GPU-991ac45f-e9e9-1c25-590c-fb49ca752965"},
+        "cuda_visible_devices": {"const": "GPU-991ac45f-e9e9-1c25-590c-fb49ca752965"},
+        "shared": {"const": true},
+        "exclusive": {"const": false},
+        "minimum_free_memory_bytes": {"const": 68719476736},
+        "foreign_process_signaling_allowed": {"const": false}
+      }
+    },
+    "endpoint": {
+      "const": {
+        "origin": "http://127.0.0.1:18007",
+        "path": "/v1/chat/completions",
+        "health_path": "/health",
+        "host": "127.0.0.1",
+        "port": 18007
+      }
+    },
+    "model_order": {"const": ["qwen3vl_8b", "mai_ui_8b"]},
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["qwen3vl_8b", "mai_ui_8b"],
+      "properties": {
+        "qwen3vl_8b": {
+          "$ref": "#/$defs/model",
+          "properties": {
+            "snapshot_path": {"pattern": "^/(?:[^/]+/)*models--Qwen--Qwen3-VL-8B-Instruct/snapshots/0c351dd01ed87e9c1b53cbc748cba10e6187ff3b$"},
+            "repository": {"const": "Qwen/Qwen3-VL-8B-Instruct"},
+            "revision": {"const": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"},
+            "served_name": {"const": "Qwen3-VL-8B-Instruct"}
+          }
+        },
+        "mai_ui_8b": {
+          "$ref": "#/$defs/model",
+          "properties": {
+            "snapshot_path": {"pattern": "^/(?:[^/]+/)*models--Tongyi-MAI--MAI-UI-8B/snapshots/e00a0097abb9cc621cac5172d8c4809f0839c94e$"},
+            "repository": {"const": "Tongyi-MAI/MAI-UI-8B"},
+            "revision": {"const": "e00a0097abb9cc621cac5172d8c4809f0839c94e"},
+            "served_name": {"const": "MAI-UI-8B"}
+          }
+        }
+      }
+    },
+    "outer_runtime": {"$ref": "#/$defs/outerRuntime"},
+    "private_runtime": {"$ref": "#/$defs/privateRuntime"},
+    "client_runtime": {"$ref": "#/$defs/clientRuntime"},
+    "server_runtime": {"$ref": "#/$defs/serverRuntime"},
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "smoke_packet_sha256", "model_config_manifest_sha256",
+        "live_preparation_receipt_sha256", "g1_5_cpu_publication_sha256",
+        "runner_module_sha256", "runner_cli_sha256", "source_git_commit"
+      ],
+      "properties": {
+        "smoke_packet_sha256": {"$ref": "#/$defs/sha256"},
+        "model_config_manifest_sha256": {"const": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"},
+        "live_preparation_receipt_sha256": {"const": "4f3cbd2d0369288c7507b77c54766bf536b620156196df770c428891280b9819"},
+        "g1_5_cpu_publication_sha256": {"const": "cffd7f24bf09f2e18c012b2a96591064e8ba200378c7e9c920d6fdd8f068d018"},
+        "runner_module_sha256": {"$ref": "#/$defs/sha256"},
+        "runner_cli_sha256": {"$ref": "#/$defs/sha256"},
+        "source_git_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "matrix": {
+      "const": {
+        "total_calls": 22,
+        "g1_4_calls": 12,
+        "g1_5_calls": 10,
+        "replay_seeds": [1729, 2718, 31415],
+        "repeats_per_seed": 2,
+        "g1_5_seed": 1729,
+        "arms": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]
+      }
+    },
+    "policies": {
+      "const": {
+        "hf_hub_offline": true,
+        "transformers_offline": true,
+        "local_files_only": true,
+        "loopback_only": true,
+        "sdk_hidden_retries": 0,
+        "stream": false,
+        "sequential_models": true,
+        "model_co_residency_allowed": false,
+        "generated_action_execution_allowed": false,
+        "replay_allowed": false,
+        "backend_restore_allowed": false,
+        "mobileworld_action_allowed": false,
+        "broad_process_signaling_allowed": false
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worktree_root", "source_root", "git_path", "git_sha256",
+        "head_commit", "critical_files", "bootstrap_manifest_sha256",
+        "source_tree_sha256", "source_tree_entry_count", "source_tree_byte_count",
+        "outer_bootstrap_code_sha256", "outer_bootstrap_code_byte_count"
+      ],
+      "properties": {
+        "worktree_root": {"$ref": "#/$defs/absolutePath"},
+        "source_root": {"$ref": "#/$defs/absolutePath"},
+        "git_path": {"const": "/usr/bin/git"},
+        "git_sha256": {"const": "587ef21868c948b883993e23209b86a72a6ddc06aab1545c697ffc31075acd4a"},
+        "head_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "bootstrap_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "source_tree_entry_count": {"type": "integer", "minimum": 1},
+        "source_tree_byte_count": {"type": "integer", "minimum": 1},
+        "outer_bootstrap_code_sha256": {"$ref": "#/$defs/sha256"},
+        "outer_bootstrap_code_byte_count": {"type": "integer", "minimum": 1},
+        "critical_files": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mobile_world_init", "gpu_live_smoke", "causal_replay_contracts",
+            "causal_replay_core", "causal_replay_registry", "live_preparation",
+            "history_codecs", "runner_cli"
+          ],
+          "properties": {
+            "mobile_world_init": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/__init__.py"}}},
+            "gpu_live_smoke": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/offline/gpu_live_smoke.py"}}},
+            "causal_replay_contracts": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/offline/causal_replay/contracts.py"}}},
+            "causal_replay_core": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/offline/causal_replay/core.py"}}},
+            "causal_replay_registry": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/offline/causal_replay/registry.py"}}},
+            "live_preparation": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/offline/causal_replay_runner/live_preparation.py"}}},
+            "history_codecs": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/offline/g1_history_codecs/codecs.py"}}},
+            "runner_cli": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/scripts/run_g1_gpu_live_smoke.py"}}}
+          }
+        }
+      }
+    },
+    "network_namespace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required", "implementation", "host_owner_uid", "host_owner_gid",
+        "inside_owner_uid", "inside_owner_gid", "uid_map_line", "gid_map_line",
+        "env_path", "env_sha256", "unshare_path", "unshare_sha256",
+        "ip_path", "ip_sha256", "setpriv_path", "setpriv_sha256",
+        "nvidia_smi_path", "nvidia_smi_sha256", "nvidia_smi_byte_count",
+        "pre_namespace_environment", "launcher_environment", "expected_interfaces", "loopback_up_required",
+        "default_route_allowed", "external_network_allowed", "python_pycache_prefix",
+        "fd_close_upper_bound_exclusive", "outer_fd_closure_receipt_sha256"
+      ],
+      "properties": {
+        "required": {"const": true},
+        "implementation": {"const": "LINUX_USER_NETNS_MAP_ROOT_V1"},
+        "host_owner_uid": {"const": 1035},
+        "host_owner_gid": {"const": 1035},
+        "inside_owner_uid": {"const": 0},
+        "inside_owner_gid": {"const": 0},
+        "uid_map_line": {"const": "0 1035 1"},
+        "gid_map_line": {"const": "0 1035 1"},
+        "env_path": {"const": "/usr/bin/env"},
+        "env_sha256": {"const": "854a8d7f147ff1bf3562edd1aa0b2f2ac28ef432811533f03c43dc9162fe3af3"},
+        "unshare_path": {"const": "/usr/bin/unshare"},
+        "unshare_sha256": {"const": "72a34e6ba98a59f1da0c7b4d8c9722b746b5ade54e4d7e8de8e519c2993858ad"},
+        "ip_path": {"const": "/usr/bin/ip"},
+        "ip_sha256": {"const": "40cd6fd071451ae104d23783b6ae22efff4f1099167d73b41ce900fc49c8abaa"},
+        "setpriv_path": {"const": "/usr/bin/setpriv"},
+        "setpriv_sha256": {"const": "960ac94d6b4d095d67d44b00b9b23b3f5e5e609d4539d2223c7c70ed559108ba"},
+        "nvidia_smi_path": {"const": "/usr/bin/nvidia-smi"},
+        "nvidia_smi_sha256": {"const": "cd4dc7637cd3ef30002cbf97afcc66f111eb90c0c615f37e264c392242eb51b6"},
+        "nvidia_smi_byte_count": {"const": 1243808},
+        "pre_namespace_environment": {
+          "const": {"LC_CTYPE": "C.UTF-8"}
+        },
+        "launcher_environment": {"$ref": "#/$defs/launcherEnvironment"},
+        "expected_interfaces": {"const": ["lo"]},
+        "loopback_up_required": {"const": true},
+        "default_route_allowed": {"const": false},
+        "external_network_allowed": {"const": false},
+        "python_pycache_prefix": {"const": "/dev/null"},
+        "fd_close_upper_bound_exclusive": {"const": 1048576},
+        "outer_fd_closure_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "evidence_root": {"$ref": "#/$defs/absolutePath"},
+    "runtime_scratch_root": {"$ref": "#/$defs/absolutePath"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$"
+    },
+    "sourceFileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sitePackagesPath": {
+      "allOf": [
+        {"$ref": "#/$defs/absolutePath"},
+        {"pattern": "/site-packages/(?:client|server)$"}
+      ]
+    },
+    "pythonFlags": {
+      "const": ["-I", "-S", "-B", "-X", "pycache_prefix=/dev/null"]
+    },
+    "outerRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python_path", "python_resolved_path", "python_sha256", "python_byte_count",
+        "python_version", "python_flags", "stdlib_root", "stdlib_tree_sha256",
+        "stdlib_tree_entry_count", "stdlib_tree_byte_count", "required_owner_uid",
+        "required_owner_gid", "directory_mode", "regular_mode", "executable_mode",
+        "symlinks_allowed", "hardlinks_allowed"
+      ],
+      "properties": {
+        "python_path": {"const": "/usr/bin/python3.10"},
+        "python_resolved_path": {"const": "/usr/bin/python3.10"},
+        "python_sha256": {"const": "d6bca2b84e73c7775a0dd5e6a76899cfe4ee62863d7c8f88513811d1fda23f49"},
+        "python_byte_count": {"const": 5937704},
+        "python_version": {"const": "3.10.12"},
+        "python_flags": {"$ref": "#/$defs/pythonFlags"},
+        "stdlib_root": {"const": "/usr/lib/python3.10"},
+        "stdlib_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "stdlib_tree_entry_count": {"type": "integer", "minimum": 1},
+        "stdlib_tree_byte_count": {"type": "integer", "minimum": 1},
+        "required_owner_uid": {"const": 0},
+        "required_owner_gid": {"const": 0},
+        "directory_mode": {"const": 493},
+        "regular_mode": {"const": 420},
+        "executable_mode": {"const": 493},
+        "symlinks_allowed": {"const": true},
+        "hardlinks_allowed": {"const": true}
+      }
+    },
+    "privateRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root", "python_path", "python_resolved_path", "python_sha256",
+        "python_byte_count", "python_version", "python_flags", "stdlib_root",
+        "tree_sha256", "tree_entry_count", "tree_byte_count", "owner_uid",
+        "owner_gid", "directory_mode", "regular_mode", "executable_mode",
+        "symlinks_allowed", "hardlinks_allowed"
+      ],
+      "properties": {
+        "root": {"$ref": "#/$defs/absolutePath"},
+        "python_path": {"$ref": "#/$defs/absolutePath"},
+        "python_resolved_path": {"$ref": "#/$defs/absolutePath"},
+        "python_sha256": {"$ref": "#/$defs/sha256"},
+        "python_byte_count": {"type": "integer", "minimum": 1},
+        "python_version": {"const": "3.12.12"},
+        "python_flags": {"$ref": "#/$defs/pythonFlags"},
+        "stdlib_root": {"$ref": "#/$defs/absolutePath"},
+        "tree_sha256": {"$ref": "#/$defs/sha256"},
+        "tree_entry_count": {"type": "integer", "minimum": 1},
+        "tree_byte_count": {"type": "integer", "minimum": 1},
+        "owner_uid": {"const": 0},
+        "owner_gid": {"const": 0},
+        "directory_mode": {"const": 320},
+        "regular_mode": {"const": 256},
+        "executable_mode": {"const": 320},
+        "symlinks_allowed": {"const": false},
+        "hardlinks_allowed": {"const": false}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_path", "snapshot_tree_sha256", "snapshot_tree_entry_count",
+        "snapshot_tree_byte_count", "repository", "revision", "served_name"
+      ],
+      "properties": {
+        "snapshot_path": {"$ref": "#/$defs/absolutePath"},
+        "snapshot_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "snapshot_tree_entry_count": {"type": "integer", "minimum": 1},
+        "snapshot_tree_byte_count": {"type": "integer", "minimum": 1},
+        "repository": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "served_name": {"type": "string", "minLength": 1}
+      }
+    },
+    "clientRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python_path", "python_resolved_path", "python_sha256", "site_packages_path",
+        "openai_version", "site_packages_tree_sha256", "site_packages_tree_entry_count",
+        "site_packages_tree_byte_count", "site_packages_owner_uid",
+        "site_packages_owner_gid", "site_packages_directory_mode",
+        "site_packages_regular_mode", "site_packages_executable_mode",
+        "site_packages_symlinks_allowed", "site_packages_hardlinks_allowed"
+      ],
+      "properties": {
+        "python_path": {"$ref": "#/$defs/absolutePath"},
+        "python_resolved_path": {"$ref": "#/$defs/absolutePath"},
+        "python_sha256": {"$ref": "#/$defs/sha256"},
+        "site_packages_path": {"$ref": "#/$defs/sitePackagesPath"},
+        "openai_version": {"const": "1.106.1"},
+        "site_packages_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "site_packages_tree_entry_count": {"type": "integer", "minimum": 1},
+        "site_packages_tree_byte_count": {"type": "integer", "minimum": 1},
+        "site_packages_owner_uid": {"const": 0},
+        "site_packages_owner_gid": {"const": 0},
+        "site_packages_directory_mode": {"const": 320},
+        "site_packages_regular_mode": {"const": 256},
+        "site_packages_executable_mode": {"const": 320},
+        "site_packages_symlinks_allowed": {"const": false},
+        "site_packages_hardlinks_allowed": {"const": false}
+      }
+    },
+    "serverRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python_path", "python_resolved_path", "python_sha256", "site_packages_path",
+        "openai_version", "vllm_version", "torch_version", "site_packages_tree_sha256",
+        "site_packages_tree_entry_count", "site_packages_tree_byte_count",
+        "site_packages_owner_uid", "site_packages_owner_gid",
+        "site_packages_directory_mode", "site_packages_regular_mode",
+        "site_packages_executable_mode", "site_packages_symlinks_allowed",
+        "site_packages_hardlinks_allowed"
+      ],
+      "properties": {
+        "python_path": {"$ref": "#/$defs/absolutePath"},
+        "python_resolved_path": {"$ref": "#/$defs/absolutePath"},
+        "python_sha256": {"$ref": "#/$defs/sha256"},
+        "site_packages_path": {"$ref": "#/$defs/sitePackagesPath"},
+        "openai_version": {"const": "2.15.0"},
+        "vllm_version": {"const": "0.11.0"},
+        "torch_version": {"const": "2.8.0+cu126"},
+        "site_packages_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "site_packages_tree_entry_count": {"type": "integer", "minimum": 1},
+        "site_packages_tree_byte_count": {"type": "integer", "minimum": 1},
+        "site_packages_owner_uid": {"const": 0},
+        "site_packages_owner_gid": {"const": 0},
+        "site_packages_directory_mode": {"const": 320},
+        "site_packages_regular_mode": {"const": 256},
+        "site_packages_executable_mode": {"const": 320},
+        "site_packages_symlinks_allowed": {"const": false},
+        "site_packages_hardlinks_allowed": {"const": false}
+      }
+    },
+    "launcherEnvironment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "PATH", "CUDA_VISIBLE_DEVICES", "LD_LIBRARY_PATH", "HOME", "HF_HOME",
+        "XDG_CACHE_HOME", "TORCH_HOME", "TRITON_CACHE_DIR", "VLLM_CACHE_ROOT",
+        "TMPDIR", "PYTHONNOUSERSITE", "LC_ALL", "LANG",
+        "GPU_SMOKE_OUTER_FD_CLOSURE_SHA256"
+      ],
+      "properties": {
+        "PATH": {"const": "/usr/bin:/bin"},
+        "CUDA_VISIBLE_DEVICES": {"const": "GPU-991ac45f-e9e9-1c25-590c-fb49ca752965"},
+        "LD_LIBRARY_PATH": {"const": ""},
+        "HOME": {"$ref": "#/$defs/absolutePath"},
+        "HF_HOME": {"$ref": "#/$defs/absolutePath"},
+        "XDG_CACHE_HOME": {"$ref": "#/$defs/absolutePath"},
+        "TORCH_HOME": {"$ref": "#/$defs/absolutePath"},
+        "TRITON_CACHE_DIR": {"$ref": "#/$defs/absolutePath"},
+        "VLLM_CACHE_ROOT": {"$ref": "#/$defs/absolutePath"},
+        "TMPDIR": {"$ref": "#/$defs/absolutePath"},
+        "PYTHONNOUSERSITE": {"const": "1"},
+        "LC_ALL": {"const": "C.UTF-8"},
+        "LANG": {"const": "C.UTF-8"},
+        "GPU_SMOKE_OUTER_FD_CLOSURE_SHA256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

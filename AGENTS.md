@@ -22,21 +22,22 @@ Before changing code, read these files completely:
 14. `mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
 15. `mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
 16. `mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
-17. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
-18. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-19. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-20. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-21. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
-22. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-23. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
-24. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-25. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
-26. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
-27. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
-28. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
-29. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
-30. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
-31. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
+17. `mobileworld_audit_handoff/G1_GPU_LIVE_SMOKE_CONTRACT_V1.md`
+18. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
+19. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
+20. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
+21. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+22. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+23. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+24. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+25. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+26. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
+27. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
+28. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
+29. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
+30. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
+31. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
+32. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
 
 The historical `replay_capsule.schema.json`, `capsule_manifest.schema.json`, and
 `capsule_integrity.schema.json` remain byte-frozen v1 references. Amendment 1
@@ -67,6 +68,8 @@ and caller-injected response records, injected-only capacity assessment, schemas
 and CPU tests. It does not authorize a client, network, subprocess, GPU probe or
 use, model load, provider send, replay, or action. All live entrypoints remain
 mechanically disabled pending a new owner authorization and downstream seals.
+D-034 is that new authority only for its separately gated synthetic smoke
+entrypoint; it does not enable or weaken any formal entrypoint covered by D-026.
 
 Active authorized scope: ALE-323 / G1.5 has a CPU-only History Codec checkpoint
 defined by `G1_5_DECISION_LOG.md` D-028 and
@@ -74,8 +77,28 @@ defined by `G1_5_DECISION_LOG.md` D-028 and
 and MAI raw-replay extraction/rendering, exact external curated-span bindings,
 secret-free fixtures, conformance/schema tests, and fail-closed G1.4 interface
 integration. Both codecs must remain `live_ready=false`; the exact 10-call
-live-smoke matrix is only recorded in the unified GPU backlog and is not
-authorized. ALE-323 remains incomplete until that separately authorized proof.
+live-smoke matrix is not authorized by D-028 alone. D-034 now separately
+authorizes only that exact submatrix inside the shared 22-call non-formal smoke
+described below. ALE-323 remains incomplete until the D-034 evidence closure
+passes.
+
+`G1_4_DECISION_LOG.md` and `G1_5_DECISION_LOG.md` D-034 plus
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` authorize exactly one owner-bound,
+secret-free, synthetic non-case, loopback-only engineering smoke on shared
+physical GPU 0 / UUID `GPU-991ac45f-e9e9-1c25-590c-fb49ca752965`.
+The free-memory floor is exactly 64 GiB and must be rechecked before each model
+start; insufficient capacity blocks without touching another process.
+The exact matrix is 12 G1.4 canaries plus 10 G1.5 codec calls, with Qwen then
+full guarded release then MAI, zero SDK retries, no streaming, no extra calls,
+and no generated action execution or feedback. Only processes proven by the
+batch's exact PID/UID/start-time/PGID/SID/model/GPU/port launch receipt may be
+stopped. For a foreign PID, only its current UID and `/proc/<pid>/stat` start
+time may be read for shared-card invariance/PID-reuse protection; it must never
+be signaled, modified, or inspected through `cmdline`, `exe`, `environ`, `fd`,
+`cwd`, `mem`, maps, stack, or any other `/proc` surface.
+The current writable model cache is acceptable only with complete pre/post tree
+hash identity and no formal or TOCTOU-free immutability claim. All formal
+G1.3/G1.4/G1.5/G1.6 gates and capsule guard values remain unchanged.
 
 Active authorized scope: ALE-324 / G1.6 is the CPU-only, human-in-the-loop gold
 curation workspace defined by `G1_6_DECISION_LOG.md` D-029 and
@@ -115,13 +138,14 @@ material. The publication is non-human, non-formal, cannot write or advance eith
 journal, and must keep every review/export/admission/promotion/replay authority false.
 
 Collector v1 remains event-sourced, lossless, label-free, zero-intervention,
-and byte-immutable. Do not invoke the target actor model or any project provider/client, use an
+and byte-immutable. Outside the exact D-034 smoke-only exception above, do not invoke the target actor model or any project provider/client, use an
 external network or a GPU, load/serve project model weights, execute a MobileWorld/generated
 GUI/tool/action, restore a backend, run a deterministic prefix or live replay, generate a treatment
 response, automatically decide claim validity or choose a formal intervention, or implement runtime
 Sentinel behavior. The deterministic fake-provider conformance path, provider-free G1.5 CPU
 checkpoint, explicitly human-authored G1.6 CPU workspace, the already authorized three-stream
-D-031 offline candidate campaign, and the isolated D-033 AI-only research publication are the only
+D-031 offline candidate campaign, the isolated D-033 AI-only research publication, and the exact
+D-034 owner-bound GPU0 loopback smoke are the only
 permitted substitutes. D-031 is the sole candidate-suggestion exception: its outputs remain
 untrusted and require individual human decisions, and the
 annotation website itself must never invoke Codex or another model/provider.
@@ -132,12 +156,15 @@ site bound to loopback with same-origin/CSRF checks and no remote assets. D-030
 also permits only the owner's single-port SSH local forward from client
 `127.0.0.1:8766` to server `127.0.0.1:8766`; reverse/dynamic forwarding,
 wildcard binds, shared proxies, and external hosting remain forbidden.
+D-034 separately permits only the hash-bound local vLLM health/chat sockets on
+`127.0.0.1:18007` during its guarded service lifecycles; it does not permit an
+external endpoint, wildcard bind, remote provider, or any other listener.
 Human clicks and form entry inside that annotation site are authorized curation
 inputs; they must never be converted into or executed as a MobileWorld action.
 Store real capsule, collection, and
 replay data outside the Git repository. Preserve unrelated user changes and
 record server findings and completed phases in
 `mobileworld_audit_handoff/STATUS.md`. Do not mark ALE-322 or ALE-323 complete
-until separately authorized live/GPU proofs satisfy their remaining acceptance
+until the exact D-034 live/GPU smoke proof satisfies its remaining acceptance
 gates, and do not mark ALE-324 complete before all 190 units are independently
 reviewed, adjudicated where required, formally exported, validated, and sealed.

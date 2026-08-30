@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_gpu_smoke/gpu_smoke_lifecycle.schema.json",
+  "title": "G1 D-034 guarded model-service lifecycle receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "model_ordinal", "model_id",
+    "started_at_utc", "finished_at_utc", "status", "launch_plan_sha256",
+    "guard", "readiness", "gpu_during", "cleanup", "gpu_after",
+    "snapshot_pre", "snapshot_post", "runtime_scratch_pre",
+    "runtime_scratch_post", "server_log", "server_environment",
+    "immediate_launch_preflight", "foreign_process_target_count",
+    "broad_signal_used"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-lifecycle/v1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "model_ordinal": {"enum": [1, 2]},
+    "model_id": {"enum": ["qwen3vl_8b", "mai_ui_8b"]},
+    "started_at_utc": {"$ref": "#/$defs/utc"},
+    "finished_at_utc": {"$ref": "#/$defs/utc"},
+    "status": {"enum": ["PASS", "FAIL"]},
+    "launch_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "guard": {"type": "object"},
+    "readiness": {"type": ["object", "null"]},
+    "gpu_during": {"type": ["object", "null"]},
+    "cleanup": {"type": ["object", "null"]},
+    "gpu_after": {"type": ["object", "null"]},
+    "snapshot_pre": {"$ref": "#/$defs/contentRef"},
+    "snapshot_post": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "runtime_scratch_pre": {"$ref": "#/$defs/contentRef"},
+    "runtime_scratch_post": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "server_log": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "server_environment": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "immediate_launch_preflight": {
+      "oneOf": [{"$ref": "#/$defs/contentRef"}, {"type": "null"}]
+    },
+    "foreign_process_target_count": {"const": 0},
+    "broad_signal_used": {"const": false}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"model_ordinal": {"const": 1}}, "required": ["model_ordinal"]},
+      "then": {"properties": {"model_id": {"const": "qwen3vl_8b"}}},
+      "else": {"properties": {"model_id": {"const": "mai_ui_8b"}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "PASS"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "readiness": {"type": "object"},
+          "gpu_during": {"type": "object"},
+          "cleanup": {"type": "object"},
+          "gpu_after": {"type": "object"},
+          "snapshot_post": {"$ref": "#/$defs/contentRef"},
+          "runtime_scratch_post": {"$ref": "#/$defs/contentRef"},
+          "server_log": {"$ref": "#/$defs/contentRef"},
+          "server_environment": {"$ref": "#/$defs/contentRef"},
+          "immediate_launch_preflight": {"$ref": "#/$defs/contentRef"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "utc": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "contentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "media_type"],
+      "properties": {
+        "relative_path": {
+          "type": "string",
+          "pattern": "^objects/sha256/[0-9a-f]{2}/[0-9a-f]{64}$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

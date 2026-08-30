@@ -21,21 +21,22 @@
 17. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
 18. `G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
 19. `G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
-20. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
-21. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-22. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-23. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-24. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
-25. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-26. `G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
-27. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-28. `G1_SENTINEL_MVP_MIGRATION.md`
-29. `g1/registry.lock.v1.json`
-30. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-31. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-32. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-33. `schemas/g1_3/field_visibility.schema.json`
-34. `schemas/g1_3/capsule_exclusion.schema.json`
+20. `G1_GPU_LIVE_SMOKE_CONTRACT_V1.md`
+21. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
+22. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
+23. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
+24. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+25. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+26. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+27. `G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+28. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+29. `G1_SENTINEL_MVP_MIGRATION.md`
+30. `g1/registry.lock.v1.json`
+31. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+32. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+33. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+34. `schemas/g1_3/field_visibility.schema.json`
+35. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -69,13 +70,29 @@ live/GPU proof 延后并需新授权。
 容量评估、schema 和 CPU tests。它不授权 client、network、subprocess、GPU probe/use、模型
 加载、provider send、replay 或 action；所有 live entrypoint 在 owner 新授权与 downstream seal
 齐备前继续机械禁用。
+D-034 是该新授权中唯一的 synthetic smoke 例外；它只启用独立的 smoke-only entrypoint，不能
+启用或削弱 D-026 覆盖的任何 formal entrypoint。
 
 `G1_5_DECISION_LOG.md` D-028 现只授权 **ALE-323 / G1.5 CPU-only History Codec
 checkpoint**：Qwen flat-progress 与 MAI raw-replay 的纯 request extraction/rendering、外部注入的
 精确 curated-span binding、五 arm conformance、secret-free fixture/schema/golden diff，以及与
 G1.4 runner 的 fail-closed interface integration。两个 Codec 均须保持 `live_ready=false`；
-2 codecs × 5 arms 的 10-call live smoke 仅进入统一 GPU backlog，当前不授权执行。不得把该
-checkpoint 冒充 live proof、formal replay 或 G1.6 curation。
+2 codecs × 5 arms 的 10-call live smoke 不由 D-028 单独授权；D-034 现在只允许它作为下述
+exact 22-call 非正式 batch 的子矩阵执行。不得把 CPU checkpoint 或 D-034 smoke 冒充 formal
+replay、formal G1 data 或 G1.6 curation。
+
+`G1_4_DECISION_LOG.md`、`G1_5_DECISION_LOG.md` D-034 与
+`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 只授权一个 owner-bound、secret-free、synthetic non-case、
+loopback-only engineering smoke：共享物理 GPU 0 / UUID
+`GPU-991ac45f-e9e9-1c25-590c-fb49ca752965` 上运行 12 个 G1.4 canary 加 10 个 G1.5 codec calls。
+free-memory floor 固定为 64 GiB，Qwen/MAI 各自启动前都必须重查；不足只能阻断，不能清理他人。
+必须 Qwen 完整运行并 guarded release 后才启动 MAI；SDK retry=0、non-stream、无额外调用，所有
+返回 action 都只能是 inert evidence。只可停止与 batch launch receipt 的
+PID/UID/start-time/PGID/SID/model/GPU/port 全部匹配的己方进程。对 foreign PID 唯一允许读取的是
+当前 UID 与 `/proc/<pid>/stat` start time，用于共享卡 invariance/PID reuse 防护；不得 signal、修改，
+也不得读取其 `cmdline`、`exe`、`environ`、`fd`、`cwd`、`mem`、maps、stack 或其他 `/proc` 面。
+可写 model cache 仅以每模型 pre/post 完整树 hash 全等获得非正式资格，
+不形成 formal 或 TOCTOU-free immutability claim。全部 formal G1.3/G1.4/G1.5/G1.6 gates 保持不变。
 
 `G1_6_DECISION_LOG.md` D-029 与
 `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md` 授权 **ALE-324 / G1.6
@@ -132,12 +149,14 @@ formal journal，所有 review/export/admission/promotion/replay authority 必�
 - 用 HTTP 200、截图变化或 task failure 自动等同动作语义失败；
 - 把 API key、Authorization header 或其他 secrets 写入日志；
 - 为了匹配本设计而破坏服务器已有用户修改或强制 reset 工作树。
-- 调用 target actor model 或任何 project provider/client、发起外部网络请求、使用 GPU、
+- 除 D-034 canonical contract 的 exact smoke-only 例外外，调用 target actor model 或任何
+  project provider/client、发起外部网络请求、使用 GPU、
   加载/服务 project model weights、执行 MobileWorld/generated GUI/tool/action、backend
   restore、prefix 或 live replay、生成 treatment response、自动决定 claim validity、自动选择
   formal intervention，或开始 G1.7+；只允许无网络的确定性 fake-provider conformance、
-  provider-free G1.5 CPU checkpoint、D-029 限定的人工 G1.6 CPU workspace，以及 D-031 已明确
-  授权的三路离线 Codex 候选 campaign，以及隔离的 D-033 AI-only research publication。
+  provider-free G1.5 CPU checkpoint、D-029 限定的人工 G1.6 CPU workspace、D-031 已明确
+  授权的三路离线 Codex 候选 campaign、隔离的 D-033 AI-only research publication，以及
+  D-034 exact owner-bound GPU0 loopback smoke。
   D-031 是唯一 candidate-suggestion 例外；输出仍不可信且
   必须逐项人审，annotation website 自身不得调用 Codex 或任何 model/provider；
 - D-033 是唯一额外的 AI-only semantic-labeling 例外，只能产生与 human journals 隔离、不可晋升、
@@ -146,6 +165,8 @@ formal journal，所有 review/export/admission/promotion/replay authority 必�
   强制 same-origin/CSRF 的 annotation site；D-030 只额外允许 owner 的单端口 SSH local forward
   从 client `127.0.0.1:8766` 到 server `127.0.0.1:8766`，禁止 reverse/dynamic forwarding、
   wildcard bind、shared proxy 或 remote hosting；
+- D-034 只额外允许其 hash-bound vLLM lifecycle 在 `127.0.0.1:18007` 使用 health/chat socket；
+  external endpoint、wildcard bind、remote provider 与其他 listener 继续禁止；
 - annotation browser 内的人类点击/表单输入是获准的 curation 输入，不得转成或执行为
   MobileWorld action；
 - 将 G1 label、capsule metadata、visibility classification 或 transformation decision 写回
@@ -166,10 +187,12 @@ captured natural action 当作 replay 必须复现的结果，也不得将 futur
 只有通过 ALE-321 的 capsule 一一对应、rehydration/hash、exact-request、target resolution、
 visibility/future-leakage、稳定 exclusion 和 deterministic double-build 验收，并在 `STATUS.md`
 记录 commit、命令、测试结果、外部 publication 与已知限制后，才可宣称 G1.3 完成。
-G1.4 CPU checkpoint 必须单独记录未完成的 live/GPU 验收项，不得将 ALE-322 标记为完成。
-G1.5 CPU checkpoint 也必须记录精确 10-call live-smoke backlog，不得将 ALE-323 标记为完成。
+G1.4 CPU checkpoint 必须单独记录未完成的 live/GPU 验收项；D-034 exact evidence closure 未
+PASS 前不得将 ALE-322 标记为完成。G1.5 CPU checkpoint 也必须保留精确 10-call 子矩阵；D-034
+exact evidence closure 未 PASS 前不得将 ALE-323 标记为完成。
 G1.6 workspace checkpoint 不能冒充 gold publication；只有 190 单元双盲 review、必要 adjudication、
 formal export/validation/admission/seal 全部完成后才可将 ALE-324 标记为完成。
 任何 target-actor/project-provider/external-network/GPU/MobileWorld-generated-GUI/action/
-live-replay 仍需另行授权；D-029 owner-started loopback annotation site/human curation clicks
-与 D-031 已冻结的离线候选 campaign 是现有窄幅例外。不得把凭据写入代码或本目录。
+live-replay 仍需另行授权；D-029 owner-started loopback annotation site/human curation clicks、
+D-031 已冻结的离线候选 campaign 与 D-034 exact GPU0 smoke 是现有窄幅例外。不得把凭据写入
+代码或本目录。

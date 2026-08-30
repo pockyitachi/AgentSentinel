@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_gpu_smoke/gpu_smoke_owned_command.schema.json",
+  "title": "G1 D-034 pidfd-owned auxiliary-command receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "command", "command_sha256", "executable_path",
+    "timeout_milliseconds", "stdout_byte_cap", "stderr_byte_cap",
+    "stdout_byte_count", "stderr_byte_count", "stdout_sha256", "stderr_sha256",
+    "initial_pidfd_acquired", "launch_gate_identity", "launch_gate_code_sha256",
+    "launch_gate_released_after_identity_proof", "target_executable_path",
+    "target_executable_sha256", "descendant_policy", "observed_descendant_count",
+    "observed_descendant_identities", "descendant_census_max_interval_milliseconds",
+    "completion_reason", "returncode", "signal_trace", "release_proven",
+    "numeric_pid_signal_count", "popen_kill_count", "popen_send_signal_count",
+    "communicate_timeout_count"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-owned-command/v1"},
+    "command": {
+      "type": "array", "minItems": 1,
+      "prefixItems": [{"type": "string", "pattern": "^/"}],
+      "items": {"type": "string", "minLength": 1}
+    },
+    "command_sha256": {"$ref": "#/$defs/sha256"},
+    "executable_path": {"type": "string", "pattern": "^/"},
+    "timeout_milliseconds": {"type": "integer", "minimum": 1, "maximum": 600000},
+    "stdout_byte_cap": {"type": "integer", "minimum": 1, "maximum": 67108864},
+    "stderr_byte_cap": {"type": "integer", "minimum": 1, "maximum": 67108864},
+    "stdout_byte_count": {"type": "integer", "minimum": 0, "maximum": 67108864},
+    "stderr_byte_count": {"type": "integer", "minimum": 0, "maximum": 67108864},
+    "stdout_sha256": {"$ref": "#/$defs/sha256"},
+    "stderr_sha256": {"$ref": "#/$defs/sha256"},
+    "initial_pidfd_acquired": {"type": "boolean"},
+    "launch_gate_identity": {
+      "oneOf": [{"$ref": "#/$defs/processIdentity"}, {"type": "null"}]
+    },
+    "launch_gate_code_sha256": {
+      "const": "70c01194e4ed6ad7cf54a5ffb0caa72bb9d8fa1694544665d53707b90279b061"
+    },
+    "launch_gate_released_after_identity_proof": {"type": "boolean"},
+    "target_executable_path": {"type": "string", "pattern": "^/"},
+    "target_executable_sha256": {
+      "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+    },
+    "descendant_policy": {"const": "FORBIDDEN"},
+    "observed_descendant_count": {"type": "integer", "minimum": 0},
+    "observed_descendant_identities": {
+      "type": "array", "items": {"$ref": "#/$defs/processIdentity"}
+    },
+    "descendant_census_max_interval_milliseconds": {"const": 10},
+    "completion_reason": {
+      "enum": [
+        "POPEN_FAILED", "INITIAL_PIDFD_UNAVAILABLE", "EXITED_BEFORE_PIDFD_OPEN",
+        "ACQUISITION_FAILURE", "EXITED_BEFORE_IDENTITY_CAPTURE", "EXITED",
+        "TIMEOUT", "STDOUT_LIMIT", "STDERR_LIMIT", "UNEXPECTED_DESCENDANT",
+        "INTERNAL_FAILURE"
+      ]
+    },
+    "returncode": {"type": ["integer", "null"]},
+    "signal_trace": {
+      "type": "array", "items": {"$ref": "#/$defs/signalTraceEntry"}
+    },
+    "release_proven": {"type": "boolean"},
+    "numeric_pid_signal_count": {"const": 0},
+    "popen_kill_count": {"const": 0},
+    "popen_send_signal_count": {"const": 0},
+    "communicate_timeout_count": {"const": 0}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"launch_gate_released_after_identity_proof": {"const": true}},
+        "required": ["launch_gate_released_after_identity_proof"]
+      },
+      "then": {
+        "properties": {
+          "initial_pidfd_acquired": {"const": true},
+          "launch_gate_identity": {"$ref": "#/$defs/processIdentity"},
+          "target_executable_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"completion_reason": {"const": "EXITED"}},
+        "required": ["completion_reason"]
+      },
+      "then": {
+        "properties": {
+          "returncode": {"type": "integer"},
+          "release_proven": {"const": true},
+          "observed_descendant_count": {"const": 0},
+          "observed_descendant_identities": {"maxItems": 0},
+          "signal_trace": {"maxItems": 0}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "processIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uid", "pid", "ppid", "pgid", "sid", "starttime_ticks",
+        "executable_path", "executable_sha256", "argv", "argv_sha256"
+      ],
+      "properties": {
+        "uid": {"type": "integer", "minimum": 0},
+        "pid": {"type": "integer", "minimum": 2},
+        "ppid": {"type": "integer", "minimum": 0},
+        "pgid": {"type": "integer", "minimum": 1},
+        "sid": {"type": "integer", "minimum": 1},
+        "starttime_ticks": {"type": "integer", "minimum": 1},
+        "executable_path": {"type": "string", "pattern": "^/"},
+        "executable_sha256": {"$ref": "#/$defs/sha256"},
+        "argv": {
+          "type": "array", "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "argv_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "signalTraceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence", "pid", "starttime_ticks", "signal", "state", "signal_api",
+        "ownership", "reason", "scope"
+      ],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "pid": {"type": "integer", "minimum": 2},
+        "starttime_ticks": {"type": ["integer", "null"], "minimum": 1},
+        "signal": {"const": "SIGKILL"},
+        "state": {
+          "enum": ["INTENDED", "IDENTITY_REVALIDATED", "SENT", "EXITED_BEFORE_SIGNAL"]
+        },
+        "signal_api": {"const": "PIDFD"},
+        "ownership": {"const": "RECORDED_OWN_ACQUISITION"},
+        "reason": {
+          "enum": [
+            "TIMEOUT", "STDOUT_LIMIT", "STDERR_LIMIT", "UNEXPECTED_DESCENDANT",
+            "ACQUISITION_FAILURE_AFTER_GATE_RELEASE", "INTERNAL_FAILURE"
+          ]
+        },
+        "scope": {"const": "OWNED_AUXILIARY_COMMAND"}
+      }
+    }
+  }
+}

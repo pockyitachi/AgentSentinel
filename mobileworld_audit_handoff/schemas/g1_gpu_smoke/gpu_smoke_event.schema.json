@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_gpu_smoke/gpu_smoke_event.schema.json",
+  "title": "G1 D-034 append-only smoke evidence event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "seq", "event_kind", "payload",
+    "generated_action_executed", "replay_executed"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-event/v1"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "seq": {"type": "integer", "minimum": 1},
+    "event_kind": {"enum": [
+      "RUN_STARTED",
+      "PREFLIGHT_VALIDATED",
+      "MODEL_PREFLIGHT_VALIDATED",
+      "SERVICE_LAUNCHED",
+      "SERVICE_READY",
+      "SERVICE_TREE_FROZEN_FOR_FAILED_START_CLEANUP",
+      "PROVISIONAL_ACQUISITION_FROZEN",
+      "PROVISIONAL_ACQUISITION_CLEANUP",
+      "CALL_COMPLETED",
+      "CALL_FAILED",
+      "SERVICE_LIFECYCLE_CLOSED",
+      "SERVICE_CLEANUP_ATTEMPT_FAILED",
+      "RUN_PASS_VALIDATED",
+      "EMERGENCY_OWN_SERVICE_CLEANUP",
+      "EMERGENCY_CLEANUP_FAILED",
+      "SERVER_LOG_CAPTURE_FAILED",
+      "RUNTIME_SCRATCH_CENSUS_FAILED",
+      "RUNTIME_TREE_CENSUS_FAILED",
+      "SERVER_LOG_CAPTURE_SKIPPED_UNCLOSED_WRITER",
+      "RUN_FAILED"
+    ]},
+    "payload": {"type": "object"},
+    "generated_action_executed": {"const": false},
+    "replay_executed": {"const": false}
+  }
+}
