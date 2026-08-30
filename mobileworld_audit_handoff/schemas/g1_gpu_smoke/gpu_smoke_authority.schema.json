@@ -8,11 +8,12 @@
     "schema_version", "authority_id", "decision_id", "authorized_scope",
     "authorized", "issued_at_utc", "expires_at_utc", "owner_uid", "gpu",
     "endpoint", "model_order", "models", "outer_runtime", "private_runtime",
-    "client_runtime", "server_runtime", "bindings", "matrix", "policies",
+    "client_runtime", "server_runtime", "launch_shim", "tool_shell",
+    "bindings", "matrix", "policies",
     "source", "network_namespace", "evidence_root", "runtime_scratch_root"
   ],
   "properties": {
-    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-authority/v1"},
+    "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-authority/v2"},
     "authority_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
     "decision_id": {"const": "D-034"},
     "authorized_scope": {"const": "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"},
@@ -76,6 +77,75 @@
     "private_runtime": {"$ref": "#/$defs/privateRuntime"},
     "client_runtime": {"$ref": "#/$defs/clientRuntime"},
     "server_runtime": {"$ref": "#/$defs/serverRuntime"},
+    "launch_shim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "path", "resolved_path", "sha256", "byte_count",
+        "owner_uid", "owner_gid", "mode", "nlink", "source_path",
+        "source_sha256", "shell_option", "token_prefix", "runner_cli_path",
+        "smoke_packet_path", "model_config_manifest_path", "bootstrap_sha256",
+        "bootstrap_byte_count", "confirmation", "elf_machine", "elf_type",
+        "static", "pt_interp_allowed", "pt_dynamic_allowed", "dt_needed_allowed",
+        "rpath_runpath_allowed", "init_array_allowed", "fini_array_allowed",
+        "tls_segment_allowed", "writable_executable_segment_allowed",
+        "executable_stack"
+      ],
+      "properties": {
+        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-launch-shim/v1"},
+        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"},
+        "resolved_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1, "maximum": 4194304},
+        "owner_uid": {"const": 1035},
+        "owner_gid": {"const": 1035},
+        "mode": {"const": 320},
+        "nlink": {"const": 1},
+        "source_path": {
+          "allOf": [
+            {"$ref": "#/$defs/absolutePath"},
+            {"pattern": "/MobileWorld/scripts/g1_gpu_live_smoke_launch_shim\\.c$"}
+          ]
+        },
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "shell_option": {"const": "-c"},
+        "token_prefix": {"const": "D034_STAGE0_V1"},
+        "runner_cli_path": {
+          "allOf": [
+            {"$ref": "#/$defs/absolutePath"},
+            {"pattern": "/MobileWorld/scripts/run_g1_gpu_live_smoke\\.py$"}
+          ]
+        },
+        "smoke_packet_path": {
+          "type": "string",
+          "pattern": "^/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/packet-objects/objects/sha256/[0-9a-f]{2}/[0-9a-f]{64}$"
+        },
+        "model_config_manifest_path": {
+          "allOf": [
+            {"$ref": "#/$defs/absolutePath"},
+            {"pattern": "/mobileworld_audit_handoff/g1/model_config_manifest\\.v1\\.json$"}
+          ]
+        },
+        "bootstrap_sha256": {
+          "const": "70ac78cc43407933ff72b43925c309823fc852e654367d8576fb74b18811e63b"
+        },
+        "bootstrap_byte_count": {"const": 4645},
+        "confirmation": {"const": "EXECUTE-D034-SYNTHETIC-22-CALL-SMOKE"},
+        "elf_machine": {"const": "EM_X86_64"},
+        "elf_type": {"const": "ET_EXEC"},
+        "static": {"const": true},
+        "pt_interp_allowed": {"const": false},
+        "pt_dynamic_allowed": {"const": false},
+        "dt_needed_allowed": {"const": false},
+        "rpath_runpath_allowed": {"const": false},
+        "init_array_allowed": {"const": false},
+        "fini_array_allowed": {"const": false},
+        "tls_segment_allowed": {"const": false},
+        "writable_executable_segment_allowed": {"const": false},
+        "executable_stack": {"const": false}
+      }
+    },
+    "tool_shell": {"$ref": "#/$defs/toolShell"},
     "bindings": {
       "type": "object",
       "additionalProperties": false,
@@ -149,7 +219,7 @@
           "required": [
             "mobile_world_init", "gpu_live_smoke", "causal_replay_contracts",
             "causal_replay_core", "causal_replay_registry", "live_preparation",
-            "history_codecs", "runner_cli"
+            "history_codecs", "runner_cli", "launch_shim_source"
           ],
           "properties": {
             "mobile_world_init": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/__init__.py"}}},
@@ -159,7 +229,8 @@
             "causal_replay_registry": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/offline/causal_replay/registry.py"}}},
             "live_preparation": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/offline/causal_replay_runner/live_preparation.py"}}},
             "history_codecs": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/src/mobile_world/offline/g1_history_codecs/codecs.py"}}},
-            "runner_cli": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/scripts/run_g1_gpu_live_smoke.py"}}}
+            "runner_cli": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/scripts/run_g1_gpu_live_smoke.py"}}},
+            "launch_shim_source": {"$ref": "#/$defs/sourceFileBinding", "properties": {"relative_path": {"const": "MobileWorld/scripts/g1_gpu_live_smoke_launch_shim.c"}}}
           }
         }
       }
@@ -169,7 +240,9 @@
       "additionalProperties": false,
       "required": [
         "required", "implementation", "host_owner_uid", "host_owner_gid",
-        "inside_owner_uid", "inside_owner_gid", "uid_map_line", "gid_map_line",
+        "inside_owner_uid", "inside_owner_gid",
+        "inside_unmapped_system_uid", "inside_unmapped_system_gid",
+        "uid_map_line", "gid_map_line",
         "env_path", "env_sha256", "unshare_path", "unshare_sha256",
         "ip_path", "ip_sha256", "setpriv_path", "setpriv_sha256",
         "nvidia_smi_path", "nvidia_smi_sha256", "nvidia_smi_byte_count",
@@ -184,6 +257,8 @@
         "host_owner_gid": {"const": 1035},
         "inside_owner_uid": {"const": 0},
         "inside_owner_gid": {"const": 0},
+        "inside_unmapped_system_uid": {"const": 65534},
+        "inside_unmapped_system_gid": {"const": 65534},
         "uid_map_line": {"const": "0 1035 1"},
         "gid_map_line": {"const": "0 1035 1"},
         "env_path": {"const": "/usr/bin/env"},
@@ -226,6 +301,354 @@
       "properties": {
         "relative_path": {"type": "string", "minLength": 1},
         "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "toolPathComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "type", "symlink_target", "resolved_path",
+        "owner_uid", "owner_gid", "mode", "nlink"
+      ],
+      "properties": {
+        "path": {
+          "oneOf": [
+            {"const": "/"},
+            {"$ref": "#/$defs/absolutePath"}
+          ]
+        },
+        "type": {"enum": ["directory", "regular", "symlink"]},
+        "symlink_target": {"type": ["string", "null"]},
+        "resolved_path": {
+          "oneOf": [
+            {"const": "/"},
+            {"$ref": "#/$defs/absolutePath"}
+          ]
+        },
+        "owner_uid": {"const": 0},
+        "owner_gid": {"const": 0},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 511},
+        "nlink": {"type": "integer", "minimum": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "symlink"}}},
+          "then": {
+            "properties": {
+              "symlink_target": {
+                "type": "string",
+                "pattern": "^(?!.*\\.\\.)(?!.*//)(?:/)?[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)*$"
+              },
+              "mode": {"const": 511},
+              "nlink": {"const": 1}
+            }
+          },
+          "else": {
+            "properties": {
+              "symlink_target": {"const": null},
+              "mode": {"const": 493}
+            }
+          }
+        }
+      ]
+    },
+    "toolPathBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lexical_path", "component_bindings"],
+      "properties": {
+        "lexical_path": {"$ref": "#/$defs/absolutePath"},
+        "component_bindings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/toolPathComponent"},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "toolShellPathBinding": {
+      "allOf": [
+        {"$ref": "#/$defs/toolPathBinding"},
+        {
+          "properties": {
+            "lexical_path": {"const": "/bin/sh"},
+            "component_bindings": {
+              "type": "array",
+              "prefixItems": [
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/"}, "type": {"const": "directory"}, "resolved_path": {"const": "/"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/bin"}, "type": {"const": "symlink"}, "symlink_target": {"const": "usr/bin"}, "resolved_path": {"const": "/usr/bin"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/bin"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/bin"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/bin/sh"}, "type": {"const": "symlink"}, "symlink_target": {"const": "dash"}, "resolved_path": {"const": "/usr/bin/dash"}}}
+              ],
+              "items": false,
+              "minItems": 5,
+              "maxItems": 5
+            }
+          }
+        }
+      ]
+    },
+    "toolShellInterpreterPathBinding": {
+      "allOf": [
+        {"$ref": "#/$defs/toolPathBinding"},
+        {
+          "properties": {
+            "lexical_path": {"const": "/lib64/ld-linux-x86-64.so.2"},
+            "component_bindings": {
+              "type": "array",
+              "prefixItems": [
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/"}, "type": {"const": "directory"}, "resolved_path": {"const": "/"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/lib64"}, "type": {"const": "symlink"}, "symlink_target": {"const": "usr/lib64"}, "resolved_path": {"const": "/usr/lib64"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/lib64"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/lib64"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/lib64/ld-linux-x86-64.so.2"}, "type": {"const": "symlink"}, "symlink_target": {"const": "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"}, "resolved_path": {"const": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/lib"}, "type": {"const": "symlink"}, "symlink_target": {"const": "usr/lib"}, "resolved_path": {"const": "/usr/lib"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/lib"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/lib"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/lib/x86_64-linux-gnu"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/lib/x86_64-linux-gnu"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/lib/x86_64-linux-gnu"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/lib/x86_64-linux-gnu"}}}
+              ],
+              "items": false,
+              "minItems": 9,
+              "maxItems": 9
+            }
+          }
+        }
+      ]
+    },
+    "toolShellAmbientPathBinding": {
+      "allOf": [
+        {"$ref": "#/$defs/toolPathBinding"},
+        {
+          "properties": {
+            "lexical_path": {"const": "/usr/local/cuda-13.0/lib64"},
+            "component_bindings": {
+              "type": "array",
+              "prefixItems": [
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/"}, "type": {"const": "directory"}, "resolved_path": {"const": "/"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/local"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/local"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/local/cuda-13.0"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/local/cuda-13.0"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/local/cuda-13.0/lib64"}, "type": {"const": "symlink"}, "symlink_target": {"const": "targets/x86_64-linux/lib"}, "resolved_path": {"const": "/usr/local/cuda-13.0/targets/x86_64-linux/lib"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/local/cuda-13.0/targets"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/local/cuda-13.0/targets"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/local/cuda-13.0/targets/x86_64-linux"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/local/cuda-13.0/targets/x86_64-linux"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/usr/local/cuda-13.0/targets/x86_64-linux/lib"}, "type": {"const": "directory"}, "resolved_path": {"const": "/usr/local/cuda-13.0/targets/x86_64-linux/lib"}}}
+              ],
+              "items": false,
+              "minItems": 8,
+              "maxItems": 8
+            }
+          }
+        }
+      ]
+    },
+    "toolShellSystemConfigurationPathBinding": {
+      "allOf": [
+        {"$ref": "#/$defs/toolPathBinding"},
+        {
+          "properties": {
+            "lexical_path": {"const": "/etc"},
+            "component_bindings": {
+              "type": "array",
+              "prefixItems": [
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/"}, "type": {"const": "directory"}, "resolved_path": {"const": "/"}}},
+                {"$ref": "#/$defs/toolPathComponent", "properties": {"path": {"const": "/etc"}, "type": {"const": "directory"}, "resolved_path": {"const": "/etc"}}}
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        }
+      ]
+    },
+    "toolBinary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "resolved_path", "sha256", "byte_count",
+        "owner_uid", "owner_gid", "mode", "nlink"
+      ],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "resolved_path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1},
+        "owner_uid": {"const": 0},
+        "owner_gid": {"const": 0},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 511},
+        "nlink": {"const": 1}
+      }
+    },
+    "toolShell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "path_binding", "resolved_binary", "elf",
+        "interpreter_path_binding", "interpreter_binary", "interpreter_elf",
+        "dependencies",
+        "ld_so_cache", "ld_so_preload", "loader_resolution",
+        "ambient_environment", "invocation", "formal_claims"
+      ],
+      "properties": {
+        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-tool-shell/v1"},
+        "path_binding": {"$ref": "#/$defs/toolShellPathBinding"},
+        "resolved_binary": {
+          "$ref": "#/$defs/toolBinary",
+          "properties": {
+            "path": {"const": "/bin/sh"},
+            "resolved_path": {"const": "/usr/bin/dash"},
+            "sha256": {"const": "4f291296e89b784cd35479fca606f228126e3641f5bcaee68dee36583d7c9483"},
+            "byte_count": {"const": 125688},
+            "mode": {"const": 493}
+          }
+        },
+        "elf": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "machine", "type", "elf_osabi", "pt_interp", "dt_needed",
+            "rpath_runpath_allowed", "bind_now", "pie", "nx_stack"
+          ],
+          "properties": {
+            "machine": {"const": "EM_X86_64"},
+            "type": {"const": "ET_DYN"},
+            "elf_osabi": {"const": 0},
+            "pt_interp": {"const": "/lib64/ld-linux-x86-64.so.2"},
+            "dt_needed": {"const": ["libc.so.6"]},
+            "rpath_runpath_allowed": {"const": false},
+            "bind_now": {"const": true},
+            "pie": {"const": true},
+            "nx_stack": {"const": true}
+          }
+        },
+        "interpreter_path_binding": {
+          "$ref": "#/$defs/toolShellInterpreterPathBinding"
+        },
+        "interpreter_binary": {
+          "$ref": "#/$defs/toolBinary",
+          "properties": {
+            "path": {"const": "/lib64/ld-linux-x86-64.so.2"},
+            "resolved_path": {"const": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"},
+            "sha256": {"const": "9eb34cb2da3ae2a9398cc09b3cd2d069563ec40d9858cb711af15cd23fa80abf"},
+            "byte_count": {"const": 240936},
+            "mode": {"const": 493}
+          }
+        },
+        "interpreter_elf": {
+          "const": {
+            "machine": "EM_X86_64",
+            "type": "ET_DYN",
+            "elf_osabi": 3
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "prefixItems": [{"$ref": "#/$defs/toolShellLibcDependency"}],
+          "items": false,
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "ld_so_cache": {
+          "$ref": "#/$defs/toolBinary",
+          "properties": {
+            "path": {"const": "/etc/ld.so.cache"},
+            "resolved_path": {"const": "/etc/ld.so.cache"},
+            "sha256": {"const": "a749eaf573738b83f29c68ef7837102e826eed2d304653c08e40cfd221490b78"},
+            "byte_count": {"const": 56624},
+            "mode": {"const": 420}
+          }
+        },
+        "ld_so_preload": {
+          "const": {"path": "/etc/ld.so.preload", "present": false}
+        },
+        "loader_resolution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ambient_path_binding", "system_configuration_path_binding",
+            "ambient_tree_entry_count",
+            "ambient_tree_entry_census_sha256", "recursive_forbidden_soname_count",
+            "recursive_forbidden_soname_census_sha256",
+            "ld_so_cache_selected_libc_path", "selected_libc_unique"
+          ],
+          "properties": {
+            "ambient_path_binding": {
+              "$ref": "#/$defs/toolShellAmbientPathBinding"
+            },
+            "system_configuration_path_binding": {
+              "$ref": "#/$defs/toolShellSystemConfigurationPathBinding"
+            },
+            "ambient_tree_entry_count": {"type": "integer", "minimum": 1},
+            "ambient_tree_entry_census_sha256": {"$ref": "#/$defs/sha256"},
+            "recursive_forbidden_soname_count": {"const": 0},
+            "recursive_forbidden_soname_census_sha256": {"$ref": "#/$defs/sha256"},
+            "ld_so_cache_selected_libc_path": {"const": "/lib/x86_64-linux-gnu/libc.so.6"},
+            "selected_libc_unique": {"const": true}
+          }
+        },
+        "ambient_environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "required", "forbidden_names", "forbidden_prefixes",
+            "other_ld_environment_variables_allowed"
+          ],
+          "properties": {
+            "required": {"const": {"LD_LIBRARY_PATH": "/usr/local/cuda-13.0/lib64"}},
+            "forbidden_names": {
+              "const": ["BASH_ENV", "ENV", "GCONV_PATH", "GLIBC_TUNABLES", "IFS", "SHELLOPTS"]
+            },
+            "forbidden_prefixes": {"const": ["BASH_FUNC_", "LD_"]},
+            "other_ld_environment_variables_allowed": {"const": false}
+          }
+        },
+        "invocation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "shell_option", "login", "tty", "command_grammar", "command_prefix",
+            "command_prefix_sha256", "command_prefix_byte_count",
+            "command_authority_sha256_byte_count", "command_total_byte_count"
+          ],
+          "properties": {
+            "shell_option": {"const": "-c"},
+            "login": {"const": false},
+            "tty": {"const": false},
+            "command_grammar": {"const": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1"},
+            "command_prefix": {"const": "exec /shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1 -c D034_STAGE0_V1:/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json:"},
+            "command_prefix_sha256": {"const": "13cf21104b8ced3951a8578b86a1d9ff6d505e4bae496b09a5ae3d6afa79bbf4"},
+            "command_prefix_byte_count": {"const": 206},
+            "command_authority_sha256_byte_count": {"const": 64},
+            "command_total_byte_count": {"const": 270}
+          }
+        },
+        "formal_claims": {
+          "const": {
+            "direct_exec_formally_proven": false,
+            "pre_gate_dynamic_loader_closure_formally_proven": false
+          }
+        }
+      }
+    },
+    "toolShellLibcDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["soname", "binary", "elf_osabi", "dt_needed"],
+      "properties": {
+        "soname": {"const": "libc.so.6"},
+        "binary": {
+          "$ref": "#/$defs/toolBinary",
+          "properties": {
+            "path": {"const": "/lib/x86_64-linux-gnu/libc.so.6"},
+            "resolved_path": {"const": "/usr/lib/x86_64-linux-gnu/libc.so.6"},
+            "sha256": {"const": "c53819710b163d3f1d2541778590d58d3ef31cb0ed75adcbe059faac68c1e72d"},
+            "byte_count": {"const": 2220400},
+            "mode": {"const": 493}
+          }
+        },
+        "elf_osabi": {"const": 3},
+        "dt_needed": {"const": ["ld-linux-x86-64.so.2"]}
       }
     },
     "sitePackagesPath": {

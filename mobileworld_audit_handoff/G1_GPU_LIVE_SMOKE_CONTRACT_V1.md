@@ -38,7 +38,7 @@ The batch must be bound before any model is loaded to a schema-valid authority
 artifact and the schema-valid, content-addressed smoke packet. The authority is
 frozen as follows:
 
-- `schema_version=mobileworld.g1.gpu-live-smoke-authority/v1`;
+- `schema_version=mobileworld.g1.gpu-live-smoke-authority/v2`;
 - `decision_id=D-034`;
 - `authorized_scope=SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS`;
 - `authorized=true`, with exact owner UID, UTC issue/expiry interval, and an
@@ -68,6 +68,115 @@ must bind each side's lexical Python path to the same exact resolved,
 executable, regular ELF path and SHA-256, record the resolved executable and
 environment identity, and fail closed if any path, hash, or version differs.
 The vLLM process identity must bind the same resolved server executable.
+
+Authority v2 also binds the only admissible tool shell and outer launch shim.
+The tool shell is lexical `/bin/sh`, with its complete symlink-component chain
+bound to resolved `/usr/bin/dash`. The authority closes the resolved dash ELF,
+its `PT_INTERP`, sole `DT_NEEDED` dependency, absence of RPATH/RUNPATH, selected
+loader and libc files, `/etc/ld.so.cache`, and absence of
+`/etc/ld.so.preload`. Every lexical symlink component and resolved regular
+binary carries its exact path/target, hash/bytes where applicable, ownership,
+mode, and link count. The selected libc resolution must be unique.
+The three dynamic ELF identities are explicit: dash has `EI_OSABI=0`, while
+the selected loader and libc both have `EI_OSABI=3`. The authority also binds
+the exact ordered `/` and `/etc` component chain used before reading
+`ld.so.cache` or proving `ld.so.preload` absent. Removing, adding, reordering,
+substituting, or changing the owner/mode/link metadata of any component in the
+shell, interpreter, system-configuration, or ambient-loader path census is
+invalid.
+
+The inherited environment may contain exactly
+`LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64` in the loader-sensitive namespace.
+That lexical path, its symlink target and every lexical/resolved ancestor are
+authority-bound as root-owned directories without group/world write. A
+recursive census must prove that tree contains no `libc.so*`, `ld-linux*`, or
+other loader candidate. `LD_PRELOAD`, `LD_AUDIT`, `LD_PROFILE`,
+`LD_DEBUG_OUTPUT`, every other `LD_*`, `GLIBC_TUNABLES`, `GCONV_PATH`, `ENV`,
+`BASH_ENV`, `SHELLOPTS`, every `BASH_FUNC_*`, and `IFS` must be absent.
+
+The launch shim itself is the
+owner-private, single-linked, mode-`0500`, static x86-64 ELF executable at
+`/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1`;
+its lexical and resolved paths must be identical. The authority records its
+exact SHA-256, byte count, owner UID/GID `1035:1035`, source path and source
+SHA-256, plus every protocol input needed for the transition: the runner CLI,
+smoke packet and model-config-manifest paths, outer bootstrap SHA-256 and byte
+count, execution confirmation, shell option `-c`, and token prefix
+`D034_STAGE0_V1`. Authority v1 artifacts do not contain this closure and are
+obsolete; they must never be accepted for execution.
+
+The shim is not Bash, a shebang script, a dynamic executable, or a general
+command interpreter. Its ELF closure is exact: `EM_X86_64`, `ET_EXEC`, no
+`PT_INTERP`, no `PT_DYNAMIC`, no `DT_NEEDED`, no RPATH/RUNPATH, no init/fini
+arrays, no TLS segment, no writable-executable segment, and a non-executable
+stack. The execution tool uses `/bin/sh` with `login=false`, `tty=false`, and
+one literal command containing only the shell builtin `exec`, the absolute shim
+path, `-c`, and one colon-delimited safe token. The command is exactly
+`exec <absolute-shim> -c D034_STAGE0_V1:<absolute-authority-path>:<lowercase-64-hex-authority-sha256>`;
+it contains no quoting, expansion, redirection, pipe, control operator,
+whitespace-bearing argument, or lookup through `PATH`. Whitespace drift, an
+extra field, an escape, a duplicate authority argument, a noncanonical path, or
+any other shell syntax is invalid. The authority binds only the command prefix,
+template hash/bytes, exact grammar, and 64-hex suffix length; binding the full
+command digest inside the authority would create an authority-hash cycle. The
+tool call must explicitly pass `shell=/bin/sh` and `login=false`; omitting the
+shell parameter (which selects an ambient default shell) or passing any other
+shell is invalid. The honored shell selection is a recorded fact, not an
+inference from the command text.
+full command SHA-256/byte count are instead recorded in preparation/runtime
+receipts without storing the raw command. The authority SHA is passed out of
+band and is never embedded into the shim bytes. The only accepted authority
+path is
+`/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json`.
+The raw command, token and complete argv are never persisted because the
+evidence secret scanner deliberately treats token-bearing field names as
+forbidden. Instead, the preparation/runtime receipts freeze the complete
+command SHA-256 and byte count, authority SHA-256, exact command grammar and
+safe prefix, `/bin/sh -c`, `login=false`, `tty=false`, and the shim invocation
+hash/length facts. The namespace receipt nests the verified transition under
+`pre_gate_launch_shim`, and the Stage1 receipt adds a no-follow, same-inode
+`launch_shim_revalidation` before the private-runtime census. All state
+`pre_gate_invocation_attestation_formally_proven=false`.
+Those receipts do not misstate the fallback as a direct static-shell call:
+they state `tool_shell_parameter_honored=true`,
+`direct_exec_formally_proven=false`, `pre_gate_tool_shell_used=true`,
+`tool_shell_inherits_ambient_environment=true`,
+`ambient_loader_environment_policy_bound=true`, and
+`launch_shim_clears_environment=true`. They also state
+`pre_gate_dynamic_loader_closure_formally_proven=false`. Raw command and token
+bytes remain absent from evidence even though their post-authority digests and
+byte counts are exact.
+
+Before opening any GPU, network, model, provider, service, or project runtime,
+the bound dynamic dash/loader/libc chain performs only the literal builtin
+`exec` transition. The shim then rejects ambient arguments, environment, and
+grammar drift, clears the inherited
+environment, closes every inherited descriptor numbered 3 or above, validates
+descriptors 0/1/2 are non-sockets, and validates its own bytes plus the sealed
+source (`0400`), runner CLI (`0400`), smoke packet (`0600`), model manifest
+(`0400`), and root-owned Python executable against the authority. Each host
+input is UID/GID `1035:1035` and singly linked except the Python ELF, which is
+root-owned, executable, resolved, and singly linked. The shim enters that exact
+Python executable through its already validated no-follow file descriptor with
+only `LC_CTYPE=C.UTF-8`. Any mismatch fails
+with zero live side effects. Self-hashing cannot prove that a caller did not
+replace the shim before the kernel executed it; owner-only sealed parent/file
+metadata and exact post-entry validation narrow that residual but do not remove
+it. Nor can post-entry validation prove that the dynamic loader and dash bytes
+actually used before shim entry matched their inspected bindings. Therefore
+`direct_exec_formally_proven=false` and
+`pre_gate_dynamic_loader_closure_formally_proven=false`. This remains a
+disclosed non-formal boundary and does not make
+`toctou_free_runtime_binding_proven` or formal runtime immutability true.
+
+The CPU-only shim builder compiles the sealed source with the authority-bound
+static freestanding flags, records the compiler path/resolved path/hash/bytes,
+exact argv/environment/return code and bounded compiler-log hash/bytes, installs
+the new destination without replacement, reopens it, and runs the full ELF
+parser. Its receipt states `static_elf_dependency_closure_proven=true`, while
+`source_to_binary_reproducibility_formally_proven=false`; successful static ELF
+inspection does not claim reproducible compilation. A failed build preserves
+its exact owner-only staging directory and never recursively deletes it.
 
 The launcher and workload runtimes are deliberately different too. The first,
 host-side stage is the root-owned `/usr/bin/python3.10` interpreter and its
@@ -118,7 +227,8 @@ ALE-323 formally.
 
 The authority also binds the exact clean Git commit, the resolved worktree and
 `MobileWorld/src` roots, `/usr/bin/git` and its hash, the runner-module and CLI
-hashes, and the eight critical source files named by the authority schema. The
+hashes, and the nine critical source files named by the authority schema,
+including the freestanding launch-shim source. The
 live runner must resolve every critical import to that one source root, verify
 the worktree is byte-clean including untracked files, and rehash the files from
 no-follow regular-file descriptors. Editable-install or ambient import drift is
@@ -130,9 +240,11 @@ configuration, hooks, credential prompts, pagers, and fsmonitor execution are
 not admissible.
 
 The three-stage production freeze binds runner-module SHA-256
-`616303e34d3158ea2ff7e5b376cb1177d1e058da7fcb8cc97cfc9fe9b2679f02`,
+`634d62a048d9cd0621419602b39ee92cc6b70e1d87fac72b954dbc6de8e2f824`
+over exactly 511,123 bytes,
 CLI SHA-256
-`9e763c9d776795836bb71c4ef2a2311b0d1e4a016749cc37409f2e19fc1b4504`,
+`1c61b4496a857e1942fb314450a724f14b7d68263295455b7e13922a4671e823`
+over exactly 140,286 bytes,
 and outer stdlib-bootstrap SHA-256
 `70ac78cc43407933ff72b43925c309823fc852e654367d8576fb74b18811e63b`
 over exactly 4,645 UTF-8 bytes. The auxiliary-command launch gate is separately
@@ -140,6 +252,13 @@ bound to SHA-256
 `70c01194e4ed6ad7cf54a5ffb0caa72bb9d8fa1694544665d53707b90279b061`
 over exactly 228 UTF-8 bytes. Any movement requires a fresh authority,
 schema/test parity pass, and contract update before execution.
+The launch-shim C source is frozen at SHA-256
+`7e7f2ab5356a50a00c2a28beacfb8fda96402c51b1daa5fb245dff187f35c390`
+over exactly 55,526 bytes. The deterministic production build from the bound
+compiler/flags has SHA-256
+`f0b645daa52279e46391a04444d617eb619f23b91f797d0710cb579fc5753f4c`
+over exactly 26,272 bytes; authority generation must independently inspect and
+bind those installed bytes rather than trusting this prose value.
 
 Execution uses exact Python flags `-I -S -B -X pycache_prefix=/dev/null` for
 both client and server. The initial outer execute stage is stdlib-only: before
@@ -161,13 +280,26 @@ Every execute is mechanically isolated by authority-bound
 rehashes the authority-bound resolved regular `/usr/bin/nvidia-smi` executable
 and verifies its exact SHA-256 and byte count immediately before invocation.
 Any executable-path, hash, byte-count, or no-follow identity drift fails before
-starting a probe, model process, client, or request. The namespace must have exact UID/GID maps from host owner
-1035 to inner owner 0, exact interface census `['lo']` from `/proc/net/dev`, no
+starting a probe, model process, client, or request. The namespace must have
+exact UID/GID maps from host owner 1035 to inner owner 0. Host-root system files
+are deliberately outside that one-ID map: they are bound as UID/GID `0:0` in
+Stage0 and must appear as the kernel overflow identity `65534:65534` in Stage1.
+Tree aggregates normalize those two observations to one `SYSTEM_ROOT` owner
+role; any other mapping or raw owner fails before private exec. The namespace
+has exact interface census `['lo']` from `/proc/net/dev`, no
 usable IPv4/IPv6 default or non-loopback route, a working loopback self-connect,
 zero capabilities, and `no_new_privs`. The launcher environment is an exact
 secret-free allowlist and external networking must be mechanically unavailable.
 The namespace receipt binds the actual outer-FD-closure receipt and the inner
 0/1/2-only FD census.
+Stage1 additionally revalidates the complete tool-shell authority subject in
+the overflow-identity view, including exact shell/interpreter/system/ambient
+component counts, all three ELF OSABI values, loader-tree census, cache
+selection and preload absence. Its receipt records raw system owner
+`65534:65534`, the normalized `SYSTEM_ROOT` role, and exact equality with the
+host-root authority subject. The runtime namespace receipt carries the same
+closed `pre_gate_tool_shell` proof; neither receipt upgrades the disclosed
+dynamic-loader residual to a formal claim.
 
 No credential is required or permitted. A syntactically required loopback-only
 SDK token must be a fixed public sentinel such as `EMPTY`, must not be read from

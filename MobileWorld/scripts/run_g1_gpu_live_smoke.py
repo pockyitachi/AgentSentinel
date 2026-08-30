@@ -30,6 +30,65 @@ _SOURCE_ROOT = _SCRIPT_PATH.parents[1] / "src"
 JsonValue = Any
 
 _EXECUTE_CONFIRMATION = "EXECUTE-D034-SYNTHETIC-22-CALL-SMOKE"
+_AUTHORITY_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-authority/v2"
+_LAUNCH_SHIM_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-launch-shim/v1"
+_LAUNCH_SHIM_PATH = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"
+)
+_LAUNCH_SHIM_AUTHORITY_PATH = (
+    "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json"
+)
+_LAUNCH_SHIM_TOKEN_PREFIX = "D034_STAGE0_V1"
+_TOOL_SHELL_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-tool-shell/v1"
+_TOOL_SHELL_PATH = "/bin/sh"
+_TOOL_SHELL_RESOLVED_PATH = "/usr/bin/dash"
+_TOOL_SHELL_SHA256 = "4f291296e89b784cd35479fca606f228126e3641f5bcaee68dee36583d7c9483"
+_TOOL_SHELL_BYTE_COUNT = 125_688
+_TOOL_SHELL_PT_INTERP_PATH = "/lib64/ld-linux-x86-64.so.2"
+_TOOL_SHELL_PT_INTERP_RESOLVED_PATH = "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+_TOOL_SHELL_PT_INTERP_SHA256 = "9eb34cb2da3ae2a9398cc09b3cd2d069563ec40d9858cb711af15cd23fa80abf"
+_TOOL_SHELL_PT_INTERP_BYTE_COUNT = 240_936
+_TOOL_SHELL_LIBC_PATH = "/lib/x86_64-linux-gnu/libc.so.6"
+_TOOL_SHELL_LIBC_RESOLVED_PATH = "/usr/lib/x86_64-linux-gnu/libc.so.6"
+_TOOL_SHELL_LIBC_SHA256 = "c53819710b163d3f1d2541778590d58d3ef31cb0ed75adcbe059faac68c1e72d"
+_TOOL_SHELL_LIBC_BYTE_COUNT = 2_220_400
+_TOOL_SHELL_LD_SO_CACHE_PATH = "/etc/ld.so.cache"
+_TOOL_SHELL_LD_SO_CACHE_SHA256 = "a749eaf573738b83f29c68ef7837102e826eed2d304653c08e40cfd221490b78"
+_TOOL_SHELL_LD_SO_CACHE_BYTE_COUNT = 56_624
+_TOOL_SHELL_LD_SO_PRELOAD_PATH = "/etc/ld.so.preload"
+_TOOL_SHELL_AMBIENT_LD_LIBRARY_PATH = "/usr/local/cuda-13.0/lib64"
+_TOOL_SHELL_PATH_COMPONENT_PATHS = ("/", "/bin", "/usr", "/usr/bin", "/bin/sh")
+_TOOL_SHELL_INTERPRETER_COMPONENT_PATHS = (
+    "/",
+    "/lib64",
+    "/usr",
+    "/usr/lib64",
+    _TOOL_SHELL_PT_INTERP_PATH,
+    "/lib",
+    "/usr/lib",
+    "/lib/x86_64-linux-gnu",
+    "/usr/lib/x86_64-linux-gnu",
+)
+_TOOL_SHELL_AMBIENT_COMPONENT_PATHS = (
+    "/",
+    "/usr",
+    "/usr/local",
+    "/usr/local/cuda-13.0",
+    _TOOL_SHELL_AMBIENT_LD_LIBRARY_PATH,
+    "/usr/local/cuda-13.0/targets",
+    "/usr/local/cuda-13.0/targets/x86_64-linux",
+    "/usr/local/cuda-13.0/targets/x86_64-linux/lib",
+)
+_TOOL_SHELL_SYSTEM_CONFIG_COMPONENT_PATHS = ("/", "/etc")
+_TOOL_SHELL_FORBIDDEN_ENVIRONMENT_NAMES = (
+    "BASH_ENV",
+    "ENV",
+    "GCONV_PATH",
+    "GLIBC_TUNABLES",
+    "IFS",
+    "SHELLOPTS",
+)
+_TOOL_SHELL_FORBIDDEN_ENVIRONMENT_PREFIXES = ("BASH_FUNC_", "LD_")
 _FD_CLOSE_UPPER_BOUND_EXCLUSIVE = 1_048_576
 _FORBIDDEN_PRE_UNSHARE_MODULE_ROOTS = ("mobile_world", "loguru", "PIL", "openai")
 _STAGE1_RECEIPT_SCHEMA_VERSION = "mobileworld.g1.gpu-live-smoke-stage1-preexec/v1"
@@ -136,9 +195,125 @@ _OUTER_AUTHORITY_KEYS = {
     "matrix",
     "policies",
     "source",
+    "launch_shim",
+    "tool_shell",
     "network_namespace",
     "evidence_root",
     "runtime_scratch_root",
+}
+_OUTER_LAUNCH_SHIM_KEYS = {
+    "schema_version",
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+    "source_path",
+    "source_sha256",
+    "shell_option",
+    "token_prefix",
+    "runner_cli_path",
+    "smoke_packet_path",
+    "model_config_manifest_path",
+    "bootstrap_sha256",
+    "bootstrap_byte_count",
+    "confirmation",
+    "elf_machine",
+    "elf_type",
+    "static",
+    "pt_interp_allowed",
+    "pt_dynamic_allowed",
+    "dt_needed_allowed",
+    "rpath_runpath_allowed",
+    "init_array_allowed",
+    "fini_array_allowed",
+    "tls_segment_allowed",
+    "writable_executable_segment_allowed",
+    "executable_stack",
+}
+_OUTER_TOOL_SHELL_KEYS = {
+    "schema_version",
+    "path_binding",
+    "resolved_binary",
+    "elf",
+    "interpreter_path_binding",
+    "interpreter_binary",
+    "interpreter_elf",
+    "dependencies",
+    "ld_so_cache",
+    "ld_so_preload",
+    "loader_resolution",
+    "ambient_environment",
+    "invocation",
+    "formal_claims",
+}
+_OUTER_TOOL_PATH_BINDING_KEYS = {"lexical_path", "component_bindings"}
+_OUTER_TOOL_PATH_COMPONENT_KEYS = {
+    "path",
+    "type",
+    "symlink_target",
+    "resolved_path",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+}
+_OUTER_TOOL_BINARY_KEYS = {
+    "path",
+    "resolved_path",
+    "sha256",
+    "byte_count",
+    "owner_uid",
+    "owner_gid",
+    "mode",
+    "nlink",
+}
+_OUTER_TOOL_SHELL_ELF_KEYS = {
+    "machine",
+    "type",
+    "elf_osabi",
+    "pt_interp",
+    "dt_needed",
+    "rpath_runpath_allowed",
+    "bind_now",
+    "pie",
+    "nx_stack",
+}
+_OUTER_TOOL_INTERPRETER_ELF_KEYS = {"machine", "type", "elf_osabi"}
+_OUTER_TOOL_DEPENDENCY_KEYS = {"soname", "binary", "elf_osabi", "dt_needed"}
+_OUTER_TOOL_LOADER_RESOLUTION_KEYS = {
+    "ambient_path_binding",
+    "system_configuration_path_binding",
+    "ambient_tree_entry_count",
+    "ambient_tree_entry_census_sha256",
+    "recursive_forbidden_soname_count",
+    "recursive_forbidden_soname_census_sha256",
+    "ld_so_cache_selected_libc_path",
+    "selected_libc_unique",
+}
+_OUTER_TOOL_AMBIENT_ENVIRONMENT_KEYS = {
+    "required",
+    "forbidden_names",
+    "forbidden_prefixes",
+    "other_ld_environment_variables_allowed",
+}
+_OUTER_TOOL_INVOCATION_KEYS = {
+    "shell_option",
+    "login",
+    "tty",
+    "command_grammar",
+    "command_prefix",
+    "command_prefix_sha256",
+    "command_prefix_byte_count",
+    "command_authority_sha256_byte_count",
+    "command_total_byte_count",
+}
+_OUTER_TOOL_FORMAL_CLAIM_KEYS = {
+    "direct_exec_formally_proven",
+    "pre_gate_dynamic_loader_closure_formally_proven",
 }
 _OUTER_NETWORK_NAMESPACE_KEYS = {
     "required",
@@ -147,6 +322,8 @@ _OUTER_NETWORK_NAMESPACE_KEYS = {
     "host_owner_gid",
     "inside_owner_uid",
     "inside_owner_gid",
+    "inside_unmapped_system_uid",
+    "inside_unmapped_system_gid",
     "uid_map_line",
     "gid_map_line",
     "env_path",
@@ -269,6 +446,7 @@ _CRITICAL_SOURCE_FILES = {
     ),
     "history_codecs": "MobileWorld/src/mobile_world/offline/g1_history_codecs/codecs.py",
     "runner_cli": "MobileWorld/scripts/run_g1_gpu_live_smoke.py",
+    "launch_shim_source": "MobileWorld/scripts/g1_gpu_live_smoke_launch_shim.c",
 }
 _PREIMPORT_RUNTIME_RECEIPT: dict[str, object] | None = None
 _STAGE1_PREEXEC_RECEIPT: dict[str, object] | None = None
@@ -386,6 +564,563 @@ def _hash_regular_nofollow_stdlib(path: str, expected_sha256: object) -> int:
         return before.st_size
     except (OSError, ValueError) as exc:
         raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID") from exc
+
+
+def _open_absolute_nofollow_file_stdlib(path: str, flags: int) -> int:
+    if not (
+        path.startswith("/")
+        and str(Path(path)) == path
+        and all(part not in {"", ".", ".."} for part in path.split("/")[1:])
+    ):
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    parts = path.split("/")[1:]
+    directory_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        directory_fd = os.open("/", directory_flags)
+        try:
+            for part in parts[:-1]:
+                next_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+                os.close(directory_fd)
+                directory_fd = next_fd
+            return os.open(parts[-1], flags | os.O_NOFOLLOW, dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID") from exc
+
+
+def _verify_launch_shim_binding_stdlib(
+    authority: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    stage: str,
+    expected_owner_uid: int,
+    expected_owner_gid: int,
+) -> dict[str, object]:
+    launch = authority.get("launch_shim")
+    source = authority.get("source")
+    namespace = authority.get("network_namespace")
+    if not (
+        stage in {"STAGE0", "STAGE1"}
+        and type(launch) is dict
+        and set(launch) == _OUTER_LAUNCH_SHIM_KEYS
+        and type(source) is dict
+        and type(namespace) is dict
+    ):
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    launch = cast(dict[str, object], launch)
+    source = cast(dict[str, object], source)
+    namespace = cast(dict[str, object], namespace)
+    critical = source.get("critical_files")
+    if type(critical) is not dict:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    critical = cast(dict[str, object], critical)
+    shim_source = critical.get("launch_shim_source")
+    runner_cli = critical.get("runner_cli")
+    if not (type(shim_source) is dict and type(runner_cli) is dict):
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    shim_source = cast(dict[str, object], shim_source)
+    runner_cli = cast(dict[str, object], runner_cli)
+    bootstrap = _OUTER_STDLIB_BOOTSTRAP_CODE.encode("utf-8")
+    if not (
+        authority.get("schema_version") == _AUTHORITY_SCHEMA_VERSION
+        and args.authority == _LAUNCH_SHIM_AUTHORITY_PATH
+        and launch.get("schema_version") == _LAUNCH_SHIM_SCHEMA_VERSION
+        and launch.get("path") == launch.get("resolved_path") == _LAUNCH_SHIM_PATH
+        and launch.get("owner_uid") == namespace.get("host_owner_uid") == 1035
+        and launch.get("owner_gid") == namespace.get("host_owner_gid") == 1035
+        and launch.get("mode") == 0o500
+        and launch.get("nlink") == 1
+        and launch.get("source_path")
+        == f"{source.get('worktree_root')}/{shim_source.get('relative_path')}"
+        and launch.get("source_sha256") == shim_source.get("sha256")
+        and launch.get("shell_option") == "-c"
+        and launch.get("token_prefix") == _LAUNCH_SHIM_TOKEN_PREFIX
+        and launch.get("runner_cli_path") == str(_SCRIPT_PATH)
+        and launch.get("runner_cli_path")
+        == f"{source.get('worktree_root')}/{runner_cli.get('relative_path')}"
+        and launch.get("smoke_packet_path") == args.smoke_packet
+        and launch.get("model_config_manifest_path") == args.model_config_manifest
+        and launch.get("bootstrap_sha256") == hashlib.sha256(bootstrap).hexdigest()
+        and launch.get("bootstrap_byte_count") == len(bootstrap) == 4645
+        and launch.get("confirmation") == _EXECUTE_CONFIRMATION
+        and launch.get("elf_machine") == "EM_X86_64"
+        and launch.get("elf_type") == "ET_EXEC"
+        and launch.get("static") is True
+        and all(
+            launch.get(field) is False
+            for field in (
+                "pt_interp_allowed",
+                "pt_dynamic_allowed",
+                "dt_needed_allowed",
+                "rpath_runpath_allowed",
+                "init_array_allowed",
+                "fini_array_allowed",
+                "tls_segment_allowed",
+                "writable_executable_segment_allowed",
+                "executable_stack",
+            )
+        )
+        and type(launch.get("sha256")) is str
+        and type(launch.get("byte_count")) is int
+        and cast(int, launch["byte_count"]) > 0
+    ):
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    path = cast(str, launch["path"])
+    try:
+        before = os.lstat(path)
+        fd = _open_absolute_nofollow_file_stdlib(path, os.O_RDONLY | os.O_CLOEXEC)
+        try:
+            opened = os.fstat(fd)
+            digest = hashlib.sha256()
+            remaining = opened.st_size
+            while remaining:
+                chunk = os.read(fd, min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ValueError("launch shim truncated")
+                digest.update(chunk)
+                remaining -= len(chunk)
+            after = os.fstat(fd)
+        finally:
+            os.close(fd)
+        path_after = os.lstat(path)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID") from exc
+
+    def identity(item: os.stat_result) -> tuple[int, ...]:
+        return (
+            item.st_dev,
+            item.st_ino,
+            item.st_mode,
+            item.st_nlink,
+            item.st_uid,
+            item.st_gid,
+            item.st_size,
+            item.st_mtime_ns,
+            item.st_ctime_ns,
+        )
+
+    if not (
+        identity(before) == identity(opened) == identity(after) == identity(path_after)
+        and stat.S_ISREG(opened.st_mode)
+        and opened.st_uid == expected_owner_uid
+        and opened.st_gid == expected_owner_gid
+        and stat.S_IMODE(opened.st_mode) == 0o500
+        and opened.st_nlink == 1
+        and opened.st_size == launch["byte_count"]
+        and digest.hexdigest() == launch["sha256"]
+        and os.path.realpath(path) == path
+    ):
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    token = f"{_LAUNCH_SHIM_TOKEN_PREFIX}:{_LAUNCH_SHIM_AUTHORITY_PATH}:{args.authority_sha256}"
+    return {
+        "schema_version": "mobileworld.g1.gpu-live-smoke-launch-shim-stdlib-revalidation/v1",
+        "stage": stage,
+        "path": path,
+        "sha256": launch["sha256"],
+        "byte_count": launch["byte_count"],
+        "authority_binding_sha256": hashlib.sha256(
+            _canonical_json_bytes_stdlib(launch)
+        ).hexdigest(),
+        "observed_owner_uid": opened.st_uid,
+        "observed_owner_gid": opened.st_gid,
+        "authority_host_owner_uid": launch["owner_uid"],
+        "authority_host_owner_gid": launch["owner_gid"],
+        "mode": stat.S_IMODE(opened.st_mode),
+        "nlink": opened.st_nlink,
+        "argument_prefix": _LAUNCH_SHIM_TOKEN_PREFIX,
+        "shell_argument_sha256": hashlib.sha256(token.encode("ascii")).hexdigest(),
+        "shell_argument_byte_count": len(token.encode("ascii")),
+        "argc": 3,
+        "login": False,
+        "tty": False,
+        "nofollow_same_inode_revalidated": True,
+        "elf_validation_deferred_to_production": True,
+    }
+
+
+def _verify_tool_shell_binding_stdlib(
+    authority: dict[str, object],
+    *,
+    stage: str,
+    expected_owner_uid: int,
+    expected_owner_gid: int,
+) -> dict[str, object]:
+    def closed(value: object, keys: set[str]) -> dict[str, object]:
+        if type(value) is not dict or set(value) != keys:
+            raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+        return cast(dict[str, object], value)
+
+    def components(
+        value: object,
+        *,
+        lexical_path: str,
+        expected_paths: tuple[str, ...],
+    ) -> list[dict[str, object]]:
+        binding = closed(value, _OUTER_TOOL_PATH_BINDING_KEYS)
+        raw_entries = binding.get("component_bindings")
+        if not (
+            binding.get("lexical_path") == lexical_path
+            and type(raw_entries) is list
+            and len(raw_entries) == len(expected_paths)
+        ):
+            raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+        result: list[dict[str, object]] = []
+        for index, expected_path in enumerate(expected_paths):
+            recorded = closed(
+                cast(list[object], raw_entries)[index],
+                _OUTER_TOOL_PATH_COMPONENT_KEYS,
+            )
+            try:
+                metadata = os.lstat(expected_path)
+                entry_type = (
+                    "symlink"
+                    if stat.S_ISLNK(metadata.st_mode)
+                    else "directory"
+                    if stat.S_ISDIR(metadata.st_mode)
+                    else "other"
+                )
+                symlink_target = os.readlink(expected_path) if entry_type == "symlink" else None
+                resolved_path = os.path.realpath(expected_path)
+            except OSError as exc:
+                raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID") from exc
+            if not (
+                recorded.get("path") == expected_path
+                and recorded.get("type") == entry_type
+                and recorded.get("symlink_target") == symlink_target
+                and recorded.get("resolved_path") == resolved_path
+                and recorded.get("owner_uid") == 0
+                and recorded.get("owner_gid") == 0
+                and metadata.st_uid == expected_owner_uid
+                and metadata.st_gid == expected_owner_gid
+                and recorded.get("mode") == stat.S_IMODE(metadata.st_mode)
+                and recorded.get("nlink") == metadata.st_nlink
+                and entry_type in {"symlink", "directory"}
+                and (entry_type != "directory" or not stat.S_IMODE(metadata.st_mode) & 0o022)
+            ):
+                raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+            result.append(recorded)
+        return result
+
+    def binary(
+        value: object,
+        *,
+        path: str,
+        resolved_path: str,
+        sha256: str,
+        byte_count: int,
+        mode: int,
+    ) -> dict[str, object]:
+        recorded = closed(value, _OUTER_TOOL_BINARY_KEYS)
+        if recorded != {
+            "path": path,
+            "resolved_path": resolved_path,
+            "sha256": sha256,
+            "byte_count": byte_count,
+            "owner_uid": 0,
+            "owner_gid": 0,
+            "mode": mode,
+            "nlink": 1,
+        }:
+            raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+        try:
+            if os.path.realpath(path) != resolved_path:
+                raise ValueError("tool-shell resolution differs")
+            before = os.lstat(resolved_path)
+            fd = _open_absolute_nofollow_file_stdlib(
+                resolved_path,
+                os.O_RDONLY | os.O_CLOEXEC,
+            )
+            try:
+                opened = os.fstat(fd)
+                digest = hashlib.sha256()
+                remaining = opened.st_size
+                while remaining:
+                    chunk = os.read(fd, min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("tool-shell dependency truncated")
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                after = os.fstat(fd)
+            finally:
+                os.close(fd)
+            path_after = os.lstat(resolved_path)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID") from exc
+
+        def identity(item: os.stat_result) -> tuple[int, ...]:
+            return (
+                item.st_dev,
+                item.st_ino,
+                item.st_mode,
+                item.st_nlink,
+                item.st_uid,
+                item.st_gid,
+                item.st_size,
+                item.st_mtime_ns,
+                item.st_ctime_ns,
+            )
+
+        if not (
+            identity(before) == identity(opened) == identity(after) == identity(path_after)
+            and stat.S_ISREG(opened.st_mode)
+            and opened.st_uid == expected_owner_uid
+            and opened.st_gid == expected_owner_gid
+            and stat.S_IMODE(opened.st_mode) == mode
+            and opened.st_nlink == 1
+            and opened.st_size == byte_count
+            and digest.hexdigest() == sha256
+        ):
+            raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+        return recorded
+
+    subject = closed(authority.get("tool_shell"), _OUTER_TOOL_SHELL_KEYS)
+    if subject.get("schema_version") != _TOOL_SHELL_SCHEMA_VERSION:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    path_entries = components(
+        subject.get("path_binding"),
+        lexical_path=_TOOL_SHELL_PATH,
+        expected_paths=_TOOL_SHELL_PATH_COMPONENT_PATHS,
+    )
+    binary(
+        subject.get("resolved_binary"),
+        path=_TOOL_SHELL_PATH,
+        resolved_path=_TOOL_SHELL_RESOLVED_PATH,
+        sha256=_TOOL_SHELL_SHA256,
+        byte_count=_TOOL_SHELL_BYTE_COUNT,
+        mode=0o755,
+    )
+    elf = closed(subject.get("elf"), _OUTER_TOOL_SHELL_ELF_KEYS)
+    if elf != {
+        "machine": "EM_X86_64",
+        "type": "ET_DYN",
+        "elf_osabi": 0,
+        "pt_interp": _TOOL_SHELL_PT_INTERP_PATH,
+        "dt_needed": ["libc.so.6"],
+        "rpath_runpath_allowed": False,
+        "bind_now": True,
+        "pie": True,
+        "nx_stack": True,
+    }:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    interpreter_entries = components(
+        subject.get("interpreter_path_binding"),
+        lexical_path=_TOOL_SHELL_PT_INTERP_PATH,
+        expected_paths=_TOOL_SHELL_INTERPRETER_COMPONENT_PATHS,
+    )
+    binary(
+        subject.get("interpreter_binary"),
+        path=_TOOL_SHELL_PT_INTERP_PATH,
+        resolved_path=_TOOL_SHELL_PT_INTERP_RESOLVED_PATH,
+        sha256=_TOOL_SHELL_PT_INTERP_SHA256,
+        byte_count=_TOOL_SHELL_PT_INTERP_BYTE_COUNT,
+        mode=0o755,
+    )
+    interpreter_elf = closed(
+        subject.get("interpreter_elf"),
+        _OUTER_TOOL_INTERPRETER_ELF_KEYS,
+    )
+    if interpreter_elf != {"machine": "EM_X86_64", "type": "ET_DYN", "elf_osabi": 3}:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    dependencies = subject.get("dependencies")
+    if type(dependencies) is not list or len(dependencies) != 1:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    dependency = closed(cast(list[object], dependencies)[0], _OUTER_TOOL_DEPENDENCY_KEYS)
+    if not (
+        dependency.get("soname") == "libc.so.6"
+        and dependency.get("elf_osabi") == 3
+        and dependency.get("dt_needed") == ["ld-linux-x86-64.so.2"]
+    ):
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    binary(
+        dependency.get("binary"),
+        path=_TOOL_SHELL_LIBC_PATH,
+        resolved_path=_TOOL_SHELL_LIBC_RESOLVED_PATH,
+        sha256=_TOOL_SHELL_LIBC_SHA256,
+        byte_count=_TOOL_SHELL_LIBC_BYTE_COUNT,
+        mode=0o755,
+    )
+    binary(
+        subject.get("ld_so_cache"),
+        path=_TOOL_SHELL_LD_SO_CACHE_PATH,
+        resolved_path=_TOOL_SHELL_LD_SO_CACHE_PATH,
+        sha256=_TOOL_SHELL_LD_SO_CACHE_SHA256,
+        byte_count=_TOOL_SHELL_LD_SO_CACHE_BYTE_COUNT,
+        mode=0o644,
+    )
+    preload = subject.get("ld_so_preload")
+    if not (
+        type(preload) is dict
+        and set(preload) == {"path", "present"}
+        and preload == {"path": _TOOL_SHELL_LD_SO_PRELOAD_PATH, "present": False}
+    ):
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    try:
+        os.lstat(_TOOL_SHELL_LD_SO_PRELOAD_PATH)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID") from exc
+    else:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    loader = closed(subject.get("loader_resolution"), _OUTER_TOOL_LOADER_RESOLUTION_KEYS)
+    system_configuration_entries = components(
+        loader.get("system_configuration_path_binding"),
+        lexical_path="/etc",
+        expected_paths=_TOOL_SHELL_SYSTEM_CONFIG_COMPONENT_PATHS,
+    )
+    ambient_entries = components(
+        loader.get("ambient_path_binding"),
+        lexical_path=_TOOL_SHELL_AMBIENT_LD_LIBRARY_PATH,
+        expected_paths=_TOOL_SHELL_AMBIENT_COMPONENT_PATHS,
+    )
+    resolved_ambient = Path(_TOOL_SHELL_AMBIENT_LD_LIBRARY_PATH).resolve(strict=True)
+    pending = [resolved_ambient]
+    census_entries: list[dict[str, object]] = []
+    forbidden_sonames: list[str] = []
+    try:
+        while pending:
+            current = pending.pop()
+            for child in sorted(os.scandir(current), key=lambda item: item.name):
+                metadata = child.stat(follow_symlinks=False)
+                relative = str(Path(child.path).relative_to(resolved_ambient))
+                if stat.S_ISDIR(metadata.st_mode):
+                    entry_type = "directory"
+                    if not (
+                        metadata.st_uid == expected_owner_uid
+                        and metadata.st_gid == expected_owner_gid
+                        and not stat.S_IMODE(metadata.st_mode) & 0o022
+                    ):
+                        raise ValueError("ambient loader directory is writable")
+                    pending.append(Path(child.path))
+                elif stat.S_ISLNK(metadata.st_mode):
+                    entry_type = "symlink"
+                elif stat.S_ISREG(metadata.st_mode):
+                    entry_type = "regular"
+                else:
+                    entry_type = "other"
+                census_entries.append(
+                    {
+                        "path": relative,
+                        "type": entry_type,
+                        "size": metadata.st_size,
+                        "directory_owner_role": (
+                            "HOST_ROOT" if entry_type == "directory" else None
+                        ),
+                        "directory_mode": (
+                            stat.S_IMODE(metadata.st_mode) if entry_type == "directory" else None
+                        ),
+                        "directory_nlink": (
+                            metadata.st_nlink if entry_type == "directory" else None
+                        ),
+                    }
+                )
+                if child.name.startswith("libc.so") or child.name.startswith("ld-linux"):
+                    forbidden_sonames.append(relative)
+                if len(census_entries) > 100_000:
+                    raise ValueError("ambient loader census is unbounded")
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID") from exc
+    census_entries.sort(key=lambda item: cast(str, item["path"]))
+    forbidden_sonames.sort()
+    observed_entry_sha256 = hashlib.sha256(_canonical_json_bytes_stdlib(census_entries)).hexdigest()
+    observed_forbidden_sha256 = hashlib.sha256(
+        _canonical_json_bytes_stdlib(forbidden_sonames)
+    ).hexdigest()
+    if not (
+        loader.get("ambient_tree_entry_count") == len(census_entries) > 0
+        and loader.get("ambient_tree_entry_census_sha256") == observed_entry_sha256
+        and loader.get("recursive_forbidden_soname_census_sha256") == observed_forbidden_sha256
+        and loader.get("recursive_forbidden_soname_count") == len(forbidden_sonames) == 0
+        and loader.get("ld_so_cache_selected_libc_path") == _TOOL_SHELL_LIBC_PATH
+        and loader.get("selected_libc_unique") is True
+    ):
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    ambient = closed(
+        subject.get("ambient_environment"),
+        _OUTER_TOOL_AMBIENT_ENVIRONMENT_KEYS,
+    )
+    if ambient != {
+        "required": {"LD_LIBRARY_PATH": _TOOL_SHELL_AMBIENT_LD_LIBRARY_PATH},
+        "forbidden_names": list(_TOOL_SHELL_FORBIDDEN_ENVIRONMENT_NAMES),
+        "forbidden_prefixes": list(_TOOL_SHELL_FORBIDDEN_ENVIRONMENT_PREFIXES),
+        "other_ld_environment_variables_allowed": False,
+    }:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    invocation = closed(subject.get("invocation"), _OUTER_TOOL_INVOCATION_KEYS)
+    command_prefix = (
+        f"exec {_LAUNCH_SHIM_PATH} -c {_LAUNCH_SHIM_TOKEN_PREFIX}:{_LAUNCH_SHIM_AUTHORITY_PATH}:"
+    )
+    if invocation != {
+        "shell_option": "-c",
+        "login": False,
+        "tty": False,
+        "command_grammar": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1",
+        "command_prefix": command_prefix,
+        "command_prefix_sha256": hashlib.sha256(command_prefix.encode("ascii")).hexdigest(),
+        "command_prefix_byte_count": len(command_prefix.encode("ascii")),
+        "command_authority_sha256_byte_count": 64,
+        "command_total_byte_count": len(command_prefix.encode("ascii")) + 64,
+    }:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    claims = closed(subject.get("formal_claims"), _OUTER_TOOL_FORMAL_CLAIM_KEYS)
+    if claims != {
+        "direct_exec_formally_proven": False,
+        "pre_gate_dynamic_loader_closure_formally_proven": False,
+    }:
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    if not (
+        components(
+            subject.get("path_binding"),
+            lexical_path=_TOOL_SHELL_PATH,
+            expected_paths=_TOOL_SHELL_PATH_COMPONENT_PATHS,
+        )
+        == path_entries
+        and components(
+            subject.get("interpreter_path_binding"),
+            lexical_path=_TOOL_SHELL_PT_INTERP_PATH,
+            expected_paths=_TOOL_SHELL_INTERPRETER_COMPONENT_PATHS,
+        )
+        == interpreter_entries
+        and components(
+            loader.get("system_configuration_path_binding"),
+            lexical_path="/etc",
+            expected_paths=_TOOL_SHELL_SYSTEM_CONFIG_COMPONENT_PATHS,
+        )
+        == system_configuration_entries
+        and components(
+            loader.get("ambient_path_binding"),
+            lexical_path=_TOOL_SHELL_AMBIENT_LD_LIBRARY_PATH,
+            expected_paths=_TOOL_SHELL_AMBIENT_COMPONENT_PATHS,
+        )
+        == ambient_entries
+    ):
+        raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    return {
+        "schema_version": "mobileworld.g1.gpu-live-smoke-tool-shell-stdlib-revalidation/v1",
+        "stage": stage,
+        "authority_binding_sha256": hashlib.sha256(
+            _canonical_json_bytes_stdlib(subject)
+        ).hexdigest(),
+        "owner_role": (
+            "HOST_ROOT" if stage == "STAGE0" else "HOST_ROOT_UNMAPPED_INSIDE_USER_NAMESPACE"
+        ),
+        "authority_host_owner_uid": 0,
+        "authority_host_owner_gid": 0,
+        "observed_owner_uid": expected_owner_uid,
+        "observed_owner_gid": expected_owner_gid,
+        "path_component_count": len(path_entries),
+        "interpreter_component_count": len(interpreter_entries),
+        "system_configuration_component_count": len(system_configuration_entries),
+        "ambient_component_count": len(ambient_entries),
+        "ambient_tree_entry_count": loader["ambient_tree_entry_count"],
+        "ambient_tree_entry_census_sha256": loader["ambient_tree_entry_census_sha256"],
+        "recursive_forbidden_soname_count": 0,
+        "ld_so_preload_absent": True,
+        "binding_match": True,
+        "direct_exec_formally_proven": False,
+        "pre_gate_dynamic_loader_closure_formally_proven": False,
+    }
 
 
 def _digest_regular_nofollow_stdlib(path: str) -> str:
@@ -1749,9 +2484,11 @@ def _outer_execute_context(
     server = authority.get("server_runtime")
     outer_runtime = authority.get("outer_runtime")
     private_runtime = authority.get("private_runtime")
+    launch_shim = authority.get("launch_shim")
+    tool_shell = authority.get("tool_shell")
     gpu = authority.get("gpu")
     if not (
-        authority.get("schema_version") == "mobileworld.g1.gpu-live-smoke-authority/v1"
+        authority.get("schema_version") == _AUTHORITY_SCHEMA_VERSION
         and authority.get("decision_id") == "D-034"
         and authority.get("authorized_scope") == "SYNTHETIC_NON_CASE_GPU_LIVE_SMOKE_22_CALLS"
         and authority.get("authorized") is True
@@ -1771,7 +2508,13 @@ def _outer_execute_context(
         and set(outer_runtime) == _OUTER_RUNTIME_KEYS
         and type(private_runtime) is dict
         and set(private_runtime) == _OUTER_PRIVATE_RUNTIME_KEYS
+        and type(launch_shim) is dict
+        and set(launch_shim) == _OUTER_LAUNCH_SHIM_KEYS
+        and type(tool_shell) is dict
+        and set(tool_shell) == _OUTER_TOOL_SHELL_KEYS
         and type(gpu) is dict
+        and namespace.get("inside_unmapped_system_uid") == 65_534
+        and namespace.get("inside_unmapped_system_gid") == 65_534
     ):
         raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
     namespace = cast(dict[str, object], namespace)
@@ -1832,10 +2575,18 @@ def _outer_execute_context(
         and outer_runtime.get("hardlinks_allowed") is True
     ):
         raise RuntimeError("GPU_SMOKE_RUNTIME_TREE_INVALID")
+    if args.pinned_bootstrap_stage == "STAGE0":
+        observed_system_uid = 0
+        observed_system_gid = 0
+    elif args.pinned_bootstrap_stage == "STAGE1":
+        observed_system_uid = cast(int, namespace["inside_unmapped_system_uid"])
+        observed_system_gid = cast(int, namespace["inside_unmapped_system_gid"])
+    else:
+        raise RuntimeError("GPU_SMOKE_RUNTIME_TREE_INVALID")
     outer_stdlib = _enumerate_bound_tree_stdlib(
         "/usr/lib/python3.10",
-        owner_uid=0,
-        owner_gid=0,
+        owner_uid=observed_system_uid,
+        owner_gid=observed_system_gid,
         recorded_owner_uid=0,
         recorded_owner_gid=0,
         directory_mode=0o755,
@@ -1921,6 +2672,19 @@ def _outer_execute_context(
         }
     ):
         raise RuntimeError("GPU_SMOKE_SOURCE_BINDING_INVALID")
+    _verify_launch_shim_binding_stdlib(
+        authority,
+        args,
+        stage="STAGE0",
+        expected_owner_uid=cast(int, namespace["host_owner_uid"]),
+        expected_owner_gid=cast(int, namespace["host_owner_gid"]),
+    )
+    _verify_tool_shell_binding_stdlib(
+        authority,
+        stage="STAGE0",
+        expected_owner_uid=0,
+        expected_owner_gid=0,
+    )
     return (
         authority,
         namespace,
@@ -2042,6 +2806,19 @@ def _stage1_preexec_context(
             cast(str, namespace[f"{role}_path"]),
             namespace[f"{role}_sha256"],
         )
+    launch_shim_revalidation = _verify_launch_shim_binding_stdlib(
+        authority,
+        args,
+        stage="STAGE1",
+        expected_owner_uid=cast(int, namespace["inside_owner_uid"]),
+        expected_owner_gid=cast(int, namespace["inside_owner_gid"]),
+    )
+    tool_shell_revalidation = _verify_tool_shell_binding_stdlib(
+        authority,
+        stage="STAGE1",
+        expected_owner_uid=cast(int, namespace["inside_unmapped_system_uid"]),
+        expected_owner_gid=cast(int, namespace["inside_unmapped_system_gid"]),
+    )
     runtime_preexec = _preexec_private_runtime_census_stdlib(authority)
     scratch = _prepare_stage1_launcher_scratch_stdlib(authority, environment)
     completed = _run_owned_command_stdlib(
@@ -2062,8 +2839,14 @@ def _stage1_preexec_context(
         "gid_map_line": namespace["gid_map_line"],
         "inside_owner_uid": 0,
         "inside_owner_gid": 0,
+        "inside_unmapped_system_uid": namespace["inside_unmapped_system_uid"],
+        "inside_unmapped_system_gid": namespace["inside_unmapped_system_gid"],
+        "system_owner_role": "HOST_ROOT_UNMAPPED_INSIDE_USER_NAMESPACE",
+        "system_owner_role_mapping_equivalent": True,
         "private_runtime_preexec": runtime_preexec,
         "launcher_scratch": scratch,
+        "launch_shim_revalidation": launch_shim_revalidation,
+        "tool_shell_revalidation": tool_shell_revalidation,
         "loopback_setup": {
             "tool_path": namespace["ip_path"],
             "tool_sha256": namespace["ip_sha256"],
@@ -2288,6 +3071,8 @@ def _parser() -> argparse.ArgumentParser:
         help="hash local snapshots/runtimes without a GPU, client, socket, or model load",
     )
     inspect_inputs.add_argument("--model-config-manifest", required=True)
+    inspect_inputs.add_argument("--launch-shim", required=True)
+    inspect_inputs.add_argument("--smoke-packet", required=True)
     inspect_inputs.add_argument("--qwen-snapshot", required=True)
     inspect_inputs.add_argument("--mai-snapshot", required=True)
     inspect_inputs.add_argument("--client-python", required=True)
@@ -2302,6 +3087,11 @@ def _parser() -> argparse.ArgumentParser:
     build_runtime.add_argument("--client-site-packages", required=True)
     build_runtime.add_argument("--server-site-packages", required=True)
     build_runtime.add_argument("--output-root", required=True)
+    build_shim = subparsers.add_parser(
+        "build-launch-shim",
+        help="build and inspect the frozen CPU-only static pre-gate launch shim",
+    )
+    build_shim.add_argument("--output-path", required=True)
     for name in ("prepare", "execute"):
         command = subparsers.add_parser(name)
         command.add_argument("--authority", required=True)
@@ -2579,6 +3369,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from mobile_world.offline.causal_replay.contracts import canonical_json_bytes
     from mobile_world.offline.gpu_live_smoke import (
         GpuLiveSmokeError,
+        build_gpu_live_smoke_launch_shim,
         build_private_runtime,
         compile_gpu_smoke_packet,
         execute_gpu_live_smoke,
@@ -2598,6 +3389,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "inspect-authority-inputs":
             result = inspect_authority_inputs(
                 model_config_manifest_path=args.model_config_manifest,
+                launch_shim_path=args.launch_shim,
+                smoke_packet_path=args.smoke_packet,
                 qwen_snapshot_path=args.qwen_snapshot,
                 mai_snapshot_path=args.mai_snapshot,
                 client_python_path=args.client_python,
@@ -2615,6 +3408,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 client_site_packages_path=args.client_site_packages,
                 server_site_packages_path=args.server_site_packages,
                 output_root=args.output_root,
+            )
+        elif args.command == "build-launch-shim":
+            result = build_gpu_live_smoke_launch_shim(
+                output_path=args.output_path,
             )
         elif args.command == "prepare":
             authority = load_gpu_live_authority(args.authority, args.authority_sha256)

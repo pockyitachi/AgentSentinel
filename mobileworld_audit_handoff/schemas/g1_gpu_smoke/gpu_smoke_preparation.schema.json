@@ -8,7 +8,8 @@
     "schema_version", "decision_id", "authority_id", "authority_sha256",
     "smoke_packet_sha256", "live_preparation_receipt_sha256", "model_order",
     "call_count", "g1_4_call_count", "g1_5_call_count",
-    "call_descriptors_sha256", "launch_plans_sha256", "validated", "prepared",
+    "call_descriptors_sha256", "launch_plans_sha256", "launch_shim",
+    "validated", "prepared",
     "execution_started", "client_created", "socket_opened", "subprocess_started",
     "gpu_probed", "gpu_used", "model_loaded", "provider_invoked",
     "generated_action_executed", "replay_executed",
@@ -29,6 +30,7 @@
     "g1_5_call_count": {"const": 10},
     "call_descriptors_sha256": {"$ref": "#/$defs/sha256"},
     "launch_plans_sha256": {"$ref": "#/$defs/sha256"},
+    "launch_shim": {"$ref": "#/$defs/launchInvocation"},
     "validated": {"const": true},
     "prepared": {"const": true},
     "execution_started": {"const": false},
@@ -45,6 +47,68 @@
     "execute_requires_explicit_entrypoint": {"const": true}
   },
   "$defs": {
-    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "launchInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "path", "sha256", "byte_count", "authority_path",
+        "authority_sha256", "argument_prefix", "shell_argument_sha256",
+        "shell_argument_byte_count", "tool_shell_path",
+        "tool_shell_resolved_path", "tool_shell_sha256",
+        "shell_command_sha256", "shell_command_byte_count",
+        "shell_command_prefix_sha256", "shell_command_prefix_byte_count",
+        "command_grammar", "argc", "argv_prefix", "shell_option", "login", "tty",
+        "tool_shell_parameter_honored",
+        "direct_exec_formally_proven", "shell_script_used",
+        "pre_gate_tool_shell_used", "tool_shell_inherits_ambient_environment",
+        "ambient_loader_environment_policy_bound", "launch_shim_clears_environment",
+        "execution_started", "pre_gate_invocation_attestation_formally_proven",
+        "pre_gate_dynamic_loader_closure_formally_proven"
+      ],
+      "properties": {
+        "schema_version": {"const": "mobileworld.g1.gpu-live-smoke-launch-invocation/v1"},
+        "path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1, "maximum": 4194304},
+        "authority_path": {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/authority.v2.json"},
+        "authority_sha256": {"$ref": "#/$defs/sha256"},
+        "argument_prefix": {"const": "D034_STAGE0_V1"},
+        "shell_argument_sha256": {"$ref": "#/$defs/sha256"},
+        "shell_argument_byte_count": {"const": 172},
+        "tool_shell_path": {"const": "/bin/sh"},
+        "tool_shell_resolved_path": {"const": "/usr/bin/dash"},
+        "tool_shell_sha256": {"const": "4f291296e89b784cd35479fca606f228126e3641f5bcaee68dee36583d7c9483"},
+        "shell_command_sha256": {"$ref": "#/$defs/sha256"},
+        "shell_command_byte_count": {"const": 270},
+        "shell_command_prefix_sha256": {"const": "13cf21104b8ced3951a8578b86a1d9ff6d505e4bae496b09a5ae3d6afa79bbf4"},
+        "shell_command_prefix_byte_count": {"const": 206},
+        "command_grammar": {"const": "EXEC_ABSOLUTE_SHIM_COLON_TOKEN_V1"},
+        "argc": {"const": 3},
+        "argv_prefix": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/d034-9845577c/launch-shim.v1"},
+            {"const": "-c"}
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "shell_option": {"const": "-c"},
+        "login": {"const": false},
+        "tty": {"const": false},
+        "tool_shell_parameter_honored": {"const": true},
+        "direct_exec_formally_proven": {"const": false},
+        "shell_script_used": {"const": false},
+        "pre_gate_tool_shell_used": {"const": true},
+        "tool_shell_inherits_ambient_environment": {"const": true},
+        "ambient_loader_environment_policy_bound": {"const": true},
+        "launch_shim_clears_environment": {"const": true},
+        "execution_started": {"const": false},
+        "pre_gate_invocation_attestation_formally_proven": {"const": false},
+        "pre_gate_dynamic_loader_closure_formally_proven": {"const": false}
+      }
+    }
   }
 }
