@@ -221,3 +221,27 @@ duplicate、校验失败、候选缺失或人类认为位置/字段不准确，�
 或编造 gold。候选选择和最终锁定仍是两个独立动作。网页服务继续只允许 owner-authorized
 single-process loopback/tmux；GPU、target actor/provider、external network、replay、
 MobileWorld/generated action 与 treatment response 仍全部禁止。
+
+## D-033 — 剩余 186 条只发布隔离的 AI-only Action labels，不冒充人工标注
+
+**状态：Locked（owner 于 2026-08-30 明确要求“按 AI-only 完成剩余 186 条”）**
+
+Owner 已亲自锁定前 4 条 `ACTION_GOLD`，并明确要求由 AI-only 方式完成其余 186 条。该授权
+只允许三个彼此隔离的 Codex research agents 各自复核一个 62-unit shard；每个 agent 只能读取
+冻结的 D-031 blind packet、target-pre screenshot 与同 unit 的 A/B/C frozen candidates，不得读取
+history、natural action、post/later/outcome、transformation、人类 journal/decision、peer batch output、
+registry 或 secret。它们只能保留/拒绝现有候选或声明没有可靠候选，不得生成、修补、执行动作或
+保存 chain-of-thought。
+
+这 186 条必须发布到第四个、repo-external、content-addressed 的独立
+`AI_ONLY_ACTION_LABELS` root。它们不是 human annotation、independent review、gold、resolution、
+adjudication、formal export 或 admission；不得写入/导入 solo 或 formal journal，不得打开
+Transformation，也不得使 ALE-324 完成。Manifest 必须绑定 active G1.3、完整 sealed D-031
+campaign、三个 batch draft hash，以及 solo journal 中恰好 4 个已锁 Action unit 的不可变 prefix；
+publication 本身不得复制 reviewer identity、assignment identity、secret 或人类 proposal 文本。
+
+`G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md` 与 `schemas/g1_6_ai_only/` 是本条的 normative
+additive boundary。所有 authority flag 固定 false，唯一诚实的语义披露是
+`ai_semantic_labeling_performed=true`。仍禁止 GPU、target actor/project provider、external
+network、model weights、backend restore、replay、MobileWorld/generated action 与 treatment
+response。

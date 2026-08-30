@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai_only/ai_only_action_label.schema.json",
+  "title": "G1.6 AI-Only Action Label V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "publication_id", "unit_id", "source_packet_sha256",
+    "source_output_bindings", "label_kind", "retained_candidate_refs", "candidate_decisions",
+    "exclusion_reason", "concise_rationale", "uncertainty_note", "provenance", "disclosure",
+    "authority", "safety", "label_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.ai-only-action-label/v1"},
+    "record_type": {"const": "ai_only_action_label"},
+    "publication_id": {"$ref": "#/$defs/publicationId"},
+    "unit_id": {"$ref": "#/$defs/unitId"},
+    "source_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "source_output_bindings": {
+      "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/outputBinding"}
+    },
+    "label_kind": {"enum": ["ACCEPT_CANDIDATES", "EXCLUDE"]},
+    "retained_candidate_refs": {
+      "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/candidateRef"}
+    },
+    "candidate_decisions": {
+      "type": "array", "uniqueItems": true,
+      "items": {"$ref": "#/$defs/candidateDecision"}
+    },
+    "exclusion_reason": {
+      "oneOf": [
+        {"type": "null"},
+        {"enum": [
+          "NO_CANDIDATES", "NO_RELIABLE_CANDIDATE", "AMBIGUOUS_VISIBLE_EVIDENCE",
+          "AUTHORIZATION_MISSING"
+        ]}
+      ]
+    },
+    "concise_rationale": {
+      "allOf": [{"$ref": "#/$defs/safeString"}, {"minLength": 1, "maxLength": 4000}]
+    },
+    "uncertainty_note": {
+      "oneOf": [
+        {"type": "null"},
+        {"allOf": [{"$ref": "#/$defs/safeString"}, {"minLength": 1, "maxLength": 4000}]}
+      ]
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "labeling_mode", "batch_slot", "only_frozen_blind_packet_and_candidates_used",
+        "human_material_used", "peer_batch_output_used", "new_candidate_generated"
+      ],
+      "properties": {
+        "labeling_mode": {"const": "THREE_ISOLATED_CODEX_SHARDS"},
+        "batch_slot": {"enum": ["BATCH_1", "BATCH_2", "BATCH_3"]},
+        "only_frozen_blind_packet_and_candidates_used": {"const": true},
+        "human_material_used": {"const": false},
+        "peer_batch_output_used": {"const": false},
+        "new_candidate_generated": {"const": false}
+      }
+    },
+    "disclosure": {"$ref": "#/$defs/disclosure"},
+    "authority": {"$ref": "#/$defs/authority"},
+    "safety": {"$ref": "#/$defs/safety"},
+    "label_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"label_kind": {"const": "ACCEPT_CANDIDATES"}}, "required": ["label_kind"]},
+      "then": {
+        "properties": {
+          "retained_candidate_refs": {"minItems": 1},
+          "exclusion_reason": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"label_kind": {"const": "EXCLUDE"}}, "required": ["label_kind"]},
+      "then": {
+        "properties": {
+          "retained_candidate_refs": {"maxItems": 0},
+          "exclusion_reason": {"type": "string"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "publicationId": {"type": "string", "pattern": "^g1aionly-[0-9a-f]{24}$"},
+    "unitId": {"type": "string", "pattern": "^(?:g1case|g1control)-[0-9a-f]{24}$"},
+    "candidateId": {"type": "string", "pattern": "^g1aicandidate-[0-9a-f]{24}$"},
+    "outputBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["agent_slot", "output_object_sha256"],
+      "properties": {
+        "agent_slot": {"enum": ["A", "B", "C"]},
+        "output_object_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "candidateRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_id", "candidate_sha256", "agent_slot", "output_object_sha256"],
+      "properties": {
+        "candidate_id": {"$ref": "#/$defs/candidateId"},
+        "candidate_sha256": {"$ref": "#/$defs/sha256"},
+        "agent_slot": {"enum": ["A", "B", "C"]},
+        "output_object_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "candidateDecision": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "candidate_id", "candidate_sha256", "agent_slot", "output_object_sha256",
+        "decision", "reason"
+      ],
+      "properties": {
+        "candidate_id": {"$ref": "#/$defs/candidateId"},
+        "candidate_sha256": {"$ref": "#/$defs/sha256"},
+        "agent_slot": {"enum": ["A", "B", "C"]},
+        "output_object_sha256": {"$ref": "#/$defs/sha256"},
+        "decision": {"enum": ["RETAIN", "REJECT"]},
+        "reason": {
+          "enum": [
+            "SUPPORTED", "MATERIAL_DUPLICATE", "LESS_COMPLETE_VARIANT", "WRONG_ACTION",
+            "BAD_GEOMETRY", "INSUFFICIENT_EVIDENCE", "OUT_OF_SCOPE"
+          ]
+        }
+      }
+    },
+    "safeString": {
+      "type": "string",
+      "pattern": "(?i)^(?!.*(?:https?://|ftp://|file://|www\\.|mailto:|(?:^|[^A-Za-z0-9_])(?:/(?!/)[^ ]+|\\.\\.?/|~/|[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\ ]+\\\\)|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret)[ ]*[:=][ ]*[^ ]+|(?:bearer|basic)[ ]+[A-Za-z0-9._~+/=-]{8,}))[^\\u0000-\\u001f\\u007f-\\u009f<>]*$"
+    },
+    "disclosure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ai_semantic_labeling_performed", "human_review_performed", "chain_of_thought_stored"],
+      "properties": {
+        "ai_semantic_labeling_performed": {"const": true},
+        "human_review_performed": {"const": false},
+        "chain_of_thought_stored": {"const": false}
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "human_selected", "counts_as_independent_review", "formal_resolution_eligible",
+        "formal_export_eligible", "admission_eligible", "promotion_allowed", "replay_eligible",
+        "auto_apply_allowed", "solo_journal_write_allowed"
+      ],
+      "properties": {
+        "human_selected": {"const": false},
+        "counts_as_independent_review": {"const": false},
+        "formal_resolution_eligible": {"const": false},
+        "formal_export_eligible": {"const": false},
+        "admission_eligible": {"const": false},
+        "promotion_allowed": {"const": false},
+        "replay_eligible": {"const": false},
+        "auto_apply_allowed": {"const": false},
+        "solo_journal_write_allowed": {"const": false}
+      }
+    },
+    "safety": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "target_actor_model_invoked", "project_provider_client_created", "project_provider_invoked",
+        "external_network_used", "project_gpu_probed", "project_gpu_used",
+        "project_model_weights_loaded", "replay_executed", "action_executed",
+        "treatment_response_generated", "annotation_journal_written"
+      ],
+      "properties": {
+        "target_actor_model_invoked": {"const": false},
+        "project_provider_client_created": {"const": false},
+        "project_provider_invoked": {"const": false},
+        "external_network_used": {"const": false},
+        "project_gpu_probed": {"const": false},
+        "project_gpu_used": {"const": false},
+        "project_model_weights_loaded": {"const": false},
+        "replay_executed": {"const": false},
+        "action_executed": {"const": false},
+        "treatment_response_generated": {"const": false},
+        "annotation_journal_written": {"const": false}
+      }
+    }
+  }
+}

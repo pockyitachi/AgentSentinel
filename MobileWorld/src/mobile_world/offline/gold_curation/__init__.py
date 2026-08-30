@@ -6,6 +6,10 @@ from mobile_world.offline.gold_curation.ai_assistance import (
     prepare_ai_action_gold_campaign,
     seal_ai_candidate_campaign,
 )
+from mobile_world.offline.gold_curation.ai_only_labels import (
+    AIOnlyActionLabelPublication,
+    build_ai_only_action_label_publication,
+)
 from mobile_world.offline.gold_curation.local_tokenizer import load_local_pinned_token_counters
 from mobile_world.offline.gold_curation.publication import (
     ACTIVE_G1_3_PUBLICATION,
@@ -23,12 +27,14 @@ from mobile_world.offline.gold_curation.store import (
 __all__ = [
     "ACTIVE_G1_3_PUBLICATION",
     "AICandidateWorkspace",
+    "AIOnlyActionLabelPublication",
     "AnnotationStore",
     "CurationPublication",
     "ReviewerRegistry",
     "SoloCuratorRegistry",
     "SoloFirstPassStore",
     "build_codec_gate_receipt",
+    "build_ai_only_action_label_publication",
     "capture_ai_candidate_slot",
     "create_app",
     "load_local_pinned_token_counters",

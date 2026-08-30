@@ -28,14 +28,15 @@ Before changing code, read these files completely:
 20. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
 21. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
 22. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-23. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-24. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
-25. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
-26. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
-27. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
-28. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
-29. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
-30. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
+23. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+24. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+25. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
+26. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
+27. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
+28. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
+29. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
+30. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
+31. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
 
 The historical `replay_capsule.schema.json`, `capsule_manifest.schema.json`, and
 `capsule_integrity.schema.json` remain byte-frozen v1 references. Amendment 1
@@ -106,16 +107,26 @@ publication authority. These streams
 are not human reviewers, their outputs never count as independent review, and candidate exposure
 permanently excludes that principal from future formal G1.6 reviewer/adjudicator roles.
 
+`G1_6_DECISION_LOG.md` D-033 additionally authorizes three isolated Codex research agents to
+review the remaining 186 units as three exact 62-unit shards and publish a separate
+`AI_ONLY_ACTION_LABELS` research dataset. The agents may only retain/reject existing frozen D-031
+candidates or exclude a unit; they may not generate new predicates or read human/peer/history/future
+material. The publication is non-human, non-formal, cannot write or advance either annotation
+journal, and must keep every review/export/admission/promotion/replay authority false.
+
 Collector v1 remains event-sourced, lossless, label-free, zero-intervention,
 and byte-immutable. Do not invoke the target actor model or any project provider/client, use an
 external network or a GPU, load/serve project model weights, execute a MobileWorld/generated
 GUI/tool/action, restore a backend, run a deterministic prefix or live replay, generate a treatment
 response, automatically decide claim validity or choose a formal intervention, or implement runtime
 Sentinel behavior. The deterministic fake-provider conformance path, provider-free G1.5 CPU
-checkpoint, explicitly human-authored G1.6 CPU workspace, and the already authorized three-stream
-D-031 offline candidate campaign are the only permitted substitutes. D-031 is the sole semantic
-suggestion exception: its outputs remain untrusted and require individual human decisions, and the
+checkpoint, explicitly human-authored G1.6 CPU workspace, the already authorized three-stream
+D-031 offline candidate campaign, and the isolated D-033 AI-only research publication are the only
+permitted substitutes. D-031 is the sole candidate-suggestion exception: its outputs remain
+untrusted and require individual human decisions, and the
 annotation website itself must never invoke Codex or another model/provider.
+The separate D-033 AI-only label publication is the only additional semantic-labeling exception;
+it remains isolated from both human journals and cannot be treated as human review or gold.
 The sole socket exception is the owner-started, single-process D-029 annotation
 site bound to loopback with same-origin/CSRF checks and no remote assets. D-030
 also permits only the owner's single-port SSH local forward from client

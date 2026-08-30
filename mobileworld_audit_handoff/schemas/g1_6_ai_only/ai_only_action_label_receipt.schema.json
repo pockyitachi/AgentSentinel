@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai_only/ai_only_action_label_receipt.schema.json",
+  "title": "G1.6 AI-Only Action Label Publication Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "publication_id", "publication_manifest_file_sha256",
+    "publication_manifest_sha256", "label_index", "label_set_sha256", "counts", "census",
+    "disclosure", "authority", "safety", "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.ai-only-action-label-publication-receipt/v1"},
+    "record_type": {"const": "ai_only_action_label_publication_receipt"},
+    "publication_id": {"type": "string", "pattern": "^g1aionly-[0-9a-f]{24}$"},
+    "publication_manifest_file_sha256": {"$ref": "#/$defs/sha256"},
+    "publication_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "label_index": {"$ref": "#/$defs/fileRef"},
+    "label_set_sha256": {"$ref": "#/$defs/sha256"},
+    "counts": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "campaign_units", "human_locked_units", "ai_only_labeled_units",
+        "accepted_candidate_units", "excluded_units", "retained_candidates",
+        "rejected_candidates", "decided_candidates"
+      ],
+      "properties": {
+        "campaign_units": {"const": 190},
+        "human_locked_units": {"const": 4},
+        "ai_only_labeled_units": {"const": 186},
+        "accepted_candidate_units": {"type": "integer", "minimum": 0, "maximum": 186},
+        "excluded_units": {"type": "integer", "minimum": 0, "maximum": 186},
+        "retained_candidates": {"type": "integer", "minimum": 0},
+        "rejected_candidates": {"type": "integer", "minimum": 0},
+        "decided_candidates": {"type": "integer", "minimum": 0}
+      }
+    },
+    "census": {
+      "type": "object", "additionalProperties": false,
+      "required": ["regular_file_count", "label_object_count", "symlink_count", "hardlink_count", "extra_file_count"],
+      "properties": {
+        "regular_file_count": {"const": 189},
+        "label_object_count": {"const": 186},
+        "symlink_count": {"const": 0},
+        "hardlink_count": {"const": 0},
+        "extra_file_count": {"const": 0}
+      }
+    },
+    "disclosure": {"$ref": "#/$defs/disclosure"},
+    "authority": {"$ref": "#/$defs/authority"},
+    "safety": {"$ref": "#/$defs/safety"},
+    "receipt_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "fileRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "byte_count"],
+      "properties": {
+        "path": {"const": "label-index.jsonl"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "disclosure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ai_semantic_labeling_performed", "human_review_performed", "chain_of_thought_stored"],
+      "properties": {
+        "ai_semantic_labeling_performed": {"const": true},
+        "human_review_performed": {"const": false},
+        "chain_of_thought_stored": {"const": false}
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "human_selected", "counts_as_independent_review", "formal_resolution_eligible",
+        "formal_export_eligible", "admission_eligible", "promotion_allowed", "replay_eligible",
+        "auto_apply_allowed", "solo_journal_write_allowed"
+      ],
+      "properties": {
+        "human_selected": {"const": false},
+        "counts_as_independent_review": {"const": false},
+        "formal_resolution_eligible": {"const": false},
+        "formal_export_eligible": {"const": false},
+        "admission_eligible": {"const": false},
+        "promotion_allowed": {"const": false},
+        "replay_eligible": {"const": false},
+        "auto_apply_allowed": {"const": false},
+        "solo_journal_write_allowed": {"const": false}
+      }
+    },
+    "safety": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "target_actor_model_invoked", "project_provider_client_created", "project_provider_invoked",
+        "external_network_used", "project_gpu_probed", "project_gpu_used",
+        "project_model_weights_loaded", "replay_executed", "action_executed",
+        "treatment_response_generated", "annotation_journal_written"
+      ],
+      "properties": {
+        "target_actor_model_invoked": {"const": false},
+        "project_provider_client_created": {"const": false},
+        "project_provider_invoked": {"const": false},
+        "external_network_used": {"const": false},
+        "project_gpu_probed": {"const": false},
+        "project_gpu_used": {"const": false},
+        "project_model_weights_loaded": {"const": false},
+        "replay_executed": {"const": false},
+        "action_executed": {"const": false},
+        "treatment_response_generated": {"const": false},
+        "annotation_journal_written": {"const": false}
+      }
+    }
+  }
+}

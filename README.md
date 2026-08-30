@@ -16,7 +16,7 @@ gate and rubric tracker are proposed work; they are not implemented results.
 
 ## Project status
 
-Status as of 2026-08-28:
+Status as of 2026-08-30:
 
 | Workstream | Status | Scope |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ Status as of 2026-08-28:
 | G1.3: immutable decision capsules | **Complete; v1.1 corrected** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); Amendment 1 adds explicit fail-closed authorization guards; 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
 | G1.4: exact-request replay runner | **CPU/fake checkpoint and inert live-proof code prepared; live proof deferred** | The validated CPU/fake runner now has additive D-026 no-execution preparation for static bindings, no-send descriptors, caller-injected response projection, inert launch plans, and injected-only GPU assessment; all readiness/authorization fields remain false and the story remains incomplete |
 | G1.5: Qwen/MAI History Codecs | **CPU checkpoint implemented; live smoke deferred** | Exact flat-progress/raw-replay extraction, rendering, target-only diff, reversibility, human-bound CPU previews, and a content-bound CPU publication are implemented; no model/provider/GPU path is enabled |
-| G1.6: curated gold workspace | **One-person non-formal first-pass checkpoint available; independent review and formal export pending** | The private loopback-only site has an isolated `SOLO_FIRST_PASS` over 190 packets plus three frozen D-031 Action-Gold candidate streams; every suggestion requires an explicit human decision, cannot count as independent review, and cannot be promoted/exported; target-actor provider/GPU/replay paths remain disabled |
+| G1.6: curated gold workspace | **AI-only 186-unit research labels plus four human solo locks; human/formal curation remains incomplete** | The private loopback-only site retains four owner-authored `SOLO_FIRST_PASS` Action locks. D-033 separately publishes the other 186 units as content-addressed `AI_ONLY_ACTION_LABELS`; those labels are non-human, non-formal, non-promotable, do not advance Transformation, and leave target-actor provider/GPU/replay paths disabled |
 
 G1.2 is merged and accepted. ALE-321 / G1.3 formally froze and published all
 190 targets—152 strict-MHR candidates plus 38 selected clean controls—as
@@ -54,14 +54,16 @@ fields remain false, no formal run publication exists, and the story state is
 History Codec checkpoint, and ALE-324 / G1.6 has a private human-curation
 workspace checkpoint. Commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405`
 adds the D-030 one-person `SOLO_FIRST_PASS`: it is a separate, non-promotable
-precursor journal and never satisfies independent review. D-031 additionally
-freezes three isolated, blind Agent A/B/C candidate streams for the 190
-Action-Gold packets. Their 570 outputs and 585 atomic suggestions are untrusted
-AI assistance, not evidence or reviews: the sole curator must inspect every item
-and explicitly adopt, edit, supplement, or ignore it before separately saving
-the still-nonformal solo form. Candidate generation is offline and the website
-has no generate/regenerate endpoint. Neither checkpoint is a live proof or a
-completed formal gold publication. G1.7 and owner authorization for any live/GPU proof remain
+precursor journal and never satisfies independent review. D-031 additionally freezes three
+isolated, blind Agent A/B/C candidate streams for the 190 Action-Gold packets. Their 570 outputs
+and 585 atomic suggestions are untrusted AI assistance, not evidence or reviews. D-033 then
+authorizes three fresh, mutually isolated Codex research agents to decide the remaining 186 units
+in exact 62-unit shards and publish a fourth, repo-external `AI_ONLY_ACTION_LABELS` dataset. It
+binds—but never copies or rewrites—the four owner-locked journal events. The 186 labels are
+explicitly non-human, non-formal, cannot enter either annotation journal, cannot open
+Transformation, and cannot complete ALE-324. Candidate generation and AI-only compilation are
+offline and the website has no generate/regenerate endpoint. None of these checkpoints is a live
+proof or completed formal gold publication. G1.7 and owner authorization for any live/GPU proof remain
 outstanding. Passing CPU or fake-provider tests must
 not be reported as ALE-322 completion. The checked-in AGENTS, STATUS, and the
 applicable G1.4/G1.5/G1.6 additive decision logs remain authoritative.
@@ -154,6 +156,9 @@ machine schemas are
 [`G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`](mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md),
 [`G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`](mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md),
 and [`schemas/g1_6_ai/`](mobileworld_audit_handoff/schemas/g1_6_ai/).
+The separate D-033 non-human publication boundary and its four schemas are
+[`G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`](mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md)
+and [`schemas/g1_6_ai_only/`](mobileworld_audit_handoff/schemas/g1_6_ai_only/).
 The owner-only local website procedure is
 [`G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`](mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md).
 

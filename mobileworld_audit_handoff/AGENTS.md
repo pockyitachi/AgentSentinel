@@ -27,14 +27,15 @@
 23. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
 24. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
 25. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-26. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-27. `G1_SENTINEL_MVP_MIGRATION.md`
-28. `g1/registry.lock.v1.json`
-29. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-30. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-31. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-32. `schemas/g1_3/field_visibility.schema.json`
-33. `schemas/g1_3/capsule_exclusion.schema.json`
+26. `G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+27. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+28. `G1_SENTINEL_MVP_MIGRATION.md`
+29. `g1/registry.lock.v1.json`
+30. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+31. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+32. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+33. `schemas/g1_3/field_visibility.schema.json`
+34. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -97,6 +98,12 @@ resolution、promotion、formal export、admission、replay 与 seal authority �
 三选一后，可另点一次明确的最终确认，由服务器在 decision-journal 锁内从冻结候选机械派生、
 校验并写入一个既有 schema 的非正式 solo lock；该操作仍不得成为 formal review、晋升或发布。
 
+`G1_6_DECISION_LOG.md` D-033 只再授权三个隔离 Codex research agents 把剩余 186 units 分成
+三个固定 62-unit shard，逐图复核并发布独立的 `AI_ONLY_ACTION_LABELS` research dataset。每个
+agent 只能 retain/reject 冻结 D-031 candidate 或排除本 unit，不得生成新 predicate，不得读取
+human/peer/history/future material。该 publication 不是 human review/gold，不得写入或推进 solo/
+formal journal，所有 review/export/admission/promotion/replay authority 必须保持 false。
+
 必须：
 
 - 保存模型真正收到的最终 request；
@@ -130,8 +137,11 @@ resolution、promotion、formal export、admission、replay 与 seal authority �
   restore、prefix 或 live replay、生成 treatment response、自动决定 claim validity、自动选择
   formal intervention，或开始 G1.7+；只允许无网络的确定性 fake-provider conformance、
   provider-free G1.5 CPU checkpoint、D-029 限定的人工 G1.6 CPU workspace，以及 D-031 已明确
-  授权的三路离线 Codex 候选 campaign。D-031 是唯一 semantic-suggestion 例外；输出仍不可信且
+  授权的三路离线 Codex 候选 campaign，以及隔离的 D-033 AI-only research publication。
+  D-031 是唯一 candidate-suggestion 例外；输出仍不可信且
   必须逐项人审，annotation website 自身不得调用 Codex 或任何 model/provider；
+- D-033 是唯一额外的 AI-only semantic-labeling 例外，只能产生与 human journals 隔离、不可晋升、
+  不具 formal authority 的 186-unit research publication；
 - D-029 唯一允许的 server socket 是 owner 启动、单进程、仅绑定 loopback、无 remote asset、
   强制 same-origin/CSRF 的 annotation site；D-030 只额外允许 owner 的单端口 SSH local forward
   从 client `127.0.0.1:8766` 到 server `127.0.0.1:8766`，禁止 reverse/dynamic forwarding、

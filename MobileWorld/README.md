@@ -33,7 +33,7 @@
 > MobileWorld benchmark/runtime host used by AgentSentinel; the original
 > upstream MobileWorld documentation continues below.
 >
-> **Status (2026-08-28):** Epic 1, G1.1, G1.2, and G1.3 are complete. We collected and audited the
+> **Status (2026-08-30):** Epic 1, G1.1, G1.2, and G1.3 are complete. We collected and audited the
 > same canonical 117-task GUI-only suite for MAI-UI-8B, Qwen3-VL-8B,
 > GELab-Zero-4B, UI-Venus-1.5-8B, GUI-Owl-1.5-8B-Instruct, and
 > MemGUI-8B-SFT: 702 model-task cases across six host-native history
@@ -75,11 +75,18 @@
 > are explicitly non-formal, do not count as independent reviews, and cannot be
 > promoted or exported as formal evidence. D-031 adds three already-frozen,
 > blind Agent A/B/C candidate streams for Action Gold. Every candidate remains
-> untrusted and non-authoritative; the human must explicitly review it, and an
-> adoption only copies it into an unsaved form with all confirmations cleared.
-> The site cannot generate, rank, merge, bulk-accept, autosave, or lock AI output.
-> This candidate campaign records `ai_semantic_suggestion_performed=true`; it
-> does not invoke the target actor model or any project provider client/call.
+> untrusted and non-authoritative. D-032 provides the owner-only three-choice
+> review plus a separate server-derived non-formal lock; opening manual editing
+> disables that simple path. The site still cannot generate, rank, vote, merge,
+> bulk-accept, or silently autosave AI output. D-033 separately binds the four
+> owner-authored Action locks and publishes the remaining 186 units, reviewed by
+> three fresh isolated 62-unit Codex shards, as content-addressed
+> `AI_ONLY_ACTION_LABELS`. Those labels have `human_review_performed=false`,
+> never enter either annotation journal, do not open Transformation, and cannot
+> be promoted or treated as gold. The candidate campaign records
+> `ai_semantic_suggestion_performed=true`, while D-033 records
+> `ai_semantic_labeling_performed=true`; neither invokes the target actor model
+> or any project provider client/call.
 > External-network calls, GPU use,
 > MobileWorld/generated GUI/action execution, live replay, and treatment-response
 > generation remain unauthorized. Human clicks in the private annotation site
@@ -89,6 +96,7 @@
 > `IN_PROGRESS_LIVE_PROOF_DEFERRED`. Follow the
 > [inert-preparation contract](../mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md),
 > [AI-candidate amendment](../mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md),
+> [AI-only label amendment](../mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md),
 > [G1.6 workspace runbook](../mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md),
 > and [project status](../mobileworld_audit_handoff/STATUS.md). ALE-324 remains
 > exactly `IN_PROGRESS_HUMAN_CURATION_REQUIRED`, not formal G1.6 completion.

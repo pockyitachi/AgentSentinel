@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai_only/ai_only_action_label_draft.schema.json",
+  "title": "G1.6 AI-Only Action Label Batch Draft V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "unit_id", "label_kind", "retained_candidate_ids", "candidate_decisions",
+    "exclusion_reason", "concise_rationale", "uncertainty_note"
+  ],
+  "properties": {
+    "unit_id": {"$ref": "#/$defs/unitId"},
+    "label_kind": {"enum": ["ACCEPT_CANDIDATES", "EXCLUDE"]},
+    "retained_candidate_ids": {
+      "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/candidateId"}
+    },
+    "candidate_decisions": {
+      "type": "array", "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["candidate_id", "decision", "reason"],
+        "properties": {
+          "candidate_id": {"$ref": "#/$defs/candidateId"},
+          "decision": {"enum": ["RETAIN", "REJECT"]},
+          "reason": {
+            "enum": [
+              "SUPPORTED", "MATERIAL_DUPLICATE", "LESS_COMPLETE_VARIANT", "WRONG_ACTION",
+              "BAD_GEOMETRY", "INSUFFICIENT_EVIDENCE", "OUT_OF_SCOPE"
+            ]
+          }
+        }
+      }
+    },
+    "exclusion_reason": {
+      "oneOf": [
+        {"type": "null"},
+        {"enum": [
+          "NO_CANDIDATES", "NO_RELIABLE_CANDIDATE", "AMBIGUOUS_VISIBLE_EVIDENCE",
+          "AUTHORIZATION_MISSING"
+        ]}
+      ]
+    },
+    "concise_rationale": {
+      "allOf": [{"$ref": "#/$defs/safeString"}, {"minLength": 1, "maxLength": 4000}]
+    },
+    "uncertainty_note": {
+      "oneOf": [
+        {"type": "null"},
+        {"allOf": [{"$ref": "#/$defs/safeString"}, {"minLength": 1, "maxLength": 4000}]}
+      ]
+    }
+  },
+  "$defs": {
+    "unitId": {"type": "string", "pattern": "^(?:g1case|g1control)-[0-9a-f]{24}$"},
+    "candidateId": {"type": "string", "pattern": "^g1aicandidate-[0-9a-f]{24}$"},
+    "safeString": {
+      "type": "string",
+      "pattern": "(?i)^(?!.*(?:https?://|ftp://|file://|www\\.|mailto:|(?:^|[^A-Za-z0-9_])(?:/(?!/)[^ ]+|\\.\\.?/|~/|[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\ ]+\\\\)|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret)[ ]*[:=][ ]*[^ ]+|(?:bearer|basic)[ ]+[A-Za-z0-9._~+/=-]{8,}))[^\\u0000-\\u001f\\u007f-\\u009f<>]*$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"label_kind": {"const": "ACCEPT_CANDIDATES"}}, "required": ["label_kind"]},
+      "then": {
+        "properties": {
+          "retained_candidate_ids": {"minItems": 1},
+          "exclusion_reason": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"label_kind": {"const": "EXCLUDE"}}, "required": ["label_kind"]},
+      "then": {
+        "properties": {
+          "retained_candidate_ids": {"maxItems": 0},
+          "exclusion_reason": {"type": "string"}
+        }
+      }
+    }
+  ]
+}

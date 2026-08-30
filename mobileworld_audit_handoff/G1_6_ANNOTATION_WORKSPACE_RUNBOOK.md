@@ -265,6 +265,35 @@ reviewers become available, create a new formal root, registry, and assignment k
 journal remains a non-authorizing precursor and must stay hidden from those reviewers until blind
 formal review is complete.
 
+### D-033 offline AI-only publication
+
+The owner's four locked Action units remain the only human-authored solo locks. D-033 labels the
+other 186 units in a fourth, repository-external dataset; it deliberately does **not** turn the site
+counter into `190/190`, write the solo journal, or open Transformation. A successful result must be
+described as `AI_ONLY_ACTION_LABELS_PUBLISHED_NON_FORMAL / HUMAN_CURATION_INCOMPLETE`.
+
+Build only from the three fresh isolated 62-unit JSONL drafts and the sealed D-031 campaign:
+
+```bash
+cd /path/to/AgentSentinel/MobileWorld
+PYTHONPATH=src python scripts/build_g1_ai_only_action_labels.py \
+  --candidate-root /shared/linqiang/mobileworld_causal_replay_data/g1_6/ai-action-gold-candidates-v1 \
+  --human-journal /shared/linqiang/mobileworld_causal_replay_data/g1_6/solo-first-pass-workspace-v1/solo-first-pass-events.jsonl \
+  --output-root /shared/linqiang/mobileworld_causal_replay_data/g1_6/ai-only-action-labels-v1 \
+  --batch-1 /private/path/batch-1.jsonl \
+  --batch-2 /private/path/batch-2.jsonl \
+  --batch-3 /private/path/batch-3.jsonl
+```
+
+Reopen without draft files using the same source bindings plus `--validate-only`. The compiler
+requires pairwise-disjoint repository, G1.3, candidate, human-workspace, draft, and output paths;
+three distinct owner-only draft files; exact 4+186 population closure; exact candidate decisions;
+no retained material duplicate; and Linux `renameat2(RENAME_NOREPLACE)`. The installed root and
+directories are mode `0500`, regular files are `0400`, and any failed install leaves a private
+sealed staging directory for explicit audited cleanup rather than recursively deleting by path.
+The CLI has no website endpoint and cannot invoke GPU, model/provider, external network, replay, or
+MobileWorld actions.
+
 ## 5. Checkpoint and completion boundary
 
 The current implementation is an annotation-workspace checkpoint, not a frozen G1.6 bundle.  It
