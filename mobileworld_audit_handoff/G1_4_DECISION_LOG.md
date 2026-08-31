@@ -120,147 +120,54 @@ seal 和新的 versioned live-execution authority 齐备并经 owner 再次明�
 继续保持 `IN_PROGRESS_LIVE_PROOF_DEFERRED`，现有
 `OpenAICompatibleProviderCodec.send` 与 `execute_live_arm` 继续机械 fail-only。
 
-## D-034 — 仅授权 GPU0 上 22-call 非正式、无秘密、非 case loopback smoke
+## D-034 — Owner-authorized direct GPU 0 smoke boundary
 
-**状态：Locked narrow owner authority（owner 于 2026-08-30 明确指定共享物理 GPU 0，并再次
-要求不得停止、修改或干扰任何其他用户进程）**
+**Status:** `LOCKED_NONFORMAL_DIRECT_SMOKE_ONLY`
 
-本条只把 D-027 中 `GPU_LIVE_BACKLOG_RECORDED_NOT_AUTHORIZED` 的一个封闭工程 smoke 项改为
-`AUTHORIZED_NON_FORMAL_SECRET_FREE_LOOPBACK_SMOKE_ONLY`。规范合同是
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md`；执行前必须由 owner UID、有效期和 out-of-band SHA-256
-共同绑定 closed-shape `mobileworld.g1.gpu-live-smoke-authority/v1` 与 exact synthetic packet。
-任何字段漂移、未知字段、secret-bearing 字段、hash/owner/time 不匹配都必须在 GPU probe、client、
-socket、subprocess 或 model load 前以稳定 `GPU_SMOKE_*` code 阻断。
-仅对这个 synthetic non-case smoke，D-027 中 formal replay 所需的 G1.6/G1.7 downstream seals
-不作为输入门槛；D-034 不生成或翻转这些 seals，它们对未来任何 formal/case replay 仍是强制门禁。
+Owner 于 2026-08-30 曾授权一次 non-formal 直接 GPU 0 smoke：固定
+`CUDA_VISIBLE_DEVICES=0`，仅绑定 `127.0.0.1:18007`，按 Qwen 后 MAI
+的顺序执行精确 22 个 secret-free synthetic calls。只允许清理本次
+smoke 自己创建的 child/session；不得读取任何外来进程的 `/proc`
+私有细节，不得向任何外部进程发送 signal 或采取动作，不得执行任何
+返回 action。只读 GPU/进程基线检查（包括收尾 `nvidia-smi`）仍允许。任一
+失败都立即结束且不得重试。旧 D-034
+authority/shim/formal-evidence 链已废弃，不得复用或作为运行 gate。
 
-授权资源固定为共享物理 GPU 0、UUID
-`GPU-991ac45f-e9e9-1c25-590c-fb49ca752965`，并以该 UUID（不是易漂移的 ordinal 字符串）设置
-`CUDA_VISIBLE_DEVICES`。API 只允许 `127.0.0.1:18007`；client 固定 MobileWorld venv 的
-`openai==1.106.1`，server 固定 SkyRL venv 的 `openai==2.15.0`、`vllm==0.11.0`、
-`torch==2.8.0+cu126`。本机 cache 可写这一现状仅能用于非正式 smoke：Qwen/MAI 每个 snapshot
-必须在服务前后做完整树 inventory/hash 且 bytes 全等，同时明确
-`formal_model_immutability_proven=false`、`toctou_free_model_binding_proven=false`。
-authority 的 free-memory floor 固定为 64 GiB（`68719476736` bytes），必须在 Qwen 与 MAI 各自
-启动前重新检查；低于阈值只可阻断，不得通过停止或修改其他用户进程释放显存。
+**2026-08-31 outcome/amendment:** GPU 0 attempt 因当前 vLLM 不支持
+`--swap-space`，在模型加载前以 0/22 次调用安全失败；该 attempt 已结束且
+不得重试。Owner 现仅授权一次 GPU 4 替代 attempt：固定
+`CUDA_VISIBLE_DEVICES=4`，仍仅绑定 `127.0.0.1:18007`，按 Qwen 后 MAI
+的顺序执行精确 22 个 secret-free synthetic calls。只能清理本 attempt 自己
+创建的 child/session；不得向 `taoz` 或任何外部进程发送 signal、修改、
+停止或采取任何动作。任一失败都立即结束且不得重试。旧
+authority/shim/formal-evidence 链仍禁止复用。
 
-调用矩阵在任何输出出现前固定为 22 次、零 SDK hidden retry、non-stream、失败不补跑：
-G1.4 是 2 models × seeds `1729/2718/31415` × 2 fresh repeats = 12；G1.5 是 2 codecs ×
-5 arms × seed `1729` = 10。严格先启动 Qwen，完成其 11 个 calls 后按 exact own-process guard
-停服并证明进程、port、GPU allocation 释放，才可启动 MAI 的 11 个 calls。不得两模型共驻，
-不得 warm-up generation、probe generation、额外 invocation 或 result-dependent call。
+**2026-08-31 GPU 4 outcome/next-fix boundary:** 该 attempt 已进入 Qwen 模型
+加载/PROFILE，随后因 bundled Triton `ptxas` 的 mode 为 `0644` 而触发
+`EACCES`，以 0/22 次调用安全失败。MAI 未启动；`taoz` PID 217927、其
+基线/显存与 loopback port 均保持或恢复至基线。该 attempt 已结束且
+不得重试。下一步只授权修改 smoke child-process environment，使用 system
+CUDA tool paths；不得 `chmod` 或以其他方式修改共享 venv。
 
-GPU 0 是共享资源，不要求或声称 exclusive lease。已有 foreign PID 只可进入最小 GPU process
-snapshot，绝不是清理目标；为共享卡 invariance 与 PID reuse 防护，唯一允许的 foreign 身份读取是
-当前 UID 与 `/proc/<pid>/stat` start time。不得 signal、renice、attach、改变 cgroup，亦不得读取
-foreign `cmdline`、`exe`、`environ`、`fd`、`cwd`、`mem`、maps、stack 或其他 `/proc` 文件/链接。
-只有同时匹配本 batch launch receipt 的 PID、UID、`/proc` start time、PGID、SID、
-executable/command hash、model、GPU UUID 与 port 的进程才可被 stop；任一不匹配必须不发送信号
-并 fail closed。port 已被占用时同样只报错，不得 kill listener 或换端口规避。
+## D-035 — Post-hoc non-formal G1.4 engineering close
 
-输入只能是 versioned、secret-free、synthetic、non-case packet；禁止 formal capsule、真实 task
-或 190-unit replay。response/action/parser output 只作为 inert evidence 保存，绝不执行或反馈给后续
-call。证据必须在 repo 外形成 exact-file-set content-addressed closure，覆盖 authority/packet、
-环境、GPU/port/process snapshots、两模型 pre/post tree hash、两个 service lifecycle、22 个 call
-request/response/usage/error/parser receipts、零 foreign-PID target/零 action/零 feedback/零
-non-loopback/零 secret ledger 以及最终 manifest；失败证据不得改写成 PASS。
+**状态：`NONFORMAL_LIVE_SMOKE_PASSED` / formal replay
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`（owner 于 2026-08-31 接受）**
 
-本条不翻转 formal G1.3 capsule 的 `execution_ready=false`、
-`provider_invocation_allowed=false`、`treatment_response_generation_allowed=false`，不解锁 G1.4
-formal send/replay、G1.6 gold/admission 或 G1.7。`OpenAICompatibleProviderCodec.send` 与
-`execute_live_arm` 的 formal path 继续 fail-only；D-034 必须使用独立 smoke-only entrypoint。
-external network、credential、真实外部 provider、backend restore/prefix/live replay、Docker/
-emulator/MobileWorld action、generated action、treatment generation、response feedback、formal
-publication 与任何他人进程操作继续禁止。任何扩大 GPU/UUID/model/endpoint/input/seed/repeat/
-arm/call count/retry/process/network/evidence 范围都需要新的 owner 决策和 contract version。
+Owner 在审阅最终 GPU4 结果后，接受该 22/22 compatibility smoke 作为 ALE-322 的有界工程
+交付收尾。该决定是 post-hoc scope amendment，不满足 D-027 的预注册 formal proof 条件，也不
+把 direct HTTP、observed vLLM 0.19.1 runtime、共享 GPU4 或事后 source/runtime binding 追认为
+formal Provider Codec、冻结 serving environment、backend/session isolation、treatment 或 replay
+evidence。
 
-### D-034 Amendment 1 — authority v3 保留 owner 已批准的 exact supplementary groups
+实现及验证面固定于 commit `86d54efce0c3f36c4a5df86c8ff146fd9b7fa25a`。外部只读
+content-addressed evidence manifest SHA-256 为
+`f70cee09e4870f3b0ab8dcd0d187efacd49362731c976b0872b4243600305179`；安装收据 SHA-256 为
+`272f03d16f988f8e9e9cb3a36146583f7545e62daf2716b0518c2155f97a7064`。历史 D-034 链最后存在于
+commit `60835447601cacbfae4c806b464b3247d555aeac`，并在 commit
+`83e6cb847e62594f75ce4f6b47b3bae3337203d6` 删除；不得复活或复用。
 
-**状态：Locked narrow owner amendment（owner 于 2026-08-30 明确批准；不改写上方历史
-D-034 文本）**
-
-上方 D-034 的 authority v1/v2 generations 现为不可执行、不可重试的历史版本；v2 operational
-attempt 无法在 one-ID user namespace 内清空 host 已有 supplementary groups。该失败发生在任何
-GPU probe、模型加载、服务、
-请求、provider、replay 或 MobileWorld action 之前。owner 现只批准
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_1.md` 中的窄幅修正，并指定该 Amendment 1 与
-base contract 共同构成后续 D-034 尝试的规范合同。历史
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 保持 byte-frozen；冲突处由 Amendment 1 控制。
-
-后续唯一有效 authority 是
-`mobileworld.g1.gpu-live-smoke-authority/v3`。它必须锁定 host UID/GID
-`1035:1035`、primary-first group vector `[1035,109,999]`、实际 sorted
-`os.getgroups()` `[109,999,1035]`，以及 namespace 内 duplicate-preserving sorted vector
-`[0,65534,65534]`。owner 明确允许仅保留这组既有身份，并要求 `setgroups=deny`、
-`setpriv --keep-groups`、Stage2 五个 capability sets 全零及 `NoNewPrivs=1`。Stage1 只记录
-实际 capability/`NoNewPrivs` 值，不声称它们已完成 Stage2 门禁。
-
-保留 GID 109/KVM 与 GID 999/Docker 意味着存在已披露、非正式的 KVM device 与 Docker
-AF_UNIX capability residual；它不授权打开或使用 `/dev/kvm`、Docker socket/filesystem、执行
-Docker/KVM 操作，亦不授权对 foreign PID 增加任何读取、signal、修改或其他操作。D-034
-原有 pidfd own-process guard、foreign PID 最小读取范围、零 action、零 feedback、零 replay、
-无外部 provider 与 no-secret 规则全部不变。只有 external INET/INET6 不可用可作机械声明；
-Docker/KVM 的零 FD/socket/action 只是各 receipt 的 point observation，不得声称连续机械不可达。
-
-authority v3 只接受 launch-shim v2、`D034_STAGE0_V2`、authority.v3、evidence-v3 与
-runtime-scratch-v3 epoch。authority v1/v2、旧 shim、旧 evidence/scratch 均保持只读历史证据，
-禁止 retry、reuse、rename、overwrite、truncate 或 delete。Preparation、network namespace 与
-stored execution receipts 分别升级为 v2；execution v2 只接受 INET/INET6 限定网络语义，旧 v1
-receipt 不得按 v2 重新解释。任何进一步范围变化仍需新的 owner 决策与版本化合同修订。
-
-### D-034 Amendment 2 — authority v4 使用 Git no-spawn empty fsmonitor override
-
-**状态：Locked narrow owner amendment（owner 于 2026-08-30 明确批准；不改写上方历史
-D-034 或 Amendment 1 文本）**
-
-authority-v3 live attempt 因 host Git 2.34 将 `core.fsmonitor=false` 解释为可执行 fsmonitor
-hook path 并生成 `/usr/bin/false` child 而由 owned-command controller fail closed。该 attempt
-完成 `0/22` calls，且失败发生在任何 GPU probe、模型加载、服务、请求、provider、replay 或
-MobileWorld action 之前。其 authority-v3、launch-shim-v2、evidence-v3 与 runtime-scratch-v3
-及全部失败 receipt/content objects 必须保持只读历史事实，禁止 retry、reuse、rename、overwrite、
-truncate 或 delete。
-
-Owner 只额外授权 `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_2.md` 的窄修。后续唯一可审
-generation 是 authority v4、launch-shim v3、token `D034_STAGE0_V3`、authority.v4.json、
-evidence-v4 与 runtime-scratch-v4。所有 production Git argv 必须使用 exact
-`-c core.fsmonitor= -c core.hooksPath=/dev/null`；literal `core.fsmonitor=false` 被禁止，且 actual
-Git CPU regression 必须证明较低优先级的 executable fsmonitor 配置被空值 override、clean
-rev-parse/status 均成功并观察到零 descendants。任何 v3/v4 mixed epoch 都必须由 schema、loader、
-preparation、shim 或 entrypoint fail closed。
-
-Amendment 1 的 exact retained supplementary groups、zero-capabilities/Stage2 NNP、Docker/KVM
-residual disclosure 与 invocation prohibition、INET/INET6、pidfd own-process、foreign PID、GPU0/
-UUID/64-GiB、模型顺序、22-call、zero-retry、no-action/no-feedback/no-replay/no-secret 规则全部不变。
-v4 必须从新的 sealed source、NO_REPLACE shim、fresh canonical authority 与 fresh evidence/scratch
-roots 重新构建并独立复核；本 amendment 不把 artifact 或 live gate 标为已通过。
-
-### D-034 Amendment 3 — authority v5 server child sealed import path
-
-**状态：Locked narrow owner amendment（owner 于 2026-08-30 明确批准；不改写历史 D-034、
-Amendment 1 或 Amendment 2 文本）**
-
-authority-v4 live attempt 已执行 GPU0 只读 baseline probe，并启动 Qwen 自有 vLLM API-server
-root process，但 readiness、during-service GPU receipt 与 model-load proof 均未成立。其自有 internal
-registry child 使用 private Python 运行 `-m vllm.model_executor.models.registry`，因 closed server
-environment 未暴露 authority-bound sealed server site-packages，以
-`ModuleNotFoundError: No module named 'vllm'` 和 exit 1 结束；terminal error 是
-`GPU_SMOKE_SERVER_EXITED_EARLY`，logical/physical HTTP 均为 `0/22`。service 自行退出，signal
-intent/sent、foreign target、replay 与 action 均为零，port/session/own-GPU release 已证明。不得把
-该失败描述为 GPU probe 或 process launch 之前，也不得声称模型已加载。
-
-Owner 只额外授权 `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_3.md` 的 server-child import
-窄修。后续唯一可审 generation 是 authority v5、launch-shim v4、token `D034_STAGE0_V4`、
-authority.v5.json、evidence-v5 与 runtime-scratch-v5。server closed environment 必须从现有
-authority-bound private server tree 唯一推导 exact single `PYTHONPATH`，并锁
-`PYTHONSAFEPATH=1`、`PYTHONDONTWRITEBYTECODE=1`、`PYTHONNOUSERSITE=1`；server-environment
-receipt 升级为 v2 并携带 closed child-import/startup-policy evidence。parent 继续由 isolated flags
-忽略环境路径并手工插入 sealed path；non-isolated registry child 必须继承 exact environment，禁止
-cwd/empty-path import、bytecode 与 startup customization。AST 与 CPU child probe 必须机械验证该
-边界。authority-v4、launch-shim-v3、evidence-v4、runtime-scratch-v4、terminal/server-log 及全部
-content objects 必须只读保留，禁止 retry、reuse、rename、overwrite、truncate 或 delete。
-
-Amendment 1/2 的 retained groups、Stage2 caps/NNP、Docker/KVM residual 与 invocation prohibition、
-external INET/INET6 isolation、pidfd own-process、foreign PID、GPU0/UUID/64-GiB、模型顺序、22-call、
-zero-retry、no-provider/no-action/no-feedback/no-replay/no-secret 规则全部不变。v5 必须从新的 sealed
-source、NO_REPLACE shim、fresh canonical authority 和 fresh evidence/scratch roots 构建并独立
-复核；本 amendment 本身不把 code、artifact 或 live gate 标为已通过。
+formal Provider Codec、完整 attempt/usage/latency/error receipts、SDK hidden-retry fidelity、
+fresh invocation/session/KV isolation、backend dependency、run-ready/execution seals 与正式 replay
+全部移交未来 G1.7 另行考虑，本决定不授权它们。GPU/model authority 已用尽；不得再运行 GPU、
+模型、replay 或 action。ALE-323/G1.5 仍未完成。

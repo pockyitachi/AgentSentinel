@@ -21,10 +21,10 @@
 17. `G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
 18. `G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
 19. `G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
-20. `G1_GPU_LIVE_SMOKE_CONTRACT_V1.md`
-21. `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_1.md`
-22. `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_2.md`
-23. `G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_3.md`
+20. `G1_4_NONFORMAL_LIVE_SMOKE_ENGINEERING_CLOSE_AMENDMENT_V1.md`
+21. `schemas/g1_4/nonformal_live_smoke_manifest.v1.schema.json`
+22. `g1_4/nonformal_live_smoke_manifest.v1.json`
+23. `g1_4/nonformal_live_smoke_install_record.v1.json`
 24. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
 25. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
 26. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
@@ -73,47 +73,13 @@ live/GPU proof 延后并需新授权。
 容量评估、schema 和 CPU tests。它不授权 client、network、subprocess、GPU probe/use、模型
 加载、provider send、replay 或 action；所有 live entrypoint 在 owner 新授权与 downstream seal
 齐备前继续机械禁用。
-D-034 是该新授权中唯一的 synthetic smoke 例外；它只启用独立的 smoke-only entrypoint，不能
-启用或削弱 D-026 覆盖的任何 formal entrypoint。
 
 `G1_5_DECISION_LOG.md` D-028 现只授权 **ALE-323 / G1.5 CPU-only History Codec
 checkpoint**：Qwen flat-progress 与 MAI raw-replay 的纯 request extraction/rendering、外部注入的
 精确 curated-span binding、五 arm conformance、secret-free fixture/schema/golden diff，以及与
 G1.4 runner 的 fail-closed interface integration。两个 Codec 均须保持 `live_ready=false`；
-2 codecs × 5 arms 的 10-call live smoke 不由 D-028 单独授权；D-034 现在只允许它作为下述
-exact 22-call 非正式 batch 的子矩阵执行。不得把 CPU checkpoint 或 D-034 smoke 冒充 formal
-replay、formal G1 data 或 G1.6 curation。
-
-`G1_4_DECISION_LOG.md`、`G1_5_DECISION_LOG.md` D-034、byte-frozen
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 与其 Amendment 1、Amendment 2、Amendment 3 只授权一个
-owner-bound、secret-free、synthetic non-case、loopback-only engineering smoke：共享物理 GPU 0 / UUID
-`GPU-991ac45f-e9e9-1c25-590c-fb49ca752965` 上运行 12 个 G1.4 canary 加 10 个 G1.5 codec calls。
-free-memory floor 固定为 64 GiB，Qwen/MAI 各自启动前都必须重查；不足只能阻断，不能清理他人。
-必须 Qwen 完整运行并 guarded release 后才启动 MAI；SDK retry=0、non-stream、无额外调用，所有
-返回 action 都只能是 inert evidence。只可停止与 batch launch receipt 的
-PID/UID/start-time/PGID/SID/model/GPU/port 全部匹配的己方进程。对 foreign PID 唯一允许读取的是
-当前 UID 与 `/proc/<pid>/stat` start time，用于共享卡 invariance/PID reuse 防护；不得 signal、修改，
-也不得读取其 `cmdline`、`exe`、`environ`、`fd`、`cwd`、`mem`、maps、stack 或其他 `/proc` 面。
-可写 model cache 仅以每模型 pre/post 完整树 hash 全等获得非正式资格，
-不形成 formal 或 TOCTOU-free immutability claim。全部 formal G1.3/G1.4/G1.5/G1.6 gates 保持不变。
-
-D-034 authority-v3 attempt 因 Git 2.34 把 `core.fsmonitor=false` 当作 executable hook path 并
-生成 `/usr/bin/false` child 而在 GPU probe 前 fail closed，完成 `0/22` calls。Amendment 2
-只授权 fresh authority v4 / launch-shim v3 / `D034_STAGE0_V3` / evidence-v4 /
-runtime-scratch-v4 generation，并要求所有 production Git argv 使用 exact empty override
-`-c core.fsmonitor= -c core.hooksPath=/dev/null`。v3 authority、shim、failure evidence 与 scratch
-只读保留且禁止重试或复用；任何 mixed epoch 必须 fail closed。Amendment 1 的 retained-group、
-Docker/KVM residual、foreign-process 与全部其他 D-034 范围限制保持不变。
-
-D-034 authority-v4 attempt 已执行 GPU0 只读 baseline probe 并启动 Qwen 自有 API-server
-root process，但其非 isolated registry child 因 closed server environment 未暴露 sealed server
-site-packages 而以 `ModuleNotFoundError: No module named 'vllm'` 自行退出。readiness、during-service
-GPU receipt、model-load proof 与 HTTP request 均未产生，完成 `0/22`；signal intent/sent 与 foreign
-target 均为零，own resource release 已证明。Amendment 3 只授权 fresh authority v5 /
-launch-shim v4 / `D034_STAGE0_V4` / evidence-v5 / runtime-scratch-v5，并把 exact single sealed
-`PYTHONPATH`、safe-path、no-bytecode、no-user-site、startup-customization absence 与 child import
-receipt 绑定到 server environment v2。v4 authority、shim、failure evidence、server log 与 scratch
-必须只读保留，禁止 retry 或复用；全部其他 D-034 安全边界不变。
+2 codecs × 5 arms 的 10-call live smoke 仅进入统一 GPU backlog，当前不授权执行。不得把该
+checkpoint 冒充 live proof、formal replay 或 G1.6 curation。
 
 `G1_6_DECISION_LOG.md` D-029 与
 `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md` 授权 **ALE-324 / G1.6
@@ -170,14 +136,12 @@ formal journal，所有 review/export/admission/promotion/replay authority 必�
 - 用 HTTP 200、截图变化或 task failure 自动等同动作语义失败；
 - 把 API key、Authorization header 或其他 secrets 写入日志；
 - 为了匹配本设计而破坏服务器已有用户修改或强制 reset 工作树。
-- 除 D-034 canonical contract 的 exact smoke-only 例外外，调用 target actor model 或任何
-  project provider/client、发起外部网络请求、使用 GPU、
+- 调用 target actor model 或任何 project provider/client、发起外部网络请求、使用 GPU、
   加载/服务 project model weights、执行 MobileWorld/generated GUI/tool/action、backend
   restore、prefix 或 live replay、生成 treatment response、自动决定 claim validity、自动选择
   formal intervention，或开始 G1.7+；只允许无网络的确定性 fake-provider conformance、
-  provider-free G1.5 CPU checkpoint、D-029 限定的人工 G1.6 CPU workspace、D-031 已明确
-  授权的三路离线 Codex 候选 campaign、隔离的 D-033 AI-only research publication，以及
-  D-034 exact owner-bound GPU0 loopback smoke。
+  provider-free G1.5 CPU checkpoint、D-029 限定的人工 G1.6 CPU workspace，以及 D-031 已明确
+  授权的三路离线 Codex 候选 campaign，以及隔离的 D-033 AI-only research publication。
   D-031 是唯一 candidate-suggestion 例外；输出仍不可信且
   必须逐项人审，annotation website 自身不得调用 Codex 或任何 model/provider；
 - D-033 是唯一额外的 AI-only semantic-labeling 例外，只能产生与 human journals 隔离、不可晋升、
@@ -186,8 +150,6 @@ formal journal，所有 review/export/admission/promotion/replay authority 必�
   强制 same-origin/CSRF 的 annotation site；D-030 只额外允许 owner 的单端口 SSH local forward
   从 client `127.0.0.1:8766` 到 server `127.0.0.1:8766`，禁止 reverse/dynamic forwarding、
   wildcard bind、shared proxy 或 remote hosting；
-- D-034 只额外允许其 hash-bound vLLM lifecycle 在 `127.0.0.1:18007` 使用 health/chat socket；
-  external endpoint、wildcard bind、remote provider 与其他 listener 继续禁止；
 - annotation browser 内的人类点击/表单输入是获准的 curation 输入，不得转成或执行为
   MobileWorld action；
 - 将 G1 label、capsule metadata、visibility classification 或 transformation decision 写回
@@ -208,12 +170,44 @@ captured natural action 当作 replay 必须复现的结果，也不得将 futur
 只有通过 ALE-321 的 capsule 一一对应、rehydration/hash、exact-request、target resolution、
 visibility/future-leakage、稳定 exclusion 和 deterministic double-build 验收，并在 `STATUS.md`
 记录 commit、命令、测试结果、外部 publication 与已知限制后，才可宣称 G1.3 完成。
-G1.4 CPU checkpoint 必须单独记录未完成的 live/GPU 验收项；D-034 exact evidence closure 未
-PASS 前不得将 ALE-322 标记为完成。G1.5 CPU checkpoint 也必须保留精确 10-call 子矩阵；D-034
-exact evidence closure 未 PASS 前不得将 ALE-323 标记为完成。
+ALE-322 的精确工程交付状态是 `NONFORMAL_LIVE_SMOKE_PASSED`；不得称为 formal live
+proof、formal replay ready 或 G1.7 ready。ALE-323 仍未完成。
 G1.6 workspace checkpoint 不能冒充 gold publication；只有 190 单元双盲 review、必要 adjudication、
 formal export/validation/admission/seal 全部完成后才可将 ALE-324 标记为完成。
 任何 target-actor/project-provider/external-network/GPU/MobileWorld-generated-GUI/action/
-live-replay 仍需另行授权；D-029 owner-started loopback annotation site/human curation clicks、
-D-031 已冻结的离线候选 campaign 与 D-034 exact GPU0 smoke 是现有窄幅例外。不得把凭据写入
-代码或本目录。
+live-replay 仍需另行授权；D-029 owner-started loopback annotation site/human curation clicks
+与 D-031 已冻结的离线候选 campaign 是现有窄幅例外。不得把凭据写入代码或本目录。
+
+Owner 直接 smoke 边界（2026-08-30）：尽管上文保留了历史 deferred/backlog
+描述，owner 曾额外授权一次 non-formal 直接 GPU 0 smoke：固定
+`CUDA_VISIBLE_DEVICES=0`，仅绑定 `127.0.0.1:18007`，按 Qwen 后 MAI
+的顺序执行精确 22 个 secret-free synthetic calls。清理只能针对本次
+smoke 自己创建的 child 和 session；不得读取任何外来进程的 `/proc`
+私有细节，不得向任何外部进程发送 signal 或采取动作，不得执行任何
+返回 action。只读 GPU/进程基线检查（包括收尾 `nvidia-smi`）仍允许。任一
+失败都立即结束且不得重试。旧 D-034
+authority/shim/formal-evidence 链已废弃，不得复用或作为 gate。
+
+GPU 0 结果与替代授权（2026-08-31）：GPU 0 attempt 因当前 vLLM 不支持
+`--swap-space`，在模型加载前以 0/22 次调用安全失败；该 attempt 已结束且
+不得重试。Owner 现仅授权一次 GPU 4 替代 attempt：固定
+`CUDA_VISIBLE_DEVICES=4`，仍仅绑定 `127.0.0.1:18007`，按 Qwen 后 MAI
+的顺序执行精确 22 个 secret-free synthetic calls。只能清理本 attempt 自己
+创建的 child/session；不得向 `taoz` 或任何外部进程发送 signal、修改、
+停止或采取任何动作。任一失败都立即结束且不得重试。旧
+authority/shim/formal-evidence 链仍禁止复用。
+
+GPU 4 结果与下一步窄修边界（2026-08-31）：该 attempt 已进入 Qwen 模型
+加载/PROFILE，随后因 bundled Triton `ptxas` 的 mode 为 `0644` 而触发
+`EACCES`，以 0/22 次调用安全失败。MAI 未启动；`taoz` PID 217927、其
+基线/显存与 loopback port 均保持或恢复至基线。该 attempt 已结束且
+不得重试。下一步只授权修改 smoke child-process environment，使用 system
+CUDA tool paths；不得 `chmod` 或以其他方式修改共享 venv。
+
+GPU 4 最终结果与工程收尾（2026-08-31）：system-CUDA tool-path 修复及 production
+prompt/parser 修正后，唯一获准 smoke 完成 Qwen 11/11，完整停止己方服务后再完成
+MAI 11/11，共精确 22/22 个 HTTP-200 且 host-parser 成功的调用；retry=0，生成 action
+执行数=0。三个原始 artifact 已按 D-035 封存为只读 content-addressed bundle。该结果只支持
+`NONFORMAL_LIVE_SMOKE_PASSED` 工程交付，不构成 formal Provider Codec、serving environment、
+isolation、treatment 或 replay proof；这些事项仅留待未来 G1.7 另行考虑且当前未获授权。
+本次 GPU/model 权限已消耗完毕，不再授权任何 GPU/model attempt。

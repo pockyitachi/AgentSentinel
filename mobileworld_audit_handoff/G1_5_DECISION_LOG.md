@@ -74,27 +74,39 @@ G1.6/G1.7 downstream seals，以及显式启用且 hash-bound 的 live Codec cap
 都必须在 client、model load 和 GPU 使用前阻断。矩阵调用数、输入或验收规则的任何扩展都需要
 新的 owner 决策，不得在看到结果后补定。
 
-## D-034 — 将 D-028 的精确 10-call 项纳入 GPU0 非正式 22-call smoke
+## D-034 — Owner-authorized direct GPU 0 smoke boundary
 
-**状态：Locked narrow owner authority（owner 于 2026-08-30 明确授权；规范边界见
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` 与 `G1_4_DECISION_LOG.md` D-034）**
+**Status:** `LOCKED_NONFORMAL_DIRECT_SMOKE_ONLY`
 
-D-028 的 10 个逻辑调用现在只在 D-034 的同一个 synthetic、secret-free、non-case、loopback
-batch 内获得执行授权：Qwen flat-progress 与 MAI raw-replay 各按
-`ORIGINAL/MASK/MASK_CORRECTION/ORACLE_CLEAN/SHAM_BENIGN_EDIT` 顺序调用一次，seed 固定为
-`1729`，SDK hidden retry 为 0，non-stream，失败不得补跑。该 10-call 子矩阵与 G1.4 的 12-call
-canary 合并为 exact 22-call packet；必须按 Qwen 的 6+5 calls、guarded full release、MAI 的
-6+5 calls 严格串行。
+Owner 于 2026-08-30 曾授权一次 non-formal 直接 GPU 0 smoke：固定
+`CUDA_VISIBLE_DEVICES=0`，仅绑定 `127.0.0.1:18007`，按 Qwen 后 MAI
+的顺序执行精确 22 个 secret-free synthetic calls；G1.5 的调用不得
+增加该总数或引入额外重试。只允许清理本次 smoke 自己创建的
+child/session；不得读取任何外来进程的 `/proc` 私有细节，不得向任何
+外部进程发送 signal 或采取动作，不得执行任何返回 action。只读 GPU/
+进程基线检查（包括收尾 `nvidia-smi`）仍允许。任一失败都立即结束且不得重试。旧 D-034 authority/shim/
+formal-evidence 链已废弃，不得复用或作为运行 gate。
 
-本条只允许验证 frozen CPU Codec 对 secret-free fixture 的 live request/diff/reversible-mapping
-binding 和 inert response/parser classification。它不允许 formal G1.3 capsule、真实 task、G1.6
-curated plan/gold、treatment response、formal replay、backend、GUI/tool/action 或 response
-feedback。两个 CPU publication 中的历史 `live_ready=false`/`live_smoke_completed=false` 记录保持
-不可变；D-034 evidence 只能作为新的独立 repo-external engineering receipt，不能回写旧
-publication 或冒充 human review/gold。
+**2026-08-31 outcome/amendment:** GPU 0 attempt 因当前 vLLM 不支持
+`--swap-space`，在模型加载前以 0/22 次调用安全失败；该 attempt 已结束且
+不得重试。Owner 现仅授权一次 GPU 4 替代 attempt：固定
+`CUDA_VISIBLE_DEVICES=4`，仍仅绑定 `127.0.0.1:18007`，按 Qwen 后 MAI
+的顺序执行精确 22 个 secret-free synthetic calls；G1.5 的调用不得增加该
+总数或引入额外重试。只能清理本 attempt 自己创建的 child/session；
+不得向 `taoz` 或任何外部进程发送 signal、修改、停止或采取任何动作。
+任一失败都立即结束且不得重试。旧 authority/shim/formal-evidence 链仍禁止复用。
 
-共享 GPU、UUID、client/server runtime、loopback、可写 cache pre/post 全树 hash、只停 exact
-己方 PID、foreign PID 零 target（只可读其 UID 与 `/proc/<pid>/stat` start time 作 invariance/PID-reuse
-防护，不得读其他 `/proc` 面）、零 external network/secret/action、证据闭包以及 formal gates
-不变等全部规则，以 D-034 canonical contract 为准。只有完整 22-call closure PASS 才能判断本
-10-call deferred smoke item 通过；任何缺失或安全/绑定失败都保持 fail closed。
+**2026-08-31 GPU 4 outcome/next-fix boundary:** 该 attempt 已进入 Qwen 模型
+加载/PROFILE，随后因 bundled Triton `ptxas` 的 mode 为 `0644` 而触发
+`EACCES`，以 0/22 次调用安全失败。MAI 未启动；`taoz` PID 217927、其
+基线/显存与 loopback port 均保持或恢复至基线。该 attempt 已结束且
+不得重试。下一步只授权修改 smoke child-process environment，使用 system
+CUDA tool paths；不得 `chmod` 或以其他方式修改共享 venv。
+
+## D-035 — G1.5 compatibility coverage only
+
+最终 GPU4 run 为 D-028 的十个 arm 各提供了一次 non-formal compatibility observation，且属于
+Qwen→MAI 精确 22-call engineering smoke 的一部分。它没有保留 D-028 formal close 所需的全部
+request/diff/mapping、Provider Codec、usage/error/attempt、authority 与 downstream seal，也不
+改变既有 CPU publication 的 `live_ready=false`。因此 ALE-323 保持未完成；不得把 G1.4 的
+`NONFORMAL_LIVE_SMOKE_PASSED` 状态传播为 G1.5 completion。任何后续 live/formal 工作均未获授权。

@@ -1,6 +1,6 @@
 # Project Status：GUI Agent Previous-Step Misleading Motivation Study
 
-Last updated: 2026-08-30 (UTC)
+Last updated: 2026-08-31 (UTC)
 
 ## 1. Project objective
 
@@ -24,10 +24,10 @@ guards，并从同一冻结来源正式发布 190 个 v1.1 immutable、self-vali
 0 个 exclusion。** 旧 v1 publication 保持不可变和历史可识别，但已被 v1.1 supersede for
 formal G1 use。
 
-**ALE-322 / G1.4 已在 commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`
-形成经验证的 CPU/fake checkpoint，并在 commit
-`74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d` 完成 D-026 inert/code-only live-proof
-preparation；story 仍为 `IN_PROGRESS_LIVE_PROOF_DEFERRED`，live/GPU proof 延后。**
+**ALE-322 / G1.4 的有界工程交付状态现为 `NONFORMAL_LIVE_SMOKE_PASSED`，formal replay
+状态为 `DEFERRED_TO_G1_7_NOT_AUTHORIZED`。** CPU/fake checkpoint、inert preparation 与一次
+Qwen→MAI 22/22 production-prompt/parser compatibility smoke 已完成；该状态不等于 formal
+Provider Codec、serving-environment、isolation、treatment 或 replay proof。
 `live_code_prepared=true` 只表示代码准备完成；全部 readiness/authorization 与 safety fields
 仍为 false，也没有 formal run publication。Production 实现没有运行真实模型、创建或调用
 外部 provider client、使用网络/GPU、启动服务、执行 GUI/action/live replay、生成 treatment
@@ -896,4 +896,24 @@ Date: 2026-08-30 UTC
 ALE-324 / G1.6 D-033 operational close: after the AI-only 186-unit research publication passed its final independent audit, the owner asked to end this checkpoint and stop the annotation webpage. The exact `g1_6_solo_first_pass` tmux session was terminated; its sole Python process PID `73982` exited and `127.0.0.1:8766` has no listener. The unrelated tmux sessions were left untouched. No workspace, registry, key, journal, candidate campaign, AI-only label, or receipt file was deleted or rewritten.
 The closed checkpoint remains `AI_ONLY_ACTION_LABELS_PUBLISHED_NON_FORMAL / HUMAN_CURATION_INCOMPLETE`. Stopping the site does not convert the four owner locks plus 186 AI-only labels into formal human gold and does not satisfy independent review, adjudication, formal export, admission, seal, or ALE-324 completion. Restarting the same loopback-only site later remains possible from the preserved data, but requires an explicit operational request.
 No target actor model, project provider/client, external network, GPU, model weights, replay, MobileWorld/generated GUI/tool/action, treatment response, formal export, admission, or seal was used during shutdown.
+```
+
+```text
+Date: 2026-08-31 UTC
+ALE-322/G1.4–G1.5 direct GPU4 smoke checkpoint: under a new explicit owner authorization, the simplified diagnostic runner completed one Qwen→MAI attempt on GPU index 4. This is a non-formal live compatibility result, not formal G1.4 or G1.5 completion and not permission to execute any generated action.
+Request fidelity: the frozen 22-call fixture used the existing production Qwen and MAI system prompts and the existing production response parsers. It contained 12 G1.4 canary calls and 10 G1.5 History Codec calls; the codec arms retained their declared history-only differences while task text, current observation, model/sampling settings, and host parser remained unchanged. Fixture SHA-256 was `fee3b47688f06be09f5f9f56abc64fc8dd82d5a0f571b258be31f572e676a195`.
+Result: Qwen completed 11/11 calls, its owned service was stopped, then MAI completed 11/11 calls and its owned service was stopped. The terminal event recorded `successful_call_count=22`; there was no retry or failure event. All 22 raw HTTP response bodies were stored with byte count, SHA-256, and base64 before parsing; all 22 existing host-parser calls succeeded; every event fixed `generated_action_executed=false`. The six same-seed canary pairs produced equal parsed content within each model/seed pair.
+Artifact: `/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/direct-gpu4-qwen-mai-20260831-productionprompt/run.jsonl`, SHA-256 `27c97d1f29119e9b3a087e756814e64fb9b822d829135b1af4b747468a7e38cd`, with 52 contiguous events numbered 0 through 51. Qwen and MAI server-log SHA-256 values were `ce511552f520e631f42b79fe8bbb7e4a45e12646ae463969f1de3e4bc3604f71` and `6996c4f1d6b938a2b7a48f10d45a44d086cd71695cbf47cfc669e0a670d8a2a0`.
+Shared-card safety: immediate preflight and postflight both identified GPU4 as UUID `GPU-36c832f8-4901-c89c-3c40-8d8b9825661d`. The only foreign GPU4 process remained `taoz` UID 1030 PID 217927 using 62,100 MiB; it was not signalled, stopped, modified, or inspected beyond the authorized read-only baseline. The runner's owned root PIDs 244577 and 256742 exited, port `127.0.0.1:18007` closed, and GPU4 returned to 62,112 MiB used / 81,045 MiB free with zero utilization. No generated GUI/tool/action was executed.
+Cleanup: the obsolete shared D-034 authority/evidence/runtime root and eight independently inventoried D-034 `/tmp` probe roots were permanently removed under separate owner authorization. Qwen/MAI model snapshots, the active worktree, and the new direct-smoke artifacts were preserved.
+Owner approval required: yes before any further GPU/model attempt, replay, or generated action; no additional approval to retain and analyze this completed inert-response smoke artifact.
+```
+
+```text
+Date: 2026-08-31 UTC
+ALE-322 / G1.4 D-035 engineering close: the owner accepted the bounded state `NONFORMAL_LIVE_SMOKE_PASSED`; formal replay remains `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. This closes the engineering delivery only. It does not accept the formal Provider Codec, exact frozen serving environment, attempt/usage/latency/error receipts, backend/session/KV isolation, treatment generation, replay readiness, or action execution. ALE-323/G1.5 remains incomplete.
+Source and CPU gates: implementation/amendment/schema commit `86d54efce0c3f36c4a5df86c8ff146fd9b7fa25a`; exact focused counts were 23 simple-smoke tests, 32 manifest-verifier adversarial tests, and 28 History Codec regressions. Ruff check, Ruff format check, Python compilation, Draft 2020-12 schema meta-validation, and Git diff checks passed. The validation receipt is SHA-256 `ea36c2e4a9eb204e7d3c92006bc46d337cdc89ca00b7f279e1e1674293bc26a2` / 7,740 bytes.
+Evidence seal: `/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/g1_4_engineering_close_20260831` was installed into a previously absent target with no-replace semantics. It contains exactly the three read-only content-addressed smoke artifacts plus the byte-identical external manifest, validation receipt, and installation receipt. Manifest SHA-256 is `f70cee09e4870f3b0ab8dcd0d187efacd49362731c976b0872b4243600305179` / 13,719 bytes; installation-receipt SHA-256 is `272f03d16f988f8e9e9cb3a36146583f7545e62daf2716b0518c2155f97a7064` / 536 bytes. Files are mode 0400, directories 0500, owner 1035:1035, with no symlink or hardlink substitution.
+Honesty boundary: source/runtime/config bindings are post-hoc, raw host pre/postflight receipts are unavailable, and the observed vLLM 0.19.1/GPU4/stdlib-HTTP environment differs from the frozen formal configuration. These limitations are closed in the manifest and amendment rather than upgraded into formal evidence. The earlier D-034 contract chain was last present at `60835447601cacbfae4c806b464b3247d555aeac` and removed at `83e6cb847e62594f75ce4f6b47b3bae3337203d6`.
+Authority: the completed GPU/model authorization is exhausted. No further GPU/model attempt, provider invocation, replay, treatment response, or generated action is authorized by this close. Future formal work is only a deferred G1.7 consideration and requires a new explicit owner decision.
 ```

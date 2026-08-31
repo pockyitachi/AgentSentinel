@@ -22,23 +22,25 @@ Before changing code, read these files completely:
 14. `mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
 15. `mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
 16. `mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
-17. `mobileworld_audit_handoff/G1_GPU_LIVE_SMOKE_CONTRACT_V1.md`
-18. `mobileworld_audit_handoff/G1_GPU_LIVE_SMOKE_CONTRACT_V1_AMENDMENT_1.md`
-19. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
-20. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-21. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-22. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-23. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
-24. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-25. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
-26. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-27. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
-28. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
-29. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
-30. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
-31. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
-32. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
-33. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
+17. `mobileworld_audit_handoff/G1_4_NONFORMAL_LIVE_SMOKE_ENGINEERING_CLOSE_AMENDMENT_V1.md`
+18. `mobileworld_audit_handoff/schemas/g1_4/nonformal_live_smoke_manifest.v1.schema.json`
+19. `mobileworld_audit_handoff/g1_4/nonformal_live_smoke_manifest.v1.json`
+20. `mobileworld_audit_handoff/g1_4/nonformal_live_smoke_install_record.v1.json`
+21. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
+22. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
+23. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
+24. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+25. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+26. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+27. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+28. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+29. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
+30. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
+31. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
+32. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
+33. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
+34. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
+35. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
 
 The historical `replay_capsule.schema.json`, `capsule_manifest.schema.json`, and
 `capsule_integrity.schema.json` remain byte-frozen v1 references. Amendment 1
@@ -69,8 +71,6 @@ and caller-injected response records, injected-only capacity assessment, schemas
 and CPU tests. It does not authorize a client, network, subprocess, GPU probe or
 use, model load, provider send, replay, or action. All live entrypoints remain
 mechanically disabled pending a new owner authorization and downstream seals.
-D-034 is that new authority only for its separately gated synthetic smoke
-entrypoint; it does not enable or weaken any formal entrypoint covered by D-026.
 
 Active authorized scope: ALE-323 / G1.5 has a CPU-only History Codec checkpoint
 defined by `G1_5_DECISION_LOG.md` D-028 and
@@ -78,28 +78,8 @@ defined by `G1_5_DECISION_LOG.md` D-028 and
 and MAI raw-replay extraction/rendering, exact external curated-span bindings,
 secret-free fixtures, conformance/schema tests, and fail-closed G1.4 interface
 integration. Both codecs must remain `live_ready=false`; the exact 10-call
-live-smoke matrix is not authorized by D-028 alone. D-034 now separately
-authorizes only that exact submatrix inside the shared 22-call non-formal smoke
-described below. ALE-323 remains incomplete until the D-034 evidence closure
-passes.
-
-`G1_4_DECISION_LOG.md` and `G1_5_DECISION_LOG.md` D-034 plus the byte-frozen
-`G1_GPU_LIVE_SMOKE_CONTRACT_V1.md` and its Amendment 1 authorize exactly one
-owner-bound, secret-free, synthetic non-case, loopback-only engineering smoke on shared
-physical GPU 0 / UUID `GPU-991ac45f-e9e9-1c25-590c-fb49ca752965`.
-The free-memory floor is exactly 64 GiB and must be rechecked before each model
-start; insufficient capacity blocks without touching another process.
-The exact matrix is 12 G1.4 canaries plus 10 G1.5 codec calls, with Qwen then
-full guarded release then MAI, zero SDK retries, no streaming, no extra calls,
-and no generated action execution or feedback. Only processes proven by the
-batch's exact PID/UID/start-time/PGID/SID/model/GPU/port launch receipt may be
-stopped. For a foreign PID, only its current UID and `/proc/<pid>/stat` start
-time may be read for shared-card invariance/PID-reuse protection; it must never
-be signaled, modified, or inspected through `cmdline`, `exe`, `environ`, `fd`,
-`cwd`, `mem`, maps, stack, or any other `/proc` surface.
-The current writable model cache is acceptable only with complete pre/post tree
-hash identity and no formal or TOCTOU-free immutability claim. All formal
-G1.3/G1.4/G1.5/G1.6 gates and capsule guard values remain unchanged.
+live-smoke matrix is only recorded in the unified GPU backlog and is not
+authorized. ALE-323 remains incomplete until that separately authorized proof.
 
 Active authorized scope: ALE-324 / G1.6 is the CPU-only, human-in-the-loop gold
 curation workspace defined by `G1_6_DECISION_LOG.md` D-029 and
@@ -139,14 +119,13 @@ material. The publication is non-human, non-formal, cannot write or advance eith
 journal, and must keep every review/export/admission/promotion/replay authority false.
 
 Collector v1 remains event-sourced, lossless, label-free, zero-intervention,
-and byte-immutable. Outside the exact D-034 smoke-only exception above, do not invoke the target actor model or any project provider/client, use an
+and byte-immutable. Do not invoke the target actor model or any project provider/client, use an
 external network or a GPU, load/serve project model weights, execute a MobileWorld/generated
 GUI/tool/action, restore a backend, run a deterministic prefix or live replay, generate a treatment
 response, automatically decide claim validity or choose a formal intervention, or implement runtime
 Sentinel behavior. The deterministic fake-provider conformance path, provider-free G1.5 CPU
 checkpoint, explicitly human-authored G1.6 CPU workspace, the already authorized three-stream
-D-031 offline candidate campaign, the isolated D-033 AI-only research publication, and the exact
-D-034 owner-bound GPU0 loopback smoke are the only
+D-031 offline candidate campaign, and the isolated D-033 AI-only research publication are the only
 permitted substitutes. D-031 is the sole candidate-suggestion exception: its outputs remain
 untrusted and require individual human decisions, and the
 annotation website itself must never invoke Codex or another model/provider.
@@ -157,15 +136,55 @@ site bound to loopback with same-origin/CSRF checks and no remote assets. D-030
 also permits only the owner's single-port SSH local forward from client
 `127.0.0.1:8766` to server `127.0.0.1:8766`; reverse/dynamic forwarding,
 wildcard binds, shared proxies, and external hosting remain forbidden.
-D-034 separately permits only the hash-bound local vLLM health/chat sockets on
-`127.0.0.1:18007` during its guarded service lifecycles; it does not permit an
-external endpoint, wildcard bind, remote provider, or any other listener.
 Human clicks and form entry inside that annotation site are authorized curation
 inputs; they must never be converted into or executed as a MobileWorld action.
 Store real capsule, collection, and
 replay data outside the Git repository. Preserve unrelated user changes and
 record server findings and completed phases in
-`mobileworld_audit_handoff/STATUS.md`. Do not mark ALE-322 or ALE-323 complete
-until the exact D-034 live/GPU smoke proof satisfies its remaining acceptance
-gates, and do not mark ALE-324 complete before all 190 units are independently
+`mobileworld_audit_handoff/STATUS.md`. ALE-322's exact bounded engineering-close
+state is `NONFORMAL_LIVE_SMOKE_PASSED`; it MUST NOT be called formal live proof
+or replay-ready. ALE-323 remains incomplete, and ALE-324 must not be marked
+complete before all 190 units are independently
 reviewed, adjudicated where required, formally exported, validated, and sealed.
+
+Owner direct-smoke boundary (2026-08-30): notwithstanding the historical
+deferred/backlog language above, the owner authorized one non-formal direct
+smoke on GPU 0 with `CUDA_VISIBLE_DEVICES=0`, a loopback-only service at
+`127.0.0.1:18007`, Qwen followed by MAI, and exactly 22 secret-free synthetic
+calls. Cleanup may target only children and sessions created by this smoke; it
+must not read private `/proc` details of, signal, or take action against any
+foreign process, and it must not execute any returned action. Read-only
+GPU/process baseline checks, including a final `nvidia-smi`, remain allowed.
+Any failure ends the attempt with no retry. The former D-034
+authority/shim/formal-evidence chain is obsolete and must not be reused or
+treated as a gate.
+
+GPU 0 outcome and replacement authority (2026-08-31): the GPU 0 attempt failed
+safely before model loading with 0/22 calls because the installed vLLM does not
+support `--swap-space`; that attempt is closed and must not be retried. The
+owner authorizes exactly one replacement attempt on GPU 4 with
+`CUDA_VISIBLE_DEVICES=4`, the same loopback-only `127.0.0.1:18007` service,
+Qwen followed by MAI, and exactly 22 secret-free synthetic calls. It may clean
+up only its own children/session and must not signal, modify, stop, or otherwise
+act on `taoz` or any foreign process. Any failure ends the replacement attempt
+immediately with no retry. The obsolete authority/shim/formal-evidence chain
+remains prohibited.
+
+GPU 4 outcome and next-fix boundary (2026-08-31): the replacement attempt
+entered Qwen model loading/PROFILE, then failed safely with 0/22 calls because
+the bundled Triton `ptxas` was non-executable (`0644`, `EACCES`). MAI was not
+started; `taoz` PID 217927, its baseline/memory, and the loopback port were
+unchanged or restored to baseline. This attempt is closed and must not be
+retried. The only authorized follow-up fix is to point the smoke's child-process
+environment at system CUDA tool paths; it must not `chmod` or otherwise modify
+the shared venv.
+
+Final GPU 4 outcome and engineering close (2026-08-31): after the system-CUDA
+tool-path fix and production-prompt/parser correction, the one authorized smoke
+completed Qwen 11/11 followed by MAI 11/11, for exact 22/22 HTTP-200,
+host-parseable calls with zero retry and zero generated-action execution. The
+three artifacts are sealed read-only under the D-035 content-addressed bundle.
+This is `NONFORMAL_LIVE_SMOKE_PASSED` engineering evidence only; formal Provider
+Codec, serving-environment, isolation, treatment, and replay proof remain false
+and deferred to future G1.7 consideration. The GPU/model authority is consumed;
+no further GPU/model attempt is authorized.
