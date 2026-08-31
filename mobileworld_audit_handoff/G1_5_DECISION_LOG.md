@@ -1,7 +1,9 @@
 # G1.5 Decision Log
 
-本 additive log 位于 G1.1–G1.4 的冻结 contract/source-bound 闭包之外。历史
-`DECISION_LOG.md`、`G1_4_DECISION_LOG.md` 及已验收的 G1.1–G1.4 文件均保持 byte-unchanged。
+本 additive log 的 D-028 最初位于 G1.1–G1.4 冻结 contract/source-bound 闭包之外；截至 D-028
+落盘时，历史 `DECISION_LOG.md`、`G1_4_DECISION_LOG.md` 及已验收 G1.1–G1.4 文件保持
+byte-unchanged。2026-08-31 的 D-035 后续以 additive engineering-close amendment 更新
+`G1_4_DECISION_LOG.md` 与治理状态，但不改写冻结的 G1.1–G1.3 formal contracts 或 artifacts。
 
 ## D-028 — G1.5 分离 CPU History Codec checkpoint 与统一 GPU live-smoke batch
 

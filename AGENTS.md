@@ -143,7 +143,8 @@ replay data outside the Git repository. Preserve unrelated user changes and
 record server findings and completed phases in
 `mobileworld_audit_handoff/STATUS.md`. ALE-322's exact bounded engineering-close
 state is `NONFORMAL_LIVE_SMOKE_PASSED`; it MUST NOT be called formal live proof
-or replay-ready. ALE-323 remains incomplete, and ALE-324 must not be marked
+or replay-ready. Its exact formal-replay state is
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`. ALE-323 remains incomplete, and ALE-324 must not be marked
 complete before all 190 units are independently
 reviewed, adjudicated where required, formally exported, validated, and sealed.
 

@@ -171,7 +171,8 @@ captured natural action 当作 replay 必须复现的结果，也不得将 futur
 visibility/future-leakage、稳定 exclusion 和 deterministic double-build 验收，并在 `STATUS.md`
 记录 commit、命令、测试结果、外部 publication 与已知限制后，才可宣称 G1.3 完成。
 ALE-322 的精确工程交付状态是 `NONFORMAL_LIVE_SMOKE_PASSED`；不得称为 formal live
-proof、formal replay ready 或 G1.7 ready。ALE-323 仍未完成。
+proof、formal replay ready 或 G1.7 ready；其精确 formal-replay 状态是
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`。ALE-323 仍未完成。
 G1.6 workspace checkpoint 不能冒充 gold publication；只有 190 单元双盲 review、必要 adjudication、
 formal export/validation/admission/seal 全部完成后才可将 ALE-324 标记为完成。
 任何 target-actor/project-provider/external-network/GPU/MobileWorld-generated-GUI/action/
