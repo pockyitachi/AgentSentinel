@@ -1,0 +1,106 @@
+{
+  "schema_version": "mobileworld.g1.history-codec-captured-fixture/v1",
+  "fixture_id": "g15-qwen-flat-progress-captured-redacted-v1",
+  "capture_boundary": "APPLICATION_LAYER_SDK_ARGUMENTS_PRE_SEND",
+  "history_family": "flat_progress",
+  "codec_id": "mobileworld.g1.history-codec.qwen-flat-progress",
+  "source_capture": {
+    "publication_manifest_sha256": "8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402",
+    "unit_id": "g1control-0d9d4c2972e594363c488f83",
+    "canonical_semantic_request_sha256": "6d7b7d2e549ce1618fc768763e7c3fe8679eeb071e0cf94c125b6dc4a6b20432",
+    "shape_observed": "TWO_MESSAGE_SYSTEM_TEXT_PLUS_USER_TEXT_AND_CURRENT_IMAGE"
+  },
+  "sanitization": {
+    "performed": true,
+    "method": "STRUCTURE_PRESERVING_SECRET_FREE_SURROGATE",
+    "source_bytes_copied": false,
+    "task_and_history_semantics_replaced": true,
+    "image_replaced_with_local_one_pixel_data_url": true,
+    "fixture_is_formal_g1_data": false
+  },
+  "fixture_request_sha256": "72f1396204e56c05b49a2a8564650f915c780d9bfa32f455f1cef3320abd6a33",
+  "application_request": {
+    "messages": [
+      {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "# Tools\n<tools>\n{\"name\":\"mobile_use\"}\n</tools>\nReturn Thought, Action, and one <tool_call>."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "\nThe user query: 调整显示亮度。\nTask progress (You have done the following operation on the current device): Step 1: 已打开设置🙂; Tool call result: <tool_response>{screen:settings}</tool_response>; Step 2: 已进入显示页面; Ask user response: 继续; Step 3: 已查看主题选项; \n"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            }
+          }
+        ]
+      }
+    ],
+    "model": "secret-free-qwen-shape-surrogate",
+    "temperature": 0.0
+  },
+  "curated_span_bindings": [
+    {
+      "binding_id": "qwen-focal-step-1",
+      "source_request_sha256": "72f1396204e56c05b49a2a8564650f915c780d9bfa32f455f1cef3320abd6a33",
+      "container_path": ["messages", 1, "content", 0, "text"],
+      "char_start": 110,
+      "char_end": 116,
+      "utf8_byte_start": 124,
+      "utf8_byte_end": 143,
+      "exact_text": "已打开设置🙂",
+      "span_sha256": "f2eedd0bee9bc0d351330df36f5934c98d6e37985fb96b5275f2f74c1df09f39",
+      "span_role": "EDITABLE_CLAIM"
+    },
+    {
+      "binding_id": "qwen-oracle-step-2",
+      "source_request_sha256": "72f1396204e56c05b49a2a8564650f915c780d9bfa32f455f1cef3320abd6a33",
+      "container_path": ["messages", 1, "content", 0, "text"],
+      "char_start": 194,
+      "char_end": 201,
+      "utf8_byte_start": 221,
+      "utf8_byte_end": 242,
+      "exact_text": "已进入显示页面",
+      "span_sha256": "c38b7a8bf1be528d9cd03e1322d1fb13960304acf22f60d7defecb4491f99c62",
+      "span_role": "EDITABLE_CLAIM"
+    },
+    {
+      "binding_id": "qwen-sham-step-3",
+      "source_request_sha256": "72f1396204e56c05b49a2a8564650f915c780d9bfa32f455f1cef3320abd6a33",
+      "container_path": ["messages", 1, "content", 0, "text"],
+      "char_start": 234,
+      "char_end": 241,
+      "utf8_byte_start": 279,
+      "utf8_byte_end": 300,
+      "exact_text": "已查看主题选项",
+      "span_sha256": "47854c0ae5984b8da34dd4b916dbff5a1cde7a8a23fe236e464ee861de245040",
+      "span_role": "BENIGN_SHAM"
+    }
+  ],
+  "plan_targets": {
+    "mask": ["qwen-focal-step-1"],
+    "mask_correction": ["qwen-focal-step-1"],
+    "oracle_clean": ["qwen-focal-step-1", "qwen-oracle-step-2"],
+    "sham_benign_edit": ["qwen-sham-step-3"]
+  },
+  "expected_rendered_request_sha256": {
+    "ORIGINAL": "72f1396204e56c05b49a2a8564650f915c780d9bfa32f455f1cef3320abd6a33",
+    "MASK": "b75c98c6dfeefa34ae471c383ec6c379484757ef5261d760cc501503fbc3de32",
+    "MASK_CORRECTION": "2dfd67eb432589a5ebb4cf7f5d6b7daeb26cafd612810cad4570aee6c3b29273",
+    "ORACLE_CLEAN": "745fac06e58f0a121ca7f83767bf1f84f3a26ff12aff5acc228df79cf4b474eb",
+    "SHAM_BENIGN_EDIT": "bff57ce3ec5cf7a625e709347c8e4344184b87a69c89616faa1f6d4b6d81ff94"
+  },
+  "human_diff_golden": "qwen_flat_progress.expected_diff.v1.txt",
+  "human_diff_sha256": "bb2484e22f568790ae953ef002062925a48512c17dead701959e0936af298cd4",
+  "correction_text": "设置页面尚未确认亮度已调整。"
+}

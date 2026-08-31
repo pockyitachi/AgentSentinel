@@ -33,7 +33,8 @@
 > MobileWorld benchmark/runtime host used by AgentSentinel; the original
 > upstream MobileWorld documentation continues below.
 >
-> **Status (2026-08-27):** Epic 1, G1.1, G1.2, and G1.3 are complete. We collected and audited the
+> **Status (2026-08-31):** Epic 1 and G1.1-G1.3 are complete; G1.4 and G1.5 have
+> bounded engineering closes while formal live/replay readiness remains deferred to G1.7. We collected and audited the
 > same canonical 117-task GUI-only suite for MAI-UI-8B, Qwen3-VL-8B,
 > GELab-Zero-4B, UI-Venus-1.5-8B, GUI-Owl-1.5-8B-Instruct, and
 > MemGUI-8B-SFT: 702 model-task cases across six host-native history
@@ -54,13 +55,55 @@
 > remain census-only and out of capsule/exclusion scope. Contract Amendment 1
 > corrected the explicit fail-closed authorization guards in the v1.1
 > content-addressed publication; the former v1 publication remains immutable
-> and is superseded for formal G1 use. ALE-322 / G1.4 remains
-> unstarted and unapproved; model/provider calls, GPU use, GUI/action execution,
-> replay, and an automatic runtime Sentinel remain unauthorized. Follow the
-> checked-in handoff scope files.
+> and is superseded for formal G1 use. ALE-322 / G1.4 is closed only under
+> D-035's bounded engineering scope as `NONFORMAL_LIVE_SMOKE_PASSED`; formal
+> replay remains `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. ALE-323 / G1.5 is likewise
+> closed only under D-036's bounded engineering scope as
+> `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; formal
+> live readiness remains `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. The accepted G1.5
+> delivery includes the Qwen flat-progress and MAI raw-replay CPU Codecs,
+> five-arm preview/conformance, content-bound publication, and fail-closed
+> runner integration. The ten D-035 calls are non-formal prompt/parser
+> compatibility observations only and did not execute the formal History
+> Codec-to-Provider Codec path. Both v1 Codecs remain `live_ready=false`.
+> Formal Provider Codec, complete attempt evidence, serving/backend/session/KV
+> isolation, live admission, and replay authority are G1.7 duties and remain
+> unauthorized. ALE-324 has a private loopback-only manual-curation workspace
+> checkpoint.
+> Commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405` adds the isolated
+> `SOLO_FIRST_PASS` for the currently sole curator: Action Gold, then
+> Transformation, then preliminary Consistency over all 190 units. These locks
+> are explicitly non-formal, do not count as independent reviews, and cannot be
+> promoted or exported as formal evidence. D-031 adds three already-frozen,
+> blind Agent A/B/C candidate streams for Action Gold. Every candidate remains
+> untrusted and non-authoritative. D-032 provides the owner-only three-choice
+> review plus a separate server-derived non-formal lock; opening manual editing
+> disables that simple path. The site still cannot generate, rank, vote, merge,
+> bulk-accept, or silently autosave AI output. D-033 separately binds the four
+> owner-authored Action locks and publishes the remaining 186 units, reviewed by
+> three fresh isolated 62-unit Codex shards, as content-addressed
+> `AI_ONLY_ACTION_LABELS`. Those labels have `human_review_performed=false`,
+> never enter either annotation journal, do not open Transformation, and cannot
+> be promoted or treated as gold. The candidate campaign records
+> `ai_semantic_suggestion_performed=true`, while D-033 records
+> `ai_semantic_labeling_performed=true`; neither invokes the target actor model
+> or any project provider client/call.
+> External-network calls, GPU use,
+> MobileWorld/generated GUI/action execution, live replay, and treatment-response
+> generation remain unauthorized. Human clicks in the private annotation site
+> are curation inputs and are never executed as MobileWorld actions.
+> Formal capsules retain their three false safety guards. ALE-322 is closed only
+> under D-035 as `NONFORMAL_LIVE_SMOKE_PASSED`, and ALE-323 is closed only under
+> D-036 as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`;
+> both formal readiness axes remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. Follow the
+> [inert-preparation contract](../mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md),
+> [AI-candidate amendment](../mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md),
+> [AI-only label amendment](../mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md),
+> [G1.6 workspace runbook](../mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md),
+> and [project status](../mobileworld_audit_handoff/STATUS.md). ALE-324 remains
+> exactly `IN_PROGRESS_HUMAN_CURATION_REQUIRED`, not formal G1.6 completion.
 >
 > See the [six-model audit](docs/misleading_history_audit_report.md),
-> [project status](../mobileworld_audit_handoff/STATUS.md), and
 > [workspace overview](../README.md).
 
 

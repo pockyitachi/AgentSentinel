@@ -1,0 +1,339 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/vllm_launch_plan.schema.json",
+  "title": "G1.4 inert vLLM launch plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "contract_version",
+    "status",
+    "model_id",
+    "live_preparation_receipt_sha256",
+    "model_config_manifest_sha256",
+    "model_config_record_sha256",
+    "checkpoint_inventory_sha256",
+    "snapshot_binding",
+    "argv",
+    "argv_canonical_sha256",
+    "argv_canonical_byte_count",
+    "generation_config_mapping",
+    "environment_variable_names",
+    "serving_image_digest",
+    "serving_image_digest_status",
+    "launch_compatibility_validated",
+    "endpoint_health_validated",
+    "isolation_validated",
+    "port_reserved",
+    "readiness",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.g1.inert-vllm-launch-plan/v1"
+    },
+    "record_type": {
+      "const": "inert_vllm_launch_plan"
+    },
+    "contract_version": {
+      "const": "mobileworld.g1.exact-request-replay-live-preparation/contract-v1"
+    },
+    "status": {
+      "const": "CODE_ONLY_NOT_OBSERVED"
+    },
+    "model_id": {
+      "enum": [
+        "qwen3vl_8b",
+        "mai_ui_8b"
+      ]
+    },
+    "live_preparation_receipt_sha256": {
+      "const": "4f3cbd2d0369288c7507b77c54766bf536b620156196df770c428891280b9819"
+    },
+    "model_config_manifest_sha256": {
+      "const": "7ba840b1b7c7f4539ec9b967a5b4029c3a0e3217f6bb8bc1e9eb7d04687c6c5f"
+    },
+    "model_config_record_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "checkpoint_inventory_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "snapshot_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_repository",
+        "model_revision",
+        "lexical_snapshot_path",
+        "runtime_snapshot_observed",
+        "model_weights_loaded"
+      ],
+      "properties": {
+        "model_repository": {
+          "enum": [
+            "Qwen/Qwen3-VL-8B-Instruct",
+            "Tongyi-MAI/MAI-UI-8B"
+          ]
+        },
+        "model_revision": {
+          "enum": [
+            "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+            "e00a0097abb9cc621cac5172d8c4809f0839c94e"
+          ]
+        },
+        "lexical_snapshot_path": {
+          "type": "string",
+          "pattern": "^/[^\\u0000]+$"
+        },
+        "runtime_snapshot_observed": {
+          "const": false
+        },
+        "model_weights_loaded": {
+          "const": false
+        }
+      }
+    },
+    "argv": {
+      "type": "array",
+      "minItems": 44,
+      "maxItems": 44,
+      "prefixItems": [
+        {"const": "vllm"},
+        {"const": "serve"},
+        {"type": "string", "pattern": "^/[^\\u0000]+$"},
+        {"const": "--served-model-name"},
+        {"enum": ["Qwen3-VL-8B-Instruct", "MAI-UI-8B"]},
+        {"const": "--host"},
+        {"const": "127.0.0.1"},
+        {"const": "--port"},
+        {"const": "18007"},
+        {"const": "--dtype"},
+        {"const": "bfloat16"},
+        {"const": "--max-model-len"},
+        {"const": "32768"},
+        {"const": "--enforce-eager"},
+        {"const": "--gpu-memory-utilization"},
+        {"const": "0.24"},
+        {"const": "--swap-space"},
+        {"const": "0"},
+        {"const": "--limit-mm-per-prompt"},
+        {"const": "{\"image\":3,\"video\":0}"},
+        {"const": "--mm-processor-cache-gb"},
+        {"const": "1"},
+        {"const": "--max-num-batched-tokens"},
+        {"const": "8192"},
+        {"const": "--max-num-seqs"},
+        {"const": "1"},
+        {"const": "--tensor-parallel-size"},
+        {"const": "1"},
+        {"const": "--pipeline-parallel-size"},
+        {"const": "1"},
+        {"const": "--data-parallel-size"},
+        {"const": "1"},
+        {"const": "--seed"},
+        {"const": "0"},
+        {"const": "--no-enable-prefix-caching"},
+        {"const": "--tokenizer-mode"},
+        {"const": "auto"},
+        {"const": "--no-trust-remote-code"},
+        {"const": "--load-format"},
+        {"const": "auto"},
+        {"const": "--kv-cache-dtype"},
+        {"const": "auto"},
+        {"const": "--generation-config"},
+        {"const": "auto"}
+      ],
+      "items": false
+    },
+    "argv_canonical_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "argv_canonical_byte_count": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "generation_config_mapping": {
+      "const": {
+        "manifest_mode": "model",
+        "vllm_version": "0.11.0",
+        "cli_value": "auto",
+        "semantic": "LOAD_MODEL_GENERATION_CONFIG"
+      }
+    },
+    "environment_variable_names": {
+      "const": []
+    },
+    "serving_image_digest": {
+      "type": "null"
+    },
+    "serving_image_digest_status": {
+      "const": "PENDING_G1_7_SEAL"
+    },
+    "launch_compatibility_validated": {
+      "const": false
+    },
+    "endpoint_health_validated": {
+      "const": false
+    },
+    "isolation_validated": {
+      "const": false
+    },
+    "port_reserved": {
+      "const": false
+    },
+    "readiness": {
+      "$ref": "#/$defs/readinessFalseState"
+    },
+    "safety": {
+      "$ref": "#/$defs/safetyFalseState"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "model_id": {
+            "const": "qwen3vl_8b"
+          }
+        },
+        "required": [
+          "model_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "model_config_record_sha256": {
+            "const": "5d6c5c1aa99aa13e8e153a19e6a0b1e8593cf2c32adaf8bca308fc76cea827e3"
+          },
+          "checkpoint_inventory_sha256": {
+            "const": "3e332c602f6ffcd11311412bf8a986c4e4f888135e719bfcb6ce2d255a9892dc"
+          },
+          "snapshot_binding": {
+            "properties": {
+              "model_repository": {
+                "const": "Qwen/Qwen3-VL-8B-Instruct"
+              },
+              "model_revision": {
+                "const": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
+              },
+              "lexical_snapshot_path": {
+                "pattern": "^/(?:[^/]+/)*models--Qwen--Qwen3-VL-8B-Instruct/snapshots/0c351dd01ed87e9c1b53cbc748cba10e6187ff3b$"
+              }
+            }
+          },
+          "argv": {
+            "prefixItems": [
+              {},
+              {},
+              {"pattern": "^/(?:[^/]+/)*models--Qwen--Qwen3-VL-8B-Instruct/snapshots/0c351dd01ed87e9c1b53cbc748cba10e6187ff3b$"},
+              {},
+              {"const": "Qwen3-VL-8B-Instruct"}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "model_id": {
+            "const": "mai_ui_8b"
+          }
+        },
+        "required": [
+          "model_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "model_config_record_sha256": {
+            "const": "c633cc272bca6e14ae788d90417c909d515fe1f22abb9c0bf5e02da78c8d7682"
+          },
+          "checkpoint_inventory_sha256": {
+            "const": "0f7124916fc6dce667cfffb1c49258eb6ed0b1cc7c0c3bea6521094394185a53"
+          },
+          "snapshot_binding": {
+            "properties": {
+              "model_repository": {
+                "const": "Tongyi-MAI/MAI-UI-8B"
+              },
+              "model_revision": {
+                "const": "e00a0097abb9cc621cac5172d8c4809f0839c94e"
+              },
+              "lexical_snapshot_path": {
+                "pattern": "^/(?:[^/]+/)*models--Tongyi-MAI--MAI-UI-8B/snapshots/e00a0097abb9cc621cac5172d8c4809f0839c94e$"
+              }
+            }
+          },
+          "argv": {
+            "prefixItems": [
+              {},
+              {},
+              {"pattern": "^/(?:[^/]+/)*models--Tongyi-MAI--MAI-UI-8B/snapshots/e00a0097abb9cc621cac5172d8c4809f0839c94e$"},
+              {},
+              {"const": "MAI-UI-8B"}
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "readinessFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_ready",
+        "live_transport_validation_complete",
+        "live_history_codec_ready",
+        "curated_transformations_ready",
+        "run_ready_seal_present",
+        "provider_invocation_allowed",
+        "treatment_response_generation_allowed",
+        "formal_replay_ready"
+      ],
+      "properties": {
+        "execution_ready": {"const": false},
+        "live_transport_validation_complete": {"const": false},
+        "live_history_codec_ready": {"const": false},
+        "curated_transformations_ready": {"const": false},
+        "run_ready_seal_present": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "treatment_response_generation_allowed": {"const": false},
+        "formal_replay_ready": {"const": false}
+      }
+    },
+    "safetyFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "client_factory_invoked",
+        "network_used",
+        "subprocess_started",
+        "gpu_probed",
+        "gpu_used",
+        "model_loaded",
+        "provider_invoked",
+        "replay_executed",
+        "generated_action_executed"
+      ],
+      "properties": {
+        "client_factory_invoked": {"const": false},
+        "network_used": {"const": false},
+        "subprocess_started": {"const": false},
+        "gpu_probed": {"const": false},
+        "gpu_used": {"const": false},
+        "model_loaded": {"const": false},
+        "provider_invoked": {"const": false},
+        "replay_executed": {"const": false},
+        "generated_action_executed": {"const": false}
+      }
+    }
+  }
+}

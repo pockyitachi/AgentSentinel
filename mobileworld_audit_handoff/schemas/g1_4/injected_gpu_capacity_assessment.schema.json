@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/injected_gpu_capacity_assessment.schema.json",
+  "title": "G1.4 injected-only GPU capacity assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "contract_version",
+    "status",
+    "model_id",
+    "live_preparation_receipt_sha256",
+    "inventory",
+    "inventory_sha256",
+    "gpu_memory_utilization",
+    "required_free_memory_bytes",
+    "capacity_sufficient",
+    "resource_snapshot_injected",
+    "isolation_validated",
+    "run_ready",
+    "gpu_reserved",
+    "readiness",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.g1.injected-gpu-inventory-assessment/v1"
+    },
+    "record_type": {
+      "const": "injected_gpu_inventory_assessment"
+    },
+    "contract_version": {
+      "const": "mobileworld.g1.exact-request-replay-live-preparation/contract-v1"
+    },
+    "status": {
+      "const": "INJECTED_DATA_ONLY_NOT_HOST_OBSERVED"
+    },
+    "model_id": {
+      "enum": [
+        "qwen3vl_8b",
+        "mai_ui_8b"
+      ]
+    },
+    "live_preparation_receipt_sha256": {
+      "const": "4f3cbd2d0369288c7507b77c54766bf536b620156196df770c428891280b9819"
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accelerator",
+        "total_memory_bytes",
+        "free_memory_bytes"
+      ],
+      "properties": {
+        "accelerator": {
+          "const": "NVIDIA H200"
+        },
+        "total_memory_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "free_memory_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "inventory_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "gpu_memory_utilization": {
+      "const": 0.24
+    },
+    "required_free_memory_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "capacity_sufficient": {
+      "type": "boolean"
+    },
+    "resource_snapshot_injected": {
+      "const": true
+    },
+    "isolation_validated": {
+      "const": false
+    },
+    "run_ready": {
+      "const": false
+    },
+    "gpu_reserved": {
+      "const": false
+    },
+    "readiness": {
+      "$ref": "#/$defs/readinessFalseState"
+    },
+    "safety": {
+      "$ref": "#/$defs/safetyFalseState"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "readinessFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_ready",
+        "live_transport_validation_complete",
+        "live_history_codec_ready",
+        "curated_transformations_ready",
+        "run_ready_seal_present",
+        "provider_invocation_allowed",
+        "treatment_response_generation_allowed",
+        "formal_replay_ready"
+      ],
+      "properties": {
+        "execution_ready": {"const": false},
+        "live_transport_validation_complete": {"const": false},
+        "live_history_codec_ready": {"const": false},
+        "curated_transformations_ready": {"const": false},
+        "run_ready_seal_present": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "treatment_response_generation_allowed": {"const": false},
+        "formal_replay_ready": {"const": false}
+      }
+    },
+    "safetyFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "client_factory_invoked",
+        "network_used",
+        "subprocess_started",
+        "gpu_probed",
+        "gpu_used",
+        "model_loaded",
+        "provider_invoked",
+        "replay_executed",
+        "generated_action_executed"
+      ],
+      "properties": {
+        "client_factory_invoked": {"const": false},
+        "network_used": {"const": false},
+        "subprocess_started": {"const": false},
+        "gpu_probed": {"const": false},
+        "gpu_used": {"const": false},
+        "model_loaded": {"const": false},
+        "provider_invoked": {"const": false},
+        "replay_executed": {"const": false},
+        "generated_action_executed": {"const": false}
+      }
+    }
+  }
+}

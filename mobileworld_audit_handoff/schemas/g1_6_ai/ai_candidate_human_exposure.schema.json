@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai/ai_candidate_human_exposure.schema.json",
+  "title": "G1.6 AI Candidate Human Exposure V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "campaign_id", "campaign_receipt_sha256",
+    "human_identity_commitment", "stable_principal_commitment",
+    "stable_principal_commitment_scheme", "exposure_role", "candidate_outputs_visible",
+    "authority", "exposure_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.ai-candidate-human-exposure/v1"},
+    "record_type": {"const": "ai_candidate_human_exposure"},
+    "campaign_id": {"type": "string", "pattern": "^g1aicampaign-[0-9a-f]{24}$"},
+    "campaign_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "human_identity_commitment": {"$ref": "#/$defs/sha256"},
+    "stable_principal_commitment": {"$ref": "#/$defs/sha256"},
+    "stable_principal_commitment_scheme": {"const": "mobileworld.g1.stable-principal-secret-sha256/v1"},
+    "exposure_role": {"const": "AI_ASSISTED_SOLO_CURATOR"},
+    "candidate_outputs_visible": {"const": true},
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "counts_as_independent_review", "formal_reviewer_eligible",
+        "formal_adjudicator_eligible", "formal_resolution_eligible",
+        "admission_eligible", "replay_eligible"
+      ],
+      "properties": {
+        "counts_as_independent_review": {"const": false},
+        "formal_reviewer_eligible": {"const": false},
+        "formal_adjudicator_eligible": {"const": false},
+        "formal_resolution_eligible": {"const": false},
+        "admission_eligible": {"const": false},
+        "replay_eligible": {"const": false}
+      }
+    },
+    "exposure_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

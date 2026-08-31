@@ -1,0 +1,13 @@
+{
+  "schema_version": "mobileworld.g1.history-codec-host-coordinate-binding/v1",
+  "binding_id": "mobileworld.g1.host-json-unicode-utf8/no-tokenizer-v1",
+  "tokenizer_required": false,
+  "tokenizer_id": "NONE",
+  "tokenizer_revision": "NONE",
+  "tokenizer_artifact_sha256": null,
+  "text_normalization": "NONE",
+  "character_coordinates": "UNICODE_CODE_POINT_HALF_OPEN",
+  "byte_coordinates": "UTF8_HALF_OPEN",
+  "container_coordinates": "EXACT_JSON_PATH",
+  "fail_closed_on_normalization_or_coordinate_drift": true
+}

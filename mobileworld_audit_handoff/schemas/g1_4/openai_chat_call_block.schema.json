@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/openai_chat_call_block.schema.json",
+  "title": "G1.4 inert OpenAI-compatible chat call block",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "contract_version",
+    "status",
+    "model_id",
+    "live_preparation_receipt_sha256",
+    "replay_seed",
+    "call_count",
+    "calls",
+    "call_set_sha256",
+    "paired_seed_consistency_validated",
+    "formal_plan_pairing_validated",
+    "readiness",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.g1.inert-openai-chat-block-descriptor/v1"
+    },
+    "record_type": {
+      "const": "inert_openai_chat_block_descriptor"
+    },
+    "contract_version": {
+      "const": "mobileworld.g1.exact-request-replay-live-preparation/contract-v1"
+    },
+    "status": {
+      "const": "CODE_ONLY_NOT_OBSERVED"
+    },
+    "model_id": {
+      "enum": [
+        "qwen3vl_8b",
+        "mai_ui_8b"
+      ]
+    },
+    "live_preparation_receipt_sha256": {
+      "const": "4f3cbd2d0369288c7507b77c54766bf536b620156196df770c428891280b9819"
+    },
+    "replay_seed": {
+      "$ref": "#/$defs/replaySeed"
+    },
+    "call_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "calls": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "openai_chat_call_plan.schema.json"
+      }
+    },
+    "call_set_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "paired_seed_consistency_validated": {
+      "const": true
+    },
+    "formal_plan_pairing_validated": {
+      "const": false
+    },
+    "readiness": {
+      "$ref": "#/$defs/readinessFalseState"
+    },
+    "safety": {
+      "$ref": "#/$defs/safetyFalseState"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "model_id": {
+            "const": "qwen3vl_8b"
+          }
+        },
+        "required": [
+          "model_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "calls": {
+            "items": {
+              "properties": {
+                "model_id": {
+                  "const": "qwen3vl_8b"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "model_id": {
+            "const": "mai_ui_8b"
+          }
+        },
+        "required": [
+          "model_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "calls": {
+            "items": {
+              "properties": {
+                "model_id": {
+                  "const": "mai_ui_8b"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "replay_seed": {
+            "const": 1729
+          }
+        },
+        "required": [
+          "replay_seed"
+        ]
+      },
+      "then": {
+        "properties": {
+          "calls": {
+            "items": {
+              "$ref": "#/$defs/seed1729Call"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "replay_seed": {
+            "const": 2718
+          }
+        },
+        "required": [
+          "replay_seed"
+        ]
+      },
+      "then": {
+        "properties": {
+          "calls": {
+            "items": {
+              "$ref": "#/$defs/seed2718Call"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "replay_seed": {
+            "const": 31415
+          }
+        },
+        "required": [
+          "replay_seed"
+        ]
+      },
+      "then": {
+        "properties": {
+          "calls": {
+            "items": {
+              "$ref": "#/$defs/seed31415Call"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "replaySeed": {
+      "enum": [
+        1729,
+        2718,
+        31415
+      ]
+    },
+    "seed1729Call": {
+      "type": "object",
+      "properties": {
+        "application_delta": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "const": 1729
+            }
+          }
+        },
+        "kwargs": {
+          "type": "object",
+          "properties": {
+            "seed": {
+              "const": 1729
+            }
+          }
+        }
+      }
+    },
+    "seed2718Call": {
+      "type": "object",
+      "properties": {
+        "application_delta": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "const": 2718
+            }
+          }
+        },
+        "kwargs": {
+          "type": "object",
+          "properties": {
+            "seed": {
+              "const": 2718
+            }
+          }
+        }
+      }
+    },
+    "seed31415Call": {
+      "type": "object",
+      "properties": {
+        "application_delta": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "const": 31415
+            }
+          }
+        },
+        "kwargs": {
+          "type": "object",
+          "properties": {
+            "seed": {
+              "const": 31415
+            }
+          }
+        }
+      }
+    },
+    "readinessFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution_ready",
+        "live_transport_validation_complete",
+        "live_history_codec_ready",
+        "curated_transformations_ready",
+        "run_ready_seal_present",
+        "provider_invocation_allowed",
+        "treatment_response_generation_allowed",
+        "formal_replay_ready"
+      ],
+      "properties": {
+        "execution_ready": {"const": false},
+        "live_transport_validation_complete": {"const": false},
+        "live_history_codec_ready": {"const": false},
+        "curated_transformations_ready": {"const": false},
+        "run_ready_seal_present": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "treatment_response_generation_allowed": {"const": false},
+        "formal_replay_ready": {"const": false}
+      }
+    },
+    "safetyFalseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "client_factory_invoked",
+        "network_used",
+        "subprocess_started",
+        "gpu_probed",
+        "gpu_used",
+        "model_loaded",
+        "provider_invoked",
+        "replay_executed",
+        "generated_action_executed"
+      ],
+      "properties": {
+        "client_factory_invoked": {"const": false},
+        "network_used": {"const": false},
+        "subprocess_started": {"const": false},
+        "gpu_probed": {"const": false},
+        "gpu_used": {"const": false},
+        "model_loaded": {"const": false},
+        "provider_invoked": {"const": false},
+        "replay_executed": {"const": false},
+        "generated_action_executed": {"const": false}
+      }
+    }
+  }
+}

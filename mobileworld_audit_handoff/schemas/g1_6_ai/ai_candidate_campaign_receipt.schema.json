@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai/ai_candidate_campaign_receipt.schema.json",
+  "title": "G1.6 AI Candidate Campaign Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "campaign_id", "campaign_manifest_sha256",
+    "publication_manifest_sha256", "packet_count", "agent_slot_count", "output_count",
+    "slot_output_counts", "generation_receipts", "output_refs", "candidate_set_sha256",
+    "disclosure", "authority",
+    "safety", "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.ai-candidate-campaign-receipt/v1"},
+    "record_type": {"const": "ai_candidate_campaign_receipt"},
+    "campaign_id": {"type": "string", "pattern": "^g1aicampaign-[0-9a-f]{24}$"},
+    "campaign_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "publication_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "packet_count": {"const": 190},
+    "agent_slot_count": {"const": 3},
+    "output_count": {"const": 570},
+    "slot_output_counts": {
+      "type": "object", "additionalProperties": false, "required": ["A", "B", "C"],
+      "properties": {"A": {"const": 190}, "B": {"const": 190}, "C": {"const": 190}}
+    },
+    "generation_receipts": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/generationReceiptRef"}, {"properties": {"agent_slot": {"const": "A"}, "path": {"const": "generation-receipts/slot-A.json"}}}]},
+        {"allOf": [{"$ref": "#/$defs/generationReceiptRef"}, {"properties": {"agent_slot": {"const": "B"}, "path": {"const": "generation-receipts/slot-B.json"}}}]},
+        {"allOf": [{"$ref": "#/$defs/generationReceiptRef"}, {"properties": {"agent_slot": {"const": "C"}, "path": {"const": "generation-receipts/slot-C.json"}}}]}
+      ],
+      "items": false
+    },
+    "output_refs": {
+      "type": "array", "minItems": 570, "maxItems": 570, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["unit_id", "agent_slot", "path", "sha256", "byte_count"],
+        "properties": {
+          "unit_id": {"type": "string", "pattern": "^(?:g1case|g1control)-[0-9a-f]{24}$"},
+          "agent_slot": {"enum": ["A", "B", "C"]},
+          "path": {"type": "string", "pattern": "^outputs/sha256/[0-9a-f]{2}/[0-9a-f]{64}\\.json$"},
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "byte_count": {"type": "integer", "minimum": 2}
+        }
+      }
+    },
+    "candidate_set_sha256": {"$ref": "#/$defs/sha256"},
+    "disclosure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ai_semantic_suggestion_performed", "blind_task_and_gui_entered_codex_context", "three_agents_are_independent_human_reviewers"],
+      "properties": {
+        "ai_semantic_suggestion_performed": {"const": true},
+        "blind_task_and_gui_entered_codex_context": {"const": true},
+        "three_agents_are_independent_human_reviewers": {"const": false}
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["counts_as_independent_review", "formal_resolution_eligible", "admission_eligible", "promotion_allowed", "replay_eligible", "human_review_required"],
+      "properties": {
+        "counts_as_independent_review": {"const": false},
+        "formal_resolution_eligible": {"const": false},
+        "admission_eligible": {"const": false},
+        "promotion_allowed": {"const": false},
+        "replay_eligible": {"const": false},
+        "human_review_required": {"const": true}
+      }
+    },
+    "safety": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target_actor_model_invoked", "project_gpu_used", "external_network_used", "replay_executed", "action_executed", "treatment_response_generation_allowed", "annotation_journal_write_allowed"],
+      "properties": {
+        "target_actor_model_invoked": {"const": false}, "project_gpu_used": {"const": false},
+        "external_network_used": {"const": false}, "replay_executed": {"const": false},
+        "action_executed": {"const": false}, "treatment_response_generation_allowed": {"const": false},
+        "annotation_journal_write_allowed": {"const": false}
+      }
+    },
+    "receipt_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generationReceiptRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "agent_slot", "path", "sha256", "byte_count", "receipt_sha256"],
+      "properties": {
+        "schema_version": {"const": "mobileworld.g1.ai-candidate-generation-receipt/v1"},
+        "agent_slot": {"enum": ["A", "B", "C"]},
+        "path": {"type": "string", "pattern": "^generation-receipts/slot-[ABC]\\.json$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 2},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

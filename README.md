@@ -16,7 +16,7 @@ gate and rubric tracker are proposed work; they are not implemented results.
 
 ## Project status
 
-Status as of 2026-08-27:
+Status as of 2026-08-31:
 
 | Workstream | Status | Scope |
 | --- | --- | --- |
@@ -25,6 +25,9 @@ Status as of 2026-08-27:
 | G1.1: causal-replay protocol and registry | **Complete** | CPU-only frozen protocol, schemas, model/config manifest, pre-gold case registry, controls, and locked analysis plan; no treatment response was generated |
 | G1.2: portable Sentinel contract | **Complete** | CPU-only canonical History IR/Core, codec/provider interfaces, fail-closed validation, schemas, sidecars, and six-family fixture conformance |
 | G1.3: immutable decision capsules | **Complete; v1.1 corrected** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); Amendment 1 adds explicit fail-closed authorization guards; 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
+| G1.4: exact-request replay runner | **Engineering delivery closed; formal replay deferred** | D-035 accepts the CPU/fake runner and sealed non-formal two-model compatibility smoke as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, serving/isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED` |
+| G1.5: Qwen/MAI History Codecs | **Engineering delivery closed; formal live readiness deferred** | D-036 accepts the content-bound CPU Codecs, five-arm preview/conformance, and non-formal prompt/parser compatibility as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; both v1 Codecs remain `live_ready=false`, and formal readiness is transferred to G1.7 |
+| G1.6: curated gold workspace | **AI-only 186-unit research labels plus four human solo locks; human/formal curation remains incomplete** | The private loopback-only site retains four owner-authored `SOLO_FIRST_PASS` Action locks. D-033 separately publishes the other 186 units as content-addressed `AI_ONLY_ACTION_LABELS`; those labels are non-human, non-formal, non-promotable, do not advance Transformation, and leave target-actor provider/GPU/replay paths disabled |
 
 G1.2 is merged and accepted. ALE-321 / G1.3 formally froze and published all
 190 targets—152 strict-MHR candidates plus 38 selected clean controls—as
@@ -37,8 +40,32 @@ Contract Amendment 1 published the corrected v1.1 artifact at manifest SHA
 `8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402`.
 The former v1 publication remains immutable and historically identifiable, but
 is superseded for formal G1 use.
-ALE-322 / G1.4 remains unstarted and unapproved. The checked-in AGENTS, STATUS,
-and DECISION_LOG remain authoritative.
+ALE-322 / G1.4 is closed only under D-035's bounded engineering scope:
+`NONFORMAL_LIVE_SMOKE_PASSED` / `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. ALE-323 /
+G1.5 is likewise closed only under D-036's bounded engineering scope:
+`CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED` /
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`. Its Qwen flat-progress and MAI raw-replay
+Codecs, five-arm preview/conformance surface, content-bound CPU publication,
+and fail-closed runner integration are complete. The ten D-035 arm-shaped calls
+are non-formal production-prompt/parser compatibility observations only; they
+did not execute the formal History Codec-to-Provider Codec path. Both v1 Codecs
+remain `live_ready=false`. Formal Provider Codec, complete per-attempt evidence,
+serving/backend/session/KV isolation, live admission, and replay authority are
+G1.7 duties and remain unauthorized. ALE-324 / G1.6 has a private human-curation
+workspace checkpoint. Commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405`
+adds the D-030 one-person `SOLO_FIRST_PASS`: it is a separate, non-promotable
+precursor journal and never satisfies independent review. D-031 additionally freezes three
+isolated, blind Agent A/B/C candidate streams for the 190 Action-Gold packets. Their 570 outputs
+and 585 atomic suggestions are untrusted AI assistance, not evidence or reviews. D-033 then
+authorizes three fresh, mutually isolated Codex research agents to decide the remaining 186 units
+in exact 62-unit shards and publish a fourth, repo-external `AI_ONLY_ACTION_LABELS` dataset. It
+binds—but never copies or rewrites—the four owner-locked journal events. The 186 labels are
+explicitly non-human, non-formal, cannot enter either annotation journal, cannot open
+Transformation, and cannot complete ALE-324. Candidate generation and AI-only compilation are
+offline and the website has no generate/regenerate endpoint. None of these checkpoints is a live
+proof or completed formal gold publication. G1.7 and owner authorization for any formal live/GPU
+proof remain outstanding. The checked-in AGENTS, STATUS, and the
+applicable G1.4/G1.5/G1.6 additive decision logs remain authoritative.
 
 ## Epic 1 results
 
@@ -98,7 +125,9 @@ Before changing implementation code, follow
 [`mobileworld_audit_handoff/AGENTS.md`](mobileworld_audit_handoff/AGENTS.md).
 The current authoritative state and locked decisions are in
 [`STATUS.md`](mobileworld_audit_handoff/STATUS.md) and
-[`DECISION_LOG.md`](mobileworld_audit_handoff/DECISION_LOG.md). The G1.1 causal
+[`DECISION_LOG.md`](mobileworld_audit_handoff/DECISION_LOG.md); current G1.4
+authorization is append-only in
+[`G1_4_DECISION_LOG.md`](mobileworld_audit_handoff/G1_4_DECISION_LOG.md). The G1.1 causal
 protocol and locked analysis plan are
 [`G1_CAUSAL_REPLAY_PROTOCOL_V1.md`](mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md)
 and
@@ -110,7 +139,28 @@ and
 its active correction is
 [`G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`](mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md),
 and the historical plus active G1.3 machine schemas live under
-[`schemas/g1_3/`](mobileworld_audit_handoff/schemas/g1_3/).
+[`schemas/g1_3/`](mobileworld_audit_handoff/schemas/g1_3/). The G1.4 CPU/fake
+runner and additive inert-preparation contracts are
+[`G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md)
+and
+[`G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md);
+their nine original plus six additive schemas live under
+[`schemas/g1_4/`](mobileworld_audit_handoff/schemas/g1_4/).
+The G1.5 CPU Codec, engineering-close amendment, and G1.6 human-curation boundaries are recorded in
+[`G1_5_DECISION_LOG.md`](mobileworld_audit_handoff/G1_5_DECISION_LOG.md),
+[`G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`](mobileworld_audit_handoff/G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md),
+[`G1_6_DECISION_LOG.md`](mobileworld_audit_handoff/G1_6_DECISION_LOG.md), and
+[`G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md).
+The additive non-authoritative candidate boundary, frozen prompt, and closed
+machine schemas are
+[`G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`](mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md),
+[`G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`](mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md),
+and [`schemas/g1_6_ai/`](mobileworld_audit_handoff/schemas/g1_6_ai/).
+The separate D-033 non-human publication boundary and its four schemas are
+[`G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`](mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md)
+and [`schemas/g1_6_ai_only/`](mobileworld_audit_handoff/schemas/g1_6_ai_only/).
+The owner-only local website procedure is
+[`G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`](mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md).
 
 Raw collections, derived audit artifacts, screenshots, and replay outputs must
 remain outside the Git repository in restricted, versioned data roots. Git

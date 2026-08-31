@@ -1,0 +1,129 @@
+{
+  "schema_version": "mobileworld.g1.history-codec-captured-fixture/v1",
+  "fixture_id": "g15-mai-raw-replay-captured-redacted-v1",
+  "capture_boundary": "APPLICATION_LAYER_SDK_ARGUMENTS_PRE_SEND",
+  "history_family": "raw_replay",
+  "codec_id": "mobileworld.g1.history-codec.mai-raw-replay",
+  "source_capture": {
+    "publication_manifest_sha256": "8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402",
+    "unit_id": "g1control-0155081b1929c80b36bf2b57",
+    "canonical_semantic_request_sha256": "7d9fa9775605005ec914b0012a68366e0c207e16ecd4557d5c0021931a3ad4e9",
+    "shape_observed": "RAW_ASSISTANT_REPLAY_WITH_HIDDEN_OLD_IMAGES_AND_CURRENT_IMAGE"
+  },
+  "sanitization": {
+    "performed": true,
+    "method": "STRUCTURE_PRESERVING_SECRET_FREE_SURROGATE",
+    "source_bytes_copied": false,
+    "task_and_history_semantics_replaced": true,
+    "image_replaced_with_local_one_pixel_data_url": true,
+    "fixture_is_formal_g1_data": false
+  },
+  "fixture_request_sha256": "c2ee086c6e5e659c4f904fbb74afefc9c89f7aabcfd47441ce65cce332d37a7d",
+  "application_request": {
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a GUI agent. Return <thinking> and one <tool_call> wrapper."
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "在设置中检查显示选项。"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "<thinking>\n已打开设置🙂\n</thinking>\n<tool_call>{\"name\":\"mobile_use\",\"arguments\":{\"action\":\"click\",\"coordinate\":[100,200]}}</tool_call>"
+      },
+      {
+        "role": "assistant",
+        "content": "<thinking>\n已进入显示页面\n</thinking>\n<tool_call>{\"name\":\"mobile_use\",\"arguments\":{\"action\":\"click\",\"coordinate\":[300,400]}}</tool_call>"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Tool call result: {\"status\":\"screen unchanged\"}"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "<thinking>\n已查看主题选项\n</thinking>\n<tool_call>{\"name\":\"mobile_use\",\"arguments\":{\"action\":\"wait\"}}</tool_call>"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            }
+          }
+        ]
+      }
+    ],
+    "max_tokens": 2048,
+    "model": "secret-free-mai-shape-surrogate",
+    "temperature": 0.0,
+    "top_p": 1.0
+  },
+  "curated_span_bindings": [
+    {
+      "binding_id": "mai-focal-message-2",
+      "source_request_sha256": "c2ee086c6e5e659c4f904fbb74afefc9c89f7aabcfd47441ce65cce332d37a7d",
+      "container_path": ["messages", 2, "content"],
+      "char_start": 11,
+      "char_end": 17,
+      "utf8_byte_start": 11,
+      "utf8_byte_end": 30,
+      "exact_text": "已打开设置🙂",
+      "span_sha256": "f2eedd0bee9bc0d351330df36f5934c98d6e37985fb96b5275f2f74c1df09f39",
+      "span_role": "EDITABLE_CLAIM"
+    },
+    {
+      "binding_id": "mai-oracle-message-3",
+      "source_request_sha256": "c2ee086c6e5e659c4f904fbb74afefc9c89f7aabcfd47441ce65cce332d37a7d",
+      "container_path": ["messages", 3, "content"],
+      "char_start": 11,
+      "char_end": 18,
+      "utf8_byte_start": 11,
+      "utf8_byte_end": 32,
+      "exact_text": "已进入显示页面",
+      "span_sha256": "c38b7a8bf1be528d9cd03e1322d1fb13960304acf22f60d7defecb4491f99c62",
+      "span_role": "EDITABLE_CLAIM"
+    },
+    {
+      "binding_id": "mai-sham-message-5",
+      "source_request_sha256": "c2ee086c6e5e659c4f904fbb74afefc9c89f7aabcfd47441ce65cce332d37a7d",
+      "container_path": ["messages", 5, "content"],
+      "char_start": 11,
+      "char_end": 18,
+      "utf8_byte_start": 11,
+      "utf8_byte_end": 32,
+      "exact_text": "已查看主题选项",
+      "span_sha256": "47854c0ae5984b8da34dd4b916dbff5a1cde7a8a23fe236e464ee861de245040",
+      "span_role": "BENIGN_SHAM"
+    }
+  ],
+  "plan_targets": {
+    "mask": ["mai-focal-message-2"],
+    "mask_correction": ["mai-focal-message-2"],
+    "oracle_clean": ["mai-focal-message-2", "mai-oracle-message-3"],
+    "sham_benign_edit": ["mai-sham-message-5"]
+  },
+  "expected_rendered_request_sha256": {
+    "ORIGINAL": "c2ee086c6e5e659c4f904fbb74afefc9c89f7aabcfd47441ce65cce332d37a7d",
+    "MASK": "3d4e0b3618f1dd44759783ed9913fec11d4ca3f7e3912559341af5f8a39ce9e7",
+    "MASK_CORRECTION": "bb9f43cdd12a27301bba03d7654e3791b7ee0e0c97a0793f3213e1ece2d06095",
+    "ORACLE_CLEAN": "97d8dc1aa155cef40e54f58649c4053822c405cd46acd87a70e0e292c54369e9",
+    "SHAM_BENIGN_EDIT": "ee4bd4b27f0a292981ec9769d151a2d1be4017fc6e49af967e4df8827581c27f"
+  },
+  "human_diff_golden": "mai_raw_replay.expected_diff.v1.txt",
+  "human_diff_sha256": "f27c7d098260f5b70be2685d249544cbfd1bafbcb45e129300dedcf357ac286f",
+  "correction_text": "当前界面未证明显示选项已经生效。"
+}

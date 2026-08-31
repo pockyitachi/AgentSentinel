@@ -1,0 +1,413 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6/review_proposal.schema.json",
+  "title": "G1.6 closed human review proposal payload",
+  "description": "Validated inline as annotation_event.payload; this is not a frozen formal G1 output.",
+  "oneOf": [
+    {"$ref": "#/$defs/actionGoldProposal"},
+    {"$ref": "#/$defs/transformationProposal"},
+    {"$ref": "#/$defs/consistencyProposal"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "evidenceId": {"type": "string", "pattern": "^evidence-[0-9a-f]{24}$"},
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_id", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end",
+        "exact_text", "span_sha256", "human_selected"
+      ],
+      "properties": {
+        "record_id": {"type": "string", "minLength": 1},
+        "char_start": {"type": "integer", "minimum": 0},
+        "char_end": {"type": "integer", "minimum": 1},
+        "utf8_byte_start": {"type": "integer", "minimum": 0},
+        "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "exact_text": {"type": "string", "minLength": 1},
+        "span_sha256": {"$ref": "#/$defs/sha256"},
+        "human_selected": {"const": true}
+      }
+    },
+    "region": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["shape", "x_min", "y_min", "x_max", "y_max"],
+          "properties": {
+            "shape": {"const": "BOUNDING_BOX"},
+            "x_min": {"type": "integer", "minimum": 0},
+            "y_min": {"type": "integer", "minimum": 0},
+            "x_max": {"type": "integer", "minimum": 0},
+            "y_max": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["shape", "vertices"],
+          "properties": {
+            "shape": {"const": "POLYGON"},
+            "vertices": {
+              "type": "array",
+              "minItems": 3,
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "integer", "minimum": 0}, {"type": "integer", "minimum": 0}],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "evidenceAndRationale": {
+      "type": "object",
+      "required": ["evidence_ids", "rationale", "human_selected"],
+      "properties": {
+        "evidence_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/evidenceId"}},
+        "rationale": {"type": "string", "minLength": 1},
+        "human_selected": {"const": true}
+      }
+    },
+    "actionPredicate": {
+      "oneOf": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/evidenceAndRationale"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["predicate_kind", "action_type", "normalized_action", "evidence_ids", "rationale", "human_selected"],
+              "properties": {
+                "predicate_kind": {"const": "EXACT_NORMALIZED_ACTION"},
+                "action_type": {"$ref": "#/$defs/actionType"},
+                "normalized_action": {"type": "object"},
+                "evidence_ids": {"$ref": "#/$defs/evidenceAndRationale/properties/evidence_ids"},
+                "rationale": {"$ref": "#/$defs/evidenceAndRationale/properties/rationale"},
+                "human_selected": {"const": true}
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/evidenceAndRationale"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["predicate_kind", "action_type", "regions", "tolerance_px", "evidence_ids", "rationale", "human_selected"],
+              "properties": {
+                "predicate_kind": {"const": "POINT_REGION"},
+                "action_type": {"enum": ["click", "double_tap", "long_press"]},
+                "regions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/region"}},
+                "tolerance_px": {"type": "integer", "minimum": 0},
+                "evidence_ids": {"$ref": "#/$defs/evidenceAndRationale/properties/evidence_ids"},
+                "rationale": {"$ref": "#/$defs/evidenceAndRationale/properties/rationale"},
+                "human_selected": {"const": true}
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/evidenceAndRationale"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "predicate_kind", "action_type", "start_regions", "end_regions",
+                "allowed_directions", "minimum_displacement_px", "tolerance_px",
+                "evidence_ids", "rationale", "human_selected"
+              ],
+              "properties": {
+                "predicate_kind": {"const": "DRAG_REGION"},
+                "action_type": {"const": "drag"},
+                "start_regions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/region"}},
+                "end_regions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/region"}},
+                "allowed_directions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["left", "right", "up", "down", "any"]}},
+                "minimum_displacement_px": {"type": "integer", "minimum": 0},
+                "tolerance_px": {"type": "integer", "minimum": 0},
+                "evidence_ids": {"$ref": "#/$defs/evidenceAndRationale/properties/evidence_ids"},
+                "rationale": {"$ref": "#/$defs/evidenceAndRationale/properties/rationale"},
+                "human_selected": {"const": true}
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/evidenceAndRationale"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "predicate_kind", "action_type", "field", "unicode_normalization",
+                "case_sensitive", "allowed_values", "evidence_ids", "rationale", "human_selected"
+              ],
+              "properties": {
+                "predicate_kind": {"const": "TEXT_VARIANTS"},
+                "action_type": {"enum": ["input_text", "open_app", "status", "answer", "finished", "ask_user"]},
+                "field": {"enum": ["text", "app_name", "goal_status"]},
+                "unicode_normalization": {"const": "NFC"},
+                "case_sensitive": {"type": "boolean"},
+                "allowed_values": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+                "evidence_ids": {"$ref": "#/$defs/evidenceAndRationale/properties/evidence_ids"},
+                "rationale": {"$ref": "#/$defs/evidenceAndRationale/properties/rationale"},
+                "human_selected": {"const": true}
+              },
+              "allOf": [
+                {
+                  "if": {"properties": {"action_type": {"enum": ["input_text", "answer", "finished", "ask_user"]}}},
+                  "then": {"properties": {"field": {"const": "text"}}}
+                },
+                {
+                  "if": {"properties": {"action_type": {"const": "open_app"}}},
+                  "then": {"properties": {"field": {"const": "app_name"}}}
+                },
+                {
+                  "if": {"properties": {"action_type": {"const": "status"}}},
+                  "then": {"properties": {"field": {"const": "goal_status"}}}
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/evidenceAndRationale"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["predicate_kind", "action_type", "allowed_directions", "evidence_ids", "rationale", "human_selected"],
+              "properties": {
+                "predicate_kind": {"const": "DIRECTION_SET"},
+                "action_type": {"enum": ["scroll", "swipe"]},
+                "allowed_directions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["left", "right", "up", "down"]}},
+                "evidence_ids": {"$ref": "#/$defs/evidenceAndRationale/properties/evidence_ids"},
+                "rationale": {"$ref": "#/$defs/evidenceAndRationale/properties/rationale"},
+                "human_selected": {"const": true}
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "actionType": {
+      "enum": [
+        "click", "double_tap", "scroll", "swipe", "input_text", "navigate_home",
+        "navigate_back", "keyboard_enter", "open_app", "status", "wait", "long_press",
+        "answer", "finished", "drag", "ask_user", "mcp"
+      ]
+    },
+    "actionGoldProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_kind", "disposition", "exclusion_reason", "predicates",
+        "evidence_rationale", "closed_world_confirmed", "all_reasonable_actions_enumerated"
+      ],
+      "properties": {
+        "proposal_kind": {"const": "ACTION_GOLD"},
+        "disposition": {"enum": ["ACCEPT", "EXCLUDE"]},
+        "exclusion_reason": {"enum": ["NO_GOLD_CONSENSUS", null]},
+        "predicates": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/actionPredicate"}},
+        "evidence_rationale": {"type": "string", "minLength": 1},
+        "closed_world_confirmed": {"type": "boolean"},
+        "all_reasonable_actions_enumerated": {"type": "boolean"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "disposition": {"const": "ACCEPT"}, "exclusion_reason": {"type": "null"},
+            "predicates": {"minItems": 1}, "closed_world_confirmed": {"const": true},
+            "all_reasonable_actions_enumerated": {"const": true}
+          }
+        },
+        {
+          "properties": {
+            "disposition": {"const": "EXCLUDE"}, "exclusion_reason": {"const": "NO_GOLD_CONSENSUS"},
+            "predicates": {"maxItems": 0}
+          }
+        }
+      ]
+    },
+    "delimiterRepair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arm", "operation", "deleted_syntax_span", "rationale", "human_selected"],
+      "properties": {
+        "arm": {"enum": ["MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+        "operation": {"enum": ["DELETE_EMPTY_DELIMITER", "DELETE_ORPHAN_SEPARATOR"]},
+        "deleted_syntax_span": {"$ref": "#/$defs/span"},
+        "rationale": {"type": "string", "minLength": 1},
+        "human_selected": {"const": true}
+      }
+    },
+    "correctionCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "rationale", "human_authored"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 1},
+        "human_authored": {"const": true}
+      }
+    },
+    "shamChecks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "same_role", "same_content_kind", "same_representation_class", "relative_third_matched",
+        "same_record_preferred_or_depth_within_one", "token_size_matched", "no_entailment",
+        "no_contradiction", "no_lexical_alias", "not_hard_task_requirement", "not_action_discriminant"
+      ],
+      "properties": {
+        "same_role": {"type": "boolean"},
+        "same_content_kind": {"type": "boolean"},
+        "same_representation_class": {"type": "boolean"},
+        "relative_third_matched": {"type": "boolean"},
+        "same_record_preferred_or_depth_within_one": {"type": "boolean"},
+        "token_size_matched": {"type": "boolean"},
+        "no_entailment": {"type": "boolean"},
+        "no_contradiction": {"type": "boolean"},
+        "no_lexical_alias": {"type": "boolean"},
+        "not_hard_task_requirement": {"type": "boolean"},
+        "not_action_discriminant": {"type": "boolean"}
+      }
+    },
+    "transformationProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_kind", "unit_kind", "history_family", "disposition", "exclusion_reason",
+        "focal_target_spans", "oracle_target_spans", "correction_candidates", "correction_text", "correction_evidence_ids",
+        "correction_is_minimal_fact", "correction_contains_no_advice",
+        "oracle_preserves_non_target_history", "protected_spans", "delimiter_repairs",
+        "sham_span", "sham_match_checks", "clean_control_reference_anchor_confirmed",
+        "preview_receipt_sha256", "preview_human_confirmed", "rationale"
+      ],
+      "properties": {
+        "proposal_kind": {"const": "TRANSFORMATION"},
+        "unit_kind": {"enum": ["STRICT_MHR", "CLEAN_CONTROL"]},
+        "history_family": {"enum": ["flat_progress", "raw_replay"]},
+        "disposition": {"enum": ["ACCEPT", "EXCLUDE"]},
+        "exclusion_reason": {
+          "enum": ["TARGET_SPAN_UNRESOLVED", "NO_VALID_CORRECTION", "NO_VALID_ORACLE_VIEW", "NO_MATCHED_SHAM", null]
+        },
+        "focal_target_spans": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/span"}},
+        "oracle_target_spans": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/span"}},
+        "correction_candidates": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/correctionCandidate"}},
+        "correction_text": {"type": "string"},
+        "correction_evidence_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/evidenceId"}},
+        "correction_is_minimal_fact": {"type": "boolean"},
+        "correction_contains_no_advice": {"type": "boolean"},
+        "oracle_preserves_non_target_history": {"type": "boolean"},
+        "protected_spans": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/span"}},
+        "delimiter_repairs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/delimiterRepair"}},
+        "sham_span": {"oneOf": [{"$ref": "#/$defs/span"}, {"type": "null"}]},
+        "sham_match_checks": {"oneOf": [{"$ref": "#/$defs/shamChecks"}, {"type": "null"}]},
+        "clean_control_reference_anchor_confirmed": {"type": "boolean"},
+        "preview_receipt_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "preview_human_confirmed": {"type": "boolean"},
+        "rationale": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"disposition": {"const": "EXCLUDE"}}},
+          "then": {
+            "properties": {
+              "exclusion_reason": {
+                "enum": ["TARGET_SPAN_UNRESOLVED", "NO_VALID_CORRECTION", "NO_VALID_ORACLE_VIEW", "NO_MATCHED_SHAM"]
+              },
+              "focal_target_spans": {"maxItems": 0}, "oracle_target_spans": {"maxItems": 0},
+              "correction_candidates": {"maxItems": 0},
+              "correction_text": {"const": ""}, "correction_evidence_ids": {"maxItems": 0},
+              "correction_is_minimal_fact": {"const": false},
+              "correction_contains_no_advice": {"const": false},
+              "oracle_preserves_non_target_history": {"const": false},
+              "protected_spans": {"maxItems": 0}, "delimiter_repairs": {"maxItems": 0},
+              "sham_span": {"type": "null"}, "sham_match_checks": {"type": "null"},
+              "clean_control_reference_anchor_confirmed": {"const": false},
+              "preview_receipt_sha256": {"type": "null"},
+              "preview_human_confirmed": {"const": false}
+            }
+          },
+          "else": {
+            "properties": {
+              "exclusion_reason": {"type": "null"},
+              "focal_target_spans": {"minItems": 1},
+              "preview_receipt_sha256": {"$ref": "#/$defs/sha256"},
+              "preview_human_confirmed": {"const": true},
+              "sham_span": {"$ref": "#/$defs/span"},
+              "sham_match_checks": {
+                "properties": {
+                  "same_role": {"const": true}, "same_content_kind": {"const": true},
+                  "same_representation_class": {"const": true}, "relative_third_matched": {"const": true},
+                  "same_record_preferred_or_depth_within_one": {"const": true}, "token_size_matched": {"const": true},
+                  "no_entailment": {"const": true}, "no_contradiction": {"const": true},
+                  "no_lexical_alias": {"const": true}, "not_hard_task_requirement": {"const": true},
+                  "not_action_discriminant": {"const": true}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"unit_kind": {"const": "STRICT_MHR"}, "disposition": {"const": "ACCEPT"}}},
+          "then": {
+            "properties": {
+              "oracle_target_spans": {"minItems": 1}, "correction_text": {"minLength": 1},
+              "correction_candidates": {"minItems": 1},
+              "correction_evidence_ids": {"minItems": 1}, "correction_is_minimal_fact": {"const": true},
+              "correction_contains_no_advice": {"const": true},
+              "oracle_preserves_non_target_history": {"const": true},
+              "clean_control_reference_anchor_confirmed": {"const": false}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"unit_kind": {"const": "CLEAN_CONTROL"}, "disposition": {"const": "ACCEPT"}}},
+          "then": {
+            "properties": {
+              "focal_target_spans": {"minItems": 1, "maxItems": 1}, "oracle_target_spans": {"maxItems": 0},
+              "correction_candidates": {"maxItems": 0},
+              "correction_text": {"const": ""}, "correction_evidence_ids": {"maxItems": 0},
+              "correction_is_minimal_fact": {"const": false}, "correction_contains_no_advice": {"const": false},
+              "oracle_preserves_non_target_history": {"const": false},
+              "clean_control_reference_anchor_confirmed": {"const": true}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"history_family": {"const": "raw_replay"}, "disposition": {"const": "ACCEPT"}}},
+          "then": {"properties": {"protected_spans": {"minItems": 1}}}
+        }
+      ]
+    },
+    "consistencyProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_kind", "consistency_label", "history_consistency_rationale",
+        "gui_task_consistency_rationale", "replay_response_used", "descriptive_only"
+      ],
+      "properties": {
+        "proposal_kind": {"const": "CONSISTENCY_AUDIT"},
+        "consistency_label": {
+          "enum": [
+            "HISTORY_CONSISTENT_GUI_TASK_INCONSISTENT", "HISTORY_AND_GUI_TASK_CONSISTENT",
+            "HISTORY_INCONSISTENT", "AMBIGUOUS", "UNPARSEABLE_ORIGINAL_ACTION"
+          ]
+        },
+        "history_consistency_rationale": {"type": "string", "minLength": 1},
+        "gui_task_consistency_rationale": {"type": "string", "minLength": 1},
+        "replay_response_used": {"const": false},
+        "descriptive_only": {"const": true}
+      }
+    }
+  }
+}

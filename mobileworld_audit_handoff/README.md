@@ -6,7 +6,7 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 
 ## 当前状态
 
-截至 2026-08-27：
+截至 2026-08-31：
 
 | Workstream | 状态 | 说明 |
 | --- | --- | --- |
@@ -15,6 +15,9 @@ Collector 与 Epic 1 六模型调查已经完成，当前工作已经进入 G1�
 | ALE-319 / G1.1 | **已完成** | 冻结 CPU-only causal-replay protocol、schemas、pre-gold registry、controls、model/config manifest 与 locked analysis plan；没有生成 treatment response |
 | ALE-320 / G1.2 | **已完成** | 已冻结可移植 History IR/Core、codec/provider interface、protocol validator、sidecar schemas 与六 family fixture conformance |
 | ALE-321 / G1.3 | **已完成；v1.1 已纠正** | CPU-only 正式发布 190 个 immutable capsules、0 exclusions（152 strict + 38 selected clean）；Amendment 1 增加显式 fail-closed authorization guards；另 38 reserve 只进 census；未调用模型/provider/GPU/GUI/replay |
+| ALE-322 / G1.4 | **有界 engineering delivery 已关闭；formal replay 延后** | D-035 接受 CPU/fake runner 与 sealed non-formal 两模型 compatibility smoke；精确状态为 `NONFORMAL_LIVE_SMOKE_PASSED` / `DEFERRED_TO_G1_7_NOT_AUTHORIZED` |
+| ALE-323 / G1.5 | **有界 engineering delivery 已关闭；formal live readiness 延后** | D-036 接受 Qwen/MAI content-bound CPU Codecs、five-arm preview/conformance 与 non-formal prompt/parser compatibility；精确状态为 `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED` / `DEFERRED_TO_G1_7_NOT_AUTHORIZED`，两个 v1 Codec 仍为 `live_ready=false` |
+| ALE-324 / G1.6 | **4 条人工 solo locks + 186 条 AI-only research labels；human/formal curation 未完成** | D-033 将 D-031 冻结候选的剩余 186 units 分成 3×62 fresh isolated shards，发布独立 content-addressed `AI_ONLY_ACTION_LABELS`；它绑定但不复制/改写前 4 条人工锁，不写 annotation journal、不打开 Transformation、不具 review/export/admission/promotion authority；无 target-actor provider/GPU/replay/action |
 
 当前 MobileWorld/ 是 AgentSentinel monorepo 中的实际实现与研究代码来源；上游
 Tongyi-MAI/MobileWorld@0dcd098... 只用于 provenance，不是当前 push 目标。
@@ -85,9 +88,131 @@ publication `c2af8b8393e2df2da21bedcc98614e60a08b8254dc03da373ce72d67fe7c76c5`
 Collector raw layer 保持不可变、passive 和 label-free。所有 G1 label、plan、rendered
 request、response 与统计都属于 repo 外的 versioned derived/replay layer。
 
-D-023 与当前 AGENTS/STATUS 只授权并记录上述 CPU-only G1.3 capsule 物化与发布；
-ALE-322 / G1.4 及以后仍未启动、未获授权，任何 model/provider/GPU/GUI/action/replay 仍需
-新的 story 与 owner 明确授权。
+D-023/D-024 只授权并记录上述 CPU-only G1.3 capsule 物化、修正与发布。
+
+## 当前活动阶段：ALE-322 / G1.4（CPU/fake checkpoint 与 inert live-proof code preparation 已实现）
+
+[`G1_4_DECISION_LOG.md`](G1_4_DECISION_LOG.md) 中 D-025 允许先完成不需真实模型或外部运行时的
+runner 工程：formal v1.1 capsule
+只读加载与验证、exact-request preparation、target-only diff/invariance guard、预注册
+arm schedule、idempotent append-only attempt/resume 存储、blinded-scoring export、schema/CLI、
+in-process fake provider，以及只通过 fake SDK client 验证的 Provider Codec 边界。
+
+D-026 与
+[`G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`](G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)
+在该 checkpoint 上只增加未来 live/GPU proof 所需的 inert、CPU-only 代码准备：静态冻结
+model/config binding、no-send OpenAI SDK call 与 paired-block descriptor、caller-injected
+response envelope 的纯投影、未执行的 vLLM launch plan、只消费 caller-injected snapshot 的
+GPU capacity assessment，以及 no-send `prepare-live-code` CLI inspection。实现提交是
+`74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d`。`live_code_prepared=true` 只表示代码准备状态，
+不表示 resource、transport、run 或 formal replay readiness；全部 8 个 readiness/authorization
+fields 与 9 个 safety fields 仍为 false，也没有 formal run publication。
+
+Formal capsule 的 `execution_ready=false`、`provider_invocation_allowed=false` 和
+`treatment_response_generation_allowed=false` 不变，不得被 wrapper、CLI、resume 或 test path
+绕过。ALE-322 只按 D-035 的 engineering scope 关闭，精确状态为
+`NONFORMAL_LIVE_SMOKE_PASSED` / `DEFERRED_TO_G1_7_NOT_AUTHORIZED`。Formal Provider Codec、
+serving/seed/isolation/backend/scorer/restorer/run-ready/execution seals 与任何新的 live/GPU 授权
+仍未完成。无论后续是否运行 formal proof，都不得执行模型返回的 GUI action。
+
+CPU/fake checkpoint 的实现提交是
+`bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`。它不是正式 replay publication，也不包含
+任何 treatment response；精确回归、冻结输入与剩余 live gate 记录在 [STATUS.md](STATUS.md)。
+
+## 最近关闭阶段：ALE-323 / G1.5（History Codec engineering delivery）
+
+[`G1_5_DECISION_LOG.md`](G1_5_DECISION_LOG.md) D-036 与
+[`G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`](G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md)
+在不改写 D-028 CPU contract 或 formal matrix 的前提下，关闭 ALE-323 的有界 engineering
+delivery。已接受 Qwen flat-progress 与 MAI raw-replay 的 exact captured-request extraction、
+request/hash-bound curated span binding、冻结 G1.2 core 的五 arm render/diff/reversibility、pure
+preview、secret-free fixtures/golden diff、content-bound CPU publication 与 G1.4 fail-closed
+integration。
+
+两个 Codec 的 `scope=LIVE` 只声明 representation capability；`live_ready=false` 保持不变。
+正式状态是 `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED` /
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`。D-035 的十个 arm-shaped calls 只证明 observed
+production-prompt/parser syntactic compatibility，未调用正式 History Codec -> Provider Codec
+路径，不计入 D-028 formal matrix。原 2 codecs × 5 arms × 1 invocation matrix、完整 per-attempt
+evidence、serving/backend/session/KV isolation 与 live seals 全部转交 G1.7；没有新的 live/GPU
+授权，也不需要单独重开 G1.5。能力和稳定 fallback 见
+[`G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`](G1_5_HISTORY_CODEC_CAPABILITIES_V1.md)，CPU conformance
+requirements coverage 见
+[`G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md`](G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md)。
+`mobile_world.offline.g1_history_codecs` 另公开纯 CPU、只读的
+`bind_human_record_spans`、`rank_correction_candidates`、`build_five_arm_preview` 与
+`build_clean_control_preview`：调用者可把
+exact G1.3 source record、显式人工 span/correction/oracle/sham/delimiter repair 绑定到任一已选
+Codec，得到 strict 五 arm 或 clean Original/Sham rendered history、exact correction anchors、
+summed-focal sham token match、target-only diff 与可逆 source mapping。序列化 preview 不含 full
+request。该接口不局限于
+fixture，但输入仍必须属于两个 Codec 的 admitted request grammar；它不推断 claim 或 correction。
+Correction token count 只接受 caller-injected、locally pinned 且不加 special token 的 deterministic
+counter；缺失时稳定阻断为 `PINNED_TOKENIZER_UNAVAILABLE`，禁止下载、替代 tokenizer 或人工填写
+count。publication 同时绑定 frozen G1.1 model/config manifest 中 Qwen/MAI 两个 tokenizer record 的
+canonical hashes 和 human-diff renderer dependency；caller 必须先逐项验证本地 artifact。输出闭合 schema 是
+[`schemas/g1_5/history_codec_preview.schema.json`](schemas/g1_5/history_codec_preview.schema.json)。
+后续 CPU gate 应只读绑定
+[`g1_5/cpu_publication_manifest.v1.json`](g1_5/cpu_publication_manifest.v1.json) 的最终 file
+SHA-256；manifest 内分别绑定两个 selected Codec、capability、fixture、checkpoint receipt，并共同
+绑定 preview implementation/output schema、冻结 G1.2 History-IR schema/renderer 与 explicit
+no-tokenizer Unicode/UTF-8 coordinate contract。
+它不是 live capability 或 formal G1 publication。
+
+## 当前活动阶段：ALE-324 / G1.6（CPU/manual annotation workspace checkpoint）
+
+[`G1_6_DECISION_LOG.md`](G1_6_DECISION_LOG.md) D-029 与
+[`G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`](G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md)
+授权把所有需要真人判断的 gold curation 选择放进一个私有、loopback-only 网页：ACTION_GOLD
+只看 exact task/current GUI；TRANSFORMATION 只看 exact source history/pre-cutoff evidence 并由
+人选择 focal/oracle/sham/correction/delimiter repair；CONSISTENCY_AUDIT 只在前两通道解决后做
+描述性判断；material disagreement 必须由第三个 channel-bound identity 独立裁决。
+
+工作台机械绑定 active G1.3 v1.1 publication、G1.5 CPU publication/preview、两个本地 pinned
+tokenizer records、role-projected browser packet 和 append-only event chain。网页不接收 raw path、
+完整 capsule、captured raw response、post/future/outcome 或另一通道 proposal；自然 normalized
+action/parse outcome 只在前两 formal channels 已解决后的 CONSISTENCY_AUDIT 可见，在
+ACTION_GOLD/TRANSFORMATION 始终不可见。preview 仅返回 assignment-scoped tokens、rendered
+history、target-only diff 与 reversible mapping。
+owner 启动步骤、9-role registry 形状和 completion boundary 见
+[`G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`](G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md)。
+
+D-030 与
+[`G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`](G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md)
+为当前仅一位真实 curator 的情况增加机械隔离的 `SOLO_FIRST_PASS`。同一 principal 必须先锁定
+全部 190 条 Action Gold，再锁定全部 190 条 Transformation，最后才可查看 preliminary
+Consistency。它使用独立 mode marker、assignment key、manifest 与 journal；formal review、
+resolution、adjudication、promotion、export、admission、seal 与 replay authority 全为 false。
+未来正式工作必须另建 blind workspace/registry/key，不能把 solo 记录原地晋升。
+
+D-031、
+[`G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`](G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md)
+与冻结的
+[`G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`](G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md)
+增加一个与 formal/solo journals 物理隔离的离线候选 campaign。三个 Agent A/B/C stream 对
+同一批 190 个 role-projected Action-Gold blind packets 各输出一次，共 570 个 terminal envelopes、
+585 个 atomic suggestions。候选不是 evidence、review、gold、resolution 或 adjudication；网页没有
+generate/regenerate/rank/merge/bulk-accept 路径。D-032 的简易页面让唯一 curator 对每条候选明确
+选择“最优/正确/错误”，再另点一次由服务器从冻结 bytes 派生并校验 non-formal solo lock；打开
+人工编辑器后该简易路径立即关闭。看到候选的 principal 会被记录为 AI-assisted，不能在未来
+formal G1.6 workspace 担任 reviewer 或 adjudicator。
+
+D-033 与
+[`G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`](G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md)
+只额外允许三个 fresh/no-context、彼此隔离的 Codex research agents 对未被 owner 锁定的 186
+units 各自处理一个固定 62-unit shard。它们只能 retain/reject 已冻结候选或排除 unit，不得生成
+predicate。结果进入第四个 repo-external、content-addressed `AI_ONLY_ACTION_LABELS` root；每条均
+固定 `human_review_performed=false`、`human_selected=false`、全部 formal/promotion authority false。
+该 publication 不进入任何 annotation journal，不推进 solo stage，不打开 Transformation，也不使
+ALE-324 完成。
+
+当前精确状态是 `IN_PROGRESS_HUMAN_CURATION_REQUIRED`：代码/workspace checkpoint 不是
+formal gold publication。190 个单元仍需真实 PRIMARY/SECONDARY review 与必要 adjudication；
+formal action bundle、Transformation Plan、admission/blinded catalog/seal 还必须在独立 exporter
+门禁中完成。两项诚实的 AI disclosure 是独立 candidate campaign 的
+`ai_semantic_suggestion_performed=true` 与 D-033 publication 的
+`ai_semantic_labeling_performed=true`；target-actor/project-provider/treatment/GPU/replay/
+action authority 与执行 flags 全部保持 false。
 
 ## 强制入口与补充导航
 
@@ -97,24 +222,42 @@ ALE-322 / G1.4 及以后仍未启动、未获授权，任何 model/provider/GPU/
 1. 本 README；
 2. [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)；
 3. [DECISION_LOG.md](DECISION_LOG.md)；
-4. [COLLECTOR_DESIGN.md](COLLECTOR_DESIGN.md)；
-5. [EVENT_CONTRACT_V1.md](EVENT_CONTRACT_V1.md)；
-6. [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)；
-7. [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md)；
-8. [SERVER_AGENT_INSTRUCTIONS.md](SERVER_AGENT_INSTRUCTIONS.md)；
-9. [STATUS.md](STATUS.md)；
-10. [G1_CAUSAL_REPLAY_PROTOCOL_V1.md](G1_CAUSAL_REPLAY_PROTOCOL_V1.md)；
-11. [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
-12. [G1_PORTABLE_SENTINEL_CONTRACT_V1.md](G1_PORTABLE_SENTINEL_CONTRACT_V1.md)；
-13. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
-14. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
-15. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
-16. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
-17. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
-18. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
-19. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
-20. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
-21. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
+4. [G1_4_DECISION_LOG.md](G1_4_DECISION_LOG.md)；
+5. [G1_5_DECISION_LOG.md](G1_5_DECISION_LOG.md)；
+6. [G1_6_DECISION_LOG.md](G1_6_DECISION_LOG.md)；
+7. [COLLECTOR_DESIGN.md](COLLECTOR_DESIGN.md)；
+8. [EVENT_CONTRACT_V1.md](EVENT_CONTRACT_V1.md)；
+9. [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)；
+10. [TEST_AND_ACCEPTANCE.md](TEST_AND_ACCEPTANCE.md)；
+11. [SERVER_AGENT_INSTRUCTIONS.md](SERVER_AGENT_INSTRUCTIONS.md)；
+12. [STATUS.md](STATUS.md)；
+13. [G1_CAUSAL_REPLAY_PROTOCOL_V1.md](G1_CAUSAL_REPLAY_PROTOCOL_V1.md)；
+14. [G1_LOCKED_ANALYSIS_PLAN_V1.md](G1_LOCKED_ANALYSIS_PLAN_V1.md)；
+15. [G1_PORTABLE_SENTINEL_CONTRACT_V1.md](G1_PORTABLE_SENTINEL_CONTRACT_V1.md)；
+16. [G1_REPLAY_CAPSULE_CONTRACT_V1.md](G1_REPLAY_CAPSULE_CONTRACT_V1.md)；
+17. [G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md](G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md)；
+18. [G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md)；
+19. [G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md](G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md)；
+20. [G1_4_NONFORMAL_LIVE_SMOKE_ENGINEERING_CLOSE_AMENDMENT_V1.md](G1_4_NONFORMAL_LIVE_SMOKE_ENGINEERING_CLOSE_AMENDMENT_V1.md)；
+21. [schemas/g1_4/nonformal_live_smoke_manifest.v1.schema.json](schemas/g1_4/nonformal_live_smoke_manifest.v1.schema.json)；
+22. [g1_4/nonformal_live_smoke_manifest.v1.json](g1_4/nonformal_live_smoke_manifest.v1.json)；
+23. [g1_4/nonformal_live_smoke_install_record.v1.json](g1_4/nonformal_live_smoke_install_record.v1.json)；
+24. [G1_5_HISTORY_CODEC_CONTRACT_V1.md](G1_5_HISTORY_CODEC_CONTRACT_V1.md)；
+25. [G1_5_HISTORY_CODEC_CAPABILITIES_V1.md](G1_5_HISTORY_CODEC_CAPABILITIES_V1.md)；
+26. [G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md](G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md)；
+27. [G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md](G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md)；
+28. [G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md](G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md)；
+29. [G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md](G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md)；
+30. [G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md](G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md)；
+31. [G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md](G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md)；
+32. [G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md](G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md)；
+33. [G1_SENTINEL_MVP_MIGRATION.md](G1_SENTINEL_MVP_MIGRATION.md)；
+34. [g1/registry.lock.v1.json](g1/registry.lock.v1.json)；
+35. [schemas/g1_3/replay_capsule.v1_1.schema.json](schemas/g1_3/replay_capsule.v1_1.schema.json)；
+36. [schemas/g1_3/capsule_manifest.v1_1.schema.json](schemas/g1_3/capsule_manifest.v1_1.schema.json)；
+37. [schemas/g1_3/capsule_integrity.v1_1.schema.json](schemas/g1_3/capsule_integrity.v1_1.schema.json)；
+38. [schemas/g1_3/field_visibility.schema.json](schemas/g1_3/field_visibility.schema.json)；
+39. [schemas/g1_3/capsule_exclusion.schema.json](schemas/g1_3/capsule_exclusion.schema.json)。
 
 三个无 `_v1_1` 后缀的 capsule/manifest/integrity schema 是 byte-frozen 历史 v1，
 不得作为当前 formal G1 contract 使用。
@@ -124,10 +267,19 @@ ALE-322 / G1.4 及以后仍未启动、未获授权，任何 model/provider/GPU/
 - [OFFLINE_EVALUATION_DESIGN.md](OFFLINE_EVALUATION_DESIGN.md)；
 - [六模型正式报告](../MobileWorld/docs/misleading_history_audit_report.md)；
 - [schemas/g1/](schemas/g1/) 中的 G1.1 machine contracts；
-- [schemas/g1_2/](schemas/g1_2/) 中的 G1.2 machine contracts。
+- [schemas/g1_2/](schemas/g1_2/) 中的 G1.2 machine contracts；
+- [schemas/g1_4/](schemas/g1_4/) 中的 9 个 CPU/fake runner schemas 与 6 个 additive inert-preparation schemas。
+- [schemas/g1_5/](schemas/g1_5/) 中的 captured-shape fixture、CPU checkpoint/publication、
+  five-arm preview 与 host-coordinate binding schemas。
+- [schemas/g1_6/](schemas/g1_6/) 中的 workspace、event、review proposal、role-projected packet
+  与 assignment-scoped browser preview schemas。
+- [schemas/g1_6_ai/](schemas/g1_6_ai/) 中的离线三路候选 campaign、packet、output、receipt、
+  exposure、browser projection 与人工 candidate-decision schemas。
 
 其中 Collector 文档保留其设计时状态与验收原则；完成记录以 STATUS.md 为准，工程授权
-以 AGENTS.md 与 DECISION_LOG.md 为准。本 README 不能覆盖它们。
+以 AGENTS.md、DECISION_LOG.md、G1_4_DECISION_LOG.md、G1_5_DECISION_LOG.md 与
+G1_6_DECISION_LOG.md 为准。本 README
+不能覆盖它们。
 
 ## 目录职责
 
@@ -135,7 +287,8 @@ ALE-322 / G1.4 及以后仍未启动、未获授权，任何 model/provider/GPU/
 mobileworld_audit_handoff/
 ├── AGENTS.md, SERVER_AGENT_INSTRUCTIONS.md
 │   └── agent 工作范围与服务器操作规则
-├── PROJECT_CONTEXT.md, DECISION_LOG.md, STATUS.md
+├── PROJECT_CONTEXT.md, DECISION_LOG.md, G1_4_DECISION_LOG.md,
+│   G1_5_DECISION_LOG.md, G1_6_DECISION_LOG.md, STATUS.md
 │   └── 研究语义、locked decisions 与 append-only execution record
 ├── COLLECTOR_DESIGN.md, EVENT_CONTRACT_V1.md
 ├── IMPLEMENTATION_GUIDE.md, TEST_AND_ACCEPTANCE.md
@@ -148,6 +301,18 @@ mobileworld_audit_handoff/
 ├── G1_SENTINEL_MVP_MIGRATION.md
 ├── G1_REPLAY_CAPSULE_CONTRACT_V1.md
 ├── G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md
+├── G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md
+├── G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md
+├── G1_5_HISTORY_CODEC_CONTRACT_V1.md
+├── G1_5_HISTORY_CODEC_CAPABILITIES_V1.md
+├── G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md
+├── G1_5_HISTORY_CODEC_TEST_COVERAGE_V1.md
+├── G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md
+├── G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md
+├── G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md
+├── G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md
+├── G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md
+├── G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md
 ├── g1/
 │   └── frozen registry inputs, model/config manifest, publication lock
 ├── schemas/g1/
@@ -156,6 +321,18 @@ mobileworld_audit_handoff/
 │   └── versioned G1.2 portable-contract schemas
 ├── schemas/g1_3/
 │   └── five historical v1 contracts plus three active v1.1 corrected schemas
+├── schemas/g1_4/
+│   └── nine CPU/fake runner schemas plus six additive inert-preparation schemas
+├── schemas/g1_5/
+│   └── captured-shape fixture, provider-free CPU checkpoint/publication/preview, and coordinate schemas
+├── schemas/g1_6/
+│   └── formal workspace/event/proposal/packet/browser-preview plus additive solo workspace/event schemas
+├── schemas/g1_6_ai/
+│   └── frozen campaign/packet/output/receipt/exposure and browser-candidate schemas
+├── schemas/g1_6_ai_only/
+│   └── AI-only draft/label/publication-manifest/publication-receipt schemas
+├── g1_5/
+│   └── content-addressed CPU manifest, two conformance receipts, preview binding, and no-tokenizer binding
 └── examples/
     └── label-free raw event example
 ~~~

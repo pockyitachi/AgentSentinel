@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/attempt_event.schema.json",
+  "title": "G1.4 append-only replay attempt event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "event_id", "run_id", "seq", "previous_event_sha256", "event_kind", "provider_attempt_index", "payload", "raw_collector_event", "generated_action_executed"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.replay-attempt-event/v1"},
+    "record_type": {"const": "g1_replay_attempt_event"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "event_id": {"type": "string", "pattern": "^g1attempt-event-[0-9a-f]{24}$"},
+    "run_id": {"type": "string", "pattern": "^g1run-[0-9a-f]{24}$"},
+    "seq": {"type": "integer", "minimum": 0},
+    "previous_event_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "event_kind": {"enum": ["PLANNED", "PREFLIGHT_ALLOWED", "PREFLIGHT_BLOCKED", "ATTEMPT_STARTED", "CHUNK", "RETURNED", "FAILED", "PARSED", "PARSE_FAILED", "TERMINAL"]},
+    "provider_attempt_index": {"type": ["integer", "null"], "minimum": 1, "maximum": 3},
+    "payload": {"type": "object"},
+    "raw_collector_event": {"const": false},
+    "generated_action_executed": {"const": false}
+  },
+  "allOf": [
+    {"if": {"properties": {"event_kind": {"enum": ["PLANNED", "PREFLIGHT_ALLOWED", "PREFLIGHT_BLOCKED"]}}}, "then": {"properties": {"provider_attempt_index": {"type": "null"}}}, "else": {"properties": {"provider_attempt_index": {"type": "integer", "minimum": 1, "maximum": 3}}}},
+    {"if": {"properties": {"event_kind": {"const": "PLANNED"}}}, "then": {"properties": {"payload": {"oneOf": [{"$ref": "#/$defs/blockedPlannedPayload"}, {"$ref": "#/$defs/allowedPlannedPayload"}]}}}},
+    {"if": {"properties": {"event_kind": {"const": "PREFLIGHT_ALLOWED"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/preflightAllowedPayload"}}}},
+    {"if": {"properties": {"event_kind": {"const": "PREFLIGHT_BLOCKED"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/preflightBlockedPayload"}}}},
+    {"if": {"properties": {"event_kind": {"const": "ATTEMPT_STARTED"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/attemptStartedPayload"}}}},
+    {"if": {"properties": {"event_kind": {"const": "CHUNK"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/chunkPayload"}}}},
+    {"if": {"properties": {"event_kind": {"const": "RETURNED"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/returnedPayload"}}}},
+    {"if": {"properties": {"event_kind": {"const": "FAILED"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/failedPayload"}}}},
+    {"if": {"properties": {"event_kind": {"const": "PARSED"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/parsedPayload"}}}},
+    {"if": {"properties": {"event_kind": {"const": "PARSE_FAILED"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/parseFailedPayload"}}}},
+    {"if": {"properties": {"event_kind": {"const": "TERMINAL"}}}, "then": {"properties": {"payload": {"oneOf": [{"$ref": "#/$defs/retryExhaustedTerminalPayload"}, {"$ref": "#/$defs/nonRetryTerminalPayload"}]}}}}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "media_type"],
+      "properties": {
+        "relative_path": {"type": "string", "pattern": "^objects/sha256/[0-9a-f]{2}/[0-9a-f]{64}$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 0},
+        "media_type": {"const": "application/json"}
+      }
+    },
+    "binaryArtifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256", "byte_count", "media_type"],
+      "properties": {
+        "relative_path": {"type": "string", "pattern": "^objects/sha256/[0-9a-f]{2}/[0-9a-f]{64}$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 0},
+        "media_type": {"const": "application/octet-stream"}
+      }
+    },
+    "blockedPlannedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invocation_plan_sha256", "preflight_outcome"],
+      "properties": {
+        "invocation_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "preflight_outcome": {"const": "BLOCKED_BEFORE_FAKE_PROVIDER"}
+      }
+    },
+    "allowedPlannedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invocation_plan_sha256", "selected_plan_ref", "paired_plan_set_ref", "invariance_report_ref", "render_result_ref", "validation_receipt_ref", "final_application_request_ref", "target_diff_ref", "blinding_commitment"],
+      "properties": {
+        "invocation_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "selected_plan_ref": {"$ref": "#/$defs/artifactRef"},
+        "paired_plan_set_ref": {"$ref": "#/$defs/artifactRef"},
+        "invariance_report_ref": {"$ref": "#/$defs/artifactRef"},
+        "render_result_ref": {"$ref": "#/$defs/artifactRef"},
+        "validation_receipt_ref": {"$ref": "#/$defs/artifactRef"},
+        "final_application_request_ref": {"$ref": "#/$defs/artifactRef"},
+        "target_diff_ref": {"$ref": "#/$defs/artifactRef"},
+        "blinding_commitment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["blinding_mapping_sha256", "key_commitment_sha256", "mapping_persisted_before_response"],
+          "properties": {
+            "blinding_mapping_sha256": {"$ref": "#/$defs/sha256"},
+            "key_commitment_sha256": {"$ref": "#/$defs/sha256"},
+            "mapping_persisted_before_response": {"const": true}
+          }
+        }
+      }
+    },
+    "preflightAllowedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fake_conformance", "external_provider_invocation_allowed", "encoded_request_ref"],
+      "properties": {
+        "fake_conformance": {"const": true},
+        "external_provider_invocation_allowed": {"const": false},
+        "encoded_request_ref": {"$ref": "#/$defs/artifactRef"}
+      }
+    },
+    "preflightBlockedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason_code", "provider_invocation_allowed", "external_provider_invoked", "treatment_response_generation_allowed"],
+      "properties": {
+        "reason_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "provider_invocation_allowed": {"const": false},
+        "external_provider_invoked": {"const": false},
+        "treatment_response_generation_allowed": {"const": false}
+      }
+    },
+    "attemptStartedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["encoded_request_sha256", "simulated", "external_provider_invoked"],
+      "properties": {
+        "encoded_request_sha256": {"$ref": "#/$defs/sha256"},
+        "simulated": {"const": true},
+        "external_provider_invoked": {"const": false}
+      }
+    },
+    "chunkPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chunk_index", "byte_count", "sha256", "is_final", "content_ref"],
+      "properties": {
+        "chunk_index": {"type": "integer", "minimum": 0},
+        "byte_count": {"type": "integer", "minimum": 0},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "is_final": {"type": "boolean"},
+        "content_ref": {"$ref": "#/$defs/binaryArtifactRef"}
+      }
+    },
+    "returnedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["response_ref", "exchange_ref"],
+      "properties": {
+        "response_ref": {"$ref": "#/$defs/binaryArtifactRef"},
+        "exchange_ref": {"$ref": "#/$defs/artifactRef"}
+      }
+    },
+    "failedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error_code", "retryable", "exchange_ref"],
+      "properties": {
+        "error_code": {"enum": ["TIMEOUT", "HTTP_5XX", "CONNECTION_ERROR"]},
+        "retryable": {"const": true},
+        "exchange_ref": {"$ref": "#/$defs/artifactRef"}
+      }
+    },
+    "parsedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider_result_sha256", "parser_diagnostics"],
+      "properties": {
+        "provider_result_sha256": {"$ref": "#/$defs/sha256"},
+        "parser_diagnostics": {"$ref": "#/$defs/parsedDiagnostics"}
+      }
+    },
+    "parsedDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parser_binding_id", "parse_outcome", "action_count", "action_sha256"],
+      "properties": {
+        "parser_binding_id": {"const": "mobileworld.g1.fixture-json-action-parser/v1"},
+        "parse_outcome": {"const": "PARSED"},
+        "action_count": {"const": 1},
+        "action_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "parseFailedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider_result_sha256", "parser_diagnostics"],
+      "properties": {
+        "provider_result_sha256": {"$ref": "#/$defs/sha256"},
+        "parser_diagnostics": {"oneOf": [{"$ref": "#/$defs/parserFailureDiagnostics"}, {"$ref": "#/$defs/refusalDiagnostics"}, {"$ref": "#/$defs/emptyResponseDiagnostics"}]}
+      }
+    },
+    "parserFailureDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parser_binding_id", "parse_outcome", "action_count", "error_code"],
+      "properties": {
+        "parser_binding_id": {"const": "mobileworld.g1.fixture-json-action-parser/v1"},
+        "parse_outcome": {"const": "FAILED"},
+        "action_count": {"const": 0},
+        "error_code": {"enum": ["MALFORMED_RESPONSE", "PARSER_FAILURE"]}
+      }
+    },
+    "refusalDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parser_binding_id", "parse_outcome", "action_count", "error_code"],
+      "properties": {
+        "parser_binding_id": {"const": "mobileworld.g1.fixture-json-action-parser/v1"},
+        "parse_outcome": {"const": "REFUSAL"},
+        "action_count": {"const": 0},
+        "error_code": {"const": "REFUSAL"}
+      }
+    },
+    "emptyResponseDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parser_binding_id", "parse_outcome", "action_count", "error_code"],
+      "properties": {
+        "parser_binding_id": {"const": "mobileworld.g1.fixture-json-action-parser/v1"},
+        "parse_outcome": {"const": "EMPTY_RESPONSE"},
+        "action_count": {"const": 0},
+        "error_code": {"const": "EMPTY_RESPONSE"}
+      }
+    },
+    "retryExhaustedTerminalPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal_status", "retry_reason", "preceding_event_sha256"],
+      "properties": {
+        "terminal_status": {"const": "RETRY_EXHAUSTED"},
+        "retry_reason": {"enum": ["TIMEOUT", "HTTP_5XX", "CONNECTION_ERROR"]},
+        "preceding_event_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "nonRetryTerminalPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal_status", "retry_reason", "preceding_event_sha256", "generated_action_executed"],
+      "properties": {
+        "terminal_status": {"enum": ["SUCCESS", "PARSE_ERROR", "REFUSAL", "EMPTY_RESPONSE", "NO_OP"]},
+        "retry_reason": {"type": "null"},
+        "preceding_event_sha256": {"$ref": "#/$defs/sha256"},
+        "generated_action_executed": {"const": false}
+      }
+    }
+  }
+}

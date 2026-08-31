@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6/solo_annotation_workspace.schema.json",
+  "title": "G1.6 non-formal single-curator first-pass workspace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "workspace_id", "workspace_mode", "contract_version",
+    "issue", "story", "publication_manifest_sha256", "capsule_set_sha256",
+    "target_unit_count", "formal_schema_sha256s", "codec_gate_receipt_sha256",
+    "identity_policy", "stage_policy", "authority", "readiness", "safety"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.solo-first-pass-workspace-manifest/v1"},
+    "record_type": {"const": "solo_first_pass_workspace_manifest"},
+    "workspace_id": {"type": "string", "pattern": "^g1workspace-[0-9a-f]{24}$"},
+    "workspace_mode": {"const": "SOLO_FIRST_PASS"},
+    "contract_version": {"const": "mobileworld.g1.gold-history-intervention-solo-first-pass/amendment-v1"},
+    "issue": {"const": "ALE-324"},
+    "story": {"const": "G1.6"},
+    "publication_manifest_sha256": {"const": "8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402"},
+    "capsule_set_sha256": {"const": "7d0e85c523c2b20b3f0b820c2e846cbb84957d4ae78e46d7090c6ce78ae9fbed"},
+    "target_unit_count": {"const": 190},
+    "formal_schema_sha256s": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "curation_input_manifest.schema.json", "curation_evidence.schema.json",
+        "action_gold_bundle.schema.json", "transformation_plan.schema.json",
+        "review_ledger.schema.json", "arm.schema.json", "admission.schema.json",
+        "admission_validation.schema.json", "admission_seal.schema.json"
+      ],
+      "properties": {
+        "curation_input_manifest.schema.json": {"$ref": "#/$defs/sha256"},
+        "curation_evidence.schema.json": {"$ref": "#/$defs/sha256"},
+        "action_gold_bundle.schema.json": {"$ref": "#/$defs/sha256"},
+        "transformation_plan.schema.json": {"$ref": "#/$defs/sha256"},
+        "review_ledger.schema.json": {"$ref": "#/$defs/sha256"},
+        "arm.schema.json": {"$ref": "#/$defs/sha256"},
+        "admission.schema.json": {"$ref": "#/$defs/sha256"},
+        "admission_validation.schema.json": {"$ref": "#/$defs/sha256"},
+        "admission_seal.schema.json": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "codec_gate_receipt_sha256": {
+      "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+    },
+    "identity_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity_key_commitment_sha256", "owner_registry_sha256", "one_real_principal",
+        "aliases_as_independent_reviewers_allowed", "same_principal_cross_channel_first_pass"
+      ],
+      "properties": {
+        "identity_key_commitment_sha256": {"$ref": "#/$defs/sha256"},
+        "owner_registry_sha256": {"$ref": "#/$defs/sha256"},
+        "one_real_principal": {"const": true},
+        "aliases_as_independent_reviewers_allowed": {"const": false},
+        "same_principal_cross_channel_first_pass": {"const": true}
+      }
+    },
+    "stage_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "global_stage_order", "units_required_per_stage", "stage_lock_immutable",
+        "later_stage_opens_only_after_prior_stage_complete", "formal_workspace_must_be_separate",
+        "precursor_visible_to_blind_formal_reviewers"
+      ],
+      "properties": {
+        "global_stage_order": {"const": ["ACTION_GOLD", "TRANSFORMATION", "CONSISTENCY_AUDIT"]},
+        "units_required_per_stage": {"const": 190},
+        "stage_lock_immutable": {"const": true},
+        "later_stage_opens_only_after_prior_stage_complete": {"const": true},
+        "formal_workspace_must_be_separate": {"const": true},
+        "precursor_visible_to_blind_formal_reviewers": {"const": false}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_tier", "counts_as_independent_review", "formal_resolution_eligible",
+        "adjudication_eligible", "formal_export_eligible", "admission_eligible",
+        "promotion_allowed", "replay_eligible", "cross_channel_exposed"
+      ],
+      "properties": {
+        "review_tier": {"const": "NON_FORMAL_SOLO_FIRST_PASS"},
+        "counts_as_independent_review": {"const": false},
+        "formal_resolution_eligible": {"const": false},
+        "adjudication_eligible": {"const": false},
+        "formal_export_eligible": {"const": false},
+        "admission_eligible": {"const": false},
+        "promotion_allowed": {"const": false},
+        "replay_eligible": {"const": false},
+        "cross_channel_exposed": {"const": true}
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_initialized", "first_pass_lock_open", "formal_annotation_open",
+        "curation_and_admission_sealed", "admission_ready", "execution_ready",
+        "provider_invocation_allowed", "treatment_response_generation_allowed",
+        "formal_replay_ready"
+      ],
+      "properties": {
+        "workspace_initialized": {"const": true},
+        "first_pass_lock_open": {"type": "boolean"},
+        "formal_annotation_open": {"const": false},
+        "curation_and_admission_sealed": {"const": false},
+        "admission_ready": {"const": false},
+        "execution_ready": {"const": false},
+        "provider_invocation_allowed": {"const": false},
+        "treatment_response_generation_allowed": {"const": false},
+        "formal_replay_ready": {"const": false}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "loopback_only", "external_network_used", "provider_client_created", "provider_invoked",
+        "gpu_probed", "gpu_used", "model_loaded", "replay_executed",
+        "mobileworld_gui_or_tool_action_executed", "treatment_response_count"
+      ],
+      "properties": {
+        "loopback_only": {"const": true},
+        "external_network_used": {"const": false},
+        "provider_client_created": {"const": false},
+        "provider_invoked": {"const": false},
+        "gpu_probed": {"const": false},
+        "gpu_used": {"const": false},
+        "model_loaded": {"const": false},
+        "replay_executed": {"const": false},
+        "mobileworld_gui_or_tool_action_executed": {"const": false},
+        "treatment_response_count": {"const": 0}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

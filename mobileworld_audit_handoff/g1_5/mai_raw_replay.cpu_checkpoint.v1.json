@@ -1,0 +1,72 @@
+{
+  "arms": [
+    {
+      "arm": "ORIGINAL",
+      "invariance_report_sha256": "8b2dae6d6055dcea54dd17b4d149bf3330502313088eef667407c4da5dd6f9f5",
+      "provider_invocation_allowed": false,
+      "render_result_sha256": "2a3db90cf3b9e491b921baf6308fe518e26395d0df27a3af5c782cc5479fa5df",
+      "rendered_request_sha256": "c2ee086c6e5e659c4f904fbb74afefc9c89f7aabcfd47441ce65cce332d37a7d",
+      "source_mapping_reversible": true,
+      "target_only_diff": true,
+      "validation_receipt_sha256": "8ae695d5ef8baa16a870970ba0b5c3ba731f2ce9970125558c96ad2adfa85f97"
+    },
+    {
+      "arm": "MASK",
+      "invariance_report_sha256": "2f5d9600671768bed15c51b81ef51269a276baae73acd407680f31b51203bca5",
+      "provider_invocation_allowed": false,
+      "render_result_sha256": "48abf6d2fa1399f1e4043f43b18b280b05bfbe4d1850ff84ba477a3accb8de83",
+      "rendered_request_sha256": "3d4e0b3618f1dd44759783ed9913fec11d4ca3f7e3912559341af5f8a39ce9e7",
+      "source_mapping_reversible": true,
+      "target_only_diff": true,
+      "validation_receipt_sha256": "2e3bddca95ac4b00f9b9fb6446f4bad99aedc2b61943bf21a9f5223759c37137"
+    },
+    {
+      "arm": "MASK_CORRECTION",
+      "invariance_report_sha256": "616f3a96b965ef5ba8419a0ce413fd1cf8608f46251db348dbdd13241393ea22",
+      "provider_invocation_allowed": false,
+      "render_result_sha256": "c2e39c9d2504975087c8f64991741bce94b6e0da6931fbd0bc6cfdaeff08696f",
+      "rendered_request_sha256": "bb9f43cdd12a27301bba03d7654e3791b7ee0e0c97a0793f3213e1ece2d06095",
+      "source_mapping_reversible": true,
+      "target_only_diff": true,
+      "validation_receipt_sha256": "5752adbe8139a2686088a1b059429dcab72bd94da2e551f3cede2dbf6c807787"
+    },
+    {
+      "arm": "ORACLE_CLEAN",
+      "invariance_report_sha256": "de69f7182d2dbd1e7f65dae6a8cf04eb74b9619e3fc875fdb6ec6b922ac21238",
+      "provider_invocation_allowed": false,
+      "render_result_sha256": "2397eed81bd98c80665df7e6f4bad95ac7b17fb21dc2869dea74cdf4622f6111",
+      "rendered_request_sha256": "97d8dc1aa155cef40e54f58649c4053822c405cd46acd87a70e0e292c54369e9",
+      "source_mapping_reversible": true,
+      "target_only_diff": true,
+      "validation_receipt_sha256": "6e33b140983471e418742b76616b9d1537d1fc0a0bbf73aa0c12457761266592"
+    },
+    {
+      "arm": "SHAM_BENIGN_EDIT",
+      "invariance_report_sha256": "0b65d3f7c12a8d87cbe8c516647f8d545af28bd12ed8ce05cfeb7fda96351610",
+      "provider_invocation_allowed": false,
+      "render_result_sha256": "6391b04a16569d6148ba6abaee6812e97f89cf3498ac1a874a596eb69fb6fd68",
+      "rendered_request_sha256": "ee4bd4b27f0a292981ec9769d151a2d1be4017fc6e49af967e4df8827581c27f",
+      "source_mapping_reversible": true,
+      "target_only_diff": true,
+      "validation_receipt_sha256": "f701f73f4fb6064178ed337bf58b06577d3b1c0d3ac8863d55e97b9d07896564"
+    }
+  ],
+  "capability_sha256": "c4d2d1896ead1e59eeb8330c2952ae24b258aa9be3470f74001de3cb90cf03b4",
+  "checkpoint_scope": "CPU_ONLY",
+  "codec_contract_version": "v1",
+  "codec_id": "mobileworld.g1.history-codec.mai-raw-replay",
+  "gpu_used": false,
+  "gui_action_executed": false,
+  "history_family": "raw_replay",
+  "history_ir_sha256": "33e5fa61b9b26b6efac282f0496de2790035bb7564dd9ca8a1bc44b8d173169d",
+  "issue": "ALE-323",
+  "live_smoke_completed": false,
+  "network_used": false,
+  "plan_set_sha256": "aa6f609838a6ce6b3ef5fe3111260344d065fbcd3ee996fac319a34282ade012",
+  "provider_invocation_allowed": false,
+  "provider_invocation_count": 0,
+  "schema_version": "mobileworld.g1.history-codec-cpu-checkpoint/v1",
+  "source_request_sha256": "c2ee086c6e5e659c4f904fbb74afefc9c89f7aabcfd47441ce65cce332d37a7d",
+  "story": "G1.5",
+  "treatment_response_count": 0
+}

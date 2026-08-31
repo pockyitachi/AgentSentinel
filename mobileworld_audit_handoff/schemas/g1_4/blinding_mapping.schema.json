@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/blinding_mapping.schema.json",
+  "title": "G1.4 confidential pre-response blinding mapping",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "blinded_packet_id", "run_id", "arm_id", "schedule_id", "blinding_nonce", "key_commitment_sha256", "forbidden_value_set_sha256", "mapping_sealed", "scorer_visible"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.confidential-blinding-mapping/v1"},
+    "record_type": {"const": "g1_confidential_blinding_mapping"},
+    "blinded_packet_id": {"type": "string", "pattern": "^g1blind-[0-9a-f]{24}$"},
+    "run_id": {"type": "string", "pattern": "^g1run-[0-9a-f]{24}$"},
+    "arm_id": {"enum": ["ORIGINAL", "MASK", "MASK_CORRECTION", "ORACLE_CLEAN", "SHAM_BENIGN_EDIT"]},
+    "schedule_id": {"type": "string", "pattern": "^g1schedule-[0-9a-f]{24}$"},
+    "blinding_nonce": {"type": "string", "minLength": 1},
+    "key_commitment_sha256": {"$ref": "#/$defs/sha256"},
+    "forbidden_value_set_sha256": {"$ref": "#/$defs/sha256"},
+    "mapping_sealed": {"const": true},
+    "scorer_visible": {"const": false}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

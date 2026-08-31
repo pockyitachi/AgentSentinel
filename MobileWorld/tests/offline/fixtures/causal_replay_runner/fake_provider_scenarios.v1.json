@@ -1,0 +1,20 @@
+{
+  "schema_version": "mobileworld.g1.fake-provider-scenarios/v1",
+  "execution_domain": "FAKE_CONFORMANCE",
+  "network_allowed": false,
+  "provider_invocation_allowed": false,
+  "scenarios": [
+    {"id": "success", "script": ["SUCCESS"], "terminal_status": "SUCCESS", "attempt_count": 1},
+    {"id": "malformed", "script": ["MALFORMED_RESPONSE"], "terminal_status": "PARSE_ERROR", "attempt_count": 1},
+    {"id": "refusal", "script": ["REFUSAL"], "terminal_status": "REFUSAL", "attempt_count": 1},
+    {"id": "empty", "script": ["EMPTY_RESPONSE"], "terminal_status": "EMPTY_RESPONSE", "attempt_count": 1},
+    {"id": "no_op", "script": ["NO_OP"], "terminal_status": "NO_OP", "attempt_count": 1},
+    {"id": "parser_failure", "script": ["PARSER_FAILURE"], "terminal_status": "PARSE_ERROR", "attempt_count": 1},
+    {"id": "streaming", "script": ["STREAMING_SUCCESS"], "terminal_status": "SUCCESS", "attempt_count": 1},
+    {"id": "retry_timeout", "script": ["TIMEOUT", "SUCCESS"], "terminal_status": "SUCCESS", "attempt_count": 2},
+    {"id": "retry_http", "script": ["HTTP_5XX", "SUCCESS"], "terminal_status": "SUCCESS", "attempt_count": 2},
+    {"id": "retry_connection", "script": ["CONNECTION_ERROR", "SUCCESS"], "terminal_status": "SUCCESS", "attempt_count": 2},
+    {"id": "retry_exhausted", "script": ["TIMEOUT", "TIMEOUT", "TIMEOUT"], "terminal_status": "RETRY_EXHAUSTED", "attempt_count": 3},
+    {"id": "partial_stream_retry", "script": ["STREAMING_PARTIAL_ERROR", "SUCCESS"], "terminal_status": "SUCCESS", "attempt_count": 2}
+  ]
+}

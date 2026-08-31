@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai/ai_action_gold_candidate_campaign.schema.json",
+  "title": "G1.6 AI Action-Gold Candidate Campaign V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "campaign_id", "created_at_ns",
+    "publication_manifest_sha256", "capsule_set_sha256", "unit_count", "agent_slots",
+    "prompt_binding", "packet_schema_sha256", "output_schema_sha256", "packet_refs",
+    "generation_policy", "safety", "campaign_manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.ai-action-gold-candidate-campaign/v1"},
+    "record_type": {"const": "ai_action_gold_candidate_campaign"},
+    "campaign_id": {"type": "string", "pattern": "^g1aicampaign-[0-9a-f]{24}$"},
+    "created_at_ns": {"type": "integer", "minimum": 0},
+    "publication_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "capsule_set_sha256": {"$ref": "#/$defs/sha256"},
+    "unit_count": {"const": 190},
+    "agent_slots": {
+      "type": "array",
+      "prefixItems": [{"const": "A"}, {"const": "B"}, {"const": "C"}],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "prompt_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt_id", "path", "sha256"],
+      "properties": {
+        "prompt_id": {"const": "mobileworld.g1.ai-action-gold-candidate-prompt/v1"},
+        "path": {"const": "mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "packet_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "output_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "packet_refs": {
+      "type": "array",
+      "minItems": 190,
+      "maxItems": 190,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/objectRef"}
+    },
+    "generation_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "three_isolated_streams", "same_frozen_prompt", "peer_outputs_visible",
+        "human_feedback_regeneration_allowed", "ranking_allowed", "merging_allowed",
+        "chain_of_thought_stored", "ai_semantic_suggestion_performed"
+      ],
+      "properties": {
+        "three_isolated_streams": {"const": true},
+        "same_frozen_prompt": {"const": true},
+        "peer_outputs_visible": {"const": false},
+        "human_feedback_regeneration_allowed": {"const": false},
+        "ranking_allowed": {"const": false},
+        "merging_allowed": {"const": false},
+        "chain_of_thought_stored": {"const": false},
+        "ai_semantic_suggestion_performed": {"const": true}
+      }
+    },
+    "safety": {"$ref": "#/$defs/safety"},
+    "campaign_manifest_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit_id", "path", "sha256", "byte_count"],
+      "properties": {
+        "unit_id": {"type": "string", "pattern": "^(?:g1case|g1control)-[0-9a-f]{24}$"},
+        "path": {"type": "string", "pattern": "^packets/sha256/[0-9a-f]{2}/[0-9a-f]{64}\\.json$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 2}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_actor_model_invoked", "project_gpu_used", "external_network_used",
+        "replay_executed", "action_executed", "treatment_response_generation_allowed",
+        "annotation_journal_write_allowed"
+      ],
+      "properties": {
+        "target_actor_model_invoked": {"const": false},
+        "project_gpu_used": {"const": false},
+        "external_network_used": {"const": false},
+        "replay_executed": {"const": false},
+        "action_executed": {"const": false},
+        "treatment_response_generation_allowed": {"const": false},
+        "annotation_journal_write_allowed": {"const": false}
+      }
+    }
+  }
+}

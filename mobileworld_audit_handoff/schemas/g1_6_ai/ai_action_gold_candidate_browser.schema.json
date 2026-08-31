@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai/ai_action_gold_candidate_browser.schema.json",
+  "title": "G1.6 Browser AI Action-Gold Candidate Projection V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assignment_id", "agent_outputs", "notice", "authority"],
+  "properties": {
+    "assignment_id": {"type": "string", "pattern": "^g1assignment-[0-9a-f]{32}$"},
+    "agent_outputs": {
+      "type": "array",
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/agentOutput"}, {"properties": {"agent_slot": {"const": "A"}}}]},
+        {"allOf": [{"$ref": "#/$defs/agentOutput"}, {"properties": {"agent_slot": {"const": "B"}}}]},
+        {"allOf": [{"$ref": "#/$defs/agentOutput"}, {"properties": {"agent_slot": {"const": "C"}}}]}
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "notice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ai_candidate_is_not_evidence", "three_agents_are_independent_human_reviewers", "no_vote_rank_or_winner", "copy_changes_browser_memory_only", "annotation_form_not_saved_or_finalized"],
+      "properties": {
+        "ai_candidate_is_not_evidence": {"const": true},
+        "three_agents_are_independent_human_reviewers": {"const": false},
+        "no_vote_rank_or_winner": {"const": true},
+        "copy_changes_browser_memory_only": {"const": true},
+        "annotation_form_not_saved_or_finalized": {"const": true}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["counts_as_independent_review", "formal_resolution_eligible", "admission_eligible", "replay_eligible", "auto_apply_allowed", "human_review_required"],
+      "properties": {
+        "counts_as_independent_review": {"const": false},
+        "formal_resolution_eligible": {"const": false},
+        "admission_eligible": {"const": false},
+        "replay_eligible": {"const": false},
+        "auto_apply_allowed": {"const": false},
+        "human_review_required": {"const": true}
+      }
+    }
+  },
+  "$defs": {
+    "candidateItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_token", "candidate_kind", "predicate", "evidence_tokens", "concise_rationale", "uncertainty_note", "current_decision"],
+      "properties": {
+        "candidate_token": {"type": "string", "pattern": "^candidate-[0-9a-f]{24}$"},
+        "candidate_kind": {"const": "ACTION_PREDICATE"},
+        "predicate": {"$ref": "https://agentsentinel.local/schemas/g1_6_ai/ai_action_gold_candidate_output.schema.json#/$defs/predicate"},
+        "evidence_tokens": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^evidence-[0-9a-f]{24}$"}},
+        "concise_rationale": {"allOf": [{"$ref": "#/$defs/safeAgentString"}, {"minLength": 1, "maxLength": 4000}]},
+        "uncertainty_note": {"anyOf": [{"type": "null"}, {"allOf": [{"$ref": "#/$defs/safeAgentString"}, {"maxLength": 4000}]}]},
+        "current_decision": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["decision", "human_note", "decision_event_token"],
+              "properties": {
+                "decision": {"enum": ["ADOPT_TO_FORM", "ADOPT_WITH_EDITS_TO_FORM", "USE_AS_SUPPLEMENT", "IGNORE"]},
+                "human_note": {"type": "string", "maxLength": 4000},
+                "decision_event_token": {"type": "string", "pattern": "^decision-[0-9a-f]{24}$"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "agentOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_slot", "response_kind", "candidate_items", "abstain_reason"],
+      "properties": {
+        "agent_slot": {"enum": ["A", "B", "C"]},
+        "response_kind": {"enum": ["CANDIDATES", "ABSTAIN"]},
+        "candidate_items": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/candidateItem"}},
+        "abstain_reason": {"anyOf": [{"type": "null"}, {"allOf": [{"$ref": "#/$defs/safeAgentString"}, {"maxLength": 4000}]}]}
+      },
+      "allOf": [
+        {"if": {"properties": {"response_kind": {"const": "CANDIDATES"}}}, "then": {"properties": {"candidate_items": {"minItems": 1}, "abstain_reason": {"type": "null"}}}},
+        {"if": {"properties": {"response_kind": {"const": "ABSTAIN"}}}, "then": {"properties": {"candidate_items": {"maxItems": 0}, "abstain_reason": {"type": "string", "minLength": 1}}}}
+      ]
+    },
+    "safeAgentString": {
+      "type": "string",
+      "pattern": "(?i)^(?!.*(?:https?://|ftp://|file://|www\\.|mailto:|(?:^|[^A-Za-z0-9_])(?:/(?!/)[^ ]+|\\.\\.?/|~/|[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\ ]+\\\\)|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret)[ ]*[:=][ ]*[^ ]+|(?:bearer|basic)[ ]+[A-Za-z0-9._~+/=-]{8,}))[^\\u0000-\\u001f\\u007f-\\u009f<>]*$"
+    }
+  }
+}

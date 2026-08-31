@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/blinded_action.schema.json",
+  "title": "G1.4 treatment-blind action scorer packet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "blinded_packet_id", "normalized_action", "parser_outcome", "parser_diagnostics", "treatment_identity_present"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.blinded-action-packet/v1"},
+    "record_type": {"const": "g1_blinded_action_packet"},
+    "blinded_packet_id": {"type": "string", "pattern": "^g1blind-[0-9a-f]{24}$"},
+    "normalized_action": {"type": ["object", "null"]},
+    "parser_outcome": {"enum": ["PARSED", "PARSE_ERROR", "REFUSAL", "EMPTY_RESPONSE", "NO_OP", "PROVIDER_ERROR", "NOT_RUN"]},
+    "parser_diagnostics": {"type": "object", "additionalProperties": false, "properties": {"parse_outcome": {"enum": ["PARSED", "PARSE_ERROR", "REFUSAL", "EMPTY_RESPONSE", "NO_OP", "PROVIDER_ERROR", "NOT_RUN"]}, "action_count": {"type": "integer", "minimum": 0}, "error_code": {"oneOf": [{"enum": ["MALFORMED_RESPONSE", "PARSER_FAILURE", "REFUSAL", "EMPTY_RESPONSE"]}, {"type": "null"}]}}},
+    "treatment_identity_present": {"const": false}
+  },
+  "allOf": [
+    {"if": {"properties": {"parser_outcome": {"const": "PARSED"}}}, "then": {"properties": {"normalized_action": {"type": "object"}, "parser_diagnostics": {"required": ["parse_outcome", "action_count"], "properties": {"parse_outcome": {"const": "PARSED"}, "action_count": {"const": 1}, "error_code": {"type": "null"}}}}}},
+    {"if": {"properties": {"parser_outcome": {"const": "NO_OP"}}}, "then": {"properties": {"normalized_action": {"type": "object"}, "parser_diagnostics": {"required": ["parse_outcome", "action_count"], "properties": {"parse_outcome": {"const": "NO_OP"}, "action_count": {"const": 1}, "error_code": {"type": "null"}}}}}},
+    {"if": {"properties": {"parser_outcome": {"const": "PARSE_ERROR"}}}, "then": {"properties": {"normalized_action": {"type": "null"}, "parser_diagnostics": {"required": ["parse_outcome", "action_count", "error_code"], "properties": {"parse_outcome": {"const": "PARSE_ERROR"}, "action_count": {"const": 0}, "error_code": {"enum": ["MALFORMED_RESPONSE", "PARSER_FAILURE"]}}}}}},
+    {"if": {"properties": {"parser_outcome": {"const": "REFUSAL"}}}, "then": {"properties": {"normalized_action": {"type": "null"}, "parser_diagnostics": {"required": ["parse_outcome", "action_count", "error_code"], "properties": {"parse_outcome": {"const": "REFUSAL"}, "action_count": {"const": 0}, "error_code": {"const": "REFUSAL"}}}}}},
+    {"if": {"properties": {"parser_outcome": {"const": "EMPTY_RESPONSE"}}}, "then": {"properties": {"normalized_action": {"type": "null"}, "parser_diagnostics": {"required": ["parse_outcome", "action_count", "error_code"], "properties": {"parse_outcome": {"const": "EMPTY_RESPONSE"}, "action_count": {"const": 0}, "error_code": {"const": "EMPTY_RESPONSE"}}}}}},
+    {"if": {"properties": {"parser_outcome": {"const": "PROVIDER_ERROR"}}}, "then": {"properties": {"normalized_action": {"type": "null"}, "parser_diagnostics": {"required": ["parse_outcome"], "properties": {"parse_outcome": {"const": "PROVIDER_ERROR"}, "action_count": {"const": 0}, "error_code": {"type": "null"}}}}}},
+    {"if": {"properties": {"parser_outcome": {"const": "NOT_RUN"}}}, "then": {"properties": {"normalized_action": {"type": "null"}, "parser_diagnostics": {"required": ["parse_outcome"], "properties": {"parse_outcome": {"const": "NOT_RUN"}, "action_count": {"const": 0}, "error_code": {"type": "null"}}}}}}
+  ]
+}

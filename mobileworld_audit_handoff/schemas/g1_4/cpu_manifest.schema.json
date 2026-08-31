@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_4/cpu_manifest.schema.json",
+  "title": "ALE-322 CPU-only implementation readiness manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "record_type", "protocol_version", "runner_contract_version", "runner_version", "story", "code_sha256", "schema_set_sha256", "fake_scenarios", "focused_test_count", "checks", "readiness", "safety"],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.replay-runner-cpu-manifest/v1"},
+    "record_type": {"const": "g1_replay_runner_cpu_manifest"},
+    "protocol_version": {"const": "mobileworld.g1.causal-replay/protocol-v1"},
+    "runner_contract_version": {"const": "mobileworld.g1.exact-request-replay/contract-v1"},
+    "runner_version": {"const": "mobileworld.g1.exact-request-replay-runner/v1"},
+    "story": {"const": "G1.4_CPU_ONLY_PARTIAL"},
+    "code_sha256": {"$ref": "#/$defs/sha256"},
+    "schema_set_sha256": {"$ref": "#/$defs/sha256"},
+    "fake_scenarios": {"const": ["SUCCESS", "MALFORMED_RESPONSE", "REFUSAL", "EMPTY_RESPONSE", "NO_OP", "TIMEOUT", "HTTP_5XX", "CONNECTION_ERROR", "STREAMING_SUCCESS", "STREAMING_PARTIAL_ERROR", "PARSER_FAILURE"]},
+    "focused_test_count": {"type": "integer", "minimum": 1},
+    "checks": {"const": ["active_g1_3_source_bound", "exact_schedule", "g1_2_full_block_preflight", "preflight_blocked_ledger", "original_identity", "target_only_diff", "fake_provider_matrix", "retry_policy", "append_only_idempotence", "blinded_export", "blinding_precommit", "parser_diagnostics_binding", "no_live_paths"]},
+    "readiness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cpu_contract_implemented", "fake_provider_conformance_ready", "live_transport_validation_complete", "live_history_codec_ready", "curated_transformations_ready", "run_ready_seal_present", "provider_invocation_allowed", "treatment_response_generation_allowed", "formal_replay_ready"],
+      "properties": {"cpu_contract_implemented": {"const": true}, "fake_provider_conformance_ready": {"const": true}, "live_transport_validation_complete": {"const": false}, "live_history_codec_ready": {"const": false}, "curated_transformations_ready": {"const": false}, "run_ready_seal_present": {"const": false}, "provider_invocation_allowed": {"const": false}, "treatment_response_generation_allowed": {"const": false}, "formal_replay_ready": {"const": false}}
+    },
+    "safety": {
+      "type": "object", "additionalProperties": false,
+      "required": ["external_provider_invoked", "gpu_used", "gui_action_executed", "generated_action_executed", "raw_collector_mutated", "automatic_semantic_inference_performed", "runtime_sentinel_enabled"],
+      "properties": {"external_provider_invoked": {"const": false}, "gpu_used": {"const": false}, "gui_action_executed": {"const": false}, "generated_action_executed": {"const": false}, "raw_collector_mutated": {"const": false}, "automatic_semantic_inference_performed": {"const": false}, "runtime_sentinel_enabled": {"const": false}}
+    }
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

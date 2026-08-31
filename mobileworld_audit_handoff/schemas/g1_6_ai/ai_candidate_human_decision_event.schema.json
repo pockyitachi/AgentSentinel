@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_6_ai/ai_candidate_human_decision_event.schema.json",
+  "title": "G1.6 AI Candidate Human Decision Event V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "event_id", "event_seq", "previous_event_sha256",
+    "event_sha256", "event_kind", "created_at_ns", "campaign_id", "unit_id", "candidate_id",
+    "candidate_sha256", "human_identity_commitment", "decision", "supersedes_event_id",
+    "human_note", "attestations", "authority"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.g1.ai-candidate-human-decision-event/v1"},
+    "record_type": {"const": "ai_candidate_human_decision_event"},
+    "event_id": {"type": "string", "pattern": "^g1aidecision-[0-9a-f]{24}$"},
+    "event_seq": {"type": "integer", "minimum": 0},
+    "previous_event_sha256": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+    "event_sha256": {"$ref": "#/$defs/sha256"},
+    "event_kind": {"enum": ["CANDIDATE_DECISION_RECORDED", "DECISION_SUPERSEDED"]},
+    "created_at_ns": {"type": "integer", "minimum": 0},
+    "campaign_id": {"type": "string", "pattern": "^g1aicampaign-[0-9a-f]{24}$"},
+    "unit_id": {"type": "string", "pattern": "^(?:g1case|g1control)-[0-9a-f]{24}$"},
+    "candidate_id": {"type": "string", "pattern": "^g1aicandidate-[0-9a-f]{24}$"},
+    "candidate_sha256": {"$ref": "#/$defs/sha256"},
+    "human_identity_commitment": {"$ref": "#/$defs/sha256"},
+    "decision": {"enum": ["ADOPT_TO_FORM", "ADOPT_WITH_EDITS_TO_FORM", "USE_AS_SUPPLEMENT", "IGNORE"]},
+    "supersedes_event_id": {"anyOf": [{"type": "null"}, {"type": "string", "pattern": "^g1aidecision-[0-9a-f]{24}$"}]},
+    "human_note": {"type": "string", "maxLength": 4000},
+    "attestations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["human_confirmed_item_review", "human_verified_visible_evidence", "ai_candidate_is_not_evidence", "annotation_form_not_saved_or_finalized"],
+      "properties": {
+        "human_confirmed_item_review": {"const": true},
+        "human_verified_visible_evidence": {"const": true},
+        "ai_candidate_is_not_evidence": {"const": true},
+        "annotation_form_not_saved_or_finalized": {"const": true}
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["counts_as_independent_review", "formal_journal_event_id", "solo_journal_event_id", "formal_resolution_eligible", "admission_eligible", "replay_eligible"],
+      "properties": {
+        "counts_as_independent_review": {"const": false},
+        "formal_journal_event_id": {"type": "null"},
+        "solo_journal_event_id": {"type": "null"},
+        "formal_resolution_eligible": {"const": false},
+        "admission_eligible": {"const": false},
+        "replay_eligible": {"const": false}
+      }
+    }
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

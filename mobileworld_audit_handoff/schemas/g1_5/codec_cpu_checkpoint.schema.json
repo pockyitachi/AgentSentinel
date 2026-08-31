@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/g1_5/codec_cpu_checkpoint.schema.json",
+  "title": "G1.5 History Codec CPU Checkpoint v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "issue",
+    "story",
+    "checkpoint_scope",
+    "codec_id",
+    "history_family",
+    "codec_contract_version",
+    "capability_sha256",
+    "history_ir_sha256",
+    "source_request_sha256",
+    "plan_set_sha256",
+    "arms",
+    "live_smoke_completed",
+    "provider_invocation_allowed",
+    "provider_invocation_count",
+    "treatment_response_count",
+    "gpu_used",
+    "network_used",
+    "gui_action_executed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.g1.history-codec-cpu-checkpoint/v1"
+    },
+    "issue": {"const": "ALE-323"},
+    "story": {"const": "G1.5"},
+    "checkpoint_scope": {"const": "CPU_ONLY"},
+    "codec_id": {
+      "enum": [
+        "mobileworld.g1.history-codec.qwen-flat-progress",
+        "mobileworld.g1.history-codec.mai-raw-replay"
+      ]
+    },
+    "history_family": {"enum": ["flat_progress", "raw_replay"]},
+    "codec_contract_version": {"const": "v1"},
+    "capability_sha256": {"$ref": "#/$defs/sha256"},
+    "history_ir_sha256": {"$ref": "#/$defs/sha256"},
+    "source_request_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_set_sha256": {"$ref": "#/$defs/sha256"},
+    "arms": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {"$ref": "#/$defs/arm", "properties": {"arm": {"const": "ORIGINAL"}}},
+        {"$ref": "#/$defs/arm", "properties": {"arm": {"const": "MASK"}}},
+        {
+          "$ref": "#/$defs/arm",
+          "properties": {"arm": {"const": "MASK_CORRECTION"}}
+        },
+        {
+          "$ref": "#/$defs/arm",
+          "properties": {"arm": {"const": "ORACLE_CLEAN"}}
+        },
+        {
+          "$ref": "#/$defs/arm",
+          "properties": {"arm": {"const": "SHAM_BENIGN_EDIT"}}
+        }
+      ],
+      "items": false
+    },
+    "live_smoke_completed": {"const": false},
+    "provider_invocation_allowed": {"const": false},
+    "provider_invocation_count": {"const": 0},
+    "treatment_response_count": {"const": 0},
+    "gpu_used": {"const": false},
+    "network_used": {"const": false},
+    "gui_action_executed": {"const": false}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "codec_id": {
+            "const": "mobileworld.g1.history-codec.qwen-flat-progress"
+          }
+        }
+      },
+      "then": {"properties": {"history_family": {"const": "flat_progress"}}},
+      "else": {"properties": {"history_family": {"const": "raw_replay"}}}
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arm",
+        "render_result_sha256",
+        "validation_receipt_sha256",
+        "invariance_report_sha256",
+        "rendered_request_sha256",
+        "provider_invocation_allowed",
+        "target_only_diff",
+        "source_mapping_reversible"
+      ],
+      "properties": {
+        "arm": {
+          "enum": [
+            "ORIGINAL",
+            "MASK",
+            "MASK_CORRECTION",
+            "ORACLE_CLEAN",
+            "SHAM_BENIGN_EDIT"
+          ]
+        },
+        "render_result_sha256": {"$ref": "#/$defs/sha256"},
+        "validation_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "invariance_report_sha256": {"$ref": "#/$defs/sha256"},
+        "rendered_request_sha256": {"$ref": "#/$defs/sha256"},
+        "provider_invocation_allowed": {"const": false},
+        "target_only_diff": {"const": true},
+        "source_mapping_reversible": {"const": true}
+      }
+    }
+  }
+}
