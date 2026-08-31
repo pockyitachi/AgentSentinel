@@ -57,29 +57,30 @@ G1.3 Contract Amendment 1 已以兼容 v1.1 publication 修正三项显式 fail-
 authorization/readiness guard；旧 v1 publication 保持不可变，仅作为历史版本，并已被
 v1.1 publication supersede for formal G1 use。
 
-当前活动范围是 `G1_4_DECISION_LOG.md` 中 D-025 限定的
-**ALE-322 / G1.4 CPU/fake checkpoint 后续阶段**。commit
+ALE-322 / G1.4 的工程交付范围已按 D-035 收尾。历史 commit
 `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c` 已实现并验证 exact-request runner、
 invariance/target-only diff guard、确定性 arm scheduling、idempotent
 append-only attempt/resume 存储、blinded export、schema/CLI、in-process fake provider，以及仅通过
 fake SDK client 测试的可注入 OpenAI-compatible Provider Codec。Formal v1.1 capsule 仍是只读
 输入，且必须保持 `execution_ready=false`、`provider_invocation_allowed=false` 和
 `treatment_response_generation_allowed=false`；本阶段对 formal capsule 的路径必须在任何
-外部调用前 fail closed。“约 90%”只是排期目标，ALE-322 仍处于 in progress，
-live/GPU proof 延后并需新授权。
+外部调用前 fail closed。当前精确工程状态是 `NONFORMAL_LIVE_SMOKE_PASSED`，formal replay
+状态是 `DEFERRED_TO_G1_7_NOT_AUTHORIZED`；不存在活动的 G1.4 GPU/model、provider、replay、
+treatment 或 action 权限。
 
-`G1_4_DECISION_LOG.md` D-026 只额外授权未来 live/GPU proof 所需的 inert/code-only
+`G1_4_DECISION_LOG.md` D-026 曾只授权可能的 live/GPU proof 所需的 inert/code-only
 准备：静态冻结模型绑定、纯 call/block/launch 与 caller-injected response 数据记录、仅注入式
 容量评估、schema 和 CPU tests。它不授权 client、network、subprocess、GPU probe/use、模型
-加载、provider send、replay 或 action；所有 live entrypoint 在 owner 新授权与 downstream seal
-齐备前继续机械禁用。
+加载、provider send、replay 或 action。该准备与后续 D-034 smoke 权限均已消耗，不产生任何
+新的 live entrypoint 权限。
 
 `G1_5_DECISION_LOG.md` D-028 现只授权 **ALE-323 / G1.5 CPU-only History Codec
 checkpoint**：Qwen flat-progress 与 MAI raw-replay 的纯 request extraction/rendering、外部注入的
 精确 curated-span binding、五 arm conformance、secret-free fixture/schema/golden diff，以及与
 G1.4 runner 的 fail-closed interface integration。两个 Codec 均须保持 `live_ready=false`；
-2 codecs × 5 arms 的 10-call live smoke 仅进入统一 GPU backlog，当前不授权执行。不得把该
-checkpoint 冒充 live proof、formal replay 或 G1.6 curation。
+最终 D-035 smoke 含十个 non-formal compatibility observations，但不满足 D-028 formal close
+matrix；ALE-323 仍未完成且不再授权后续 live run。不得把该 checkpoint 冒充 formal replay 或
+G1.6 curation。
 
 `G1_6_DECISION_LOG.md` D-029 与
 `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md` 授权 **ALE-324 / G1.6

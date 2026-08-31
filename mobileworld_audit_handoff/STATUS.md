@@ -29,13 +29,15 @@ formal G1 use。
 Qwen→MAI 22/22 production-prompt/parser compatibility smoke 已完成；该状态不等于 formal
 Provider Codec、serving-environment、isolation、treatment 或 replay proof。
 `live_code_prepared=true` 只表示代码准备完成；全部 readiness/authorization 与 safety fields
-仍为 false，也没有 formal run publication。Production 实现没有运行真实模型、创建或调用
-外部 provider client、使用网络/GPU、启动服务、执行 GUI/action/live replay、生成 treatment
-response、选择 intervention 或实现自动 Sentinel。Reviewer-only validator 的一次被沙箱拦截的
+仍为 false，也没有 formal run publication。Formal production entrypoint 与 Provider Codec
+没有运行真实模型、创建或调用外部 provider client、执行 GUI/action/live replay、生成 treatment
+response、选择 intervention 或实现自动 Sentinel；D-035 另行披露的 simple compatibility runner
+曾使用 GPU4 和 loopback vLLM，但不改变这些 formal guards。Reviewer-only validator 的一次被沙箱拦截的
 DNS 尝试另在本页追加记录中披露。
 
 **ALE-323 / G1.5 已形成 `CPU_CHECKPOINT_IMPLEMENTED_LIVE_SMOKE_DEFERRED` 的 Qwen/MAI
-History Codec 与 CPU preview/publication checkpoint；live smoke 仍在统一 GPU backlog，未授权执行。**
+History Codec 与 CPU preview/publication checkpoint；D-035 的十个 non-formal compatibility
+observations 不满足 D-028 formal close matrix，ALE-323 仍未完成且不再授权 live run。**
 
 **ALE-324 / G1.6 已获 D-029 CPU-only 人工标注授权，并形成 private loopback-only manual
 annotation workspace checkpoint，并在 D-031 下部署三路已冻结的非权威 AI Action-Gold 候选。

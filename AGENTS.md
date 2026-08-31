@@ -55,31 +55,34 @@ scope. Contract Amendment 1 corrected the explicit fail-closed authorization
 guards in a v1.1 content-addressed publication; the former v1 publication is
 immutable and superseded for formal G1 use.
 
-Active authorized scope: ALE-322 / G1.4 has a validated CPU/fake checkpoint at
+Closed engineering scope: ALE-322 / G1.4 has a validated CPU/fake checkpoint at
 commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`, covering the exact-request
 runner, invariant/diff guards, deterministic scheduling and idempotent derived
 attempt storage, blinded exports, versioned schemas/CLI, an in-process fake
 provider, and an injectable OpenAI-compatible Provider Codec exercised only
 through fake SDK clients. Formal v1.1 capsules remain read-only and retain
 `execution_ready=false`, `provider_invocation_allowed=false`, and
-`treatment_response_generation_allowed=false`; the CPU tranche must fail closed
-before every external send.
+`treatment_response_generation_allowed=false`. D-035 now closes the bounded
+engineering delivery as `NONFORMAL_LIVE_SMOKE_PASSED`, while formal replay is
+exactly `DEFERRED_TO_G1_7_NOT_AUTHORIZED`; there is no active G1.4 GPU/model,
+provider, replay, treatment, or action authority.
 
-`G1_4_DECISION_LOG.md` D-026 additionally authorizes inert/code-only preparation
-for a future live/GPU proof: static frozen-model binding, pure call/block/launch
+`G1_4_DECISION_LOG.md` D-026 historically authorized inert/code-only preparation
+for a possible live/GPU proof: static frozen-model binding, pure call/block/launch
 and caller-injected response records, injected-only capacity assessment, schemas,
-and CPU tests. It does not authorize a client, network, subprocess, GPU probe or
-use, model load, provider send, replay, or action. All live entrypoints remain
-mechanically disabled pending a new owner authorization and downstream seals.
+and CPU tests. That preparation and the later D-034 smoke authority are consumed;
+they do not authorize a client, network, subprocess, GPU probe/use, model load,
+provider send, replay, treatment, or action.
 
 Active authorized scope: ALE-323 / G1.5 has a CPU-only History Codec checkpoint
 defined by `G1_5_DECISION_LOG.md` D-028 and
 `G1_5_HISTORY_CODEC_CONTRACT_V1.md`. Work is limited to pure Qwen flat-progress
 and MAI raw-replay extraction/rendering, exact external curated-span bindings,
 secret-free fixtures, conformance/schema tests, and fail-closed G1.4 interface
-integration. Both codecs must remain `live_ready=false`; the exact 10-call
-live-smoke matrix is only recorded in the unified GPU backlog and is not
-authorized. ALE-323 remains incomplete until that separately authorized proof.
+integration. Both codecs remain `live_ready=false`. The completed D-035 smoke
+contains ten non-formal compatibility observations, but it did not satisfy the
+D-028 formal close matrix; ALE-323 remains incomplete and no further live run is
+authorized.
 
 Active authorized scope: ALE-324 / G1.6 is the CPU-only, human-in-the-loop gold
 curation workspace defined by `G1_6_DECISION_LOG.md` D-029 and
