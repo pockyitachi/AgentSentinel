@@ -51,7 +51,9 @@ MHR 是失败的唯一原因、不能给模型排名，也不能估计删除或�
 v3 的 11/117 与 7/117；已撤回的旧 v2 1/117 结果不得再引用。
 
 完整定义、逐模型证据和限制见
-[MobileWorld/docs/misleading_history_audit_report.md](../MobileWorld/docs/misleading_history_audit_report.md)。
+[MobileWorld/docs/misleading_history_audit_report.md](../MobileWorld/docs/misleading_history_audit_report.md)；
+安全、machine-readable 的聚合数据与哈希清单见
+[Epic 1 public projection](../MobileWorld/docs/data/epic1_failure_link_audit_v1/)。
 
 ## 最近完成阶段：ALE-321 / G1.3
 
@@ -266,6 +268,7 @@ action authority 与执行 flags 全部保持 false。
 
 - [OFFLINE_EVALUATION_DESIGN.md](OFFLINE_EVALUATION_DESIGN.md)；
 - [六模型正式报告](../MobileWorld/docs/misleading_history_audit_report.md)；
+- [Epic 1 machine-readable public projection](../MobileWorld/docs/data/epic1_failure_link_audit_v1/)；
 - [schemas/g1/](schemas/g1/) 中的 G1.1 machine contracts；
 - [schemas/g1_2/](schemas/g1_2/) 中的 G1.2 machine contracts；
 - [schemas/g1_4/](schemas/g1_4/) 中的 9 个 CPU/fake runner schemas 与 6 个 additive inert-preparation schemas。

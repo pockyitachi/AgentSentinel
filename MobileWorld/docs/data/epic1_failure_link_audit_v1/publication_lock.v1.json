@@ -1,0 +1,114 @@
+{
+  "schema_version": "mobileworld.audit.failure-link-publication-lock/v1",
+  "record_type": "failure_link_repository_publication_lock",
+  "publication_id": "six-model-failure-link-audit-v1-20260824-03-public",
+  "source_archive": {
+    "source_id": "six_model_failure_link_audit_v1_20260824_03",
+    "file_count": 2842,
+    "byte_count": 119555475,
+    "tree_inventory_sha256": "a97f9d4541c339d3cb6782bf499eed61ade9bfe68270419b7a62f500f4aa944a",
+    "tree_inventory_algorithm": "sha256(concat(GNU_sha256sum_lines_for_all_regular_files_sorted_by_C_locale_relative_path_with_dot_slash_prefix))"
+  },
+  "source_projection": {
+    "file_count": 8,
+    "byte_count": 3018398,
+    "files": [
+      {
+        "logical_name": "phase_a_driver_freeze",
+        "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/phase_a/driver_freeze.json",
+        "sha256": "5debdc28cb5aca7188bdc79fb0347a44430cb24a5e4e197b08c3e3a52793a07c",
+        "byte_count": 1446181
+      },
+      {
+        "logical_name": "phase_a_review_schema",
+        "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/phase_a/input/review_schema.json",
+        "sha256": "057c448fa0499425d7035170893386560be8aa9d7f86738e3d09bfd3393781ec",
+        "byte_count": 2813
+      },
+      {
+        "logical_name": "phase_a_resolution_manifest",
+        "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/phase_a/resolution/manifest.json",
+        "sha256": "865bf9ab51bf46f8882deb06ea9dd35cb2a963d2c810898ef2cb37ff90555bb8",
+        "byte_count": 56978
+      },
+      {
+        "logical_name": "phase_b_driver_freeze",
+        "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/phase_b/driver_freeze.json",
+        "sha256": "3415f8a3fe41e8cf5f632fd7c854cfef612682a6f46461580446d474afceb6d8",
+        "byte_count": 1445735
+      },
+      {
+        "logical_name": "phase_b_input_manifest",
+        "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/phase_b/input/manifest.json",
+        "sha256": "7f0a49b69e5e11e8069bd4a1c54bb11d2baf0311cc46b3ac6c3b8e00c52f956c",
+        "byte_count": 3234
+      },
+      {
+        "logical_name": "phase_b_review_schema",
+        "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/phase_b/input/review_schema.json",
+        "sha256": "372ebd38eede2e4b1583bf3a0544281904548b3d4f8cd797413bc79de9071541",
+        "byte_count": 4137
+      },
+      {
+        "logical_name": "phase_b_metrics",
+        "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/phase_b/resolution/metrics.json",
+        "sha256": "f5b4400ce6c7d6955e3aa67271c5303d4adb46df9434afb9a652cc5bddfce536",
+        "byte_count": 2104
+      },
+      {
+        "logical_name": "phase_b_resolution_manifest",
+        "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/phase_b/resolution/manifest.json",
+        "sha256": "bb0d1c3e8a81d7a805a39438d62c71d131873ba717a1e833e689ea371edffe18",
+        "byte_count": 57216
+      }
+    ]
+  },
+  "repository_bindings": [
+    {
+      "logical_name": "final_markdown_report",
+      "path": "MobileWorld/docs/misleading_history_audit_report.md",
+      "sha256": "a057b3dda627cf9ff6c474b0cd4bc0df198b13c5fa50fe9229b94df6e9edbbab",
+      "byte_count": 59120
+    },
+    {
+      "logical_name": "pdf_renderer",
+      "path": "MobileWorld/scripts/render_misleading_history_audit_pdf.py",
+      "sha256": "aa4fbdbf46b1cc11a701a4a894b056fe3e6a7867f82c84f512a657b02f22cb48",
+      "byte_count": 12376
+    },
+    {
+      "logical_name": "public_summary",
+      "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/public_summary.v1.json",
+      "sha256": "b37575dc6d1e0a67ef07018df8216109a66c288642b6d2f2c6bc3644c2649dc1",
+      "byte_count": 2572
+    },
+    {
+      "logical_name": "public_summary_schema",
+      "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/schemas/failure_link_public_summary.v1.schema.json",
+      "sha256": "8115eb1a970d93bb4769c5caab184d4e8e4777a1a615648d0d9660731981ba92",
+      "byte_count": 3580
+    },
+    {
+      "logical_name": "publication_lock_schema",
+      "path": "MobileWorld/docs/data/epic1_failure_link_audit_v1/schemas/failure_link_publication_lock.v1.schema.json",
+      "sha256": "d89379c4b8a3121814dedf7fcd09c58b0edf9141ce4b752e36ef0421362a04b1",
+      "byte_count": 3372
+    }
+  ],
+  "excluded_private_classes": [
+    "raw_cards_and_application_requests",
+    "raw_trajectories_and_outcomes",
+    "review_jsonl_rationales_and_evaluator_excerpts",
+    "model_responses_receipts_rejected_and_migration_artifacts",
+    "raw_screenshots_and_screenshot_embedding_pdf",
+    "machine_local_run_manifests_and_logs"
+  ],
+  "safety": {
+    "raw_collection_data_committed": false,
+    "raw_screenshot_bytes_committed": false,
+    "reviewer_natural_text_committed": false,
+    "credentials_or_secrets_committed": false,
+    "machine_absolute_paths_committed_in_projection": false,
+    "causal_claim_supported": false
+  }
+}

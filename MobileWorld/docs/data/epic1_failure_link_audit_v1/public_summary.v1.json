@@ -1,0 +1,70 @@
+{
+  "schema_version": "mobileworld.audit.failure-link-public-summary/v1",
+  "record_type": "failure_link_public_summary",
+  "publication_id": "six-model-failure-link-audit-v1-20260824-03-public",
+  "report_binding": {
+    "path": "MobileWorld/docs/misleading_history_audit_report.md",
+    "sha256": "a057b3dda627cf9ff6c474b0cd4bc0df198b13c5fa50fe9229b94df6e9edbbab",
+    "byte_count": 59120
+  },
+  "population": {
+    "model_count": 6,
+    "tasks_per_model": 117,
+    "model_task_case_count": 702,
+    "success_case_count": 128,
+    "failure_case_count": 574,
+    "strict_mhr_case_count": 116,
+    "strict_mhr_chain_count": 272,
+    "local_harm_case_count": 94,
+    "local_harm_chain_count": 239,
+    "failure_strict_mhr_case_count": 108,
+    "success_control_case_count": 8
+  },
+  "phase_a_outcome_blind": {
+    "outcomes_opened": false,
+    "reviewed_task_count": 116,
+    "reviewed_chain_count": 272,
+    "unresolved_task_count": 0,
+    "causal_claim_supported": false
+  },
+  "phase_b_internal_observational": {
+    "outcomes_opened": true,
+    "denominator_failure_strict_mhr_cases": 108,
+    "failure_link_level_counts": {
+      "CO_OCCURRENCE_ONLY": 46,
+      "INDETERMINATE": 2,
+      "PLAUSIBLE_OBSERVED_CONTRIBUTION": 59,
+      "STRONG_OBSERVED_CONTRIBUTION": 1
+    },
+    "plausible_or_strong_case_count": 60,
+    "strong_case_count": 1,
+    "causal_claim_supported": false
+  },
+  "reader_facing_projection": {
+    "denominator_failure_strict_mhr_cases": 108,
+    "direct_stop_case_count": 10,
+    "indirect_derailment_case_count": 48,
+    "linked_case_count": 58,
+    "adapter_parser_boundary_case_count": 2,
+    "no_supported_reader_link_case_count": 48,
+    "categories_are_mutually_exclusive": true,
+    "causal_claim_supported": false
+  },
+  "interpretation": {
+    "internal_60_and_reader_facing_58_are_distinct_projections": true,
+    "observational_not_counterfactual": true,
+    "not_a_model_ranking": true,
+    "no_success_rate_uplift_claim": true
+  },
+  "repo_publication_boundary": {
+    "safe_source_projection_file_count": 8,
+    "raw_trajectory_or_request_text_included": false,
+    "review_rationale_or_evaluator_excerpt_included": false,
+    "raw_screenshot_bytes_included": false,
+    "credentials_or_secrets_included": false,
+    "external_pdf_included": false,
+    "external_pdf_sha256": "2b714a8641d34d607b1876aec39d77789c32220f3a9ef78631c2f195309366a8",
+    "external_pdf_byte_count": 16129136,
+    "external_pdf_exclusion_reason": "The PDF embeds raw Collector screenshots that require a separate privacy and redistribution review."
+  }
+}

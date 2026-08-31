@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/epic1/failure_link_publication_lock.v1.schema.json",
+  "title": "Epic 1 failure-link repository publication lock v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "publication_id",
+    "source_archive",
+    "source_projection",
+    "repository_bindings",
+    "excluded_private_classes",
+    "safety"
+  ],
+  "properties": {
+    "schema_version": {"const": "mobileworld.audit.failure-link-publication-lock/v1"},
+    "record_type": {"const": "failure_link_repository_publication_lock"},
+    "publication_id": {"const": "six-model-failure-link-audit-v1-20260824-03-public"},
+    "source_archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "file_count", "byte_count", "tree_inventory_sha256", "tree_inventory_algorithm"],
+      "properties": {
+        "source_id": {"const": "six_model_failure_link_audit_v1_20260824_03"},
+        "file_count": {"const": 2842},
+        "byte_count": {"const": 119555475},
+        "tree_inventory_sha256": {"const": "a97f9d4541c339d3cb6782bf499eed61ade9bfe68270419b7a62f500f4aa944a"},
+        "tree_inventory_algorithm": {"const": "sha256(concat(GNU_sha256sum_lines_for_all_regular_files_sorted_by_C_locale_relative_path_with_dot_slash_prefix))"}
+      }
+    },
+    "source_projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_count", "byte_count", "files"],
+      "properties": {
+        "file_count": {"const": 8},
+        "byte_count": {"const": 3018398},
+        "files": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/fileBinding"}
+        }
+      }
+    },
+    "repository_bindings": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/fileBinding"}
+    },
+    "excluded_private_classes": {
+      "const": [
+        "raw_cards_and_application_requests",
+        "raw_trajectories_and_outcomes",
+        "review_jsonl_rationales_and_evaluator_excerpts",
+        "model_responses_receipts_rejected_and_migration_artifacts",
+        "raw_screenshots_and_screenshot_embedding_pdf",
+        "machine_local_run_manifests_and_logs"
+      ]
+    },
+    "safety": {
+      "const": {
+        "raw_collection_data_committed": false,
+        "raw_screenshot_bytes_committed": false,
+        "reviewer_natural_text_committed": false,
+        "credentials_or_secrets_committed": false,
+        "machine_absolute_paths_committed_in_projection": false,
+        "causal_claim_supported": false
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "relativePath": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$"},
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logical_name", "path", "sha256", "byte_count"],
+      "properties": {
+        "logical_name": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "path": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_count": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}
