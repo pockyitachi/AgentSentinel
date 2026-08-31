@@ -34,5 +34,6 @@ matrix to both real Codec implementations. This is requirements coverage, not li
 
 Checked-in fixtures also bind the expected rendered-request SHA-256 for all 10 codec/arm combinations
 and deterministic human-readable before/after mappings. No provider response, parser output, GPU use,
-live endpoint, formal replay, or action execution is covered or claimed; those remain the exact D-028
-10-call GPU backlog.
+live endpoint, formal replay, or action execution is covered or claimed. D-036 leaves the exact D-028
+full-fidelity 10-call matrix unchanged but transfers it to G1.7 formal-live readiness; it is no longer
+a standalone ALE-323 engineering-close backlog.

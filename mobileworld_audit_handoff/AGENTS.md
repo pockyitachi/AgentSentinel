@@ -27,19 +27,20 @@
 23. `g1_4/nonformal_live_smoke_install_record.v1.json`
 24. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`
 25. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-26. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-27. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-28. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
-29. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-30. `G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
-31. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-32. `G1_SENTINEL_MVP_MIGRATION.md`
-33. `g1/registry.lock.v1.json`
-34. `schemas/g1_3/replay_capsule.v1_1.schema.json`
-35. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
-36. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
-37. `schemas/g1_3/field_visibility.schema.json`
-38. `schemas/g1_3/capsule_exclusion.schema.json`
+26. `G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`
+27. `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
+28. `G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+29. `G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+30. `G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+31. `G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+32. `G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+33. `G1_SENTINEL_MVP_MIGRATION.md`
+34. `g1/registry.lock.v1.json`
+35. `schemas/g1_3/replay_capsule.v1_1.schema.json`
+36. `schemas/g1_3/capsule_manifest.v1_1.schema.json`
+37. `schemas/g1_3/capsule_integrity.v1_1.schema.json`
+38. `schemas/g1_3/field_visibility.schema.json`
+39. `schemas/g1_3/capsule_exclusion.schema.json`
 
 历史 `replay_capsule.schema.json`、`capsule_manifest.schema.json` 与
 `capsule_integrity.schema.json` 保持 byte-frozen v1；正式 G1 使用 Amendment 1 与三个
@@ -74,13 +75,16 @@ treatment 或 action 权限。
 加载、provider send、replay 或 action。该准备与后续 D-034 smoke 权限均已消耗，不产生任何
 新的 live entrypoint 权限。
 
-`G1_5_DECISION_LOG.md` D-028 现只授权 **ALE-323 / G1.5 CPU-only History Codec
-checkpoint**：Qwen flat-progress 与 MAI raw-replay 的纯 request extraction/rendering、外部注入的
-精确 curated-span binding、五 arm conformance、secret-free fixture/schema/golden diff，以及与
-G1.4 runner 的 fail-closed interface integration。两个 Codec 均须保持 `live_ready=false`；
-最终 D-035 smoke 含十个 non-formal compatibility observations，但不满足 D-028 formal close
-matrix；ALE-323 仍未完成且不再授权后续 live run。不得把该 checkpoint 冒充 formal replay 或
-G1.6 curation。
+`G1_5_DECISION_LOG.md` D-036 已按追加式 amendment 关闭 **ALE-323 / G1.5 的有界
+engineering scope**。精确状态是
+`CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED` /
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`。已接受 Qwen flat-progress 与 MAI raw-replay 的纯 request
+extraction/rendering、精确 curated-span binding、五 arm conformance、preview、secret-free CPU
+publication、golden diff 与 G1.4 fail-closed integration。D-035 的十个调用只提供 non-formal
+prompt/parser compatibility coverage，未执行正式 History Codec -> Provider Codec 路径，也不计入
+D-028 formal matrix。两个 v1 Codec 均保持 `live_ready=false`；正式 matrix、完整 per-attempt
+evidence、serving/isolation 与 live seals 全部转交 G1.7，且当前未获授权。不得把 engineering
+close 冒充 formal live readiness、formal replay 或 G1.6 curation。
 
 `G1_6_DECISION_LOG.md` D-029 与
 `G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md` 授权 **ALE-324 / G1.6
@@ -173,7 +177,8 @@ visibility/future-leakage、稳定 exclusion 和 deterministic double-build 验�
 记录 commit、命令、测试结果、外部 publication 与已知限制后，才可宣称 G1.3 完成。
 ALE-322 的精确工程交付状态是 `NONFORMAL_LIVE_SMOKE_PASSED`；不得称为 formal live
 proof、formal replay ready 或 G1.7 ready；其精确 formal-replay 状态是
-`DEFERRED_TO_G1_7_NOT_AUTHORIZED`。ALE-323 仍未完成。
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`。ALE-323 只按 D-036 的有界 engineering scope 关闭；两个
+v1 Codec 仍为 `live_ready=false`，G1.7 formal readiness 仍未授权。
 G1.6 workspace checkpoint 不能冒充 gold publication；只有 190 单元双盲 review、必要 adjudication、
 formal export/validation/admission/seal 全部完成后才可将 ALE-324 标记为完成。
 任何 target-actor/project-provider/external-network/GPU/MobileWorld-generated-GUI/action/

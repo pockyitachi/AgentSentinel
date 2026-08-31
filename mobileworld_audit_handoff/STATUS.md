@@ -35,9 +35,12 @@ response、选择 intervention 或实现自动 Sentinel；D-035 另行披露的 
 曾使用 GPU4 和 loopback vLLM，但不改变这些 formal guards。Reviewer-only validator 的一次被沙箱拦截的
 DNS 尝试另在本页追加记录中披露。
 
-**ALE-323 / G1.5 已形成 `CPU_CHECKPOINT_IMPLEMENTED_LIVE_SMOKE_DEFERRED` 的 Qwen/MAI
-History Codec 与 CPU preview/publication checkpoint；D-035 的十个 non-formal compatibility
-observations 不满足 D-028 formal close matrix，ALE-323 仍未完成且不再授权 live run。**
+**ALE-323 / G1.5 已按 D-036 的有界 engineering scope 关闭。精确状态是
+`CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED` /
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`。Qwen/MAI CPU Codec、preview/publication 与 fail-closed
+integration 已接受；D-035 的十个调用只算 non-formal prompt/parser compatibility，不满足
+D-028 formal matrix。两个 v1 Codec 继续 `live_ready=false`，formal readiness 全部转交 G1.7，
+且没有新的 live/GPU 授权。**
 
 **ALE-324 / G1.6 已获 D-029 CPU-only 人工标注授权，并形成 private loopback-only manual
 annotation workspace checkpoint，并在 D-031 下部署三路已冻结的非权威 AI Action-Gold 候选。
@@ -918,4 +921,13 @@ Source and CPU gates: implementation/amendment/schema commit `86d54efce0c3f36c4a
 Evidence seal: `/shared/linqiang/mobileworld_causal_replay_data/g1_gpu_smoke/g1_4_engineering_close_20260831` was installed into a previously absent target with no-replace semantics. It contains exactly the three read-only content-addressed smoke artifacts plus the byte-identical external manifest, validation receipt, and installation receipt. Manifest SHA-256 is `f70cee09e4870f3b0ab8dcd0d187efacd49362731c976b0872b4243600305179` / 13,719 bytes; installation-receipt SHA-256 is `272f03d16f988f8e9e9cb3a36146583f7545e62daf2716b0518c2155f97a7064` / 536 bytes. Files are mode 0400, directories 0500, owner 1035:1035, with no symlink or hardlink substitution.
 Honesty boundary: source/runtime/config bindings are post-hoc, raw host pre/postflight receipts are unavailable, and the observed vLLM 0.19.1/GPU4/stdlib-HTTP environment differs from the frozen formal configuration. These limitations are closed in the manifest and amendment rather than upgraded into formal evidence. The earlier D-034 contract chain was last present at `60835447601cacbfae4c806b464b3247d555aeac` and removed at `83e6cb847e62594f75ce4f6b47b3bae3337203d6`.
 Authority: the completed GPU/model authorization is exhausted. No further GPU/model attempt, provider invocation, replay, treatment response, or generated action is authorized by this close. Future formal work is only a deferred G1.7 consideration and requires a new explicit owner decision.
+```
+
+```text
+Date: 2026-08-31 UTC
+ALE-323 / G1.5 D-036 engineering close: the owner accepted the additive bounded state `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; formal live readiness is exactly `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. This supersedes only the earlier story-completion taxonomy. D-028's technical CPU contract, formal 2-codec x 5-arm x 1-invocation matrix, and every frozen/hash-bound publication byte remain unchanged.
+Accepted engineering evidence: the Qwen flat-progress and MAI raw-replay CPU Codecs, exact external curated-span binding, five-arm rendering, target-only diff, reversible mapping, pure preview API, secret-free fixtures/golden diffs, content-bound CPU publication, and G1.4 fail-closed integration. The CPU publication manifest remains SHA-256 `cffd7f24bf09f2e18c012b2a96591064e8ba200378c7e9c920d6fdd8f068d018`; the 28 focused Codec regressions are the accepted implementation gate.
+Compatibility evidence: the ten arm-shaped calls inside D-035 returned HTTP 200 and passed existing host-parser projection with zero retry and zero generated-action execution. They used prebuilt requests through the simplified stdlib-HTTP runner and did not invoke the accepted G1.5 Codec through the formal Provider Codec. They therefore remain non-formal supporting observations and do not count toward the D-028 matrix.
+Deferred G1.7 duties: formal History Codec-to-Provider Codec execution; complete per-call final request, diff, reversible mapping, provider envelope, response/error, usage, latency, application-visible attempt/retry, parser and block-seed evidence; SDK/version and hidden-retry proof; serving equivalence; `backend_dependency=NONE`; fresh invocation/session/KV isolation; and separate live-admission, run-ready, execution-authorization and formal-replay seals. Both v1 Codecs remain `live_ready=false`; G1.7 must use a separate hash-bound readiness seal rather than mutate the v1 publication.
+Authority: ALE-323 may be marked Done only under this amended engineering scope. No additional standalone G1.5 GPU run is planned or authorized. No model, provider, network, GPU, replay, treatment, backend, GUI, tool, or action authority is created by D-036.
 ```

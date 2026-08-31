@@ -112,3 +112,34 @@ Qwen→MAI 精确 22-call engineering smoke 的一部分。它没有保留 D-028
 request/diff/mapping、Provider Codec、usage/error/attempt、authority 与 downstream seal，也不
 改变既有 CPU publication 的 `live_ready=false`。因此 ALE-323 保持未完成；不得把 G1.4 的
 `NONFORMAL_LIVE_SMOKE_PASSED` 状态传播为 G1.5 completion。任何后续 live/formal 工作均未获授权。
+
+## D-036 — G1.5 engineering close 与 formal live readiness 分离
+
+**状态：Locked（owner 于 2026-08-31 要求修订 G1.5 验收口径）**
+
+Owner 接受
+`G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md` 的追加式、有界收尾：
+
+- `engineering_close_status=CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`；
+- `formal_live_ready_status=DEFERRED_TO_G1_7_NOT_AUTHORIZED`。
+
+D-028 的 CPU contract、Codec bytes、capability、publication、schema、receipt 与 formal 十调用
+矩阵均不改写。ALE-323 的 engineering close 接受已完成的 Qwen flat-progress 与 MAI raw-replay
+Codec、五 arm 纯渲染、target-only diff、可逆 mapping、preview、content-bound CPU publication、
+fail-closed runner integration 和 28 项 Codec regressions。D-035 的十个 arm-shaped calls 只作为
+production prompt/parser 的 non-formal syntactic compatibility coverage；它们未调用正式
+History Codec -> Provider Codec 路径，绝不计入 D-028 formal matrix。
+
+D-035 sealed manifest 中历史字段 `claims.g15_complete=false` 保持 immutable；它在 D-036 前的
+D-028/formal-completion taxonomy 下仍正确。D-036 不回写或重解释该 evidence，只新增一个后续、
+独立的 bounded engineering-close axis。
+
+ALE-323 因此可按修订后的 engineering scope 关闭。两个 Codec 继续保持
+`live_ready=false`。正式十调用矩阵、formal Provider Codec、完整 request/diff/mapping/
+provider/usage/latency/error/attempt/retry receipts、SDK hidden-retry proof、serving equivalence、
+`backend_dependency=NONE`、fresh session/KV isolation 及 live-admission/run-ready/execution/formal-
+replay seals 全部转交 ALE-325 / G1.7。G1.7 必须以独立 hash-bound seal 覆盖 readiness，不得修改
+v1 capability bytes；其未来失败也不重开 ALE-323，除非 Codec 语义 bytes 发生版本化变更。
+
+本决策不授权任何新的 model/provider/network/GPU/replay/treatment/backend/GUI/tool/action。
+任何 G1.7 live 工作仍需新的 owner 明确授权。

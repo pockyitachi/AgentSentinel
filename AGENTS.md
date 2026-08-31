@@ -28,19 +28,20 @@ Before changing code, read these files completely:
 20. `mobileworld_audit_handoff/g1_4/nonformal_live_smoke_install_record.v1.json`
 21. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
 22. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-23. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-24. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-25. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
-26. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-27. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
-28. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-29. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
-30. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
-31. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
-32. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
-33. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
-34. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
-35. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
+23. `mobileworld_audit_handoff/G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`
+24. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
+25. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
+26. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
+27. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
+28. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
+29. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
+30. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
+31. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
+32. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
+33. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
+34. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
+35. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
+36. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
 
 The historical `replay_capsule.schema.json`, `capsule_manifest.schema.json`, and
 `capsule_integrity.schema.json` remain byte-frozen v1 references. Amendment 1
@@ -74,15 +75,18 @@ and CPU tests. That preparation and the later D-034 smoke authority are consumed
 they do not authorize a client, network, subprocess, GPU probe/use, model load,
 provider send, replay, treatment, or action.
 
-Active authorized scope: ALE-323 / G1.5 has a CPU-only History Codec checkpoint
-defined by `G1_5_DECISION_LOG.md` D-028 and
-`G1_5_HISTORY_CODEC_CONTRACT_V1.md`. Work is limited to pure Qwen flat-progress
-and MAI raw-replay extraction/rendering, exact external curated-span bindings,
-secret-free fixtures, conformance/schema tests, and fail-closed G1.4 interface
-integration. Both codecs remain `live_ready=false`. The completed D-035 smoke
-contains ten non-formal compatibility observations, but it did not satisfy the
-D-028 formal close matrix; ALE-323 remains incomplete and no further live run is
-authorized.
+Closed engineering scope: ALE-323 / G1.5 is accepted under D-036 as
+`CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; its exact
+formal-live-readiness state is `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. The accepted
+delivery is the pure Qwen flat-progress and MAI raw-replay Codec implementation,
+exact external curated-span bindings, five-arm render/diff/reversibility and
+preview surfaces, secret-free fixtures and CPU publication, conformance/schema
+tests, fail-closed G1.4 integration, and ten D-035 non-formal prompt/parser
+compatibility observations. Those observations did not execute the formal
+History Codec-to-Provider Codec path and do not satisfy the D-028 formal matrix.
+Both v1 Codecs remain `live_ready=false`; all formal matrix, Provider Codec,
+complete per-attempt evidence, serving/isolation, and live seal duties are
+transferred to G1.7. No further standalone G1.5 live run is authorized.
 
 Active authorized scope: ALE-324 / G1.6 is the CPU-only, human-in-the-loop gold
 curation workspace defined by `G1_6_DECISION_LOG.md` D-029 and
@@ -147,8 +151,9 @@ record server findings and completed phases in
 `mobileworld_audit_handoff/STATUS.md`. ALE-322's exact bounded engineering-close
 state is `NONFORMAL_LIVE_SMOKE_PASSED`; it MUST NOT be called formal live proof
 or replay-ready. Its exact formal-replay state is
-`DEFERRED_TO_G1_7_NOT_AUTHORIZED`. ALE-323 remains incomplete, and ALE-324 must not be marked
-complete before all 190 units are independently
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`. ALE-323 is closed only under D-036's bounded
+engineering scope; both v1 Codecs remain `live_ready=false`, and G1.7 formal
+readiness remains unauthorized. ALE-324 must not be marked complete before all 190 units are independently
 reviewed, adjudicated where required, formally exported, validated, and sealed.
 
 Owner direct-smoke boundary (2026-08-30): notwithstanding the historical

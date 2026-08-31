@@ -16,7 +16,7 @@ gate and rubric tracker are proposed work; they are not implemented results.
 
 ## Project status
 
-Status as of 2026-08-30:
+Status as of 2026-08-31:
 
 | Workstream | Status | Scope |
 | --- | --- | --- |
@@ -25,8 +25,8 @@ Status as of 2026-08-30:
 | G1.1: causal-replay protocol and registry | **Complete** | CPU-only frozen protocol, schemas, model/config manifest, pre-gold case registry, controls, and locked analysis plan; no treatment response was generated |
 | G1.2: portable Sentinel contract | **Complete** | CPU-only canonical History IR/Core, codec/provider interfaces, fail-closed validation, schemas, sidecars, and six-family fixture conformance |
 | G1.3: immutable decision capsules | **Complete; v1.1 corrected** | CPU-only formal publication of 190 immutable capsules with zero exclusions (152 strict + 38 selected clean); Amendment 1 adds explicit fail-closed authorization guards; 38 reserve controls remain census-only; no model/provider/GPU/GUI/replay |
-| G1.4: exact-request replay runner | **CPU/fake checkpoint and inert live-proof code prepared; live proof deferred** | The validated CPU/fake runner now has additive D-026 no-execution preparation for static bindings, no-send descriptors, caller-injected response projection, inert launch plans, and injected-only GPU assessment; all readiness/authorization fields remain false and the story remains incomplete |
-| G1.5: Qwen/MAI History Codecs | **CPU checkpoint implemented; live smoke deferred** | Exact flat-progress/raw-replay extraction, rendering, target-only diff, reversibility, human-bound CPU previews, and a content-bound CPU publication are implemented; no model/provider/GPU path is enabled |
+| G1.4: exact-request replay runner | **Engineering delivery closed; formal replay deferred** | D-035 accepts the CPU/fake runner and sealed non-formal two-model compatibility smoke as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, serving/isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED` |
+| G1.5: Qwen/MAI History Codecs | **Engineering delivery closed; formal live readiness deferred** | D-036 accepts the content-bound CPU Codecs, five-arm preview/conformance, and non-formal prompt/parser compatibility as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; both v1 Codecs remain `live_ready=false`, and formal readiness is transferred to G1.7 |
 | G1.6: curated gold workspace | **AI-only 186-unit research labels plus four human solo locks; human/formal curation remains incomplete** | The private loopback-only site retains four owner-authored `SOLO_FIRST_PASS` Action locks. D-033 separately publishes the other 186 units as content-addressed `AI_ONLY_ACTION_LABELS`; those labels are non-human, non-formal, non-promotable, do not advance Transformation, and leave target-actor provider/GPU/replay paths disabled |
 
 G1.2 is merged and accepted. ALE-321 / G1.3 formally froze and published all
@@ -40,18 +40,18 @@ Contract Amendment 1 published the corrected v1.1 artifact at manifest SHA
 `8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402`.
 The former v1 publication remains immutable and historically identifiable, but
 is superseded for formal G1 use.
-ALE-322 / G1.4 has a validated CPU/fake implementation checkpoint at commit
-`bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c` and additive D-026 inert live-proof
-code preparation at commit `74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d`.
-The additive tranche statically binds frozen model/config declarations, renders
-no-send OpenAI call and paired-block descriptors, projects only caller-injected
-response envelopes, renders an inert vLLM launch plan, and assesses only an
-injected GPU inventory. It creates no client, performs no production network
-access, starts no process, probes or uses no GPU, loads no model, and executes no
-replay or action. All eight readiness/authorization fields and all nine safety
-fields remain false, no formal run publication exists, and the story state is
-`IN_PROGRESS_LIVE_PROOF_DEFERRED`. ALE-323 / G1.5 now has a provider-free CPU
-History Codec checkpoint, and ALE-324 / G1.6 has a private human-curation
+ALE-322 / G1.4 is closed only under D-035's bounded engineering scope:
+`NONFORMAL_LIVE_SMOKE_PASSED` / `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. ALE-323 /
+G1.5 is likewise closed only under D-036's bounded engineering scope:
+`CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED` /
+`DEFERRED_TO_G1_7_NOT_AUTHORIZED`. Its Qwen flat-progress and MAI raw-replay
+Codecs, five-arm preview/conformance surface, content-bound CPU publication,
+and fail-closed runner integration are complete. The ten D-035 arm-shaped calls
+are non-formal production-prompt/parser compatibility observations only; they
+did not execute the formal History Codec-to-Provider Codec path. Both v1 Codecs
+remain `live_ready=false`. Formal Provider Codec, complete per-attempt evidence,
+serving/backend/session/KV isolation, live admission, and replay authority are
+G1.7 duties and remain unauthorized. ALE-324 / G1.6 has a private human-curation
 workspace checkpoint. Commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405`
 adds the D-030 one-person `SOLO_FIRST_PASS`: it is a separate, non-promotable
 precursor journal and never satisfies independent review. D-031 additionally freezes three
@@ -63,9 +63,8 @@ binds—but never copies or rewrites—the four owner-locked journal events. The
 explicitly non-human, non-formal, cannot enter either annotation journal, cannot open
 Transformation, and cannot complete ALE-324. Candidate generation and AI-only compilation are
 offline and the website has no generate/regenerate endpoint. None of these checkpoints is a live
-proof or completed formal gold publication. G1.7 and owner authorization for any live/GPU proof remain
-outstanding. Passing CPU or fake-provider tests must
-not be reported as ALE-322 completion. The checked-in AGENTS, STATUS, and the
+proof or completed formal gold publication. G1.7 and owner authorization for any formal live/GPU
+proof remain outstanding. The checked-in AGENTS, STATUS, and the
 applicable G1.4/G1.5/G1.6 additive decision logs remain authoritative.
 
 ## Epic 1 results
@@ -147,8 +146,9 @@ and
 [`G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md);
 their nine original plus six additive schemas live under
 [`schemas/g1_4/`](mobileworld_audit_handoff/schemas/g1_4/).
-The G1.5 CPU codec and G1.6 human-curation boundaries are recorded in
+The G1.5 CPU Codec, engineering-close amendment, and G1.6 human-curation boundaries are recorded in
 [`G1_5_DECISION_LOG.md`](mobileworld_audit_handoff/G1_5_DECISION_LOG.md),
+[`G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`](mobileworld_audit_handoff/G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md),
 [`G1_6_DECISION_LOG.md`](mobileworld_audit_handoff/G1_6_DECISION_LOG.md), and
 [`G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`](mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md).
 The additive non-authoritative candidate boundary, frozen prompt, and closed

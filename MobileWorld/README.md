@@ -33,7 +33,8 @@
 > MobileWorld benchmark/runtime host used by AgentSentinel; the original
 > upstream MobileWorld documentation continues below.
 >
-> **Status (2026-08-30):** Epic 1, G1.1, G1.2, and G1.3 are complete. We collected and audited the
+> **Status (2026-08-31):** Epic 1 and G1.1-G1.3 are complete; G1.4 and G1.5 have
+> bounded engineering closes while formal live/replay readiness remains deferred to G1.7. We collected and audited the
 > same canonical 117-task GUI-only suite for MAI-UI-8B, Qwen3-VL-8B,
 > GELab-Zero-4B, UI-Venus-1.5-8B, GUI-Owl-1.5-8B-Instruct, and
 > MemGUI-8B-SFT: 702 model-task cases across six host-native history
@@ -54,21 +55,21 @@
 > remain census-only and out of capsule/exclusion scope. Contract Amendment 1
 > corrected the explicit fail-closed authorization guards in the v1.1
 > content-addressed publication; the former v1 publication remains immutable
-> and is superseded for formal G1 use. ALE-322 / G1.4 now has a validated
-> CPU/fake runner checkpoint at commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`,
-> covering invariant/diff guards, deterministic fake-provider tests, scheduling,
-> idempotent attempt storage, blinded export, schemas, and CLI.
-> D-026 additionally prepared inert live-proof code at commit
-> `74b18c6bc0f4ce6c56c0e9b979cafec0b5298b6d`: static frozen-model bindings,
-> no-send OpenAI call/paired-block descriptors, caller-injected response
-> projection, an inert vLLM launch plan, and injected-only GPU assessment. This
-> inspection-only tranche creates no client, starts no service, performs no
-> production network access or GPU probe/use, loads no model, and executes no
-> replay or action. All eight readiness/authorization fields and all nine safety
-> fields remain false, `live_code_prepared=true` is not readiness, and no formal
-> run publication exists.
-> ALE-323 now has a provider-free Qwen/MAI History Codec CPU checkpoint, and
-> ALE-324 has a private loopback-only manual-curation workspace checkpoint.
+> and is superseded for formal G1 use. ALE-322 / G1.4 is closed only under
+> D-035's bounded engineering scope as `NONFORMAL_LIVE_SMOKE_PASSED`; formal
+> replay remains `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. ALE-323 / G1.5 is likewise
+> closed only under D-036's bounded engineering scope as
+> `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; formal
+> live readiness remains `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. The accepted G1.5
+> delivery includes the Qwen flat-progress and MAI raw-replay CPU Codecs,
+> five-arm preview/conformance, content-bound publication, and fail-closed
+> runner integration. The ten D-035 calls are non-formal prompt/parser
+> compatibility observations only and did not execute the formal History
+> Codec-to-Provider Codec path. Both v1 Codecs remain `live_ready=false`.
+> Formal Provider Codec, complete attempt evidence, serving/backend/session/KV
+> isolation, live admission, and replay authority are G1.7 duties and remain
+> unauthorized. ALE-324 has a private loopback-only manual-curation workspace
+> checkpoint.
 > Commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405` adds the isolated
 > `SOLO_FIRST_PASS` for the currently sole curator: Action Gold, then
 > Transformation, then preliminary Consistency over all 190 units. These locks
@@ -91,9 +92,10 @@
 > MobileWorld/generated GUI/action execution, live replay, and treatment-response
 > generation remain unauthorized. Human clicks in the private annotation site
 > are curation inputs and are never executed as MobileWorld actions.
-> Formal capsules retain their three false safety guards, and ALE-322 remains
-> incomplete pending separately authorized live/GPU proof; its exact state is
-> `IN_PROGRESS_LIVE_PROOF_DEFERRED`. Follow the
+> Formal capsules retain their three false safety guards. ALE-322 is closed only
+> under D-035 as `NONFORMAL_LIVE_SMOKE_PASSED`, and ALE-323 is closed only under
+> D-036 as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`;
+> both formal readiness axes remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. Follow the
 > [inert-preparation contract](../mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md),
 > [AI-candidate amendment](../mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md),
 > [AI-only label amendment](../mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md),
