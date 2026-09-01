@@ -42,6 +42,14 @@ receipt for that unadmitted call. The integration backstop logs only a fixed
 diagnostic. A future typed treatment of opaque SDK values requires a versioned
 semantic-projection plus opaque-passthrough contract.
 
+Admission MUST inspect the caller's exact Python tree before any JSON round
+trip, canonical hash, logical-call cache lookup, or receipt transaction. The
+admitted tree uses only built-in JSON scalars, finite floats, exact `list`
+arrays, and exact `dict` objects whose keys are exact strings. Serializer-
+coercible values such as tuples or non-string dictionary keys remain outside
+the domain; they MUST NOT be converted to lists/strings or collide with an
+already cached admitted request.
+
 This is an additive runtime overlay. It does not edit or weaken the accepted
 G1.2 contracts, alter Collector v1 events, modify a frozen G1.3/G1.4/G1.5
 publication, or change either G1.5 v1 Codec's `live_ready=false` declaration.
@@ -217,6 +225,13 @@ Each admitted canonical-JSON logical call produces one lightweight receipt confo
   would-edit/applied state;
 - typed fallback, validation status/checks, exact-diff SHA-256, and latency.
 
+The policy-output type/structure gate runs before canonicalization. Once a
+complete `SentinelPolicyOutput` is canonicalizable, its hash is fixed before
+decision-ID uniqueness, operation binding, R2.1 operation admission, or G1.2
+plan validation. Hashing records the rejected output; it does not authorize it.
+An arbitrary or non-canonicalizable return retains the empty-output sentinel
+because no complete policy output was admitted for hashing.
+
 The lightweight receipt is hash-only: it MUST NOT embed a request view, history
 text, exact diff bytes, evidence text, provider credential, secret, or chain of
 thought. Its `request_views_persisted` and `exact_diffs_persisted` fields are
@@ -263,7 +278,9 @@ R2.1 is accepted only when CPU tests prove:
    one logical-call ID;
 5. caller immutability, exact non-history invariants, held and pulsed kill-switch
    activation, pre-policy sidecar admission, post-policy commit failure, atomic
-   fallback, every typed failure reason, and the closed receipt schema;
+   fallback, strict pre-copy/pre-cache JSON-domain rejection, rejected-output
+   hashing before later admission checks, every typed failure reason, and the
+   closed receipt schema;
 6. the existing fake provider receives the expected request while provider
    response normalization and host action parsing remain unchanged; and
 7. no live provider/model/GPU/backend/action path was invoked.

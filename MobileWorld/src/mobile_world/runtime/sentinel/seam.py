@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from contextlib import contextmanager
@@ -57,6 +58,25 @@ _CHECK_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
 _CURRENT_LOGICAL_CALL: ContextVar[SentinelLogicalCall | None] = ContextVar(
     "mobileworld_prompt_sentinel_logical_call", default=None
 )
+
+
+def _is_strict_json_value(value: Any) -> bool:
+    """Return whether value is an exact built-in, finite JSON tree."""
+
+    if value is None or type(value) in {str, bool, int}:
+        return True
+    if type(value) is float:
+        return math.isfinite(value)
+    if type(value) is list:
+        return all(_is_strict_json_value(item) for item in value)
+    if type(value) is dict:
+        return all(type(key) is str and _is_strict_json_value(item) for key, item in value.items())
+    return False
+
+
+def _require_canonical_json_domain(value: Any) -> None:
+    if not _is_strict_json_value(value):
+        raise SentinelContractError("request is outside canonical-JSON admission domain")
 
 
 class SentinelGlobalSwitch:
@@ -215,6 +235,7 @@ class PromptSentinel:
             role = SentinelCallRole(call_role)
         except ValueError as exc:
             raise SentinelContractError("call_role must be actor or sentinel") from exc
+        _require_canonical_json_domain(request)
         raw = copy_json(request)
         raw_json = canonical_json_bytes(raw)
         raw_sha256 = canonical_sha256(raw)
@@ -365,8 +386,9 @@ class PromptSentinel:
                 timeout_ms=config.policy_timeout_ms,
             )
             try:
-                self._validate_policy_output(output)
+                output = self._require_policy_output_type(output)
                 policy_output_sha256 = canonical_sha256(output.to_dict())
+                self._validate_policy_output_admission(output)
                 if output.transformation_plan is None:
                     self._validate_no_plan_decisions(output)
                 else:
@@ -622,11 +644,15 @@ class PromptSentinel:
             )
 
     @staticmethod
-    def _validate_policy_output(output: Any) -> None:
+    def _require_policy_output_type(output: Any) -> SentinelPolicyOutput:
         if not isinstance(output, SentinelPolicyOutput):
             raise _EvaluationFailure(
                 SentinelFallbackReason.INVALID_POLICY_OUTPUT, "policy_output_type"
             )
+        return output
+
+    @staticmethod
+    def _validate_policy_output_admission(output: SentinelPolicyOutput) -> None:
         if len({item.decision_id for item in output.decisions}) != len(output.decisions):
             raise _EvaluationFailure(
                 SentinelFallbackReason.INVALID_POLICY_OUTPUT, "duplicate_decision_id"
@@ -1052,6 +1078,7 @@ class SentinelLogicalCall:
             return self._result
 
     def before_model_call(self, request: JsonValue) -> SentinelResult:
+        _require_canonical_json_domain(request)
         request_sha256 = canonical_sha256(request)
         with self._lock:
             if self._result is not None:

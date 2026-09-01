@@ -48,6 +48,7 @@ from mobile_world.runtime.sentinel import (
     PromptSentinel,
     SentinelCallRole,
     SentinelContext,
+    SentinelContractError,
     SentinelDecision,
     SentinelDecisionKind,
     SentinelFallbackReason,
@@ -423,6 +424,47 @@ def test_r21_rejects_correction_insertions_that_change_current_observation() -> 
     assert request == original
 
 
+def test_rejected_duplicate_decision_ids_bind_the_complete_policy_output_hash() -> None:
+    codec, request = _fixture_codec_and_request()
+    outputs: list[SentinelPolicyOutput] = []
+    sink = MemorySentinelReceiptSink()
+
+    def duplicate_decisions(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        valid = _keep_output(request_value, context, ir)
+        output = replace(valid, decisions=(valid.decisions[0], valid.decisions[0]))
+        outputs.append(output)
+        return output
+
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=duplicate_decisions,
+        codec=codec,
+        sink=sink,
+    )
+    call = sentinel.logical_call(host_id=QWEN_HOST_ID, history_codec_id=QWEN_CODEC_ID)
+    result = call.before_model_call(request)
+    cached = call.before_model_call(request)
+    assert cached is result
+    assert policy.evaluate_count == 1
+    assert len(outputs) == 1
+    assert len(sink.receipts) == 1
+    assert result.receipt.fallback_reason is SentinelFallbackReason.INVALID_POLICY_OUTPUT
+    assert result.receipt.validation_checks == ("duplicate_decision_id",)
+    assert result.receipt.policy_evaluated is True
+    assert result.receipt.policy_output_sha256 == canonical_sha256(outputs[0].to_dict())
+    assert result.receipt.policy_output_sha256 != canonical_sha256(
+        {"decisions": [], "transformation_plan": None}
+    )
+    assert result.receipt.decision_kinds == ()
+    assert result.receipt.raw_request_sha256 == result.receipt.candidate_request_sha256
+    assert result.receipt.raw_request_sha256 == result.receipt.final_request_sha256
+    assert result.final_request == request
+    schema = json.loads(RECEIPT_SCHEMA_PATH.read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(result.receipt.to_dict())
+
+
 def test_mai_host_off_scope_preserves_request_and_existing_parser() -> None:
     def forbidden(*_args: Any) -> SentinelPolicyOutput:
         raise AssertionError("MAI OFF path must not evaluate policy")
@@ -539,6 +581,85 @@ def test_opaque_sdk_parameter_stays_original_outside_canonical_json_admission() 
     assert captured[0]["messages"] is request["messages"]
     assert policy.evaluate_count == 0
     assert sink.receipts == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "non_json_value"),
+    (
+        ("stop", ("END",)),
+        ("metadata", {1: "one"}),
+    ),
+    ids=("tuple", "integer-dictionary-key"),
+)
+def test_json_coercible_non_json_parameters_stay_exactly_original_without_semantic_work(
+    field: str,
+    non_json_value: Any,
+) -> None:
+    codec, request = _fixture_codec_and_request(
+        request_updates=cast(dict[str, JsonValue], {field: non_json_value})
+    )
+
+    class CountingMemorySink(MemorySentinelReceiptSink):
+        def __init__(self) -> None:
+            super().__init__()
+            self.begin_count = 0
+
+        def begin(self, logical_call_id: str) -> Any:
+            self.begin_count += 1
+            return super().begin(logical_call_id)
+
+    sink = CountingMemorySink()
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        codec=codec,
+        sink=sink,
+    )
+    agent = _Agent(prompt_sentinel=sentinel)
+    captured: list[dict[str, Any]] = []
+
+    def create(**kwargs: Any) -> _Response:
+        captured.append(kwargs)
+        return _Response()
+
+    agent.openai_client = _client(create)
+    assert _call_base(agent, request) == "ok"
+    assert len(captured) == 1
+    assert captured[0][field] is non_json_value
+    assert captured[0]["messages"] is request["messages"]
+    assert policy.evaluate_count == 0
+    assert sink.begin_count == 0
+    assert sink.receipts == ()
+
+
+@pytest.mark.parametrize(
+    ("valid_value", "non_json_value"),
+    (
+        (["END"], ("END",)),
+        ({"1": "one"}, {1: "one"}),
+    ),
+    ids=("list-vs-tuple", "string-vs-integer-key"),
+)
+def test_non_json_request_cannot_reuse_a_canonical_hash_collision_from_cache(
+    valid_value: JsonValue,
+    non_json_value: Any,
+) -> None:
+    codec, valid_request = _fixture_codec_and_request(request_updates={"metadata": valid_value})
+    sink = MemorySentinelReceiptSink()
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        codec=codec,
+        sink=sink,
+    )
+    call = sentinel.logical_call(host_id=QWEN_HOST_ID, history_codec_id=QWEN_CODEC_ID)
+    valid_result = call.before_model_call(valid_request)
+    non_json_request = deepcopy(valid_request)
+    non_json_request["metadata"] = non_json_value
+    assert canonical_sha256(cast(JsonValue, non_json_request)) == canonical_sha256(valid_request)
+    with pytest.raises(SentinelContractError, match="outside canonical-JSON admission domain"):
+        call.before_model_call(cast(JsonValue, non_json_request))
+    assert valid_result.receipt.edit_applied is True
+    assert policy.evaluate_count == 1
+    assert len(sink.receipts) == 1
 
 
 def test_global_kill_switch_and_sentinel_role_bypass_before_codec_or_policy() -> None:
@@ -1105,6 +1226,10 @@ def test_typed_failures_never_expose_partial_transform(case: str, reason: Any) -
         assert call.before_model_call(selected_request) is result
         assert result.receipt.validation_checks == ("sidecar_admission_failed",)
         assert selected_policy.evaluate_count == 0
+    if case == "invalid_output":
+        assert result.receipt.policy_output_sha256 == canonical_sha256(
+            {"decisions": [], "transformation_plan": None}
+        )
 
 
 def test_sidecar_commit_failure_falls_back_after_one_policy_evaluation() -> None:
