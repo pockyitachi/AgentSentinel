@@ -7,20 +7,53 @@ import re
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar, Token, copy_context
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, fields
+from hashlib import sha256
 from threading import Event, Lock, Thread
 from typing import Any
 
 from mobile_world.offline.causal_replay.contracts import (
+    RENDER_RESULT_SCHEMA_VERSION,
+    TRANSFORMATION_PLAN_SCHEMA_VERSION,
+    ArmKind,
+    CapabilityLevel,
+    CodecCapabilities,
+    CodecScope,
+    CorrectionAnchor,
+    CorrectionContextKind,
+    CorrectionPlacement,
+    EvidenceRef,
     ExecutionMode,
     FailurePolicy,
     FallbackState,
+    FrozenTextSlice,
     HistoryCodecResolver,
+    HistoryFamily,
     HistoryIR,
+    HistoryRecord,
+    HistoryRelationship,
     JsonValue,
+    ListInsertionDiff,
+    MappingKind,
     OperationKind,
+    PlanOperation,
     PortableContractError,
+    RecordCoordinates,
+    RecordModality,
+    RegionAvailability,
+    RegionKind,
+    RelatedContentKind,
+    RelatedContentRef,
+    RelationshipKind,
+    RenderDiff,
     RenderResult,
+    RequestRegion,
+    SourceMapping,
+    SourceSpan,
+    SourceVersionRef,
+    SpanRole,
+    TransformationPlan,
     canonical_json_bytes,
     canonical_sha256,
     copy_json,
@@ -38,6 +71,7 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelCallRole,
     SentinelContext,
     SentinelContractError,
+    SentinelDecision,
     SentinelDecisionKind,
     SentinelFallbackReason,
     SentinelHostConfig,
@@ -61,17 +95,31 @@ _CURRENT_LOGICAL_CALL: ContextVar[SentinelLogicalCall | None] = ContextVar(
 
 
 def _is_strict_json_value(value: Any) -> bool:
-    """Return whether value is an exact built-in, finite JSON tree."""
+    """Return whether value is an acyclic exact built-in, finite JSON tree."""
 
-    if value is None or type(value) in {str, bool, int}:
-        return True
-    if type(value) is float:
-        return math.isfinite(value)
-    if type(value) is list:
-        return all(_is_strict_json_value(item) for item in value)
-    if type(value) is dict:
-        return all(type(key) is str and _is_strict_json_value(item) for key, item in value.items())
-    return False
+    def visit(item: Any, active_container_ids: set[int]) -> bool:
+        item_type = type(item)
+        if item is None or item_type in {str, bool, int}:
+            return True
+        if item_type is float:
+            return math.isfinite(item)
+        if item_type not in {list, dict}:
+            return False
+        identity = id(item)
+        if identity in active_container_ids:
+            return False
+        active_container_ids.add(identity)
+        try:
+            if item_type is list:
+                return all(visit(value, active_container_ids) for value in item)
+            return all(
+                type(key) is str and visit(value, active_container_ids)
+                for key, value in item.items()
+            )
+        finally:
+            active_container_ids.remove(identity)
+
+    return visit(value, set())
 
 
 def _require_canonical_json_domain(value: Any) -> None:
@@ -136,6 +184,542 @@ def bind_sentinel_logical_call(call: SentinelLogicalCall):
 class _EvaluationFailure(Exception):
     reason: SentinelFallbackReason
     check: str
+
+
+_HISTORY_IR_DATACLASS_TYPES = frozenset(
+    {
+        HistoryIR,
+        RequestRegion,
+        FrozenTextSlice,
+        HistoryRecord,
+        HistoryRelationship,
+        SourceVersionRef,
+        RecordCoordinates,
+        RelatedContentRef,
+        CodecCapabilities,
+        SourceSpan,
+        CorrectionAnchor,
+    }
+)
+_HISTORY_IR_ENUM_TYPES = frozenset(
+    {
+        HistoryFamily,
+        RegionKind,
+        RegionAvailability,
+        RecordModality,
+        RelatedContentKind,
+        RelationshipKind,
+        CapabilityLevel,
+        CodecScope,
+        OperationKind,
+        ArmKind,
+        SpanRole,
+        CorrectionPlacement,
+        CorrectionContextKind,
+    }
+)
+
+
+def _snapshot_history_ir_node(value: Any) -> Any:
+    value_type = type(value)
+    if value is None or value_type in {str, bool, int}:
+        return value
+    if value_type is float:
+        if not math.isfinite(value):
+            raise _EvaluationFailure(
+                SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE,
+                "history_ir_untrusted_type",
+            )
+        return value
+    if value_type in _HISTORY_IR_ENUM_TYPES:
+        return value
+    if value_type is tuple:
+        return tuple(_snapshot_history_ir_node(item) for item in value)
+    if value_type in {list, dict}:
+        if not _is_strict_json_value(value):
+            raise _EvaluationFailure(
+                SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE,
+                "history_ir_untrusted_type",
+            )
+        return copy_json(value)
+    if value_type in _HISTORY_IR_DATACLASS_TYPES:
+        return value_type(
+            **{
+                item.name: _snapshot_history_ir_node(getattr(value, item.name))
+                for item in fields(value)
+            }
+        )
+    raise _EvaluationFailure(
+        SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE,
+        "history_ir_untrusted_type",
+    )
+
+
+def _snapshot_history_ir(value: Any) -> HistoryIR:
+    if type(value) is not HistoryIR:
+        raise _EvaluationFailure(
+            SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE,
+            "history_ir_untrusted_type",
+        )
+    snapshot = _snapshot_history_ir_node(value)
+    assert type(snapshot) is HistoryIR
+    return snapshot
+
+
+@dataclass(frozen=True)
+class _PolicyOutputSnapshot:
+    """Detached trusted graph and its immutable canonical hash preimage."""
+
+    output: SentinelPolicyOutput
+    canonical_bytes: bytes
+    sha256: str
+
+
+def _untrusted_policy_output() -> _EvaluationFailure:
+    return _EvaluationFailure(
+        SentinelFallbackReason.INVALID_POLICY_OUTPUT,
+        "policy_output_untrusted_type",
+    )
+
+
+def _require_exact_string(value: Any) -> str:
+    if type(value) is not str:
+        raise _untrusted_policy_output()
+    return value
+
+
+def _require_exact_optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _require_exact_string(value)
+
+
+def _snapshot_json_path(value: Any) -> tuple[str | int, ...]:
+    if type(value) is not tuple or any(type(item) not in {str, int} for item in value):
+        raise _untrusted_policy_output()
+    return tuple(value)
+
+
+def _snapshot_source_span(value: Any) -> SourceSpan:
+    if type(value) is not SourceSpan:
+        raise _untrusted_policy_output()
+    if (
+        any(
+            type(item) is not int
+            for item in (
+                value.char_start,
+                value.char_end,
+                value.utf8_byte_start,
+                value.utf8_byte_end,
+            )
+        )
+        or type(value.span_role) is not SpanRole
+    ):
+        raise _untrusted_policy_output()
+    return SourceSpan(
+        container_path=_snapshot_json_path(value.container_path),
+        char_start=value.char_start,
+        char_end=value.char_end,
+        utf8_byte_start=value.utf8_byte_start,
+        utf8_byte_end=value.utf8_byte_end,
+        exact_text=_require_exact_string(value.exact_text),
+        span_sha256=_require_exact_string(value.span_sha256),
+        span_role=value.span_role,
+        claim_id=_require_exact_optional_string(value.claim_id),
+    )
+
+
+def _snapshot_evidence_ref(value: Any) -> EvidenceRef:
+    if type(value) is not EvidenceRef or (
+        value.event_seq is not None and type(value.event_seq) is not int
+    ):
+        raise _untrusted_policy_output()
+    return EvidenceRef(
+        evidence_id=_require_exact_string(value.evidence_id),
+        sha256=_require_exact_string(value.sha256),
+        role=_require_exact_string(value.role),
+        event_seq=value.event_seq,
+    )
+
+
+def _snapshot_correction_anchor(value: Any) -> CorrectionAnchor:
+    if (
+        type(value) is not CorrectionAnchor
+        or type(value.insert_index) is not int
+        or type(value.placement) is not CorrectionPlacement
+        or type(value.context_kind) is not CorrectionContextKind
+    ):
+        raise _untrusted_policy_output()
+    return CorrectionAnchor(
+        container_path=_snapshot_json_path(value.container_path),
+        insert_index=value.insert_index,
+        source_container_sha256=_require_exact_string(value.source_container_sha256),
+        owner_region_id=_require_exact_string(value.owner_region_id),
+        host_context_path=_snapshot_json_path(value.host_context_path),
+        host_context_sha256=_require_exact_string(value.host_context_sha256),
+        role_path=_snapshot_json_path(value.role_path),
+        expected_role=_require_exact_string(value.expected_role),
+        reference_path=_snapshot_json_path(value.reference_path),
+        reference_sha256=_require_exact_string(value.reference_sha256),
+        placement=value.placement,
+        context_kind=value.context_kind,
+        visible_prefix=_require_exact_string(value.visible_prefix),
+        visible_suffix=_require_exact_string(value.visible_suffix),
+    )
+
+
+def _snapshot_plan_operation(value: Any) -> PlanOperation:
+    if (
+        type(value) is not PlanOperation
+        or type(value.kind) is not OperationKind
+        or type(value.evidence_refs) is not tuple
+        or type(value.protocol_shell_for) is not tuple
+        or any(type(item) is not str for item in value.protocol_shell_for)
+        or not _is_strict_json_value(value.rendered_correction_context)
+    ):
+        raise _untrusted_policy_output()
+    return PlanOperation(
+        operation_id=_require_exact_string(value.operation_id),
+        kind=value.kind,
+        target_record_id=_require_exact_string(value.target_record_id),
+        target_span=_snapshot_source_span(value.target_span),
+        replacement_text=_require_exact_optional_string(value.replacement_text),
+        replacement_author=_require_exact_optional_string(value.replacement_author),
+        evidence_refs=tuple(_snapshot_evidence_ref(item) for item in value.evidence_refs),
+        protocol_shell_for=tuple(value.protocol_shell_for),
+        correction_anchor=(
+            None
+            if value.correction_anchor is None
+            else _snapshot_correction_anchor(value.correction_anchor)
+        ),
+        rendered_correction_context=copy_json(value.rendered_correction_context),
+    )
+
+
+def _snapshot_transformation_plan(value: Any) -> TransformationPlan:
+    if (
+        type(value) is not TransformationPlan
+        or type(value.history_family) is not HistoryFamily
+        or type(value.arm) is not ArmKind
+        or type(value.operations) is not tuple
+        or type(value.curated) is not bool
+        or type(value.deployment_prediction) is not bool
+    ):
+        raise _untrusted_policy_output()
+    return TransformationPlan(
+        plan_id=_require_exact_string(value.plan_id),
+        host_id=_require_exact_string(value.host_id),
+        history_family=value.history_family,
+        codec_id=_require_exact_string(value.codec_id),
+        codec_contract_version=_require_exact_string(value.codec_contract_version),
+        source_request_sha256=_require_exact_string(value.source_request_sha256),
+        arm=value.arm,
+        operations=tuple(_snapshot_plan_operation(item) for item in value.operations),
+        curated=value.curated,
+        deployment_prediction=value.deployment_prediction,
+    )
+
+
+def _snapshot_sentinel_decision(value: Any) -> SentinelDecision:
+    if type(value) is not SentinelDecision or type(value.kind) is not SentinelDecisionKind:
+        raise _untrusted_policy_output()
+    return SentinelDecision(
+        decision_id=_require_exact_string(value.decision_id),
+        kind=value.kind,
+        operation_id=_require_exact_optional_string(value.operation_id),
+        record_id=_require_exact_optional_string(value.record_id),
+        reason_code=_require_exact_string(value.reason_code),
+    )
+
+
+def _policy_output_canonical_view(value: Any) -> dict[str, JsonValue]:
+    if type(value) is not SentinelPolicyOutput or type(value.decisions) is not tuple:
+        raise _untrusted_policy_output()
+    decisions: list[JsonValue] = []
+    for decision in value.decisions:
+        if (
+            type(decision) is not SentinelDecision
+            or type(decision.kind) is not SentinelDecisionKind
+        ):
+            raise _untrusted_policy_output()
+        decisions.append(
+            {
+                "decision_id": _require_exact_string(decision.decision_id),
+                "kind": decision.kind.value,
+                "operation_id": _require_exact_optional_string(decision.operation_id),
+                "record_id": _require_exact_optional_string(decision.record_id),
+                "reason_code": _require_exact_string(decision.reason_code),
+            }
+        )
+    plan = value.transformation_plan
+    if plan is None:
+        plan_view: JsonValue = None
+    else:
+        if (
+            type(plan) is not TransformationPlan
+            or type(plan.history_family) is not HistoryFamily
+            or type(plan.arm) is not ArmKind
+            or type(plan.operations) is not tuple
+            or type(plan.curated) is not bool
+            or type(plan.deployment_prediction) is not bool
+        ):
+            raise _untrusted_policy_output()
+        operations: list[JsonValue] = []
+        for operation in plan.operations:
+            if (
+                type(operation) is not PlanOperation
+                or type(operation.kind) is not OperationKind
+                or type(operation.evidence_refs) is not tuple
+                or type(operation.protocol_shell_for) is not tuple
+                or any(type(item) is not str for item in operation.protocol_shell_for)
+                or not _is_strict_json_value(operation.rendered_correction_context)
+            ):
+                raise _untrusted_policy_output()
+            span = operation.target_span
+            if type(span) is not SourceSpan or (
+                any(
+                    type(item) is not int
+                    for item in (
+                        span.char_start,
+                        span.char_end,
+                        span.utf8_byte_start,
+                        span.utf8_byte_end,
+                    )
+                )
+                or type(span.span_role) is not SpanRole
+            ):
+                raise _untrusted_policy_output()
+            evidence: list[JsonValue] = []
+            for item in operation.evidence_refs:
+                if type(item) is not EvidenceRef or (
+                    item.event_seq is not None and type(item.event_seq) is not int
+                ):
+                    raise _untrusted_policy_output()
+                evidence.append(
+                    {
+                        "evidence_id": _require_exact_string(item.evidence_id),
+                        "sha256": _require_exact_string(item.sha256),
+                        "role": _require_exact_string(item.role),
+                        "event_seq": item.event_seq,
+                    }
+                )
+            anchor = operation.correction_anchor
+            if anchor is None:
+                anchor_view: JsonValue = None
+            else:
+                if (
+                    type(anchor) is not CorrectionAnchor
+                    or type(anchor.insert_index) is not int
+                    or type(anchor.placement) is not CorrectionPlacement
+                    or type(anchor.context_kind) is not CorrectionContextKind
+                ):
+                    raise _untrusted_policy_output()
+                anchor_view = {
+                    "container_path": list(_snapshot_json_path(anchor.container_path)),
+                    "insert_index": anchor.insert_index,
+                    "source_container_sha256": _require_exact_string(
+                        anchor.source_container_sha256
+                    ),
+                    "owner_region_id": _require_exact_string(anchor.owner_region_id),
+                    "host_context_path": list(_snapshot_json_path(anchor.host_context_path)),
+                    "host_context_sha256": _require_exact_string(anchor.host_context_sha256),
+                    "role_path": list(_snapshot_json_path(anchor.role_path)),
+                    "expected_role": _require_exact_string(anchor.expected_role),
+                    "reference_path": list(_snapshot_json_path(anchor.reference_path)),
+                    "reference_sha256": _require_exact_string(anchor.reference_sha256),
+                    "placement": anchor.placement.value,
+                    "context_kind": anchor.context_kind.value,
+                    "visible_prefix": _require_exact_string(anchor.visible_prefix),
+                    "visible_suffix": _require_exact_string(anchor.visible_suffix),
+                }
+            operations.append(
+                {
+                    "operation_id": _require_exact_string(operation.operation_id),
+                    "kind": operation.kind.value,
+                    "target_record_id": _require_exact_string(operation.target_record_id),
+                    "target_span": {
+                        "container_path": list(_snapshot_json_path(span.container_path)),
+                        "char_start": span.char_start,
+                        "char_end": span.char_end,
+                        "utf8_byte_start": span.utf8_byte_start,
+                        "utf8_byte_end": span.utf8_byte_end,
+                        "exact_text": _require_exact_string(span.exact_text),
+                        "span_sha256": _require_exact_string(span.span_sha256),
+                        "span_role": span.span_role.value,
+                        "claim_id": _require_exact_optional_string(span.claim_id),
+                    },
+                    "replacement_text": _require_exact_optional_string(operation.replacement_text),
+                    "replacement_author": _require_exact_optional_string(
+                        operation.replacement_author
+                    ),
+                    "evidence_refs": evidence,
+                    "protocol_shell_for": list(operation.protocol_shell_for),
+                    "correction_anchor": anchor_view,
+                    "rendered_correction_context": copy_json(operation.rendered_correction_context),
+                }
+            )
+        plan_view = {
+            "schema_version": TRANSFORMATION_PLAN_SCHEMA_VERSION,
+            "plan_id": _require_exact_string(plan.plan_id),
+            "host_id": _require_exact_string(plan.host_id),
+            "history_family": plan.history_family.value,
+            "codec_id": _require_exact_string(plan.codec_id),
+            "codec_contract_version": _require_exact_string(plan.codec_contract_version),
+            "source_request_sha256": _require_exact_string(plan.source_request_sha256),
+            "arm": plan.arm.value,
+            "curated": plan.curated,
+            "deployment_prediction": plan.deployment_prediction,
+            "operations": operations,
+        }
+    return {"decisions": decisions, "transformation_plan": plan_view}
+
+
+def _snapshot_policy_output(
+    value: Any,
+    *,
+    canonical_bytes: bytes,
+    canonical_digest: str,
+) -> _PolicyOutputSnapshot:
+    trusted = SentinelPolicyOutput(
+        decisions=tuple(_snapshot_sentinel_decision(item) for item in value.decisions),
+        transformation_plan=(
+            None
+            if value.transformation_plan is None
+            else _snapshot_transformation_plan(value.transformation_plan)
+        ),
+    )
+    trusted_bytes = canonical_json_bytes(SentinelPolicyOutput.to_dict(trusted))
+    if trusted_bytes != canonical_bytes:
+        raise _EvaluationFailure(
+            SentinelFallbackReason.INVALID_POLICY_OUTPUT,
+            "policy_output_snapshot_mismatch",
+        )
+    return _PolicyOutputSnapshot(
+        output=trusted,
+        canonical_bytes=canonical_bytes,
+        sha256=canonical_digest,
+    )
+
+
+def _render_json_path(value: Any) -> list[str | int]:
+    if type(value) is not tuple or any(type(item) not in {str, int} for item in value):
+        raise SentinelContractError("renderer result contains an untrusted JSON path")
+    return list(value)
+
+
+def _render_exact_string(value: Any) -> str:
+    if type(value) is not str:
+        raise SentinelContractError("renderer result contains an untrusted string")
+    return value
+
+
+def _render_optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _render_exact_string(value)
+
+
+def _render_result_canonical_view(value: Any) -> dict[str, JsonValue]:
+    if (
+        type(value) is not RenderResult
+        or not _is_strict_json_value(value.original_request)
+        or not _is_strict_json_value(value.rendered_request)
+        or type(value.requested_arm) is not ArmKind
+        or (value.effective_arm is not None and type(value.effective_arm) is not ArmKind)
+        or type(value.execution_mode) is not ExecutionMode
+        or type(value.failure_policy) is not FailurePolicy
+        or type(value.diffs) is not tuple
+        or type(value.list_insertions) is not tuple
+        or type(value.source_mappings) is not tuple
+        or type(value.warnings) is not tuple
+        or any(type(item) is not str for item in value.warnings)
+        or type(value.fallback_state) is not FallbackState
+        or type(value.count_as_treatment) is not bool
+    ):
+        raise SentinelContractError("renderer result is outside the trusted result domain")
+    diffs: list[JsonValue] = []
+    for item in value.diffs:
+        if (
+            type(item) is not RenderDiff
+            or type(item.source_char_start) is not int
+            or type(item.source_char_end) is not int
+            or type(item.mapping_kind) is not MappingKind
+        ):
+            raise SentinelContractError("renderer diff is outside the trusted result domain")
+        diffs.append(
+            {
+                "operation_id": _render_exact_string(item.operation_id),
+                "container_path": _render_json_path(item.container_path),
+                "source_char_start": item.source_char_start,
+                "source_char_end": item.source_char_end,
+                "original_text": _render_exact_string(item.original_text),
+                "rendered_text": _render_exact_string(item.rendered_text),
+                "original_sha256": _render_exact_string(item.original_sha256),
+                "rendered_sha256": _render_exact_string(item.rendered_sha256),
+                "mapping_kind": item.mapping_kind.value,
+            }
+        )
+    insertions: list[JsonValue] = []
+    for item in value.list_insertions:
+        if (
+            type(item) is not ListInsertionDiff
+            or type(item.source_index) is not int
+            or type(item.rendered_index) is not int
+            or not _is_strict_json_value(item.inserted_value)
+        ):
+            raise SentinelContractError("renderer insertion is outside the trusted result domain")
+        insertions.append(
+            {
+                "operation_id": _render_exact_string(item.operation_id),
+                "container_path": _render_json_path(item.container_path),
+                "source_index": item.source_index,
+                "rendered_index": item.rendered_index,
+                "inserted_value": copy_json(item.inserted_value),
+                "inserted_value_sha256": _render_exact_string(item.inserted_value_sha256),
+            }
+        )
+    mappings: list[JsonValue] = []
+    for item in value.source_mappings:
+        if (
+            type(item) is not SourceMapping
+            or type(item.source_char_start) is not int
+            or type(item.source_char_end) is not int
+            or type(item.rendered_char_start) is not int
+            or type(item.rendered_char_end) is not int
+            or type(item.kind) is not MappingKind
+        ):
+            raise SentinelContractError("renderer mapping is outside the trusted result domain")
+        mappings.append(
+            {
+                "container_path": _render_json_path(item.container_path),
+                "source_char_start": item.source_char_start,
+                "source_char_end": item.source_char_end,
+                "rendered_char_start": item.rendered_char_start,
+                "rendered_char_end": item.rendered_char_end,
+                "kind": item.kind.value,
+                "operation_id": _render_optional_string(item.operation_id),
+            }
+        )
+    return {
+        "schema_version": RENDER_RESULT_SCHEMA_VERSION,
+        "original_request": copy_json(value.original_request),
+        "rendered_request": copy_json(value.rendered_request),
+        "source_request_sha256": _render_exact_string(value.source_request_sha256),
+        "rendered_request_sha256": _render_exact_string(value.rendered_request_sha256),
+        "plan_sha256": _render_exact_string(value.plan_sha256),
+        "capability_sha256": _render_exact_string(value.capability_sha256),
+        "requested_arm": value.requested_arm.value,
+        "effective_arm": None if value.effective_arm is None else value.effective_arm.value,
+        "execution_mode": value.execution_mode.value,
+        "failure_policy": value.failure_policy.value,
+        "diffs": diffs,
+        "list_insertions": insertions,
+        "source_mappings": mappings,
+        "warnings": list(value.warnings),
+        "fallback_state": value.fallback_state.value,
+        "count_as_treatment": value.count_as_treatment,
+        "unsupported_reason": _render_optional_string(value.unsupported_reason),
+    }
 
 
 class PromptSentinel:
@@ -231,6 +815,7 @@ class PromptSentinel:
 
         started = self._clock_ns()
         policy_output_sha256 = _EMPTY_POLICY_OUTPUT_SHA256
+        policy_evaluation_started = Event()
         try:
             role = SentinelCallRole(call_role)
         except ValueError as exc:
@@ -360,6 +945,15 @@ class PromptSentinel:
                     "history_extract_exception",
                 ) from exc
             try:
+                ir = _snapshot_history_ir(ir)
+            except _EvaluationFailure:
+                raise
+            except Exception as exc:
+                raise _EvaluationFailure(
+                    SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE,
+                    "history_ir_snapshot_exception",
+                ) from exc
+            try:
                 self._validate_extracted_ir(
                     raw=raw,
                     context=context,
@@ -384,10 +978,17 @@ class PromptSentinel:
                 context=context,
                 history_ir=ir,
                 timeout_ms=config.policy_timeout_ms,
+                evaluation_started=policy_evaluation_started,
             )
             try:
-                output = self._require_policy_output_type(output)
-                policy_output_sha256 = canonical_sha256(output.to_dict())
+                policy_output_bytes = canonical_json_bytes(_policy_output_canonical_view(output))
+                policy_output_sha256 = sha256(policy_output_bytes).hexdigest()
+                output_snapshot = _snapshot_policy_output(
+                    output,
+                    canonical_bytes=policy_output_bytes,
+                    canonical_digest=policy_output_sha256,
+                )
+                output = output_snapshot.output
                 self._validate_policy_output_admission(output)
                 if output.transformation_plan is None:
                     self._validate_no_plan_decisions(output)
@@ -407,10 +1008,23 @@ class PromptSentinel:
             checks = ["request_schema", "codec_extract", "policy_output_schema"]
             if output.transformation_plan is not None:
                 try:
-                    render_result = codec.render(
+                    expected_render_result = render_request(
                         copy_json(raw),
                         ir,
                         output.transformation_plan,
+                        execution_mode=ExecutionMode.RUNTIME,
+                        failure_policy=FailurePolicy.FAIL_OPEN_ORIGINAL,
+                    )
+                except Exception as exc:
+                    raise _EvaluationFailure(
+                        SentinelFallbackReason.INVARIANT_FAILURE,
+                        "independent_render_exception",
+                    ) from exc
+                try:
+                    observed_render_result = codec.render(
+                        copy_json(raw),
+                        deepcopy(ir),
+                        deepcopy(output.transformation_plan),
                         execution_mode=ExecutionMode.RUNTIME,
                         failure_policy=FailurePolicy.FAIL_OPEN_ORIGINAL,
                     )
@@ -425,7 +1039,15 @@ class PromptSentinel:
                         "render_exception",
                     ) from exc
                 try:
-                    self._validate_render_result(raw, ir, output, render_result)
+                    if canonical_json_bytes(
+                        _render_result_canonical_view(observed_render_result)
+                    ) != canonical_json_bytes(
+                        _render_result_canonical_view(expected_render_result)
+                    ):
+                        raise SentinelContractError(
+                            "renderer result differs from precomputed G1.2 result"
+                        )
+                    self._validate_render_result(raw, expected_render_result)
                 except (PortableContractError, SentinelContractError) as exc:
                     raise _EvaluationFailure(
                         SentinelFallbackReason.INVARIANT_FAILURE,
@@ -436,6 +1058,7 @@ class PromptSentinel:
                         SentinelFallbackReason.INVARIANT_FAILURE,
                         "invariant_validation_exception",
                     ) from exc
+                render_result = expected_render_result
                 candidate = copy_json(render_result.rendered_request)
                 checks.extend(
                     (
@@ -518,6 +1141,7 @@ class PromptSentinel:
                 started=started,
                 policy_output_sha256=policy_output_sha256,
                 transaction=receipt_transaction,
+                policy_evaluated=policy_evaluation_started.is_set(),
             )
         except Exception:
             return self._fallback_result(
@@ -533,6 +1157,7 @@ class PromptSentinel:
                 started=started,
                 policy_output_sha256=policy_output_sha256,
                 transaction=receipt_transaction,
+                policy_evaluated=policy_evaluation_started.is_set(),
             )
 
     def _evaluate_policy_with_timeout(
@@ -542,19 +1167,33 @@ class PromptSentinel:
         context: SentinelContext,
         history_ir: Any,
         timeout_ms: int,
+        evaluation_started: Event,
     ) -> SentinelPolicyOutput:
         """Run the replaceable backend behind a real, bounded daemon wait."""
 
         finished = Event()
+        cancel_before_policy = Event()
+        policy_start_gate = Lock()
         outcome: list[tuple[bool, Any]] = []
-        policy_context = copy_context()
+        thread_context = copy_context()
+        policy_request = copy_json(request)
+        policy_call_context = SentinelContext(
+            logical_call_id=context.logical_call_id,
+            host_id=context.host_id,
+            attributes=copy_json(context.attributes),
+        )
+        policy_history_ir = deepcopy(history_ir)
 
         def evaluate() -> None:
             try:
+                with policy_start_gate:
+                    if cancel_before_policy.is_set():
+                        return
+                    evaluation_started.set()
                 value = self._policy.evaluate(
-                    request=copy_json(request),
-                    context=context,
-                    history_ir=history_ir,
+                    request=policy_request,
+                    context=policy_call_context,
+                    history_ir=policy_history_ir,
                 )
             except BaseException as error:
                 outcome.append((False, error))
@@ -564,7 +1203,7 @@ class PromptSentinel:
                 finished.set()
 
         worker = Thread(
-            target=policy_context.run,
+            target=thread_context.run,
             args=(evaluate,),
             name="mobileworld-prompt-sentinel-policy",
             daemon=True,
@@ -572,6 +1211,8 @@ class PromptSentinel:
         policy_started = self._clock_ns()
         worker.start()
         if not finished.wait(timeout_ms / 1000):
+            with policy_start_gate:
+                cancel_before_policy.set()
             raise _EvaluationFailure(
                 SentinelFallbackReason.POLICY_TIMEOUT,
                 "policy_deadline_exceeded",
@@ -642,14 +1283,6 @@ class PromptSentinel:
             raise _EvaluationFailure(
                 SentinelFallbackReason.INVALID_REQUEST_SCHEMA, "request_messages_missing"
             )
-
-    @staticmethod
-    def _require_policy_output_type(output: Any) -> SentinelPolicyOutput:
-        if not isinstance(output, SentinelPolicyOutput):
-            raise _EvaluationFailure(
-                SentinelFallbackReason.INVALID_POLICY_OUTPUT, "policy_output_type"
-            )
-        return output
 
     @staticmethod
     def _validate_policy_output_admission(output: SentinelPolicyOutput) -> None:
@@ -730,27 +1363,14 @@ class PromptSentinel:
     @staticmethod
     def _validate_render_result(
         raw: JsonValue,
-        ir: Any,
-        output: SentinelPolicyOutput,
         result: RenderResult,
     ) -> None:
-        plan = output.transformation_plan
-        assert plan is not None
         if result.list_insertions:
             raise SentinelContractError(
                 "R2.1 history-only runtime cannot insert current-observation blocks"
             )
         if result.fallback_state is not FallbackState.NOT_NEEDED:
             raise SentinelContractError("renderer returned a fallback instead of a candidate")
-        expected = render_request(
-            copy_json(raw),
-            ir,
-            plan,
-            execution_mode=ExecutionMode.RUNTIME,
-            failure_policy=FailurePolicy.FAIL_OPEN_ORIGINAL,
-        )
-        if canonical_sha256(result.to_dict()) != canonical_sha256(expected.to_dict()):
-            raise SentinelContractError("renderer result differs from G1.2 recomputation")
         if result.original_request != raw or result.source_request_sha256 != canonical_sha256(raw):
             raise SentinelContractError("renderer source binding differs from raw request")
         if result.rendered_request_sha256 != canonical_sha256(result.rendered_request):
@@ -762,10 +1382,11 @@ class PromptSentinel:
     def _diff_sha256(result: RenderResult | None) -> str:
         if result is None:
             return _EMPTY_DIFF_SHA256
+        view = _render_result_canonical_view(result)
         return canonical_sha256(
             {
-                "diffs": [item.to_dict() for item in result.diffs],
-                "list_insertions": [item.to_dict() for item in result.list_insertions],
+                "diffs": view["diffs"],
+                "list_insertions": view["list_insertions"],
             }
         )
 
@@ -871,19 +1492,11 @@ class PromptSentinel:
         reason: SentinelFallbackReason,
         check: str,
         started: int,
+        policy_evaluated: bool,
         persist: bool = True,
-        policy_evaluated: bool | None = None,
         policy_output_sha256: str = _EMPTY_POLICY_OUTPUT_SHA256,
         transaction: SentinelReceiptTransaction | None = None,
     ) -> SentinelResult:
-        if policy_evaluated is None:
-            policy_evaluated = reason not in {
-                SentinelFallbackReason.INVALID_REQUEST_SCHEMA,
-                SentinelFallbackReason.UNSUPPORTED_HISTORY_FAMILY,
-                SentinelFallbackReason.AMBIGUOUS_HISTORY_SPAN,
-                SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE,
-                SentinelFallbackReason.REQUEST_DRIFT,
-            }
         receipt = SentinelReceipt(
             logical_call_id=context.logical_call_id,
             host_id=context.host_id,
@@ -953,11 +1566,22 @@ class PromptSentinel:
         )
         if self._receipt_sink is None:
             return result
+        publication_receipt = SentinelReceipt(
+            **{item.name: getattr(receipt, item.name) for item in fields(SentinelReceipt)}
+        )
+        publication_receipt_json = canonical_json_bytes(
+            SentinelReceipt.to_dict(publication_receipt)
+        )
         selected_transaction = transaction
         try:
             if selected_transaction is None:
                 selected_transaction = self._begin_receipt_transaction(receipt.logical_call_id)
-            selected_transaction.commit(receipt)
+            selected_transaction.commit(publication_receipt)
+            if (
+                canonical_json_bytes(SentinelReceipt.to_dict(publication_receipt))
+                != publication_receipt_json
+            ):
+                raise SentinelContractError("receipt transaction mutated its detached input")
         except Exception:
             if selected_transaction is not None:
                 try:
@@ -1020,8 +1644,8 @@ class PromptSentinel:
             reason=SentinelFallbackReason.REQUEST_DRIFT,
             check="cached_raw_request_sha256_mismatch",
             started=started,
-            persist=False,
             policy_evaluated=policy_evaluated,
+            persist=False,
             policy_output_sha256=policy_output_sha256,
         )
 

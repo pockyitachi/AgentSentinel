@@ -96,8 +96,11 @@ they perform no semantic work; their receipt publication is best-effort.
 The configured policy deadline is a real bounded wait. A policy worker that
 does not finish before the deadline is abandoned as a daemon computation and
 the actor immediately receives Original; its late return can never update the
-cached result or reach the actor provider. The global switch is checked both
-before semantic work and again at candidate-selection time. A monotonic
+cached result or reach the actor provider. The worker receives detached copies
+of the admitted request, call context, and validated History IR; the
+authoritative raw request, context, and IR used by admission and rendering are
+never lent to replaceable policy code. The global switch is checked both before
+semantic work and again at candidate-selection time. A monotonic
 activation generation detects both a held activation and an activate-then-
 deactivate pulse during evaluation; either discards the candidate as a typed
 invariant fallback to Original.
@@ -111,7 +114,9 @@ The host boundary MUST allocate one stable `logical_call_id` after request
 assembly and before the first provider attempt. One logical actor decision has
 at most one policy evaluation. The result is cached by logical-call identity
 and raw-request hash, and the receipt records whether evaluation occurred with
-`policy_evaluated`.
+`policy_evaluated`. That field is tracked explicitly at the policy boundary;
+request, Codec, History-IR snapshot, or other pre-policy failures MUST record
+`false` rather than infer evaluation from the fallback category.
 
 The same validated `SentinelResult` MUST be reused without semantic
 re-evaluation across:
@@ -225,12 +230,38 @@ Each admitted canonical-JSON logical call produces one lightweight receipt confo
   would-edit/applied state;
 - typed fallback, validation status/checks, exact-diff SHA-256, and latency.
 
-The policy-output type/structure gate runs before canonicalization. Once a
-complete `SentinelPolicyOutput` is canonicalizable, its hash is fixed before
+The policy-output type/structure gate runs before canonicalization. It accepts
+only a recursively closed graph of exact trusted base dataclasses, exact tuple
+containers, exact expected enums and scalars, and acyclic strict built-in JSON
+values.
+Policy-owned subclasses, custom containers, and other untrusted graph types are
+invalid output. Instance serializer shadows on otherwise exact base objects are
+ignored: they are neither copied into the snapshot nor invoked.
+
+The runtime MUST rebuild every admitted field into one detached Sentinel-owned
+snapshot and produce canonical bytes with a module-owned serializer. It MUST
+never call a policy-owned `to_dict()` or later consume the policy's original
+object graph. The policy-output hash, decision census, duplicate and operation-
+binding checks, R2.1/G1.2 admission, and renderer MUST all consume that one
+snapshot. Once the snapshot is canonicalizable, its hash is fixed before
 decision-ID uniqueness, operation binding, R2.1 operation admission, or G1.2
 plan validation. Hashing records the rejected output; it does not authorize it.
-An arbitrary or non-canonicalizable return retains the empty-output sentinel
-because no complete policy output was admitted for hashing.
+An arbitrary, subclassed, or non-canonicalizable return retains the empty-
+output sentinel because no complete trusted snapshot was admitted for hashing.
+
+The same reference-isolation rule applies at the Codec boundary. A Codec's
+extracted History IR is recursively rebuilt from exact trusted base dataclasses
+before validation; replaceable policy code receives only another detached copy.
+Cycles, subclasses, custom containers, or other non-canonical values in the
+extracted IR fail as `HISTORY_EXTRACTION_FAILURE` before policy evaluation and
+therefore record `policy_evaluated=false`.
+Before calling a Codec renderer, Sentinel computes the authoritative G1.2
+result from the trusted IR and policy snapshot. The renderer receives detached
+request/IR/plan copies, and its returned result must match that precomputed
+result through a recursively exact, field-owned canonical projection. Sentinel
+uses only the precomputed result for candidate bytes and the exact-diff hash.
+Renderer subclasses, virtual serializers, or mutations of renderer-owned
+copies therefore cannot change the receipt-bound target or actor request.
 
 The lightweight receipt is hash-only: it MUST NOT embed a request view, history
 text, exact diff bytes, evidence text, provider credential, secret, or chain of
@@ -252,6 +283,15 @@ atomically publish the final logical-call name without replacement. Admission
 or commit failure before publication leaves no final receipt; after atomic
 publication, cleanup failure cannot retroactively force the actor to Original
 against an already visible ACTIVE receipt.
+
+The runtime validates its authoritative `SentinelResult` before commit and lends
+the transaction only a detached receipt copy. A transaction MUST NOT mutate that
+copy; the seam compares its canonical value again before releasing the actor
+request and treats detected mutation as `SIDECAR_FAILURE`. Thus a replaceable
+sink cannot change the authoritative receipt by retaining or modifying the
+object reference it receives. A custom sink that publishes bytes other than the
+detached value violates this transaction contract and is not a compliant v1
+sink.
 
 The v1 external sink uses Linux anonymous `O_TMPFILE` storage and an fd-bound
 `/proc/self/fd` no-replace hard link. Lack of either capability fails safe as
@@ -278,9 +318,11 @@ R2.1 is accepted only when CPU tests prove:
    one logical-call ID;
 5. caller immutability, exact non-history invariants, held and pulsed kill-switch
    activation, pre-policy sidecar admission, post-policy commit failure, atomic
-   fallback, strict pre-copy/pre-cache JSON-domain rejection, rejected-output
-   hashing before later admission checks, every typed failure reason, and the
-   closed receipt schema;
+   fallback, strict pre-copy/pre-cache JSON-domain rejection, recursively
+   trusted and detached policy-output snapshotting, rejected-output hashing
+   before later admission checks, acyclic History-IR snapshot admission,
+   explicit policy-evaluation census, detached sidecar commit inputs, every
+   typed failure reason, and the closed receipt schema;
 6. the existing fake provider receives the expected request while provider
    response normalization and host action parsing remain unchanged; and
 7. no live provider/model/GPU/backend/action path was invoked.

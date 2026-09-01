@@ -4,7 +4,7 @@ import json
 import os
 import time
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -20,6 +20,7 @@ from mobile_world.agents.implementations import mai_ui_agent as mai_module
 from mobile_world.agents.implementations import qwen3vl as qwen_module
 from mobile_world.offline.causal_replay.contracts import (
     ArmKind,
+    CorrectionAnchor,
     EvidenceRef,
     ExecutionMode,
     FailurePolicy,
@@ -29,12 +30,14 @@ from mobile_world.offline.causal_replay.contracts import (
     PlanOperation,
     PortableContractError,
     RenderResult,
+    SourceSpan,
     SpanRole,
     TransformationPlan,
     canonical_json_bytes,
     canonical_sha256,
     stable_id,
 )
+from mobile_world.offline.causal_replay.core import render_request
 from mobile_world.offline.causal_replay.history_codec import HistoryCodec
 from mobile_world.offline.causal_replay.registry import HistoryCodecRegistry
 from mobile_world.offline.g1_history_codecs import (
@@ -58,6 +61,7 @@ from mobile_world.runtime.sentinel import (
     SentinelPolicyOutput,
     SentinelResult,
 )
+from mobile_world.runtime.sentinel import seam as sentinel_seam_module
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 FIXTURE_PATH = (
@@ -182,6 +186,37 @@ def _drop_output(
     )
 
 
+def _alternate_drop_plan(ir: HistoryIR, plan: TransformationPlan) -> TransformationPlan:
+    original_span = plan.operations[0].target_span
+    alternatives = [
+        (record, span)
+        for record in ir.records
+        for span in record.editable_spans
+        if span != original_span
+    ]
+    assert alternatives
+    record, span = alternatives[0]
+    operation = replace(
+        plan.operations[0],
+        target_record_id=record.record_id,
+        target_span=span,
+    )
+    subject: dict[str, JsonValue] = {
+        "host_id": ir.host_id,
+        "history_family": ir.history_family.value,
+        "codec_id": ir.codec_id,
+        "codec_contract_version": ir.codec_contract_version,
+        "source_request_sha256": ir.raw_request_sha256,
+        "arm": plan.arm.value,
+        "operations": [operation.to_dict()],
+    }
+    return replace(
+        plan,
+        plan_id=stable_id("plan", subject),
+        operations=(operation,),
+    )
+
+
 def _keep_output(
     _request: JsonValue, context: SentinelContext, _ir: HistoryIR
 ) -> SentinelPolicyOutput:
@@ -277,7 +312,7 @@ def _sentinel(
     sentinel = PromptSentinel(
         policy=policy,
         codec_registry=registry,
-        host_configs={QWEN_HOST_ID: SentinelHostConfig(mode=mode, policy_timeout_ms=10)},
+        host_configs={QWEN_HOST_ID: SentinelHostConfig(mode=mode)},
         receipt_sink=MemorySentinelReceiptSink() if sink is None else sink,
         global_switch=switch or SentinelGlobalSwitch(),
         logical_call_id_factory=lambda: "01K_SENTINEL_LOGICAL_CALL_01",
@@ -461,6 +496,436 @@ def test_rejected_duplicate_decision_ids_bind_the_complete_policy_output_hash() 
     assert result.receipt.raw_request_sha256 == result.receipt.candidate_request_sha256
     assert result.receipt.raw_request_sha256 == result.receipt.final_request_sha256
     assert result.final_request == request
+    schema = json.loads(RECEIPT_SCHEMA_PATH.read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(result.receipt.to_dict())
+
+
+@pytest.mark.parametrize(
+    "untrusted_layer",
+    (
+        "output",
+        "decision",
+        "plan",
+        "operation",
+        "source_span",
+        "evidence_ref",
+        "correction_anchor",
+        "decision_tuple",
+        "rendered_json",
+    ),
+)
+def test_policy_output_snapshot_rejects_untrusted_recursive_graph_before_hash_or_render(
+    untrusted_layer: str,
+) -> None:
+    codec, request = _fixture_codec_and_request()
+    original = deepcopy(request)
+    serializer_calls: list[str] = []
+
+    def lie(_value: Any) -> dict[str, JsonValue]:
+        serializer_calls.append(untrusted_layer)
+        return {"decisions": [], "transformation_plan": None}
+
+    class LyingOutput(SentinelPolicyOutput):
+        def to_dict(self) -> dict[str, JsonValue]:
+            return lie(self)
+
+    class LyingDecision(SentinelDecision):
+        def to_dict(self) -> dict[str, JsonValue]:
+            return lie(self)
+
+    class LyingPlan(TransformationPlan):
+        def to_dict(self) -> dict[str, JsonValue]:
+            return lie(self)
+
+    class LyingOperation(PlanOperation):
+        def to_dict(self) -> dict[str, JsonValue]:
+            return lie(self)
+
+    class LyingSourceSpan(SourceSpan):
+        def to_dict(self) -> dict[str, JsonValue]:
+            return lie(self)
+
+    class LyingEvidenceRef(EvidenceRef):
+        def to_dict(self) -> dict[str, JsonValue]:
+            return lie(self)
+
+    class LyingCorrectionAnchor(CorrectionAnchor):
+        def to_dict(self) -> dict[str, JsonValue]:
+            return lie(self)
+
+    class DecisionTuple(tuple):
+        pass
+
+    class RenderedJson(dict):
+        pass
+
+    def kwargs(value: Any) -> dict[str, Any]:
+        return {item.name: getattr(value, item.name) for item in fields(value)}
+
+    def untrusted_output(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        output = (
+            _replace_output(request_value, context, ir)
+            if untrusted_layer in {"evidence_ref", "correction_anchor", "rendered_json"}
+            else _drop_output(request_value, context, ir)
+        )
+        assert output.transformation_plan is not None
+        plan = output.transformation_plan
+        operation = plan.operations[0]
+        if untrusted_layer == "output":
+            return LyingOutput(**kwargs(output))
+        if untrusted_layer == "decision":
+            decision = LyingDecision(**kwargs(output.decisions[0]))
+            return replace(output, decisions=(decision,))
+        if untrusted_layer == "plan":
+            return replace(output, transformation_plan=LyingPlan(**kwargs(plan)))
+        if untrusted_layer == "operation":
+            operation = LyingOperation(**kwargs(operation))
+        elif untrusted_layer == "source_span":
+            operation = replace(
+                operation,
+                target_span=LyingSourceSpan(**kwargs(operation.target_span)),
+            )
+        elif untrusted_layer == "evidence_ref":
+            operation = replace(
+                operation,
+                evidence_refs=(LyingEvidenceRef(**kwargs(operation.evidence_refs[0])),),
+            )
+        elif untrusted_layer == "correction_anchor":
+            assert operation.correction_anchor is not None
+            operation = replace(
+                operation,
+                correction_anchor=LyingCorrectionAnchor(**kwargs(operation.correction_anchor)),
+            )
+        elif untrusted_layer == "rendered_json":
+            assert isinstance(operation.rendered_correction_context, dict)
+            operation = replace(
+                operation,
+                rendered_correction_context=RenderedJson(operation.rendered_correction_context),
+            )
+        elif untrusted_layer == "decision_tuple":
+            return replace(output, decisions=DecisionTuple(output.decisions))
+        return replace(output, transformation_plan=replace(plan, operations=(operation,)))
+
+    sink = MemorySentinelReceiptSink()
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=untrusted_output,
+        codec=codec,
+        sink=sink,
+    )
+    call = sentinel.logical_call(host_id=QWEN_HOST_ID, history_codec_id=QWEN_CODEC_ID)
+    result = call.before_model_call(request)
+    cached = call.before_model_call(request)
+    assert cached is result
+    assert policy.evaluate_count == 1
+    assert serializer_calls == []
+    assert len(sink.receipts) == 1
+    assert result.final_request == original
+    assert result.receipt.edit_applied is False
+    assert result.receipt.fallback_reason is SentinelFallbackReason.INVALID_POLICY_OUTPUT
+    assert result.receipt.validation_checks == ("policy_output_untrusted_type",)
+    assert result.receipt.policy_output_sha256 == canonical_sha256(
+        {"decisions": [], "transformation_plan": None}
+    )
+    assert result.receipt.decision_kinds == ()
+    schema = json.loads(RECEIPT_SCHEMA_PATH.read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(result.receipt.to_dict())
+
+
+def test_policy_output_snapshot_ignores_instance_serializer_shadow_and_detaches_renderer() -> None:
+    codec, request = _fixture_codec_and_request()
+    outputs: list[SentinelPolicyOutput] = []
+    rendered_plans: list[TransformationPlan] = []
+    serializer_calls: list[str] = []
+
+    class CapturingCodec:
+        codec_id = codec.codec_id
+        contract_version = codec.contract_version
+        history_family = codec.history_family
+        capabilities = codec.capabilities
+
+        def extract(self, request_value: JsonValue) -> HistoryIR:
+            return codec.extract(request_value)
+
+        def render(
+            self,
+            request_value: JsonValue,
+            ir: HistoryIR,
+            plan: TransformationPlan,
+            *,
+            execution_mode: ExecutionMode,
+            failure_policy: FailurePolicy,
+        ) -> RenderResult:
+            rendered_plans.append(plan)
+            return codec.render(
+                request_value,
+                ir,
+                plan,
+                execution_mode=execution_mode,
+                failure_policy=failure_policy,
+            )
+
+    def shadowed_output(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        output = _drop_output(request_value, context, ir)
+        outputs.append(output)
+
+        def lie() -> dict[str, JsonValue]:
+            serializer_calls.append("instance-shadow")
+            return {"decisions": [], "transformation_plan": None}
+
+        object.__setattr__(output, "to_dict", lie)
+        return output
+
+    sink = MemorySentinelReceiptSink()
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=shadowed_output,
+        codec=cast(HistoryCodec, CapturingCodec()),
+        sink=sink,
+    )
+    result = sentinel.logical_call(
+        host_id=QWEN_HOST_ID,
+        history_codec_id=QWEN_CODEC_ID,
+    ).before_model_call(request)
+    assert policy.evaluate_count == 1
+    assert serializer_calls == []
+    assert result.receipt.fallback_reason is None
+    assert result.receipt.edit_applied is True
+    assert len(rendered_plans) == 1
+    assert outputs[0].transformation_plan is not None
+    assert rendered_plans[0] is not outputs[0].transformation_plan
+    assert type(rendered_plans[0]) is TransformationPlan
+    assert type(rendered_plans[0].operations[0]) is PlanOperation
+    assert type(rendered_plans[0].operations[0].target_span) is SourceSpan
+    expected = canonical_sha256(SentinelPolicyOutput.to_dict(outputs[0]))
+    assert result.receipt.policy_output_sha256 == expected
+
+
+def test_policy_receives_detached_request_context_and_history_ir() -> None:
+    codec, request = _fixture_codec_and_request()
+    original = deepcopy(request)
+
+    def mutating_policy(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        output = _drop_output(request_value, context, ir)
+        assert isinstance(request_value, dict)
+        request_value["model"] = "policy-mutated-model"
+        object.__setattr__(context, "host_id", "policy-mutated-host")
+        object.__setattr__(ir, "records", ())
+        return output
+
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=mutating_policy,
+        codec=codec,
+    )
+    result = sentinel.logical_call(
+        host_id=QWEN_HOST_ID,
+        history_codec_id=QWEN_CODEC_ID,
+    ).before_model_call(request)
+    assert policy.evaluate_count == 1
+    assert request == original
+    assert result.receipt.host_id == QWEN_HOST_ID
+    assert result.receipt.fallback_reason is None
+    assert result.receipt.edit_applied is True
+    assert result.final_request["model"] == original["model"]
+
+
+@pytest.mark.parametrize("invalid_shape", ("empty_decisions", "empty_decision_id"))
+def test_canonical_exact_policy_output_hash_is_fixed_before_semantic_construction_rejection(
+    invalid_shape: str,
+) -> None:
+    codec, request = _fixture_codec_and_request()
+    outputs: list[SentinelPolicyOutput] = []
+
+    def invalid_but_canonical(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        output = _drop_output(request_value, context, ir)
+        if invalid_shape == "empty_decisions":
+            object.__setattr__(output, "decisions", ())
+        else:
+            object.__setattr__(output.decisions[0], "decision_id", "")
+        outputs.append(output)
+        return output
+
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=invalid_but_canonical,
+        codec=codec,
+    )
+    result = sentinel.logical_call(
+        host_id=QWEN_HOST_ID,
+        history_codec_id=QWEN_CODEC_ID,
+    ).before_model_call(request)
+    expected = canonical_sha256(SentinelPolicyOutput.to_dict(outputs[0]))
+    assert policy.evaluate_count == 1
+    assert result.final_request == request
+    assert result.receipt.fallback_reason is SentinelFallbackReason.INVALID_POLICY_OUTPUT
+    assert result.receipt.policy_output_sha256 == expected
+    assert result.receipt.policy_output_sha256 != canonical_sha256(
+        {"decisions": [], "transformation_plan": None}
+    )
+
+
+@pytest.mark.parametrize("renderer_attack", ("mutate_plan", "lying_result_serializer"))
+def test_renderer_cannot_mutate_or_lie_about_the_receipt_bound_policy_snapshot(
+    renderer_attack: str,
+) -> None:
+    codec, request = _fixture_codec_and_request()
+    outputs: list[SentinelPolicyOutput] = []
+    serializer_calls: list[str] = []
+
+    class LyingRenderResult(RenderResult):
+        def to_dict(self) -> dict[str, JsonValue]:
+            serializer_calls.append("lying-result")
+            return {"spoofed": True}
+
+    class AdversarialRendererCodec:
+        codec_id = codec.codec_id
+        contract_version = codec.contract_version
+        history_family = codec.history_family
+        capabilities = codec.capabilities
+
+        def extract(self, request_value: JsonValue) -> HistoryIR:
+            return codec.extract(request_value)
+
+        def render(
+            self,
+            request_value: JsonValue,
+            ir: HistoryIR,
+            plan: TransformationPlan,
+            *,
+            execution_mode: ExecutionMode,
+            failure_policy: FailurePolicy,
+        ) -> RenderResult:
+            alternate = _alternate_drop_plan(ir, plan)
+            if renderer_attack == "mutate_plan":
+                for item in fields(plan):
+                    object.__setattr__(plan, item.name, getattr(alternate, item.name))
+                return render_request(
+                    request_value,
+                    ir,
+                    plan,
+                    execution_mode=execution_mode,
+                    failure_policy=failure_policy,
+                )
+            actual = render_request(
+                request_value,
+                ir,
+                alternate,
+                execution_mode=execution_mode,
+                failure_policy=failure_policy,
+            )
+            return LyingRenderResult(
+                **{item.name: getattr(actual, item.name) for item in fields(actual)}
+            )
+
+    def captured_drop(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        output = _drop_output(request_value, context, ir)
+        outputs.append(output)
+        return output
+
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=captured_drop,
+        codec=cast(HistoryCodec, AdversarialRendererCodec()),
+    )
+    result = sentinel.logical_call(
+        host_id=QWEN_HOST_ID,
+        history_codec_id=QWEN_CODEC_ID,
+    ).before_model_call(request)
+    assert policy.evaluate_count == 1
+    assert serializer_calls == []
+    assert result.final_request == request
+    assert result.receipt.edit_applied is False
+    assert result.receipt.fallback_reason is SentinelFallbackReason.INVARIANT_FAILURE
+    assert result.receipt.policy_output_sha256 == canonical_sha256(
+        SentinelPolicyOutput.to_dict(outputs[0])
+    )
+
+
+def test_history_ir_subclass_is_rejected_before_policy_or_renderer() -> None:
+    codec, request = _fixture_codec_and_request()
+
+    class LyingHistoryIR(HistoryIR):
+        def record_by_id(self, _record_id: str) -> Any:
+            raise AssertionError("subclass method must never execute")
+
+    class UntrustedIrCodec:
+        codec_id = codec.codec_id
+        contract_version = codec.contract_version
+        history_family = codec.history_family
+        capabilities = codec.capabilities
+
+        def extract(self, request_value: JsonValue) -> HistoryIR:
+            original = codec.extract(request_value)
+            return LyingHistoryIR(
+                **{item.name: getattr(original, item.name) for item in fields(original)}
+            )
+
+        def render(self, *_args: Any, **_kwargs: Any) -> RenderResult:
+            raise AssertionError("untrusted IR must fail before renderer")
+
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        codec=cast(HistoryCodec, UntrustedIrCodec()),
+    )
+    result = sentinel.logical_call(
+        host_id=QWEN_HOST_ID,
+        history_codec_id=QWEN_CODEC_ID,
+    ).before_model_call(request)
+    assert policy.evaluate_count == 0
+    assert result.final_request == request
+    assert result.receipt.fallback_reason is SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE
+    assert result.receipt.validation_checks == ("history_ir_untrusted_type",)
+
+
+def test_cyclic_history_ir_json_fails_before_policy_with_truthful_evaluation_census() -> None:
+    codec, request = _fixture_codec_and_request()
+
+    class CyclicIrCodec:
+        codec_id = codec.codec_id
+        contract_version = codec.contract_version
+        history_family = codec.history_family
+        capabilities = codec.capabilities
+
+        def extract(self, request_value: JsonValue) -> HistoryIR:
+            ir = codec.extract(request_value)
+            cycle: dict[str, Any] = {}
+            cycle["self"] = cycle
+            object.__setattr__(ir.records[0], "provenance", cycle)
+            return ir
+
+        def render(self, *_args: Any, **_kwargs: Any) -> RenderResult:
+            raise AssertionError("cyclic IR must fail before renderer")
+
+    def forbidden(*_args: Any) -> SentinelPolicyOutput:
+        raise AssertionError("cyclic IR must fail before policy")
+
+    sink = MemorySentinelReceiptSink()
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=forbidden,
+        codec=cast(HistoryCodec, CyclicIrCodec()),
+        sink=sink,
+    )
+    call = sentinel.logical_call(host_id=QWEN_HOST_ID, history_codec_id=QWEN_CODEC_ID)
+    result = call.before_model_call(request)
+    assert call.before_model_call(request) is result
+    assert policy.evaluate_count == 0
+    assert len(sink.receipts) == 1
+    assert result.final_request == request
+    assert result.receipt.policy_evaluated is False
+    assert result.receipt.fallback_reason is SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE
+    assert result.receipt.validation_checks == ("history_ir_untrusted_type",)
     schema = json.loads(RECEIPT_SCHEMA_PATH.read_text(encoding="utf-8"))
     Draft202012Validator(schema).validate(result.receipt.to_dict())
 
@@ -786,6 +1251,73 @@ def test_policy_deadline_returns_original_without_waiting_for_worker_completion(
     assert result.receipt.fallback_reason is SentinelFallbackReason.POLICY_TIMEOUT
     assert result.receipt.validation_checks == ("policy_deadline_exceeded",)
     assert result.final_request == request
+
+
+def test_policy_thread_start_failure_does_not_claim_policy_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codec, request = _fixture_codec_and_request()
+    sink = MemorySentinelReceiptSink()
+
+    class StartFailingThread:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("worker unavailable")
+
+    monkeypatch.setattr(sentinel_seam_module, "Thread", StartFailingThread)
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        codec=codec,
+        sink=sink,
+    )
+    result = sentinel.logical_call(
+        host_id=QWEN_HOST_ID,
+        history_codec_id=QWEN_CODEC_ID,
+    ).before_model_call(request)
+    assert policy.evaluate_count == 0
+    assert len(sink.receipts) == 1
+    assert result.final_request == request
+    assert result.receipt.policy_evaluated is False
+    assert result.receipt.fallback_reason is SentinelFallbackReason.INVARIANT_FAILURE
+    assert result.receipt.validation_checks == ("internal_evaluation_exception",)
+
+
+def test_policy_worker_deferred_past_timeout_is_cancelled_before_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codec, request = _fixture_codec_and_request()
+    sink = MemorySentinelReceiptSink()
+    deferred_invocations: list[tuple[Any, tuple[Any, ...]]] = []
+
+    class DeferredThread:
+        def __init__(self, *, target: Any, args: tuple[Any, ...], **_kwargs: Any) -> None:
+            deferred_invocations.append((target, args))
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(sentinel_seam_module, "Thread", DeferredThread)
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        codec=codec,
+        sink=sink,
+    )
+    result = sentinel.logical_call(
+        host_id=QWEN_HOST_ID,
+        history_codec_id=QWEN_CODEC_ID,
+    ).before_model_call(request)
+    assert policy.evaluate_count == 0
+    assert len(deferred_invocations) == 1
+    target, args = deferred_invocations[0]
+    target(*args)
+    assert policy.evaluate_count == 0
+    assert len(sink.receipts) == 1
+    assert result.final_request == request
+    assert result.receipt.policy_evaluated is False
+    assert result.receipt.fallback_reason is SentinelFallbackReason.POLICY_TIMEOUT
+    assert result.receipt.validation_checks == ("policy_deadline_exceeded",)
 
 
 def test_kill_switch_activation_during_evaluation_discards_candidate() -> None:
@@ -1284,6 +1816,68 @@ def test_sidecar_commit_failure_falls_back_after_one_policy_evaluation() -> None
     assert sink.begin_count == 1
     assert sink.transaction.commit_count == 1
     assert sink.transaction.abort_count == 1
+
+
+def test_sidecar_transaction_cannot_mutate_the_authoritative_result_receipt() -> None:
+    codec, request = _fixture_codec_and_request()
+    outputs: list[SentinelPolicyOutput] = []
+
+    def captured_drop(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        output = _drop_output(request_value, context, ir)
+        outputs.append(output)
+        return output
+
+    class MutatingTransaction:
+        def __init__(self) -> None:
+            self.commit_count = 0
+            self.abort_count = 0
+            self.receipt: Any = None
+
+        def commit(self, receipt: Any) -> None:
+            self.commit_count += 1
+            self.receipt = receipt
+            object.__setattr__(receipt, "policy_output_sha256", "0" * 64)
+            object.__setattr__(receipt, "edit_applied", False)
+
+        def abort(self) -> None:
+            self.abort_count += 1
+
+    class MutatingSink:
+        def __init__(self) -> None:
+            self.begin_count = 0
+            self.transaction = MutatingTransaction()
+
+        def begin(self, _logical_call_id: str) -> MutatingTransaction:
+            self.begin_count += 1
+            return self.transaction
+
+    sink = MutatingSink()
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=captured_drop,
+        codec=codec,
+        sink=sink,
+    )
+    call = sentinel.logical_call(host_id=QWEN_HOST_ID, history_codec_id=QWEN_CODEC_ID)
+    result = call.before_model_call(request)
+    assert call.before_model_call(request) is result
+    assert result.final_request == request
+    assert result.receipt.fallback_reason is SentinelFallbackReason.SIDECAR_FAILURE
+    assert result.receipt.validation_checks == ("sidecar_commit_failed",)
+    assert result.receipt.policy_evaluated is True
+    assert result.receipt.edit_applied is False
+    assert result.receipt.policy_output_sha256 == canonical_sha256(
+        SentinelPolicyOutput.to_dict(outputs[0])
+    )
+    assert sink.transaction.receipt is not result.receipt
+    assert policy.evaluate_count == 1
+    assert sink.begin_count == 1
+    assert sink.transaction.commit_count == 1
+    assert sink.transaction.abort_count == 1
+    schema = json.loads(RECEIPT_SCHEMA_PATH.read_text(encoding="utf-8"))
+    Draft202012Validator(schema).validate(result.receipt.to_dict())
 
 
 @pytest.mark.parametrize("case", ("unbound_material", "record_mismatch", "duplicate_operation"))
