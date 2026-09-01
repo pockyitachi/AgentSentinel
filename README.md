@@ -98,9 +98,9 @@ These are observational associations, not counterfactual effects. Every
 dataset remains `causal_claim_supported=false`; the results do not establish a
 cross-model ranking, prove that MHR alone caused a failure, or estimate how much
 success would improve after deleting or correcting history. See the
-[canonical six-model report](MobileWorld/docs/misleading_history_audit_report.md)
+[canonical six-model report](<motivation study/misleading_history_audit_report.md>)
 for definitions, per-model evidence, and limitations. The safe
-[machine-readable public projection](MobileWorld/docs/data/epic1_failure_link_audit_v1/)
+[machine-readable public projection](<motivation study/epic1_failure_link_audit_v1/>)
 contains the frozen schemas, aggregate metrics, resolution manifests, driver-freeze
 provenance, and publication hashes without raw trajectories, reviewer text, or
 screenshots. The corrected GUI-Owl v3 result above supersedes the retracted earlier
@@ -111,6 +111,7 @@ v2 audit.
 ```text
 AgentSentinel/
 ├── MobileWorld/                 # instrumented benchmark/runtime and audit tooling
+├── motivation study/            # canonical Epic 1 report and publishable result projection
 ├── mobileworld_audit_handoff/   # authoritative contracts, decisions, status, and G1 protocol
 ├── seed_baseline_audit/         # historical preliminary Seed investigation
 ├── sentinel_mvp/                # legacy single-host behavioral reference

@@ -10,7 +10,7 @@
 > 已完成的 Epic 1 evidence base 是六种 history representation、共 702 个
 > model-task cases 的 outcome-blind audit，以及后续 outcome-aware observational
 > failure-link review。当前定义和结果请使用
-> [六模型正式报告](../../MobileWorld/docs/misleading_history_audit_report.md)，
+> [六模型正式报告](<../../motivation study/misleading_history_audit_report.md>)，
 > 当前项目阶段请使用
 > [Project Status](../../mobileworld_audit_handoff/STATUS.md)。
 

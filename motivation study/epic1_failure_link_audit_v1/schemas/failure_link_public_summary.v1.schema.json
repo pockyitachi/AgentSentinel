@@ -22,7 +22,7 @@
     "publication_id": {"const": "six-model-failure-link-audit-v1-20260824-03-public"},
     "report_binding": {
       "const": {
-        "path": "MobileWorld/docs/misleading_history_audit_report.md",
+        "path": "motivation study/misleading_history_audit_report.md",
         "sha256": "a057b3dda627cf9ff6c474b0cd4bc0df198b13c5fa50fe9229b94df6e9edbbab",
         "byte_count": 59120
       }

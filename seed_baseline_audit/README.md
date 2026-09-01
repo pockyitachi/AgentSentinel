@@ -10,7 +10,7 @@
 >
 > Epic 1 已完成六种 history representation、共 702 个 model-task cases 的正式审核。
 > 当前定义和结果以
-> [六模型正式报告](../MobileWorld/docs/misleading_history_audit_report.md) 为准，
+> [六模型正式报告](<../motivation study/misleading_history_audit_report.md>) 为准，
 > 最新阶段以 [Project Status](../mobileworld_audit_handoff/STATUS.md) 为准。本文后续
 > “建议的下一步”保留为历史设计记录，不代表当前 roadmap。
 

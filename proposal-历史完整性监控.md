@@ -5,7 +5,7 @@
 >
 > 状态说明（2026-08-26）：本文保留 2026-08-22 的研究提案快照；第 7 节的
 > MAI/Qwen 与 GELab 执行状态已被后续六模型最终审核和 ALE-319/G1.1 冻结结果取代。
-> 当前结果以 `MobileWorld/docs/misleading_history_audit_report.md`、
+> 当前结果以 `motivation study/misleading_history_audit_report.md`、
 > `mobileworld_audit_handoff/STATUS.md` 和 G1 协议/锁文件为准。
 
 ## 摘要
@@ -90,7 +90,7 @@ Sentinel 针对的是这一组合，而不是任何单个组件的绝对首创�
 - **MAI-UI-8B：**117/117 task evidence coverage 完整；**7/117（5.98%）**tasks 出现 MHR，**7/117（5.98%）**出现 MHR-OH。共确认 13 个 MHR reuse instances，13 个均伴随 observed harm。117 条轨迹共有 4,156 个 actor prompts 和 91,607 次 history-entry appearances；13 条已确认错误 entries 后续累计出现 309 次。
 - **Qwen3-VL-8B：**117/117 task evidence coverage 完整；**35/117（29.91%）**tasks 出现 MHR，**32/117（27.35%）**出现 MHR-OH。共确认 139 个 MHR reuse instances，其中 131 个伴随 observed harm。117 条轨迹共有 3,017 个 actor prompts 和 58,677 次 history-entry appearances；138 条去重后的已确认错误 entries 后续累计出现 2,495 次。
 
-两份数据均独立满足冻结审核规则的 `STRONG_OBSERVATIONAL` 门槛，且 `causal_claim_supported=false`。MAI-UI 使用 raw replay，Qwen3-VL 使用 flat task-progress，两者不能据此做模型优劣或 history-format 因果比较。prompt appearance 也不自动等于 reuse 或 harm。完整定义、分母、实例和截图证据见 [`MobileWorld/docs/misleading_history_audit_report.md`](MobileWorld/docs/misleading_history_audit_report.md)。
+两份数据均独立满足冻结审核规则的 `STRONG_OBSERVATIONAL` 门槛，且 `causal_claim_supported=false`。MAI-UI 使用 raw replay，Qwen3-VL 使用 flat task-progress，两者不能据此做模型优劣或 history-format 因果比较。prompt appearance 也不自动等于 reuse 或 harm。完整定义、分母、实例和截图证据见 [`motivation study/misleading_history_audit_report.md`](<motivation study/misleading_history_audit_report.md>)。
 
 早期 Seed `5/116` strict lower bound 和 `14/69` broad signal 仅保留为历史 pilot，不再作为当前 headline。只有在冻结 task、GUI/backend state、system/tools、model、decoding、images 和其他 messages 后，仅改变目标 history span 的配对 replay 中，本文才主张 pre-step 的因果影响。
 

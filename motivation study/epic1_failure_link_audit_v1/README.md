@@ -36,14 +36,14 @@ small enough for ordinary Git and does not require Git LFS.
 
 ## Offline report rendering
 
-[`render_misleading_history_audit_pdf.py`](../../../scripts/render_misleading_history_audit_pdf.py)
+[`render_misleading_history_audit_pdf.py`](../../MobileWorld/scripts/render_misleading_history_audit_pdf.py)
 is the checked-in, path-safe derivative of the renderer used for the final report layout. It
 requires the report's 39 external, content-addressed screenshot paths to exist locally, validates
 every image hash, and refuses to replace an existing build directory or output file:
 
 ```bash
 python MobileWorld/scripts/render_misleading_history_audit_pdf.py \
-  MobileWorld/docs/misleading_history_audit_report.md \
+  "motivation study/misleading_history_audit_report.md" \
   /tmp/new-absent-build-directory \
   /tmp/new-absent-output.pdf
 ```

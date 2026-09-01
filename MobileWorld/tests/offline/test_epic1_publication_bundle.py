@@ -16,7 +16,7 @@ from mobile_world.offline.failure_attribution import (
 from mobile_world.offline.motivation_review import canonical_json_bytes
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-BUNDLE_ROOT = REPOSITORY_ROOT / "MobileWorld/docs/data/epic1_failure_link_audit_v1"
+BUNDLE_ROOT = REPOSITORY_ROOT / "motivation study/epic1_failure_link_audit_v1"
 LOCK_PATH = BUNDLE_ROOT / "publication_lock.v1.json"
 SUMMARY_PATH = BUNDLE_ROOT / "public_summary.v1.json"
 LOCK_SCHEMA_PATH = BUNDLE_ROOT / "schemas/failure_link_publication_lock.v1.schema.json"
@@ -155,7 +155,7 @@ def test_pdf_renderer_is_non_replacing_and_report_images_remain_external() -> No
     renderer = (
         REPOSITORY_ROOT / "MobileWorld/scripts/render_misleading_history_audit_pdf.py"
     ).read_text(encoding="utf-8")
-    report = (REPOSITORY_ROOT / "MobileWorld/docs/misleading_history_audit_report.md").read_text(
+    report = (REPOSITORY_ROOT / "motivation study/misleading_history_audit_report.md").read_text(
         encoding="utf-8"
     )
 

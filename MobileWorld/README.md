@@ -103,8 +103,8 @@
 > and [project status](../mobileworld_audit_handoff/STATUS.md). ALE-324 remains
 > exactly `IN_PROGRESS_HUMAN_CURATION_REQUIRED`, not formal G1.6 completion.
 >
-> See the [six-model audit](docs/misleading_history_audit_report.md), its
-> [machine-readable public projection](docs/data/epic1_failure_link_audit_v1/), and the
+> See the [six-model audit](<../motivation study/misleading_history_audit_report.md>), its
+> [machine-readable public projection](<../motivation study/epic1_failure_link_audit_v1/>), and the
 > [workspace overview](../README.md).
 
 
