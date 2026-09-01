@@ -170,6 +170,18 @@ captured natural action 当作 replay 必须复现的结果，也不得将 futur
 
 `EVENT_CONTRACT_V1.md` 是 event 名称、字段和终态规则的唯一权威；“完整 request”指 MobileWorld 在 SDK invocation 前传入的 application-layer arguments，不声称是 SDK 内部最终 HTTP wire body。
 
+Owner 公开证据例外（2026-09-01）：尽管真实 collection/capsule/replay 数据默认必须留在
+repo 外，owner 已明确批准只把 Epic 1 正式报告所引用的精确 39 张 content-addressed PNG
+原始截图放入 `motivation study/report_assets/screenshots/`，并把唯一固定 PDF
+`motivation study/misleading_history_audit_report_20260825.pdf` 放入公开 Git。该例外不覆盖
+raw cards、requests、trajectories、model responses、reviewer text、receipts、logs、replay
+数据或任何其他 Collector blob。仓库是公开的；这些精确 bytes 进入 commit 后可能长期留在
+Git history、fork 和 cache，即使以后删除也不能保证完全收回。截图中的手机号、验证码、姓名、
+邮箱等均按 benchmark 的 synthetic/demo fixture 内容发布；其中还包含第三方 app UI、商标与
+图片，相关第三方再分发权没有逐项独立核实。截图中任何看似医学或健康的文字都只是静态研究
+证据，不构成医学建议或项目背书。该文档发布例外不产生 model/provider/network/GPU/replay/
+treatment/GUI/tool/action 权限。
+
 ## 完成要求
 
 只有通过 ALE-321 的 capsule 一一对应、rehydration/hash、exact-request、target resolution、

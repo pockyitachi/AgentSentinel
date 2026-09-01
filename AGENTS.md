@@ -156,6 +156,23 @@ engineering scope; both v1 Codecs remain `live_ready=false`, and G1.7 formal
 readiness remains unauthorized. ALE-324 must not be marked complete before all 190 units are independently
 reviewed, adjudicated where required, formally exported, validated, and sealed.
 
+Owner public-evidence exception (2026-09-01): notwithstanding the default
+repo-external rule above, the owner explicitly authorizes the public Git
+publication of exactly the 39 content-addressed PNG screenshots referenced by
+the canonical Epic 1 report under `motivation study/report_assets/screenshots/`
+and the single fixed PDF
+`motivation study/misleading_history_audit_report_20260825.pdf`. This exception
+does not cover raw cards, requests, trajectories, model responses, reviewer
+text, receipts, logs, replay data, or any other Collector blob. The repository
+is public, and the owner accepts that these exact bytes may persist in Git
+history, forks, and caches even after a later deletion. The screenshots contain
+synthetic/demo credential-like and identity-like fixture values as well as
+third-party application UI, trademarks, and imagery whose separate
+redistribution rights were not independently verified. Any medical-looking
+text visible in a benchmark screenshot is inert research evidence, not medical
+advice or endorsement. This documentation publication grants no model,
+provider, network, GPU, replay, treatment, GUI, tool, or action authority.
+
 Owner direct-smoke boundary (2026-08-30): notwithstanding the historical
 deferred/backlog language above, the owner authorized one non-formal direct
 smoke on GPU 0 with `CUDA_VISIBLE_DEVICES=0`, a loopback-only service at

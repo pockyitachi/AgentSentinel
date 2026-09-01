@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/epic1/report-screenshot-manifest.v1.schema.json",
+  "title": "Epic 1 report screenshot manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "manifest_id",
+    "report_path",
+    "asset_root",
+    "asset_count",
+    "total_byte_count",
+    "content_addressed",
+    "publication",
+    "assets"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.audit.report-screenshot-manifest/v1"
+    },
+    "record_type": {
+      "const": "report_screenshot_manifest"
+    },
+    "manifest_id": {
+      "const": "six-model-mhr-audit-report-screenshots-20260825"
+    },
+    "report_path": {
+      "const": "motivation study/misleading_history_audit_report.md"
+    },
+    "asset_root": {
+      "const": "motivation study/report_assets/screenshots"
+    },
+    "asset_count": {
+      "const": 39
+    },
+    "total_byte_count": {
+      "const": 18315499
+    },
+    "content_addressed": {
+      "const": true
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository_visibility",
+        "source_kind",
+        "owner_exception_scope",
+        "other_raw_collection_data_authorized",
+        "actual_credentials_or_secrets_included",
+        "synthetic_credential_like_ui_content_included",
+        "third_party_rights_independently_verified",
+        "medical_content_is_not_medical_advice"
+      ],
+      "properties": {
+        "repository_visibility": {
+          "const": "public"
+        },
+        "source_kind": {
+          "const": "synthetic_mobileworld_fixture_collector_screenshot"
+        },
+        "owner_exception_scope": {
+          "const": "exact_39_report_screenshots_and_companion_pdf_only"
+        },
+        "other_raw_collection_data_authorized": {
+          "const": false
+        },
+        "actual_credentials_or_secrets_included": {
+          "const": false
+        },
+        "synthetic_credential_like_ui_content_included": {
+          "const": true
+        },
+        "third_party_rights_independently_verified": {
+          "const": false
+        },
+        "medical_content_is_not_medical_advice": {
+          "const": true
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 39,
+      "maxItems": 39,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/asset"
+      }
+    }
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "path",
+        "sha256",
+        "byte_count",
+        "media_type",
+        "width",
+        "height",
+        "alt_text"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 39
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^motivation study/report_assets/screenshots/[0-9a-f]{64}\\.png$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "media_type": {
+          "const": "image/png"
+        },
+        "width": {
+          "const": 1080
+        },
+        "height": {
+          "const": 2400
+        },
+        "alt_text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    }
+  }
+}

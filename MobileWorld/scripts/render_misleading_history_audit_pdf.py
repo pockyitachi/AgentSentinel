@@ -1,9 +1,9 @@
-"""Render the six-model audit report with its externally governed figures.
+"""Render the self-contained six-model audit report.
 
-The report intentionally keeps raw Collector screenshots outside Git. This renderer therefore
-expects the content-addressed absolute image references in the Markdown to be available locally.
-It validates every image digest before invoking XeLaTeX and never replaces an existing build or
-output path.
+Every report image must be a repository-local, content-addressed PNG at the exact relative path
+``report_assets/screenshots/<sha256>.png``. The renderer rejects absolute paths, URIs, traversal,
+symlinks, and non-regular image files before invoking XeLaTeX. It never replaces an existing build
+or output path.
 """
 
 from __future__ import annotations
@@ -12,13 +12,61 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
 
-IMAGE_RE = re.compile(r"^!\[(?P<alt>.*?)]\((?P<path>/[^)]+)\)$")
+IMAGE_RE = re.compile(r"^!\[(?P<alt>.*?)]\((?P<path>[^)]+)\)$")
+REPORT_IMAGE_PATH_RE = re.compile(r"^report_assets/screenshots/(?P<sha256>[0-9a-f]{64})\.png$")
 HEADING_RE = re.compile(r"^(#{1,4})\s+(.*)$")
 INLINE_RE = re.compile(r"(\*\*.*?\*\*|`[^`]*`|\[[^]]+]\([^)]+\))")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def resolve_report_image(markdown_path: Path, raw_path: str) -> tuple[Path, str]:
+    """Resolve and authenticate one strict repository-local report image reference."""
+
+    match = REPORT_IMAGE_PATH_RE.fullmatch(raw_path)
+    if match is None:
+        raise ValueError(
+            "report images must use "
+            "report_assets/screenshots/<lowercase-sha256>.png; "
+            f"rejected: {raw_path!r}"
+        )
+
+    report_dir = markdown_path.parent.resolve(strict=True)
+    source = report_dir / raw_path
+    cursor = report_dir
+    for component in raw_path.split("/"):
+        cursor /= component
+        metadata = cursor.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            raise RuntimeError(f"report image path must not contain a symlink: {source}")
+
+    metadata = source.lstat()
+    if not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError(f"report image must be a regular file: {source}")
+    try:
+        source.resolve(strict=True).relative_to(report_dir)
+    except ValueError as error:
+        raise RuntimeError(f"report image escapes the report directory: {source}") from error
+
+    expected_digest = match.group("sha256")
+    observed_digest = sha256_file(source)
+    if observed_digest != expected_digest:
+        raise RuntimeError(
+            "report image digest/filename mismatch: "
+            f"expected {expected_digest}, observed {observed_digest}"
+        )
+    return source, observed_digest
 
 
 def escape_tex(text: str) -> str:
@@ -69,14 +117,9 @@ def split_table_row(line: str) -> list[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
-def image_tex(entries: list[tuple[str, Path]], figure_dir: Path) -> str:
+def image_tex(entries: list[tuple[str, Path, str]], figure_dir: Path) -> str:
     rendered: list[tuple[str, Path]] = []
-    for index, (alt, source) in enumerate(entries, start=1):
-        if not source.is_file():
-            raise FileNotFoundError(source)
-        digest = hashlib.sha256(source.read_bytes()).hexdigest()
-        if source.name != digest:
-            raise RuntimeError(f"Image digest/path mismatch: {source}")
+    for index, (alt, source, digest) in enumerate(entries, start=1):
         target = figure_dir / f"figure-{digest[:12]}-{index}.png"
         if target.exists() or target.is_symlink():
             target.unlink()
@@ -104,7 +147,7 @@ def image_tex(entries: list[tuple[str, Path]], figure_dir: Path) -> str:
     return "\n".join(chunks)
 
 
-def markdown_to_tex(markdown: str, figure_dir: Path) -> str:
+def markdown_to_tex(markdown: str, figure_dir: Path, markdown_path: Path) -> str:
     lines = markdown.splitlines()
     body: list[str] = []
     index = 0
@@ -113,7 +156,7 @@ def markdown_to_tex(markdown: str, figure_dir: Path) -> str:
     def special(line: str) -> bool:
         return bool(
             HEADING_RE.match(line)
-            or IMAGE_RE.match(line)
+            or line.startswith("![")
             or line.startswith("- ")
             or (line.lstrip().startswith("|") and "|" in line.lstrip()[1:])
         )
@@ -123,6 +166,10 @@ def markdown_to_tex(markdown: str, figure_dir: Path) -> str:
         if not line:
             index += 1
             continue
+
+        image = IMAGE_RE.fullmatch(line)
+        if line.startswith("![") and image is None:
+            raise ValueError(f"unsupported report image syntax: {line!r}")
 
         heading = HEADING_RE.match(line)
         if heading:
@@ -136,19 +183,19 @@ def markdown_to_tex(markdown: str, figure_dir: Path) -> str:
             index += 1
             continue
 
-        image = IMAGE_RE.match(line)
         if image:
-            entries: list[tuple[str, Path]] = []
+            entries: list[tuple[str, Path, str]] = []
             cursor = index
             while cursor < len(lines):
                 candidate = lines[cursor].rstrip()
                 if not candidate:
                     cursor += 1
                     continue
-                image_candidate = IMAGE_RE.match(candidate)
+                image_candidate = IMAGE_RE.fullmatch(candidate)
                 if not image_candidate or len(entries) == 2:
                     break
-                entries.append((image_candidate.group("alt"), Path(image_candidate.group("path"))))
+                source, digest = resolve_report_image(markdown_path, image_candidate.group("path"))
+                entries.append((image_candidate.group("alt"), source, digest))
                 cursor += 1
             body.append(image_tex(entries, figure_dir))
             index = cursor
@@ -291,7 +338,7 @@ def main() -> None:
     figure_dir.mkdir()
     tex_path = build_dir / "report.tex"
     tex_path.write_text(
-        markdown_to_tex(markdown_path.read_text(encoding="utf-8"), figure_dir),
+        markdown_to_tex(markdown_path.read_text(encoding="utf-8"), figure_dir, markdown_path),
         encoding="utf-8",
     )
     command = [

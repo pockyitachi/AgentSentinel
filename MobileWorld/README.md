@@ -103,9 +103,15 @@
 > and [project status](../mobileworld_audit_handoff/STATUS.md). ALE-324 remains
 > exactly `IN_PROGRESS_HUMAN_CURATION_REQUIRED`, not formal G1.6 completion.
 >
-> See the [six-model audit](<../motivation study/misleading_history_audit_report.md>), its
-> [machine-readable public projection](<../motivation study/epic1_failure_link_audit_v1/>), and the
-> [workspace overview](../README.md).
+> See the [six-model Markdown audit](<../motivation study/misleading_history_audit_report.md>),
+> [fixed PDF](<../motivation study/misleading_history_audit_report_20260825.pdf>),
+> [content-addressed report assets](<../motivation study/report_assets/>),
+> [machine-readable result projection](<../motivation study/epic1_failure_link_audit_v1/>), and
+> [workspace overview](../README.md). The public evidence set is an owner-approved exception
+> limited to the report's 39 screenshots and one PDF. It contains synthetic/demo fixture values
+> and third-party UI/imagery with independently unverified redistribution rights; Git history may
+> retain the bytes after deletion. Medical-looking screenshot text is benchmark evidence, not
+> medical advice or endorsement. All other raw research data remains repo-external.
 
 
 While maintaining the same level of rigorous, reproducible evaluation as AndroidWorld, **MobileWorld** offers a more challenging online mobile-use benchmark by introducing four additional features that better capture real-world agent behavior.

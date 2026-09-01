@@ -23,7 +23,24 @@
 
 ## 上传/运行产物边界
 
-Raw audit 数据应写到显式配置的外部路径，例如：
+### Epic 1 owner 公开证据例外（2026-09-01）
+
+- [ ] 只允许 `motivation study/report_assets/screenshots/` 中、正式报告实际引用的精确 39 张
+  content-addressed PNG，以及唯一固定文件
+  `motivation study/misleading_history_audit_report_20260825.pdf`。
+- [ ] 校验 39 张图逐个 hash、总数和总字节数，并由
+  `motivation study/report_assets/screenshot_manifest.v1.json` 绑定；Markdown 必须使用仓库内
+  相对路径。
+- [ ] 确认仓库是公开的，并接受这些 bytes 进入 Git history、fork 与 cache 后无法保证完全收回。
+- [ ] 将可见手机号、验证码、姓名、邮箱等标为 synthetic/demo benchmark fixture 内容；不得把它们
+  描述为真实账号或可用凭据。
+- [ ] 记录第三方 app UI、商标与图片的再分发权未逐项独立核实；本次收录是研究证据发布，
+  不是对第三方内容的额外许可。
+- [ ] 明确截图中任何医学或健康表述都只是静态 benchmark 内容，不是医学建议或项目背书。
+- [ ] 不把该例外扩展到 raw cards、requests、trajectories、model responses、reviewer text、
+  receipts、logs、replay 数据或其他 Collector blob。
+
+除上述精确 allowlist 外，Raw audit 数据应写到显式配置的外部路径，例如：
 
 ```text
 <server-data-root>/mobileworld_audit_data/raw/runs/<run_id>/

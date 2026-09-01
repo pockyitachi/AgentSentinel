@@ -1,0 +1,412 @@
+{
+  "schema_version": "mobileworld.audit.report-screenshot-manifest/v1",
+  "record_type": "report_screenshot_manifest",
+  "manifest_id": "six-model-mhr-audit-report-screenshots-20260825",
+  "report_path": "motivation study/misleading_history_audit_report.md",
+  "asset_root": "motivation study/report_assets/screenshots",
+  "asset_count": 39,
+  "total_byte_count": 18315499,
+  "content_addressed": true,
+  "publication": {
+    "repository_visibility": "public",
+    "source_kind": "synthetic_mobileworld_fixture_collector_screenshot",
+    "owner_exception_scope": "exact_39_report_screenshots_and_companion_pdf_only",
+    "other_raw_collection_data_authorized": false,
+    "actual_credentials_or_secrets_included": false,
+    "synthetic_credential_like_ui_content_included": true,
+    "third_party_rights_independently_verified": false,
+    "medical_content_is_not_medical_advice": true
+  },
+  "assets": [
+    {
+      "ordinal": 1,
+      "path": "motivation study/report_assets/screenshots/0ac372444556353c30723da033c2770ea584895cb0b0a39b0542bb3e437f453c.png",
+      "sha256": "0ac372444556353c30723da033c2770ea584895cb0b0a39b0542bb3e437f453c",
+      "byte_count": 173469,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Internet settings page without a General entry"
+    },
+    {
+      "ordinal": 2,
+      "path": "motivation study/report_assets/screenshots/99672703245cbf5ccf8fde2c1220a319dfb6bf0f8d0ebb1d1bff1056eaf7e9c2.png",
+      "sha256": "99672703245cbf5ccf8fde2c1220a319dfb6bf0f8d0ebb1d1bff1056eaf7e9c2",
+      "byte_count": 139333,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Network and internet settings page without a General entry"
+    },
+    {
+      "ordinal": 3,
+      "path": "motivation study/report_assets/screenshots/4b666476a28377f87f70b5e19455a82f656d9108f9139515ef4125696f7e9b14.png",
+      "sha256": "4b666476a28377f87f70b5e19455a82f656d9108f9139515ef4125696f7e9b14",
+      "byte_count": 147194,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Mastodon profile with a visible share icon"
+    },
+    {
+      "ordinal": 4,
+      "path": "motivation study/report_assets/screenshots/48a0241d7fb9bad6f2d64d168a605925394d9826009dc5182e53a81fd79b1b8f.png",
+      "sha256": "48a0241d7fb9bad6f2d64d168a605925394d9826009dc5182e53a81fd79b1b8f",
+      "byte_count": 165076,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Android sharing-link sheet opened from the Mastodon share icon"
+    },
+    {
+      "ordinal": 5,
+      "path": "motivation study/report_assets/screenshots/581ae2259521e3d0ba394db8dae7b752fa802e567fa25e8b5b3d5fb09465bdcf.png",
+      "sha256": "581ae2259521e3d0ba394db8dae7b752fa802e567fa25e8b5b3d5fb09465bdcf",
+      "byte_count": 819812,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Gallery ordinary viewer displaying photo 2 of 7"
+    },
+    {
+      "ordinal": 6,
+      "path": "motivation study/report_assets/screenshots/bfb715e6d039758dbf7ccc576eb3730ed8e2175c6024c042bd587522537f8c6c.png",
+      "sha256": "bfb715e6d039758dbf7ccc576eb3730ed8e2175c6024c042bd587522537f8c6c",
+      "byte_count": 1292962,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Gallery ordinary viewer displaying photo 3 of 7"
+    },
+    {
+      "ordinal": 7,
+      "path": "motivation study/report_assets/screenshots/48c9f51092533d9fd1e1af8237dacc89909519799a9b1c7814ba34e66a76d431.png",
+      "sha256": "48c9f51092533d9fd1e1af8237dacc89909519799a9b1c7814ba34e66a76d431",
+      "byte_count": 144276,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Reminder dialog with value 1 and the minutes unit selected"
+    },
+    {
+      "ordinal": 8,
+      "path": "motivation study/report_assets/screenshots/511e3fb171f24ca171229aa814f46e3158dc7abf865d25886951eac368510c11.png",
+      "sha256": "511e3fb171f24ca171229aa814f46e3158dc7abf865d25886951eac368510c11",
+      "byte_count": 161399,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Calendar event form displaying 1 minute before"
+    },
+    {
+      "ordinal": 9,
+      "path": "motivation study/report_assets/screenshots/d7786fdfcfd999c1af48fea90b67785daf44a0909ecd05b75de275a470109e68.png",
+      "sha256": "d7786fdfcfd999c1af48fea90b67785daf44a0909ecd05b75de275a470109e68",
+      "byte_count": 70010,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Carl email specifying November 15 at 3 PM"
+    },
+    {
+      "ordinal": 10,
+      "path": "motivation study/report_assets/screenshots/b7e66c3dc10304117ee35e8d6aeb14dfc5b316728826cb279c4bcb297697e79b.png",
+      "sha256": "b7e66c3dc10304117ee35e8d6aeb14dfc5b316728826cb279c4bcb297697e79b",
+      "byte_count": 117374,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Board Meeting form still showing October 16 and 1 PM for both times"
+    },
+    {
+      "ordinal": 11,
+      "path": "motivation study/report_assets/screenshots/488a97075555816213828ac5561026c88c844ddca0e3edf5c429d58964130198.png",
+      "sha256": "488a97075555816213828ac5561026c88c844ddca0e3edf5c429d58964130198",
+      "byte_count": 118089,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Board Meeting immediately before saving as October 16 from 1 to 2 PM"
+    },
+    {
+      "ordinal": 12,
+      "path": "motivation study/report_assets/screenshots/fac11ee4069c1cfdfab07e7efa25d1abf4c6c2dbdcd89db9d7e7bec732d02246.png",
+      "sha256": "fac11ee4069c1cfdfab07e7efa25d1abf4c6c2dbdcd89db9d7e7bec732d02246",
+      "byte_count": 156406,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Static archive listing showing file names but no file contents"
+    },
+    {
+      "ordinal": 13,
+      "path": "motivation study/report_assets/screenshots/c5e7a0c2f9747c2df92b2fe05fc39390c1cf877fbcc398f72e25c9d7fac12ab4.png",
+      "sha256": "c5e7a0c2f9747c2df92b2fe05fc39390c1cf877fbcc398f72e25c9d7fac12ab4",
+      "byte_count": 77940,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "CoolHacks email giving the event start time but no departure time"
+    },
+    {
+      "ordinal": 14,
+      "path": "motivation study/report_assets/screenshots/3f1fe6cc1bb23867aa6d7d02df528af1610b79e5ac763f0029251abe90c87c28.png",
+      "sha256": "3f1fe6cc1bb23867aa6d7d02df528af1610b79e5ac763f0029251abe90c87c28",
+      "byte_count": 225691,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Inbox after the erroneous departure-time summary was carried forward"
+    },
+    {
+      "ordinal": 15,
+      "path": "motivation study/report_assets/screenshots/3b87edd87c3451e1c45b8d987447f99dacf34461a73d0a60c2fec45c35065e9e.png",
+      "sha256": "3b87edd87c3451e1c45b8d987447f99dacf34461a73d0a60c2fec45c35065e9e",
+      "byte_count": 197911,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Taodian login page contradicting the completed-login summary"
+    },
+    {
+      "ordinal": 16,
+      "path": "motivation study/report_assets/screenshots/58dba5e31c47df71efd89de6147b7455aedc7c9938758a3df1a6b944db525680.png",
+      "sha256": "58dba5e31c47df71efd89de6147b7455aedc7c9938758a3df1a6b944db525680",
+      "byte_count": 197807,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Same login page after the repeated login action"
+    },
+    {
+      "ordinal": 17,
+      "path": "motivation study/report_assets/screenshots/e062a2dc7458e8dbaa7d1765c2794c029741a6f502fc2a879e2192e75d4c9a09.png",
+      "sha256": "e062a2dc7458e8dbaa7d1765c2794c029741a6f502fc2a879e2192e75d4c9a09",
+      "byte_count": 2117313,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Post already favorited before the target decision"
+    },
+    {
+      "ordinal": 18,
+      "path": "motivation study/report_assets/screenshots/c5923eafa2118788fbdbdbf035fa5f3bae2cb7b06b14e14b596773e6d35c6b20.png",
+      "sha256": "c5923eafa2118788fbdbdbf035fa5f3bae2cb7b06b14e14b596773e6d35c6b20",
+      "byte_count": 2117169,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Same post unfavorited by the repeated click"
+    },
+    {
+      "ordinal": 19,
+      "path": "motivation study/report_assets/screenshots/e6f8c33a66fdaadab3469ffe1f7a54f710007d45dfa35e8ce6b16b619d424fad.png",
+      "sha256": "e6f8c33a66fdaadab3469ffe1f7a54f710007d45dfa35e8ce6b16b619d424fad",
+      "byte_count": 64528,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Coffee Time event with the wrong date and time"
+    },
+    {
+      "ordinal": 20,
+      "path": "motivation study/report_assets/screenshots/b1e1d8e3acc2da73a4345bf6661e57e51cb7256bd79b6676d81f75a90cd0c12a.png",
+      "sha256": "b1e1d8e3acc2da73a4345bf6661e57e51cb7256bd79b6676d81f75a90cd0c12a",
+      "byte_count": 1442245,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "State after leaving the incorrectly scheduled event"
+    },
+    {
+      "ordinal": 21,
+      "path": "motivation study/report_assets/screenshots/0c8e47d65cd5db6d8c1eceece5f7590327e51008e4d38ebad6e8f175957e4c18.png",
+      "sha256": "0c8e47d65cd5db6d8c1eceece5f7590327e51008e4d38ebad6e8f175957e4c18",
+      "byte_count": 1327956,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Image viewer with an upper-left close control"
+    },
+    {
+      "ordinal": 22,
+      "path": "motivation study/report_assets/screenshots/9798bd709dffa97373343f2830153d825056f27c4b3b548b4a4ca7a5f734c02c.png",
+      "sha256": "9798bd709dffa97373343f2830153d825056f27c4b3b548b4a4ca7a5f734c02c",
+      "byte_count": 1057682,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Feed after the repeated click closes the viewer"
+    },
+    {
+      "ordinal": 23,
+      "path": "motivation study/report_assets/screenshots/8571c7ffe5e11f3c2e37583a1d34dfb6dab00c7ae1d60b5ab21fb75348db736c.png",
+      "sha256": "8571c7ffe5e11f3c2e37583a1d34dfb6dab00c7ae1d60b5ab21fb75348db736c",
+      "byte_count": 1251513,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Saved feed already visible before the target decision"
+    },
+    {
+      "ordinal": 24,
+      "path": "motivation study/report_assets/screenshots/9cf59c0fe61c26e8a1057250d9706dd89915267589c92b5a1e6470429b476ffe.png",
+      "sha256": "9cf59c0fe61c26e8a1057250d9706dd89915267589c92b5a1e6470429b476ffe",
+      "byte_count": 1441832,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Android home screen after the stale Back action"
+    },
+    {
+      "ordinal": 25,
+      "path": "motivation study/report_assets/screenshots/6b715b4f7d1a0bedcccf70c3fbed864ba90f7659cdb76bf2ab7f030ce26b49a4.png",
+      "sha256": "6b715b4f7d1a0bedcccf70c3fbed864ba90f7659cdb76bf2ab7f030ce26b49a4",
+      "byte_count": 85063,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Inbox before the source wait action"
+    },
+    {
+      "ordinal": 26,
+      "path": "motivation study/report_assets/screenshots/6997aee30634be87eed5999cbb3c142ae04913e3f5f71b61ad10e7c518abae51.png",
+      "sha256": "6997aee30634be87eed5999cbb3c142ae04913e3f5f71b61ad10e7c518abae51",
+      "byte_count": 85073,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Same inbox before the target follows the incorrect click record"
+    },
+    {
+      "ordinal": 27,
+      "path": "motivation study/report_assets/screenshots/3419212da12abeaddc46014cac804534f73f525c9938b8aab9b1a28d744a1a9c.png",
+      "sha256": "3419212da12abeaddc46014cac804534f73f525c9938b8aab9b1a28d744a1a9c",
+      "byte_count": 72184,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Email opened by the target click"
+    },
+    {
+      "ordinal": 28,
+      "path": "motivation study/report_assets/screenshots/9b5f8502a1a2e96f4ff200f22fb6ab2f87f105dd93758f73785ede8256227a93.png",
+      "sha256": "9b5f8502a1a2e96f4ff200f22fb6ab2f87f105dd93758f73785ede8256227a93",
+      "byte_count": 126998,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "All-day toggle already off before the source click"
+    },
+    {
+      "ordinal": 29,
+      "path": "motivation study/report_assets/screenshots/dc5f5ed41d1988569dd9182cbdc569cf5b8bf81708677a24c7c771f5fa76815c.png",
+      "sha256": "dc5f5ed41d1988569dd9182cbdc569cf5b8bf81708677a24c7c771f5fa76815c",
+      "byte_count": 120973,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "All-day toggle on after the source action"
+    },
+    {
+      "ordinal": 30,
+      "path": "motivation study/report_assets/screenshots/9e2dae21903b73db3bd6bdb8df40757c920c1751149911f80e5c06292c23e926.png",
+      "sha256": "9e2dae21903b73db3bd6bdb8df40757c920c1751149911f80e5c06292c23e926",
+      "byte_count": 128953,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "All-day toggle off again after the repeated target click"
+    },
+    {
+      "ordinal": 31,
+      "path": "motivation study/report_assets/screenshots/c04b6aab85be517175111fc6e287aa541becde56d3e3bffa8dedbe2f18d78263.png",
+      "sha256": "c04b6aab85be517175111fc6e287aa541becde56d3e3bffa8dedbe2f18d78263",
+      "byte_count": 127170,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Language list before the source drag"
+    },
+    {
+      "ordinal": 32,
+      "path": "motivation study/report_assets/screenshots/322e44ef70005a92e5f95d118debe99269808d52deb98112cbf120de07f72800.png",
+      "sha256": "322e44ef70005a92e5f95d118debe99269808d52deb98112cbf120de07f72800",
+      "byte_count": 134310,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Language list after the source drag and before reuse"
+    },
+    {
+      "ordinal": 33,
+      "path": "motivation study/report_assets/screenshots/1ac773389eddb8b4c1bcbc527472f523ef48e901e63d76a2db614ad27b17756c.png",
+      "sha256": "1ac773389eddb8b4c1bcbc527472f523ef48e901e63d76a2db614ad27b17756c",
+      "byte_count": 151837,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Language list after the repeated target drag"
+    },
+    {
+      "ordinal": 34,
+      "path": "motivation study/report_assets/screenshots/81a201f44049f6e82a58042f6b28fda7a6aa86afe49b651b96637b20236d4008.png",
+      "sha256": "81a201f44049f6e82a58042f6b28fda7a6aa86afe49b651b96637b20236d4008",
+      "byte_count": 173542,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Unchanged shopping screen with no active search cursor or keyboard"
+    },
+    {
+      "ordinal": 35,
+      "path": "motivation study/report_assets/screenshots/fdaabb534afce9395b31388feb15802dc69bdd96af22e07b5e9eec7ca94923dc.png",
+      "sha256": "fdaabb534afce9395b31388feb15802dc69bdd96af22e07b5e9eec7ca94923dc",
+      "byte_count": 73595,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Static receipt attachment before reuse"
+    },
+    {
+      "ordinal": 36,
+      "path": "motivation study/report_assets/screenshots/1cf26b4aa71a64f7106ace46addff56e76fedb9a1eeba559dc4b1d01dfe53186.png",
+      "sha256": "1cf26b4aa71a64f7106ace46addff56e76fedb9a1eeba559dc4b1d01dfe53186",
+      "byte_count": 84770,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "State after leaving the attachment page"
+    },
+    {
+      "ordinal": 37,
+      "path": "motivation study/report_assets/screenshots/2efa6fde4ead30492a53062d25398abb60838adbbd6bb3a3dce32b23011f23f1.png",
+      "sha256": "2efa6fde4ead30492a53062d25398abb60838adbbd6bb3a3dce32b23011f23f1",
+      "byte_count": 277697,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Downloads folder before the contradictory fold"
+    },
+    {
+      "ordinal": 38,
+      "path": "motivation study/report_assets/screenshots/b974c0a9967757c8d0d84b62b967822fce37574704ea0fd904d6e670fd9868ea.png",
+      "sha256": "b974c0a9967757c8d0d84b62b967822fce37574704ea0fd904d6e670fd9868ea",
+      "byte_count": 1441509,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Android home screen after the target leaves Files"
+    },
+    {
+      "ordinal": 39,
+      "path": "motivation study/report_assets/screenshots/d000280b9f632bf7d20fad0bf3fb278da6a4ff6a0aac2fac4ba3cd7d122fbc47.png",
+      "sha256": "d000280b9f632bf7d20fad0bf3fb278da6a4ff6a0aac2fac4ba3cd7d122fbc47",
+      "byte_count": 206838,
+      "media_type": "image/png",
+      "width": 1080,
+      "height": 2400,
+      "alt_text": "Mattermost after the target leaves Files"
+    }
+  ]
+}

@@ -16,7 +16,7 @@ gate and rubric tracker are proposed work; they are not implemented results.
 
 ## Project status
 
-Status as of 2026-08-31:
+Status as of 2026-09-01:
 
 | Workstream | Status | Scope |
 | --- | --- | --- |
@@ -98,20 +98,31 @@ These are observational associations, not counterfactual effects. Every
 dataset remains `causal_claim_supported=false`; the results do not establish a
 cross-model ranking, prove that MHR alone caused a failure, or estimate how much
 success would improve after deleting or correcting history. See the
-[canonical six-model report](<motivation study/misleading_history_audit_report.md>)
-for definitions, per-model evidence, and limitations. The safe
-[machine-readable public projection](<motivation study/epic1_failure_link_audit_v1/>)
+[canonical Markdown report](<motivation study/misleading_history_audit_report.md>),
+the [fixed PDF](<motivation study/misleading_history_audit_report_20260825.pdf>),
+and the [content-addressed report assets](<motivation study/report_assets/>) for
+definitions, per-model evidence, and the 39 cited screenshots. The
+[machine-readable result projection](<motivation study/epic1_failure_link_audit_v1/>)
 contains the frozen schemas, aggregate metrics, resolution manifests, driver-freeze
-provenance, and publication hashes without raw trajectories, reviewer text, or
-screenshots. The corrected GUI-Owl v3 result above supersedes the retracted earlier
-v2 audit.
+provenance, and publication hashes without raw trajectories or reviewer text. The
+corrected GUI-Owl v3 result above supersedes the retracted earlier v2 audit.
+
+The owner approved a narrow exception to publish exactly those 39 screenshots and
+the one fixed PDF in this public repository. They contain synthetic/demo fixture
+values that resemble credentials or personal information, plus third-party UI,
+trademarks, and imagery whose separate redistribution rights were not independently
+verified. Git history, forks, and caches may retain the bytes after deletion. Any
+medical-looking statement visible in a screenshot is inert benchmark evidence, not
+medical advice or project endorsement. All other raw requests, trajectories, model
+responses, reviews, receipts, logs, replay data, and Collector blobs remain outside
+Git.
 
 ## Repository layout
 
 ```text
 AgentSentinel/
 ├── MobileWorld/                 # instrumented benchmark/runtime and audit tooling
-├── motivation study/            # canonical Epic 1 report and publishable result projection
+├── motivation study/            # Epic 1 Markdown/PDF, exact report assets, and result projection
 ├── mobileworld_audit_handoff/   # authoritative contracts, decisions, status, and G1 protocol
 ├── seed_baseline_audit/         # historical preliminary Seed investigation
 ├── sentinel_mvp/                # legacy single-host behavioral reference
@@ -168,8 +179,11 @@ The owner-only local website procedure is
 [`G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`](mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md).
 
 Raw collections, derived audit artifacts, screenshots, and replay outputs must
-remain outside the Git repository in restricted, versioned data roots. Git
-contains code, schemas, reports, manifests, hashes, and non-secret references.
+remain outside the Git repository in restricted, versioned data roots by
+default. The sole owner-approved evidence exception is the exact 39-screenshot
+allowlist and fixed Epic 1 PDF documented above; it does not expand to any
+other raw artifact. Git otherwise contains code, schemas, reports, manifests,
+hashes, and non-secret references.
 
 ## Clone on a server
 

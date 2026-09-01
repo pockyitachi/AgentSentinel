@@ -52,8 +52,18 @@ v3 的 11/117 与 7/117；已撤回的旧 v2 1/117 结果不得再引用。
 
 完整定义、逐模型证据和限制见
 [motivation study/misleading_history_audit_report.md](<../motivation study/misleading_history_audit_report.md>)；
-安全、machine-readable 的聚合数据与哈希清单见
-[Epic 1 public projection](<../motivation study/epic1_failure_link_audit_v1/>)。
+固定 PDF 见
+[misleading_history_audit_report_20260825.pdf](<../motivation study/misleading_history_audit_report_20260825.pdf>)；
+39 张 content-addressed 截图及其 publication manifest 见
+[report_assets](<../motivation study/report_assets/>)；machine-readable 聚合数据与哈希清单见
+[Epic 1 result projection](<../motivation study/epic1_failure_link_audit_v1/>)。
+
+这 39 张截图和一个 PDF 是 owner 明确批准的窄幅公开证据例外。仓库公开，进入 Git 后的
+bytes 可能长期存在于 history、fork 和 cache。截图里的手机号、验证码、姓名、邮箱等按
+synthetic/demo benchmark fixture 发布；其中第三方 app UI、商标和图片的再分发权没有逐项独立
+核实。任何看似医学或健康的截图文字只是静态研究证据，不是医学建议或项目背书。其他 raw
+requests、trajectories、model responses、reviewer text、receipts、logs、replay 数据及 Collector
+blobs 仍必须留在 repo 外。
 
 ## 最近完成阶段：ALE-321 / G1.3
 
@@ -267,8 +277,10 @@ action authority 与执行 flags 全部保持 false。
 以下是补充研究结果导航，不替代上述强制顺序：
 
 - [OFFLINE_EVALUATION_DESIGN.md](OFFLINE_EVALUATION_DESIGN.md)；
-- [六模型正式报告](<../motivation study/misleading_history_audit_report.md>)；
-- [Epic 1 machine-readable public projection](<../motivation study/epic1_failure_link_audit_v1/>)；
+- [六模型正式 Markdown 报告](<../motivation study/misleading_history_audit_report.md>)；
+- [六模型固定 PDF](<../motivation study/misleading_history_audit_report_20260825.pdf>)；
+- [Epic 1 content-addressed report assets](<../motivation study/report_assets/>)；
+- [Epic 1 machine-readable result projection](<../motivation study/epic1_failure_link_audit_v1/>)；
 - [schemas/g1/](schemas/g1/) 中的 G1.1 machine contracts；
 - [schemas/g1_2/](schemas/g1_2/) 中的 G1.2 machine contracts；
 - [schemas/g1_4/](schemas/g1_4/) 中的 9 个 CPU/fake runner schemas 与 6 个 additive inert-preparation schemas。
@@ -351,7 +363,8 @@ AgentSentinel/
 └── mobileworld_audit_handoff/
 ~~~
 
-真实 raw collection、derived audit、screenshots、review receipts、replay capsules 和 model
-responses 都必须写在 Git 工作树之外的受限、versioned data root。Git 只保存代码、schema、
-协议、报告、manifest/hash 和非秘密引用。Raw evidence append-only；任何 derived 输出不得
-回写或“修复”既有 raw bytes。
+真实 raw collection、derived audit、review receipts、replay capsules 和 model responses 默认
+都必须写在 Git 工作树之外的受限、versioned data root。唯一例外是 owner 于 2026-09-01
+明确批准的 Epic 1 报告公开证据：报告实际引用的精确 39 张 content-addressed PNG 和单个固定
+PDF。除此之外，Git 只保存代码、schema、协议、报告、manifest/hash 和非秘密引用。Raw
+evidence append-only；任何 derived 输出不得回写或“修复”既有 raw bytes。

@@ -1,0 +1,142 @@
+{
+  "schema_version": "mobileworld.audit.failure-link-publication-lock/v2",
+  "record_type": "failure_link_repository_publication_lock",
+  "publication_id": "six-model-failure-link-audit-v1-20260824-03-public-v2",
+  "source_archive": {
+    "source_id": "six_model_failure_link_audit_v1_20260824_03",
+    "file_count": 2842,
+    "byte_count": 119555475,
+    "tree_inventory_sha256": "a97f9d4541c339d3cb6782bf499eed61ade9bfe68270419b7a62f500f4aa944a",
+    "tree_inventory_algorithm": "sha256(concat(GNU_sha256sum_lines_for_all_regular_files_sorted_by_C_locale_relative_path_with_dot_slash_prefix))"
+  },
+  "source_projection": {
+    "file_count": 8,
+    "byte_count": 3018398,
+    "files": [
+      {
+        "logical_name": "phase_a_driver_freeze",
+        "path": "motivation study/epic1_failure_link_audit_v1/phase_a/driver_freeze.json",
+        "sha256": "5debdc28cb5aca7188bdc79fb0347a44430cb24a5e4e197b08c3e3a52793a07c",
+        "byte_count": 1446181
+      },
+      {
+        "logical_name": "phase_a_review_schema",
+        "path": "motivation study/epic1_failure_link_audit_v1/phase_a/input/review_schema.json",
+        "sha256": "057c448fa0499425d7035170893386560be8aa9d7f86738e3d09bfd3393781ec",
+        "byte_count": 2813
+      },
+      {
+        "logical_name": "phase_a_resolution_manifest",
+        "path": "motivation study/epic1_failure_link_audit_v1/phase_a/resolution/manifest.json",
+        "sha256": "865bf9ab51bf46f8882deb06ea9dd35cb2a963d2c810898ef2cb37ff90555bb8",
+        "byte_count": 56978
+      },
+      {
+        "logical_name": "phase_b_driver_freeze",
+        "path": "motivation study/epic1_failure_link_audit_v1/phase_b/driver_freeze.json",
+        "sha256": "3415f8a3fe41e8cf5f632fd7c854cfef612682a6f46461580446d474afceb6d8",
+        "byte_count": 1445735
+      },
+      {
+        "logical_name": "phase_b_input_manifest",
+        "path": "motivation study/epic1_failure_link_audit_v1/phase_b/input/manifest.json",
+        "sha256": "7f0a49b69e5e11e8069bd4a1c54bb11d2baf0311cc46b3ac6c3b8e00c52f956c",
+        "byte_count": 3234
+      },
+      {
+        "logical_name": "phase_b_review_schema",
+        "path": "motivation study/epic1_failure_link_audit_v1/phase_b/input/review_schema.json",
+        "sha256": "372ebd38eede2e4b1583bf3a0544281904548b3d4f8cd797413bc79de9071541",
+        "byte_count": 4137
+      },
+      {
+        "logical_name": "phase_b_metrics",
+        "path": "motivation study/epic1_failure_link_audit_v1/phase_b/resolution/metrics.json",
+        "sha256": "f5b4400ce6c7d6955e3aa67271c5303d4adb46df9434afb9a652cc5bddfce536",
+        "byte_count": 2104
+      },
+      {
+        "logical_name": "phase_b_resolution_manifest",
+        "path": "motivation study/epic1_failure_link_audit_v1/phase_b/resolution/manifest.json",
+        "sha256": "bb0d1c3e8a81d7a805a39438d62c71d131873ba717a1e833e689ea371edffe18",
+        "byte_count": 57216
+      }
+    ]
+  },
+  "repository_bindings": [
+    {
+      "logical_name": "final_markdown_report",
+      "path": "motivation study/misleading_history_audit_report.md",
+      "sha256": "864c87cd1ba346eefcfab4a65babb697372f372a5eb27de32982ca912c800579",
+      "byte_count": 55077
+    },
+    {
+      "logical_name": "final_pdf_report",
+      "path": "motivation study/misleading_history_audit_report_20260825.pdf",
+      "sha256": "af670f4c8f539b61ad2199d76a7ec86cfcf7830af4ad8cfa3936ea34f2b0852a",
+      "byte_count": 16129148
+    },
+    {
+      "logical_name": "report_screenshot_manifest",
+      "path": "motivation study/report_assets/screenshot_manifest.v1.json",
+      "sha256": "33d6d78afb4600890339aab48a697fdb490bcaa2ab673d9a2fbe343ea13c9155",
+      "byte_count": 17363
+    },
+    {
+      "logical_name": "report_screenshot_manifest_schema",
+      "path": "motivation study/report_assets/screenshot_manifest.v1.schema.json",
+      "sha256": "97015f360b767b777914351d98509017e8a621bb003ad109882042a20a3344c5",
+      "byte_count": 3552
+    },
+    {
+      "logical_name": "pdf_renderer",
+      "path": "MobileWorld/scripts/render_misleading_history_audit_pdf.py",
+      "sha256": "582f919b2c30d691f8cd9aabcd95d54ba3d133e40836c50883ffd02eda2b8bcd",
+      "byte_count": 14161
+    },
+    {
+      "logical_name": "public_summary",
+      "path": "motivation study/epic1_failure_link_audit_v1/public_summary.v2.json",
+      "sha256": "6f3b01403ddda612ace47a54f3c7e3435cfbbf18605ca4465509a15cd6a8786f",
+      "byte_count": 3108
+    },
+    {
+      "logical_name": "public_summary_schema",
+      "path": "motivation study/epic1_failure_link_audit_v1/schemas/failure_link_public_summary.v2.schema.json",
+      "sha256": "e9aec4e82b0f0c139980c741b13c5b069280d332361cd071b584027d3e3bd6d1",
+      "byte_count": 4204
+    },
+    {
+      "logical_name": "publication_lock_schema",
+      "path": "motivation study/epic1_failure_link_audit_v1/schemas/failure_link_publication_lock.v2.schema.json",
+      "sha256": "f808b2702c56ebe1df20d10f578da46bcd2cf5337517e104f3a1768c8840a702",
+      "byte_count": 4018
+    }
+  ],
+  "excluded_private_classes": [
+    "raw_cards_and_application_requests",
+    "raw_trajectories_and_outcomes",
+    "review_jsonl_rationales_and_evaluator_excerpts",
+    "model_responses_receipts_rejected_and_migration_artifacts",
+    "raw_screenshots_except_exact_39_report_assets",
+    "screenshot_embedding_pdfs_except_fixed_20260825_report_pdf",
+    "machine_local_run_manifests_and_logs"
+  ],
+  "safety": {
+    "raw_report_screenshot_subset_committed": true,
+    "raw_report_screenshot_count": 39,
+    "raw_report_screenshot_byte_count": 18315499,
+    "fixed_report_pdf_committed": true,
+    "fixed_report_pdf_embeds_same_39_screenshots": true,
+    "other_raw_collection_data_committed": false,
+    "reviewer_natural_text_committed": false,
+    "synthetic_credential_like_ui_content_committed": true,
+    "actual_credentials_or_secrets_committed": false,
+    "third_party_rights_independently_verified": false,
+    "medical_misinformation_is_synthetic_not_advice": true,
+    "public_repository_permanence_acknowledged": true,
+    "owner_public_evidence_exception_scope": "exact_39_report_screenshots_and_companion_pdf_only",
+    "machine_absolute_paths_committed_in_projection": false,
+    "causal_claim_supported": false
+  }
+}

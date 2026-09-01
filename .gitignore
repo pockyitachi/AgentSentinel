@@ -24,9 +24,12 @@ venv/
 # Runtime collection data is immutable research data, not source code.
 mobileworld_audit_data/
 
-# Rendered audit reports embed source screenshots and are published outside Git.
+# Rendered audit reports normally embed source screenshots and stay outside Git.
 MobileWorld/docs/misleading_history_audit_report_*.pdf
 motivation study/misleading_history_audit_report_*.pdf
+
+# Owner-approved public Epic 1 evidence exception: exactly this fixed PDF is tracked.
+!motivation study/misleading_history_audit_report_20260825.pdf
 
 # Recoverable local copy of the original nested upstream checkout used during
 # the one-time subtree import. It is intentionally never published.

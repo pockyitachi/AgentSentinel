@@ -149,9 +149,9 @@ CheckGithubInfoTask, source step 45 → target step 46.
 - **Observed harm:** **UNNECESSARY_ACTION** and **OFFTRACK_CONTINUATION**; the trajectory
   later **RECOVERED**.
 
-![Internet settings page without a General entry](/shared/linqiang/mobileworld_audit_data/mai_ui_8b_gui117_g7_20260820_01/audit/raw/runs/01M0EZ6T4XF06CPS3Z69XXW4ZB/blobs/sha256/0a/0ac372444556353c30723da033c2770ea584895cb0b0a39b0542bb3e437f453c)
+![Internet settings page without a General entry](report_assets/screenshots/0ac372444556353c30723da033c2770ea584895cb0b0a39b0542bb3e437f453c.png)
 
-![Network and internet settings page without a General entry](/shared/linqiang/mobileworld_audit_data/mai_ui_8b_gui117_g7_20260820_01/audit/raw/runs/01M0EZ6T4XF06CPS3Z69XXW4ZB/blobs/sha256/99/99672703245cbf5ccf8fde2c1220a319dfb6bf0f8d0ebb1d1bff1056eaf7e9c2)
+![Network and internet settings page without a General entry](report_assets/screenshots/99672703245cbf5ccf8fde2c1220a319dfb6bf0f8d0ebb1d1bff1056eaf7e9c2.png)
 
 *Left: the visible Internet page contains no “General” entry. Right: after the reused route
 assumption and Back action, “General” is still absent.*
@@ -165,9 +165,9 @@ MastodonMultiInviteTask, source step 37 → target step 39.
 - **Observed harm:** **WRONG_ACTION**, **REPEATED_ACTION**, and
   **OFFTRACK_CONTINUATION**.
 
-![Mastodon profile with a visible share icon](/shared/linqiang/mobileworld_audit_data/mai_ui_8b_gui117_g7_20260820_01/audit/raw/runs/01M0EZ6T4XF06CPS3Z69XXW4ZB/blobs/sha256/4b/4b666476a28377f87f70b5e19455a82f656d9108f9139515ef4125696f7e9b14)
+![Mastodon profile with a visible share icon](report_assets/screenshots/4b666476a28377f87f70b5e19455a82f656d9108f9139515ef4125696f7e9b14.png)
 
-![Android sharing-link sheet opened from the Mastodon share icon](/shared/linqiang/mobileworld_audit_data/mai_ui_8b_gui117_g7_20260820_01/audit/raw/runs/01M0EZ6T4XF06CPS3Z69XXW4ZB/blobs/sha256/48/48a0241d7fb9bad6f2d64d168a605925394d9826009dc5182e53a81fd79b1b8f)
+![Android sharing-link sheet opened from the Mastodon share icon](report_assets/screenshots/48a0241d7fb9bad6f2d64d168a605925394d9826009dc5182e53a81fd79b1b8f.png)
 
 *Left: the selected control is visibly a share icon. Right: clicking it again opens the Android
 “Sharing link” sheet, not invite-link settings.*
@@ -181,9 +181,9 @@ MastodonPostEditedPhotoTask, source step 20 → target step 22.
 - **Observed harm:** **WRONG_ACTION**, **REPEATED_ACTION**, and
   **OFFTRACK_CONTINUATION**.
 
-![Gallery ordinary viewer displaying photo 2 of 7](/shared/linqiang/mobileworld_audit_data/mai_ui_8b_gui117_g7_20260820_01/audit/raw/runs/01M0EZ6T4XF06CPS3Z69XXW4ZB/blobs/sha256/58/581ae2259521e3d0ba394db8dae7b752fa802e567fa25e8b5b3d5fb09465bdcf)
+![Gallery ordinary viewer displaying photo 2 of 7](report_assets/screenshots/581ae2259521e3d0ba394db8dae7b752fa802e567fa25e8b5b3d5fb09465bdcf.png)
 
-![Gallery ordinary viewer displaying photo 3 of 7](/shared/linqiang/mobileworld_audit_data/mai_ui_8b_gui117_g7_20260820_01/audit/raw/runs/01M0EZ6T4XF06CPS3Z69XXW4ZB/blobs/sha256/bf/bfb715e6d039758dbf7ccc576eb3730ed8e2175c6024c042bd587522537f8c6c)
+![Gallery ordinary viewer displaying photo 3 of 7](report_assets/screenshots/bfb715e6d039758dbf7ccc576eb3730ed8e2175c6024c042bd587522537f8c6c.png)
 
 *Left: Gallery shows photo 2/7 with no crop controls. Right: the repeated click advances to
 photo 3/7 instead of opening editing controls.*
@@ -269,9 +269,9 @@ step 31.
   next decision reuses that false completion and terminates successfully; this was classified as
   **PREMATURE_TERMINATION**. The task received score 0.
 
-![Reminder dialog with value 1 and the minutes unit selected](/shared/linqiang/mobileworld_audit_data/qwen3vl_8b_gui117_g7_20260821_01/audit/raw/runs/01M0HAPBKPN5HJHFB6HQ3ME74M/blobs/sha256/48/48c9f51092533d9fd1e1af8237dacc89909519799a9b1c7814ba34e66a76d431)
+![Reminder dialog with value 1 and the minutes unit selected](report_assets/screenshots/48c9f51092533d9fd1e1af8237dacc89909519799a9b1c7814ba34e66a76d431.png)
 
-![Calendar event form displaying 1 minute before](/shared/linqiang/mobileworld_audit_data/qwen3vl_8b_gui117_g7_20260821_01/audit/raw/runs/01M0HAPBKPN5HJHFB6HQ3ME74M/blobs/sha256/51/511e3fb171f24ca171229aa814f46e3158dc7abf865d25886951eac368510c11)
+![Calendar event form displaying 1 minute before](report_assets/screenshots/511e3fb171f24ca171229aa814f46e3158dc7abf865d25886951eac368510c11.png)
 
 *The task requires one day. The GUI visibly contains one minute, but the carried-forward error
 says one day; the next decision saves the event.*
@@ -291,11 +291,11 @@ CheckSetMeetTimeTask, source step 10 → target step 12.
 - **Trajectory outcome:** the same trajectory later saves **October 16, 1–2 PM**, terminates as
   success, and receives score 0 for an incorrect calendar event.
 
-![Carl email specifying November 15 at 3 PM](/shared/linqiang/mobileworld_audit_data/qwen3vl_8b_gui117_g7_20260821_01/audit/raw/runs/01M0HAPBKPN5HJHFB6HQ3ME74M/blobs/sha256/d7/d7786fdfcfd999c1af48fea90b67785daf44a0909ecd05b75de275a470109e68)
+![Carl email specifying November 15 at 3 PM](report_assets/screenshots/d7786fdfcfd999c1af48fea90b67785daf44a0909ecd05b75de275a470109e68.png)
 
-![Board Meeting form still showing October 16 and 1 PM for both times](/shared/linqiang/mobileworld_audit_data/qwen3vl_8b_gui117_g7_20260821_01/audit/raw/runs/01M0HAPBKPN5HJHFB6HQ3ME74M/blobs/sha256/b7/b7e66c3dc10304117ee35e8d6aeb14dfc5b316728826cb279c4bcb297697e79b)
+![Board Meeting form still showing October 16 and 1 PM for both times](report_assets/screenshots/b7e66c3dc10304117ee35e8d6aeb14dfc5b316728826cb279c4bcb297697e79b.png)
 
-![Board Meeting immediately before saving as October 16 from 1 to 2 PM](/shared/linqiang/mobileworld_audit_data/qwen3vl_8b_gui117_g7_20260821_01/audit/raw/runs/01M0HAPBKPN5HJHFB6HQ3ME74M/blobs/sha256/48/488a97075555816213828ac5561026c88c844ddca0e3edf5c429d58964130198)
+![Board Meeting immediately before saving as October 16 from 1 to 2 PM](report_assets/screenshots/488a97075555816213828ac5561026c88c844ddca0e3edf5c429d58964130198.png)
 
 *The first two images show the required time and the contradictory state during the reviewed
 reuse. The third records the later wrong event immediately before it is saved; it is trajectory
@@ -313,7 +313,7 @@ CountFileLinesTask, source step 4 → target step 5.
   reviewed the file, answers **5**, and ends the task. This was classified as **WRONG_ACTION**
   and **PREMATURE_TERMINATION**. The evaluator reports: “Incorrect answer: 5 (expected: 29).”
 
-![Static archive listing showing file names but no file contents](/shared/linqiang/mobileworld_audit_data/qwen3vl_8b_gui117_g7_20260821_01/audit/raw/runs/01M0HAPBKPN5HJHFB6HQ3ME74M/blobs/sha256/fa/fac11ee4069c1cfdfab07e7efa25d1abf4c6c2dbdcd89db9d7e7bec732d02246)
+![Static archive listing showing file names but no file contents](report_assets/screenshots/fac11ee4069c1cfdfab07e7efa25d1abf4c6c2dbdcd89db9d7e7bec732d02246.png)
 
 *The same archive-listing screenshot appears before and after the claimed file-opening action and
 at the target decision. The model never observed the contents of file_1.txt before answering 5.*
@@ -402,9 +402,9 @@ CheckDepartTimeTask, source step 3 → target step 4; task score 0.
   proceeds toward messaging that information instead of taking the missing-information fallback.
   This was classified as **OFFTRACK_CONTINUATION**.
 
-![CoolHacks email giving the event start time but no departure time](/shared/linqiang/mobileworld_audit_data/gelab_zero_4b_gui117_g7_20260821_01/audit/raw/runs/01M0JSPDHJ073675315FBW27BN/blobs/sha256/c5/c5e7a0c2f9747c2df92b2fe05fc39390c1cf877fbcc398f72e25c9d7fac12ab4)
+![CoolHacks email giving the event start time but no departure time](report_assets/screenshots/c5e7a0c2f9747c2df92b2fe05fc39390c1cf877fbcc398f72e25c9d7fac12ab4.png)
 
-![Inbox after the erroneous departure-time summary was carried forward](/shared/linqiang/mobileworld_audit_data/gelab_zero_4b_gui117_g7_20260821_01/audit/raw/runs/01M0JSPDHJ073675315FBW27BN/blobs/sha256/3f/3f1fe6cc1bb23867aa6d7d02df528af1610b79e5ac763f0029251abe90c87c28)
+![Inbox after the erroneous departure-time summary was carried forward](report_assets/screenshots/3f1fe6cc1bb23867aa6d7d02df528af1610b79e5ac763f0029251abe90c87c28.png)
 
 *The email supplies an event start time, not a departure time. The rolling summary converts it
 into a found departure time, and the next decision continues from that error.*
@@ -421,9 +421,9 @@ ItemCheckoutTask, source step 9 → target step 10; task score 0.
   “同意协议并登录” again. The screen remains on the same login form. This was classified as
   **REPEATED_ACTION**.
 
-![Taodian login page contradicting the completed-login summary](/shared/linqiang/mobileworld_audit_data/gelab_zero_4b_gui117_g7_20260821_01/audit/raw/runs/01M0JSPDHJ073675315FBW27BN/blobs/sha256/3b/3b87edd87c3451e1c45b8d987447f99dacf34461a73d0a60c2fec45c35065e9e)
+![Taodian login page contradicting the completed-login summary](report_assets/screenshots/3b87edd87c3451e1c45b8d987447f99dacf34461a73d0a60c2fec45c35065e9e.png)
 
-![Same login page after the repeated login action](/shared/linqiang/mobileworld_audit_data/gelab_zero_4b_gui117_g7_20260821_01/audit/raw/runs/01M0JSPDHJ073675315FBW27BN/blobs/sha256/58/58dba5e31c47df71efd89de6147b7455aedc7c9938758a3df1a6b944db525680)
+![Same login page after the repeated login action](report_assets/screenshots/58dba5e31c47df71efd89de6147b7455aedc7c9938758a3df1a6b944db525680.png)
 
 *Before and after the target action, the task is visibly still at login despite the carried-forward
 claim that SMS login was complete.*
@@ -444,9 +444,9 @@ MastodonConditionalFavoTask, source step 46 → target step 47; task score 1.
 - **Trajectory outcome:** the task eventually receives score 1. This is a direct example of an
   MHR with observed local harm coexisting with eventual task success.
 
-![Post already favorited before the target decision](/shared/linqiang/mobileworld_audit_data/gelab_zero_4b_gui117_g7_20260821_01/audit/raw/runs/01M0JSPDHJ073675315FBW27BN/blobs/sha256/e0/e062a2dc7458e8dbaa7d1765c2794c029741a6f502fc2a879e2192e75d4c9a09)
+![Post already favorited before the target decision](report_assets/screenshots/e062a2dc7458e8dbaa7d1765c2794c029741a6f502fc2a879e2192e75d4c9a09.png)
 
-![Same post unfavorited by the repeated click](/shared/linqiang/mobileworld_audit_data/gelab_zero_4b_gui117_g7_20260821_01/audit/raw/runs/01M0JSPDHJ073675315FBW27BN/blobs/sha256/c5/c5923eafa2118788fbdbdbf035fa5f3bae2cb7b06b14e14b596773e6d35c6b20)
+![Same post unfavorited by the repeated click](report_assets/screenshots/c5923eafa2118788fbdbdbf035fa5f3bae2cb7b06b14e14b596773e6d35c6b20.png)
 
 *The carried-forward summary says the visible item still needs to be favorited. It is already
 favorited; reusing that stale status immediately undoes the completed action.*
@@ -533,9 +533,9 @@ ScheduleCoffeeTimeViaSmsTask, source step 9 → target step 10; task score 0.
   the sender. Opening Messages is independently required by the task, so this instance has
   **NO_VISIBLE_HARM**, even though the history claim is refuted.
 
-![Coffee Time event with the wrong date and time](/shared/linqiang/mobileworld_audit_data/ui_venus_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0M2QKK2PRPEA3VXAKZ36W4B/blobs/sha256/e6/e6f8c33a66fdaadab3469ffe1f7a54f710007d45dfa35e8ce6b16b619d424fad)
+![Coffee Time event with the wrong date and time](report_assets/screenshots/e6f8c33a66fdaadab3469ffe1f7a54f710007d45dfa35e8ce6b16b619d424fad.png)
 
-![State after leaving the incorrectly scheduled event](/shared/linqiang/mobileworld_audit_data/ui_venus_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0M2QKK2PRPEA3VXAKZ36W4B/blobs/sha256/b1/b1e1d8e3acc2da73a4345bf6661e57e51cb7256bd79b6676d81f75a90cd0c12a)
+![State after leaving the incorrectly scheduled event](report_assets/screenshots/b1e1d8e3acc2da73a4345bf6661e57e51cb7256bd79b6676d81f75a90cd0c12a.png)
 
 *The history upgrades an incorrectly configured calendar entry into a successful scheduling
 claim. The next navigation is still independently appropriate, which is why this is MHR without
@@ -550,9 +550,9 @@ MastodonMallPurchaseCommodityTask, source step 24 → target step 26; task score
 - **Reuse:** the target repeats the same interpretation and click. The action still closes the
   viewer and returns to the feed, so the strict MHR instance has **NO_VISIBLE_HARM**.
 
-![Image viewer with an upper-left close control](/shared/linqiang/mobileworld_audit_data/ui_venus_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0M2QKK2PRPEA3VXAKZ36W4B/blobs/sha256/0c/0c8e47d65cd5db6d8c1eceece5f7590327e51008e4d38ebad6e8f175957e4c18)
+![Image viewer with an upper-left close control](report_assets/screenshots/0c8e47d65cd5db6d8c1eceece5f7590327e51008e4d38ebad6e8f175957e4c18.png)
 
-![Feed after the repeated click closes the viewer](/shared/linqiang/mobileworld_audit_data/ui_venus_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0M2QKK2PRPEA3VXAKZ36W4B/blobs/sha256/97/9798bd709dffa97373343f2830153d825056f27c4b3b548b4a4ca7a5f734c02c)
+![Feed after the repeated click closes the viewer](report_assets/screenshots/9798bd709dffa97373343f2830153d825056f27c4b3b548b4a4ca7a5f734c02c.png)
 
 *The control description is visibly wrong, but its coordinates still perform the useful close
 operation. This separates invalid history from observed harm.*
@@ -569,9 +569,9 @@ MastodonRemoveBookmarkTask, source step 20 → target step 23; task score 0.
   Back, leaving Mastodon for the Android home screen. This was classified as
   **WRONG_ACTION** and **OFFTRACK_CONTINUATION**.
 
-![Saved feed already visible before the target decision](/shared/linqiang/mobileworld_audit_data/ui_venus_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0M2QKK2PRPEA3VXAKZ36W4B/blobs/sha256/85/8571c7ffe5e11f3c2e37583a1d34dfb6dab00c7ae1d60b5ab21fb75348db736c)
+![Saved feed already visible before the target decision](report_assets/screenshots/8571c7ffe5e11f3c2e37583a1d34dfb6dab00c7ae1d60b5ab21fb75348db736c.png)
 
-![Android home screen after the stale Back action](/shared/linqiang/mobileworld_audit_data/ui_venus_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0M2QKK2PRPEA3VXAKZ36W4B/blobs/sha256/9c/9cf59c0fe61c26e8a1057250d9706dd89915267589c92b5a1e6470429b476ffe)
+![Android home screen after the stale Back action](report_assets/screenshots/9cf59c0fe61c26e8a1057250d9706dd89915267589c92b5a1e6470429b476ffe.png)
 
 *The source wording may once have described a different screen, but at the target it is stale.
 Following it exits the relevant app and supplies the sole UI-Venus MHR case with observed local
@@ -662,11 +662,11 @@ DownloadSendReceiptTask, source step 5 → target step 6; task score 0.
   it and actually clicks the email. This is **RESULT_MISALIGNMENT** with
   **NO_VISIBLE_HARM** at that local step because opening the relevant email is useful.
 
-![Inbox before the source wait action](/shared/linqiang/mobileworld_audit_data/gui_owl_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0NK5E8YZM21NA5WZ7Q3A9MD/blobs/sha256/6b/6b715b4f7d1a0bedcccf70c3fbed864ba90f7659cdb76bf2ab7f030ce26b49a4)
+![Inbox before the source wait action](report_assets/screenshots/6b715b4f7d1a0bedcccf70c3fbed864ba90f7659cdb76bf2ab7f030ce26b49a4.png)
 
-![Same inbox before the target follows the incorrect click record](/shared/linqiang/mobileworld_audit_data/gui_owl_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0NK5E8YZM21NA5WZ7Q3A9MD/blobs/sha256/69/6997aee30634be87eed5999cbb3c142ae04913e3f5f71b61ad10e7c518abae51)
+![Same inbox before the target follows the incorrect click record](report_assets/screenshots/6997aee30634be87eed5999cbb3c142ae04913e3f5f71b61ad10e7c518abae51.png)
 
-![Email opened by the target click](/shared/linqiang/mobileworld_audit_data/gui_owl_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0NK5E8YZM21NA5WZ7Q3A9MD/blobs/sha256/34/3419212da12abeaddc46014cac804534f73f525c9938b8aab9b1a28d744a1a9c)
+![Email opened by the target click](report_assets/screenshots/3419212da12abeaddc46014cac804534f73f525c9938b8aab9b1a28d744a1a9c.png)
 
 *The folded text claims that click already happened, while the exact source action was wait. The
 next decision explicitly adopts the action record and performs the click.*
@@ -682,11 +682,11 @@ CheckSetMeetTimeTask, source step 10 → target step 11; task score 0.
   restoring the toggle to off. This was classified as **WRONG_ACTION** and
   **REPEATED_ACTION**, followed by **RECOVERED**.
 
-![All-day toggle already off before the source click](/shared/linqiang/mobileworld_audit_data/gui_owl_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0NK5E8YZM21NA5WZ7Q3A9MD/blobs/sha256/9b/9b5f8502a1a2e96f4ff200f22fb6ab2f87f105dd93758f73785ede8256227a93)
+![All-day toggle already off before the source click](report_assets/screenshots/9b5f8502a1a2e96f4ff200f22fb6ab2f87f105dd93758f73785ede8256227a93.png)
 
-![All-day toggle on after the source action](/shared/linqiang/mobileworld_audit_data/gui_owl_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0NK5E8YZM21NA5WZ7Q3A9MD/blobs/sha256/dc/dc5f5ed41d1988569dd9182cbdc569cf5b8bf81708677a24c7c771f5fa76815c)
+![All-day toggle on after the source action](report_assets/screenshots/dc5f5ed41d1988569dd9182cbdc569cf5b8bf81708677a24c7c771f5fa76815c.png)
 
-![All-day toggle off again after the repeated target click](/shared/linqiang/mobileworld_audit_data/gui_owl_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0NK5E8YZM21NA5WZ7Q3A9MD/blobs/sha256/9e/9e2dae21903b73db3bd6bdb8df40757c920c1751149911f80e5c06292c23e926)
+![All-day toggle off again after the repeated target click](report_assets/screenshots/9e2dae21903b73db3bd6bdb8df40757c920c1751149911f80e5c06292c23e926.png)
 
 *The textual purpose is false at the source: the click turns an already-off toggle on. Repeating
 the same carried record happens to undo the error.*
@@ -702,11 +702,11 @@ MastodonChangeLanguageTask, source step 40 → target step 41; task score 0.
   farther away. This was classified as **WRONG_ACTION**, **REPEATED_ACTION**, and
   **OFFTRACK_CONTINUATION**.
 
-![Language list before the source drag](/shared/linqiang/mobileworld_audit_data/gui_owl_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0NK5E8YZM21NA5WZ7Q3A9MD/blobs/sha256/c0/c04b6aab85be517175111fc6e287aa541becde56d3e3bffa8dedbe2f18d78263)
+![Language list before the source drag](report_assets/screenshots/c04b6aab85be517175111fc6e287aa541becde56d3e3bffa8dedbe2f18d78263.png)
 
-![Language list after the source drag and before reuse](/shared/linqiang/mobileworld_audit_data/gui_owl_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0NK5E8YZM21NA5WZ7Q3A9MD/blobs/sha256/32/322e44ef70005a92e5f95d118debe99269808d52deb98112cbf120de07f72800)
+![Language list after the source drag and before reuse](report_assets/screenshots/322e44ef70005a92e5f95d118debe99269808d52deb98112cbf120de07f72800.png)
 
-![Language list after the repeated target drag](/shared/linqiang/mobileworld_audit_data/gui_owl_1_5_8b_gui117_g7_20260822_01/audit/raw/runs/01M0NK5E8YZM21NA5WZ7Q3A9MD/blobs/sha256/1a/1ac773389eddb8b4c1bcbc527472f523ef48e901e63d76a2db614ad27b17756c)
+![Language list after the repeated target drag](report_assets/screenshots/1ac773389eddb8b4c1bcbc527472f523ef48e901e63d76a2db614ad27b17756c.png)
 
 *The audit checks the recorded action's direction and purpose against the exact executed drag,
 rather than treating the imperative sentence as a generic visual observation.*
@@ -812,7 +812,7 @@ SearchItemAndCheckoutTask, L entry, source step 5 → target step 6; task score 
   same `input_text`. This was classified as **REPEATED_ACTION**. The trajectory later succeeds,
   showing that MHR with observed local harm can coexist with final task success.
 
-![Unchanged shopping screen with no active search cursor or keyboard](/shared/linqiang/mobileworld_audit_data/memgui_8b_sft_gui117_g4_20260823_01/audit/raw/runs/01M0P576JF73HFWD85PEKNP35V/blobs/sha256/81/81a201f44049f6e82a58042f6b28fda7a6aa86afe49b651b96637b20236d4008)
+![Unchanged shopping screen with no active search cursor or keyboard](report_assets/screenshots/81a201f44049f6e82a58042f6b28fda7a6aa86afe49b651b96637b20236d4008.png)
 
 *The same pixels occur before and after both reviewed actions. L carries the model's active-field
 observation forward even though the external result is not represented in L.*
@@ -829,9 +829,9 @@ DownloadSendReceiptTask, H entry, source step 19 → target step 20; task score 
   the attachment page without verifying or completing the download. This was classified as
   **PREMATURE_TERMINATION**.
 
-![Static receipt attachment before reuse](/shared/linqiang/mobileworld_audit_data/memgui_8b_sft_gui117_g4_20260823_01/audit/raw/runs/01M0P576JF73HFWD85PEKNP35V/blobs/sha256/fd/fdaabb534afce9395b31388feb15802dc69bdd96af22e07b5e9eec7ca94923dc)
+![Static receipt attachment before reuse](report_assets/screenshots/fdaabb534afce9395b31388feb15802dc69bdd96af22e07b5e9eec7ca94923dc.png)
 
-![State after leaving the attachment page](/shared/linqiang/mobileworld_audit_data/memgui_8b_sft_gui117_g4_20260823_01/audit/raw/runs/01M0P576JF73HFWD85PEKNP35V/blobs/sha256/1c/1cf26b4aa71a64f7106ace46addff56e76fedb9a1eeba559dc4b1d01dfe53186)
+![State after leaving the attachment page](report_assets/screenshots/1cf26b4aa71a64f7106ace46addff56e76fedb9a1eeba559dc4b1d01dfe53186.png)
 
 *The folded H summary compresses many steps into an unverified transfer-status claim. The next
 decision relies on that claim rather than checking an external result.*
@@ -847,11 +847,11 @@ LocalFileManagementTask, H entry, source step 7 → target step 8; task score 0.
 - **Reuse and observed harm:** the target trusts the completed-cleanup premise, leaves Files, and
   opens Mattermost. This was classified as **OFFTRACK_CONTINUATION**.
 
-![Downloads folder before the contradictory fold](/shared/linqiang/mobileworld_audit_data/memgui_8b_sft_gui117_g4_20260823_01/audit/raw/runs/01M0P576JF73HFWD85PEKNP35V/blobs/sha256/2e/2efa6fde4ead30492a53062d25398abb60838adbbd6bb3a3dce32b23011f23f1)
+![Downloads folder before the contradictory fold](report_assets/screenshots/2efa6fde4ead30492a53062d25398abb60838adbbd6bb3a3dce32b23011f23f1.png)
 
-![Downloads folder still containing old files at the target](/shared/linqiang/mobileworld_audit_data/memgui_8b_sft_gui117_g4_20260823_01/audit/raw/runs/01M0P576JF73HFWD85PEKNP35V/blobs/sha256/b9/b974c0a9967757c8d0d84b62b967822fce37574704ea0fd904d6e670fd9868ea)
+![Android home screen after the target leaves Files](report_assets/screenshots/b974c0a9967757c8d0d84b62b967822fce37574704ea0fd904d6e670fd9868ea.png)
 
-![Mattermost after the target leaves Files](/shared/linqiang/mobileworld_audit_data/memgui_8b_sft_gui117_g4_20260823_01/audit/raw/runs/01M0P576JF73HFWD85PEKNP35V/blobs/sha256/d0/d000280b9f632bf7d20fad0bf3fb278da6a4ff6a0aac2fac4ba3cd7d122fbc47)
+![Mattermost after the target leaves Files](report_assets/screenshots/d000280b9f632bf7d20fad0bf3fb278da6a4ff6a0aac2fac4ba3cd7d122fbc47.png)
 
 *Structured folding can preserve a compact contradiction after the detailed source steps and
 old screenshots have disappeared. The target treats that compressed state as complete.*
