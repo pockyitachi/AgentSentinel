@@ -77,10 +77,11 @@ revived as a separate causal-evaluation effort after an explicit owner decision.
 
 Runtime Epic 2 is 1/6 complete at the repository engineering layer. ALE-324 /
 R2.1 has an accepted CPU/fake checkpoint at commit
-`58820a8d68870ad0b10df504b41fefb6c500561a`. It supersedes the `d5cf6c3`
-checkpoint after strict request-domain, cache, and policy-output hash-ordering
-hardening. Linear workflow state remains owner-managed. The repository
-dependency sequence is:
+`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. It supersedes the `58820a8`
+checkpoint after recursively trusted policy-output and History-IR snapshots,
+precomputed renderer-result binding, worker-owned policy-evaluation census, and
+detached receipt-transaction hardening. Linear workflow state remains owner-
+managed. The repository dependency sequence is:
 
 ```text
 R2.1 / ALE-324
@@ -357,11 +358,12 @@ history-only invariants, requires destructive handling of user data, or would
 merge/revive the superseded causal-replay path.
 
 The R2.1 repository checkpoint is accepted only at commit
-`58820a8d68870ad0b10df504b41fefb6c500561a`, where the shared seam, OFF/SHADOW
+`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`, where the shared seam, OFF/SHADOW
 parity, fake ACTIVE history-only transformation, retry reuse, recursion bypass,
 held/pulsed kill switch, typed fallback, pre-policy sidecar admission,
 fd-bound transactional hash-only publication, strict pre-copy/pre-cache JSON
-admission, complete rejected-output hashing, and focused regressions were
-verified. Do not claim an automatic runtime policy, rubric, live
-transformation, success-rate gain, or causal effect before the corresponding
-later work actually exists.
+admission, complete rejected-output hashing, recursively detached policy/IR/
+renderer boundaries, truthful worker-owned evaluation census, detached receipt
+commit, and focused regressions were verified. Do not claim an automatic
+runtime policy, rubric, live transformation, success-rate gain, or causal
+effect before the corresponding later work actually exists.

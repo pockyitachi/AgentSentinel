@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 1/6 repository engineering stories complete.** ALE-324 / R2.1 has an accepted CPU/fake implementation checkpoint at commit `58820a8d68870ad0b10df504b41fefb6c500561a`; Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 1/6 repository engineering stories complete.** ALE-324 / R2.1 has an accepted CPU/fake implementation checkpoint at commit `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -69,9 +69,10 @@ history representation may still require a thin registered extractor/renderer.
 ## Accepted implementation boundary: ALE-324 / R2.1
 
 The repository now contains the accepted **Pre-Call Sentinel Runtime Seam**
-checkpoint at commit `58820a8d68870ad0b10df504b41fefb6c500561a`. This
-supersedes the `d5cf6c3` checkpoint after strict canonical-JSON admission,
-logical-call cache, and rejected-policy-output hash-ordering hardening.
+checkpoint at commit `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. This
+supersedes the `58820a8` checkpoint after recursively trusted policy-output and
+History-IR snapshotting, precomputed renderer-result binding, explicit worker-
+owned policy-evaluation census, and detached receipt-transaction hardening.
 Its executable acceptance remains CPU-only and fake-provider-only until
 separately authorized otherwise.
 
