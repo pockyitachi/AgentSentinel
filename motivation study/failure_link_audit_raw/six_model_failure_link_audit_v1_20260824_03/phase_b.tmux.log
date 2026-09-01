@@ -1,0 +1,2 @@
+{"error": "incomplete B/PRIMARY pass; retry with --resume: ['b-primary-0074-2bbe09f79c53']", "status": "ERROR"}
+{"adjudication_review_count": 116, "causal_claim_supported": false, "driver_freeze_sha256": "3415f8a3fe41e8cf5f632fd7c854cfef612682a6f46461580446d474afceb6d8", "dry_run": false, "material_disagreement_task_count": 116, "outcomes_opened": true, "phase": "B", "resolution_id": "failure-attribution-b-resolution-c97a06899d1265c45a08e1ff", "status": "OK", "success_control_task_count": 8, "task_count": 116}

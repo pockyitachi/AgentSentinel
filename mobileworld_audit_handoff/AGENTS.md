@@ -182,6 +182,20 @@ Git history、fork 和 cache，即使以后删除也不能保证完全收回。�
 证据，不构成医学建议或项目背书。该文档发布例外不产生 model/provider/network/GPU/replay/
 treatment/GUI/tool/action 权限。
 
+Owner 最终 failure-link 原始归档例外（2026-09-01）：作为一项独立、追加的窄幅
+例外，owner 已明确批准把且只把
+`motivation study/failure_link_audit_raw/six_model_failure_link_audit_v1_20260824_03/`
+放入公开 Git。该树精确包含 2,842 个常规文件 / 119,555,475 bytes，按路径排序的
+inventory SHA-256 为
+`a97f9d4541c339d3cb6782bf499eed61ade9bfe68270419b7a62f500f4aa944a`。其中包含 raw
+cards/requests、model responses、reviewer text/rationales、operational receipts、logs
+与 machine-local paths；发布前审查未发现可确认的在用 secret。仓库是公开的，这些
+bytes 可能永久留在 Git history、fork、mirror 与 cache 中。已删除的 `_02` 不在
+授权中；任何其他 collection、capsule、replay 或 audit 数据仍未获准入库。v1/v2
+publication locks 仍是未修改的历史 safe/report-publication scope，不绑定也不认证
+这个后续 raw-archive 例外。该发布不产生 model/provider/network/GPU/replay/
+treatment/GUI/tool/action 权限。
+
 ## 完成要求
 
 只有通过 ALE-321 的 capsule 一一对应、rehydration/hash、exact-request、target resolution、

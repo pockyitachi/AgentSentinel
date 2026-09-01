@@ -15,6 +15,9 @@ MobileWorld implementation tree:
 - [`epic1_failure_link_audit_v1/`](epic1_failure_link_audit_v1/) is the machine-readable
   publication of aggregate results, frozen schemas, provenance hashes, and publication
   boundaries.
+- [`failure_link_audit_raw/six_model_failure_link_audit_v1_20260824_03/`](failure_link_audit_raw/six_model_failure_link_audit_v1_20260824_03/)
+  is the exact final Phase A/Phase B failure-link review archive published under a separate owner
+  exception.
 
 ## Public-evidence notice
 
@@ -31,7 +34,17 @@ research evidence and does not grant an additional license to third-party conten
 health-looking statement visible inside a screenshot is inert benchmark content, not medical
 advice, a factual health claim by this project, or an endorsement.
 
-This narrow publication exception does not include raw requests, trajectories, model responses,
-reviewer text, operational receipts, logs, replay data, or any other Collector blob. Those data
-remain outside Git under the repository's data-governance rules. Implementation, validation code,
-and the report renderer remain under `MobileWorld/`.
+The screenshot/PDF exception above was intentionally narrow. On 2026-09-01 the owner made a
+separate, additive decision to publish the exact final failure-link archive at
+[`failure_link_audit_raw/six_model_failure_link_audit_v1_20260824_03/`](failure_link_audit_raw/six_model_failure_link_audit_v1_20260824_03/).
+It contains 2,842 regular files / 119,555,475 bytes and has path-sorted inventory SHA-256
+`a97f9d4541c339d3cb6782bf499eed61ade9bfe68270419b7a62f500f4aa944a`. The archive includes raw
+cards and requests, model responses, reviewer text and rationales, operational receipts, logs, and
+machine-local paths. No confirmed live secret was found in the pre-publication review. The owner
+accepts that these public bytes may remain permanently in Git history, forks, mirrors, and caches.
+
+This later raw-archive exception does not rewrite or expand the historical v1/v2 publication
+locks, which remain records of their safe projection and report-publication scopes. The older
+`_02` attempt was deleted and is not authorized for publication. All other raw collection,
+capsule, replay, and audit data remain outside Git. Implementation, validation code, and the report
+renderer remain under `MobileWorld/`.

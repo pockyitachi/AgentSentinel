@@ -40,6 +40,23 @@
 - [ ] 不把该例外扩展到 raw cards、requests、trajectories、model responses、reviewer text、
   receipts、logs、replay 数据或其他 Collector blob。
 
+### Epic 1 owner 最终 failure-link 原始归档例外（2026-09-01）
+
+- [ ] 只允许精确目录
+  `motivation study/failure_link_audit_raw/six_model_failure_link_audit_v1_20260824_03/`；已删除的
+  `_02` 不在授权中。
+- [ ] 校验精确 2,842 个常规文件 / 119,555,475 bytes，以及按相对路径 C locale 排序的
+  inventory SHA-256
+  `a97f9d4541c339d3cb6782bf499eed61ade9bfe68270419b7a62f500f4aa944a`。
+- [ ] 明确归档包含 raw cards/requests、model responses、reviewer text/rationales、
+  operational receipts、logs 和 machine-local paths；发布前审查未找到可确认的在用 secret。
+- [ ] 确认这是 owner 知情的公开与永久性发布；即使以后删除，bytes 仍可能留在
+  Git history、fork、mirror 和 cache。
+- [ ] 不修改 v1/v2 publication locks；它们继续记录历史 safe/report-publication
+  scope，不将这份 raw archive 追加进旧 lock。
+- [ ] 不将这项例外扩展到其他 audit/collection/capsule/replay 数据，也不因发布获得
+  model/provider/network/GPU/replay/treatment/GUI/tool/action 权限。
+
 除上述精确 allowlist 外，Raw audit 数据应写到显式配置的外部路径，例如：
 
 ```text

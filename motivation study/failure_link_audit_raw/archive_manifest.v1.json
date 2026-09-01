@@ -1,0 +1,44 @@
+{
+  "archive": {
+    "archive_id": "six-model-failure-link-audit-v1-20260824-03-raw-public-archive-v1",
+    "byte_count": 119555475,
+    "copy_fidelity": "exact_byte_copy_of_final_source_archive",
+    "file_count": 2842,
+    "repository_path": "motivation study/failure_link_audit_raw/six_model_failure_link_audit_v1_20260824_03",
+    "source_archive_id": "six_model_failure_link_audit_v1_20260824_03",
+    "tree_inventory_algorithm": "sha256(concat(GNU_sha256sum_lines_for_all_regular_files_sorted_by_C_locale_relative_path_with_dot_slash_prefix))",
+    "tree_inventory_sha256": "a97f9d4541c339d3cb6782bf499eed61ade9bfe68270419b7a62f500f4aa944a"
+  },
+  "authorization": {
+    "action_execution_authorized": false,
+    "external_network_use_authorized": false,
+    "gpu_use_authorized": false,
+    "model_invocation_authorized": false,
+    "owner_authorized_publication": true,
+    "owner_authorized_publication_date": "2026-09-01",
+    "public_repository_permanence_acknowledged": true,
+    "publication_scope": "exact_six_model_failure_link_audit_v1_20260824_03_archive_only",
+    "replay_authorized": false,
+    "repository_visibility": "public"
+  },
+  "content_notice": {
+    "benchmark_identity_or_email_like_strings_present": true,
+    "confirmed_live_credentials_or_secrets_found": false,
+    "included_content_classes": [
+      "raw_cards_and_application_requests",
+      "model_responses",
+      "reviewer_rationales_and_evaluator_excerpts",
+      "receipts_rejected_and_migration_artifacts",
+      "machine_local_manifests_logs_and_paths"
+    ],
+    "secret_review_boundary": "No confirmed live credential or secret was found; this is not a guarantee that every natural-text value is non-sensitive."
+  },
+  "exclusions": {
+    "obsolete_02_archive_deleted": true,
+    "obsolete_02_archive_id": "six_model_failure_link_audit_v1_20260824_02",
+    "obsolete_02_archive_included": false
+  },
+  "record_status": "closed",
+  "record_type": "failure_link_complete_raw_archive_manifest",
+  "schema_version": "mobileworld.audit.failure-link-complete-raw-archive-manifest/v1"
+}

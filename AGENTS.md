@@ -173,6 +173,23 @@ text visible in a benchmark screenshot is inert research evidence, not medical
 advice or endorsement. This documentation publication grants no model,
 provider, network, GPU, replay, treatment, GUI, tool, or action authority.
 
+Owner final failure-link archive exception (2026-09-01): as a separate,
+additive exception, the owner explicitly authorizes public Git publication of
+exactly `motivation study/failure_link_audit_raw/six_model_failure_link_audit_v1_20260824_03/`.
+The authorized tree is exactly 2,842 regular files / 119,555,475 bytes with
+path-sorted inventory SHA-256
+`a97f9d4541c339d3cb6782bf499eed61ade9bfe68270419b7a62f500f4aa944a`.
+It contains raw cards and requests, model responses, reviewer text and
+rationales, operational receipts, logs, and machine-local paths. No confirmed
+live secret was found in the pre-publication review, but the repository is
+public and these bytes may remain permanently in Git history, forks, mirrors,
+and caches. The deleted `_02` attempt is not authorized, and this exception
+does not cover any other collection, capsule, replay, or audit data. The v1/v2
+publication locks remain unchanged historical safe/report-publication scopes;
+they do not bind or certify this later raw-archive exception. This publication
+creates no model, provider, network, GPU, replay, treatment, GUI, tool, or
+action authority.
+
 Owner direct-smoke boundary (2026-08-30): notwithstanding the historical
 deferred/backlog language above, the owner authorized one non-formal direct
 smoke on GPU 0 with `CUDA_VISIBLE_DEVICES=0`, a loopback-only service at
