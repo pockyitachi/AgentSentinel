@@ -186,6 +186,9 @@ def parsing_response_to_andoid_world_env_action(
 
 
 class Qwen3VLAgentMCP(MCPAgent):
+    sentinel_host_id = "mobileworld.qwen3vl.actor"
+    sentinel_history_codec_id = "mobileworld.g1.history-codec.qwen-flat-progress"
+
     def __init__(
         self,
         model_name: str,
@@ -267,55 +270,56 @@ class Qwen3VLAgentMCP(MCPAgent):
 
         pretty_print_messages(messages)
 
-        audit_retry_group = self._begin_outer_model_audit_retry_group()
+        with self._sentinel_logical_call_scope(attributes={"adapter": "qwen3vl"}):
+            audit_retry_group = self._begin_outer_model_audit_retry_group()
 
-        try_times = 3
-        adapter_attempt_index = 0
-        origin_h, origin_w = screenshot.height, screenshot.width
-        parsed_response = None
+            try_times = 3
+            adapter_attempt_index = 0
+            origin_h, origin_w = screenshot.height, screenshot.width
+            parsed_response = None
 
-        while True:
-            adapter_attempt_index += 1
-            if audit_retry_group is None:
-                prediction = self.openai_chat_completions_create(
-                    model=self.model_name,
-                    messages=messages,
-                    retry_times=3,
-                    **self.runtime_conf,
-                )
-            else:
-                with self._outer_model_audit_attempt_scope(
-                    audit_retry_group,
-                    adapter_attempt_index=adapter_attempt_index,
-                    # Provider failure exits this adapter; only a successful but
-                    # malformed response reaches the outer parse retry.
-                    adapter_retry_planned=False,
-                ):
+            while True:
+                adapter_attempt_index += 1
+                if audit_retry_group is None:
                     prediction = self.openai_chat_completions_create(
                         model=self.model_name,
                         messages=messages,
                         retry_times=3,
                         **self.runtime_conf,
                     )
-
-            if prediction is None:
-                raise Exception("Error when fetching response from clients")
-
-            try:
-                parsed_response = parse_action_to_structure_output(
-                    prediction,
-                )
-
-                logger.info(f"Parsed response: \n{parsed_response}")
-                break
-            except Exception:
-                if try_times > 0:
-                    logger.error("Error when parsing response from clients")
-                    logger.error(traceback.format_exc())
-                    prediction = None
-                    try_times -= 1
                 else:
-                    raise Exception("Failed to parse response after maximum retries")
+                    with self._outer_model_audit_attempt_scope(
+                        audit_retry_group,
+                        adapter_attempt_index=adapter_attempt_index,
+                        # Provider failure exits this adapter; only a successful but
+                        # malformed response reaches the outer parse retry.
+                        adapter_retry_planned=False,
+                    ):
+                        prediction = self.openai_chat_completions_create(
+                            model=self.model_name,
+                            messages=messages,
+                            retry_times=3,
+                            **self.runtime_conf,
+                        )
+
+                if prediction is None:
+                    raise Exception("Error when fetching response from clients")
+
+                try:
+                    parsed_response = parse_action_to_structure_output(
+                        prediction,
+                    )
+
+                    logger.info(f"Parsed response: \n{parsed_response}")
+                    break
+                except Exception:
+                    if try_times > 0:
+                        logger.error("Error when parsing response from clients")
+                        logger.error(traceback.format_exc())
+                        prediction = None
+                        try_times -= 1
+                    else:
+                        raise Exception("Failed to parse response after maximum retries")
 
         if parsed_response is None:
             return "llm parse error after multiple retries", JSONAction(action_type=ENV_FAIL)
