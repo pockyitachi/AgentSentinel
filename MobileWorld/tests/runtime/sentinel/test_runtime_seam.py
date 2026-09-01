@@ -394,16 +394,30 @@ def test_active_reuses_one_validated_history_only_edit_across_transport_retry(
 def test_r21_rejects_correction_insertions_that_change_current_observation() -> None:
     codec, request = _fixture_codec_and_request()
     original = deepcopy(request)
+    outputs: list[SentinelPolicyOutput] = []
+
+    def rejected_replace(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        output = _replace_output(request_value, context, ir)
+        outputs.append(output)
+        return output
+
     sentinel, policy = _sentinel(
         mode=SentinelMode.ACTIVE,
-        policy_factory=_replace_output,
+        policy_factory=rejected_replace,
         codec=codec,
     )
-    result = sentinel.logical_call(
-        host_id=QWEN_HOST_ID, history_codec_id=QWEN_CODEC_ID
-    ).before_model_call(request)
+    call = sentinel.logical_call(host_id=QWEN_HOST_ID, history_codec_id=QWEN_CODEC_ID)
+    result = call.before_model_call(request)
+    cached = call.before_model_call(request)
     assert policy.evaluate_count == 1
+    assert cached is result
     assert result.receipt.fallback_reason is SentinelFallbackReason.INVALID_POLICY_OUTPUT
+    assert result.receipt.policy_output_sha256 == canonical_sha256(outputs[0].to_dict())
+    assert result.receipt.policy_output_sha256 != canonical_sha256(
+        {"decisions": [], "transformation_plan": None}
+    )
     assert result.receipt.edit_applied is False
     assert result.final_request == original
     assert request == original
@@ -500,6 +514,31 @@ def test_existing_max_token_wire_alias_does_not_repeat_sentinel_or_change_histor
         key: value for key, value in captured[1].items() if key != "max_completion_tokens"
     }
     assert first_without_alias == second_without_alias
+
+
+def test_opaque_sdk_parameter_stays_original_outside_canonical_json_admission() -> None:
+    codec, request = _fixture_codec_and_request()
+    opaque_parameter = object()
+    request["opaque_sdk_parameter"] = opaque_parameter
+    sink = MemorySentinelReceiptSink()
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        codec=codec,
+        sink=sink,
+    )
+    agent = _Agent(prompt_sentinel=sentinel)
+    captured: list[dict[str, Any]] = []
+
+    def create(**kwargs: Any) -> _Response:
+        captured.append(kwargs)
+        return _Response()
+
+    agent.openai_client = _client(create)
+    assert _call_base(agent, request) == "ok"
+    assert captured[0]["opaque_sdk_parameter"] is opaque_parameter
+    assert captured[0]["messages"] is request["messages"]
+    assert policy.evaluate_count == 0
+    assert sink.receipts == ()
 
 
 def test_global_kill_switch_and_sentinel_role_bypass_before_codec_or_policy() -> None:
@@ -656,6 +695,43 @@ def test_kill_switch_activation_during_evaluation_discards_candidate() -> None:
     assert result.receipt.global_kill_switch_active is True
     assert result.receipt.policy_evaluated is True
     assert result.receipt.edit_applied is False
+
+
+def test_kill_switch_activation_pulse_during_evaluation_discards_candidate() -> None:
+    codec, request = _fixture_codec_and_request()
+    registry = HistoryCodecRegistry()
+    registry.register(codec)
+    switch = SentinelGlobalSwitch()
+
+    def pulse_then_edit(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        switch.set_active(True)
+        switch.set_active(False)
+        return _drop_output(request_value, context, ir)
+
+    policy = DeterministicFakeSentinelPolicy(pulse_then_edit)
+    sink = MemorySentinelReceiptSink()
+    sentinel = PromptSentinel(
+        policy=policy,
+        codec_registry=registry,
+        host_configs={QWEN_HOST_ID: SentinelHostConfig(mode=SentinelMode.ACTIVE)},
+        receipt_sink=sink,
+        global_switch=switch,
+        logical_call_id_factory=lambda: "kill-pulse-during-evaluation",
+    )
+    call = sentinel.logical_call(host_id=QWEN_HOST_ID, history_codec_id=QWEN_CODEC_ID)
+    result = call.before_model_call(request)
+    cached = call.before_model_call(request)
+    assert cached is result
+    assert result.final_request == request
+    assert result.receipt.fallback_reason is SentinelFallbackReason.INVARIANT_FAILURE
+    assert result.receipt.validation_checks == ("global_kill_switch_activated_during_evaluation",)
+    assert result.receipt.global_kill_switch_active is False
+    assert result.receipt.policy_evaluated is True
+    assert result.receipt.edit_applied is False
+    assert policy.evaluate_count == 1
+    assert len(sink.receipts) == 1
 
 
 def test_per_host_modes_are_independent_and_default_off() -> None:
@@ -1016,14 +1092,73 @@ def test_typed_failures_never_expose_partial_transform(case: str, reason: Any) -
         global_switch=SentinelGlobalSwitch(),
         logical_call_id_factory=lambda: f"failure-{case}",
     )
-    result = sentinel.logical_call(
+    call = sentinel.logical_call(
         host_id=QWEN_HOST_ID,
         history_codec_id=QWEN_CODEC_ID,
-    ).before_model_call(selected_request)
+    )
+    result = call.before_model_call(selected_request)
     assert result.receipt.fallback_reason is reason
     assert result.final_request == selected_request
     assert result.receipt.edit_applied is False
     assert result.receipt.final_request_sha256 == result.receipt.raw_request_sha256
+    if case == "sidecar":
+        assert call.before_model_call(selected_request) is result
+        assert result.receipt.validation_checks == ("sidecar_admission_failed",)
+        assert selected_policy.evaluate_count == 0
+
+
+def test_sidecar_commit_failure_falls_back_after_one_policy_evaluation() -> None:
+    codec, request = _fixture_codec_and_request()
+    outputs: list[SentinelPolicyOutput] = []
+
+    def captured_drop(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        output = _drop_output(request_value, context, ir)
+        outputs.append(output)
+        return output
+
+    class FailingTransaction:
+        def __init__(self) -> None:
+            self.commit_count = 0
+            self.abort_count = 0
+
+        def commit(self, _receipt: Any) -> None:
+            self.commit_count += 1
+            raise OSError("commit unavailable")
+
+        def abort(self) -> None:
+            self.abort_count += 1
+
+    class CommitFailingSink:
+        def __init__(self) -> None:
+            self.begin_count = 0
+            self.transaction = FailingTransaction()
+
+        def begin(self, _logical_call_id: str) -> FailingTransaction:
+            self.begin_count += 1
+            return self.transaction
+
+    sink = CommitFailingSink()
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=captured_drop,
+        codec=codec,
+        sink=sink,
+    )
+    call = sentinel.logical_call(host_id=QWEN_HOST_ID, history_codec_id=QWEN_CODEC_ID)
+    result = call.before_model_call(request)
+    cached = call.before_model_call(request)
+    assert cached is result
+    assert result.final_request == request
+    assert result.receipt.fallback_reason is SentinelFallbackReason.SIDECAR_FAILURE
+    assert result.receipt.validation_checks == ("sidecar_commit_failed",)
+    assert result.receipt.policy_evaluated is True
+    assert result.receipt.policy_output_sha256 == canonical_sha256(outputs[0].to_dict())
+    assert policy.evaluate_count == 1
+    assert sink.begin_count == 1
+    assert sink.transaction.commit_count == 1
+    assert sink.transaction.abort_count == 1
 
 
 @pytest.mark.parametrize("case", ("unbound_material", "record_mismatch", "duplicate_operation"))
@@ -1120,6 +1255,112 @@ def test_external_receipt_sink_is_repo_external_owner_only_and_hash_only(tmp_pat
     assert payload["exact_diffs_persisted"] is False
 
 
+def test_external_receipt_transaction_has_no_replaceable_named_temp_during_policy(
+    tmp_path: Path,
+) -> None:
+    codec, request = _fixture_codec_and_request()
+    root = tmp_path / "anonymous-sentinel-sidecars"
+    sink = ExternalSentinelReceiptSink(root, repository_root=REPO_ROOT)
+
+    def inspect_root_then_keep(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        assert list(root.iterdir()) == []
+        return _keep_output(request_value, context, ir)
+
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.SHADOW,
+        policy_factory=inspect_root_then_keep,
+        codec=codec,
+        sink=sink,
+    )
+    result = sentinel.logical_call(
+        host_id=QWEN_HOST_ID,
+        history_codec_id=QWEN_CODEC_ID,
+    ).before_model_call(request)
+    assert result.receipt.fallback_reason is None
+    assert policy.evaluate_count == 1
+    assert [path.name for path in root.iterdir()] == [
+        f"{result.receipt.logical_call_id}.sentinel-receipt.v1.json"
+    ]
+
+
+def test_external_receipt_fd_link_capability_fails_before_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codec, request = _fixture_codec_and_request()
+    root = tmp_path / "unavailable-fd-link-sidecars"
+    sink = ExternalSentinelReceiptSink(root, repository_root=REPO_ROOT)
+    real_stat = os.stat
+
+    def hide_proc_fd(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        if isinstance(path, str) and path.startswith("/proc/self/fd/"):
+            raise FileNotFoundError("injected missing procfs")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr("mobile_world.runtime.sentinel.sidecar.os.stat", hide_proc_fd)
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        codec=codec,
+        sink=sink,
+    )
+    result = sentinel.logical_call(
+        host_id=QWEN_HOST_ID,
+        history_codec_id=QWEN_CODEC_ID,
+    ).before_model_call(request)
+    assert result.final_request == request
+    assert result.receipt.fallback_reason is SentinelFallbackReason.SIDECAR_FAILURE
+    assert result.receipt.validation_checks == ("sidecar_admission_failed",)
+    assert result.receipt.policy_evaluated is False
+    assert policy.evaluate_count == 0
+    assert list(root.iterdir()) == []
+
+
+@pytest.mark.parametrize("mutation", ("chmod", "replace"))
+def test_external_receipt_root_change_before_commit_forces_original(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    codec, request = _fixture_codec_and_request()
+    root = tmp_path / "mutable-sentinel-sidecars"
+    moved = tmp_path / "moved-sentinel-sidecars"
+    sink = ExternalSentinelReceiptSink(root, repository_root=REPO_ROOT)
+
+    def mutate_root_then_edit(
+        request_value: JsonValue, context: SentinelContext, ir: HistoryIR
+    ) -> SentinelPolicyOutput:
+        if mutation == "chmod":
+            root.chmod(0o777)
+        else:
+            root.rename(moved)
+            root.mkdir(mode=0o700)
+        return _drop_output(request_value, context, ir)
+
+    sentinel, policy = _sentinel(
+        mode=SentinelMode.ACTIVE,
+        policy_factory=mutate_root_then_edit,
+        codec=codec,
+        sink=sink,
+    )
+    try:
+        result = sentinel.logical_call(
+            host_id=QWEN_HOST_ID,
+            history_codec_id=QWEN_CODEC_ID,
+        ).before_model_call(request)
+        assert result.final_request == request
+        assert result.receipt.fallback_reason is SentinelFallbackReason.SIDECAR_FAILURE
+        assert result.receipt.validation_checks == ("sidecar_commit_failed",)
+        assert result.receipt.policy_evaluated is True
+        assert policy.evaluate_count == 1
+        assert list(root.iterdir()) == []
+        if moved.exists():
+            assert list(moved.iterdir()) == []
+    finally:
+        if mutation == "chmod":
+            root.chmod(0o700)
+
+
 def test_external_receipt_sink_failure_never_exposes_a_partial_final_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1127,7 +1368,7 @@ def test_external_receipt_sink_failure_never_exposes_a_partial_final_file(
     codec, request = _fixture_codec_and_request()
     root = tmp_path / "transactional-sentinel-sidecars"
     sink = ExternalSentinelReceiptSink(root, repository_root=REPO_ROOT)
-    sentinel, _policy = _sentinel(
+    sentinel, policy = _sentinel(
         mode=SentinelMode.ACTIVE,
         codec=codec,
         sink=sink,
@@ -1139,6 +1380,8 @@ def test_external_receipt_sink_failure_never_exposes_a_partial_final_file(
         nonlocal writes
         writes += 1
         if writes == 1:
+            return real_write(fd, payload)
+        if writes == 2:
             prefix = memoryview(payload)[:17]
             return real_write(fd, prefix)
         raise OSError("injected transactional write failure")
@@ -1149,7 +1392,10 @@ def test_external_receipt_sink_failure_never_exposes_a_partial_final_file(
         history_codec_id=QWEN_CODEC_ID,
     ).before_model_call(request)
     assert result.receipt.fallback_reason is SentinelFallbackReason.SIDECAR_FAILURE
+    assert result.receipt.validation_checks == ("sidecar_commit_failed",)
+    assert result.receipt.policy_evaluated is True
     assert result.final_request == request
+    assert policy.evaluate_count == 1
     assert list(root.iterdir()) == []
 
 

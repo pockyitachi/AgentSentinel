@@ -29,10 +29,18 @@ PromptSentinel.before_model_call(
 ```
 
 `SentinelContext` MUST bind a non-secret `host_id` and a stable
-`logical_call_id`. `SentinelResult` MUST contain an untouched raw-request
-snapshot, a separately constructed final request, and one schema-valid receipt.
-It MUST NOT contain or choose a provider response, parsed action, GUI action, or
-environment transition.
+`logical_call_id`. For an admitted request, `SentinelResult` MUST contain an
+untouched raw-request snapshot, a separately constructed final request, and one
+schema-valid receipt. It MUST NOT contain or choose a provider response, parsed
+action, GUI action, or environment transition.
+
+The v1 semantic admission domain is the existing G1.2 canonical-JSON provider
+request envelope. An SDK argument containing an opaque, non-JSON Python object
+is outside that domain: BaseAgent MUST pass the exact Original objects through,
+MUST NOT start Codec or policy work, and emits no synthetic hash or typed v1
+receipt for that unadmitted call. The integration backstop logs only a fixed
+diagnostic. A future typed treatment of opaque SDK values requires a versioned
+semantic-projection plus opaque-passthrough contract.
 
 This is an additive runtime overlay. It does not edit or weaken the accepted
 G1.2 contracts, alter Collector v1 events, modify a frozen G1.3/G1.4/G1.5
@@ -67,17 +75,24 @@ fake providers. `ACTIVE` is test-only in this story. No real provider/client,
 model call, network, GPU, model load/service, MobileWorld backend, GUI/tool
 action, replay, or returned-action execution is authorized.
 
-`SHADOW` and `ACTIVE` require an explicitly configured receipt sink. Missing
-or failed receipt storage is `SIDECAR_FAILURE` and forces Original before any
-semantic policy work or actor send. Default `OFF` and recursion/kill bypasses
-remain safe without a sink because they perform no semantic work.
+`SHADOW` and `ACTIVE` require an explicitly configured receipt sink and a
+successful receipt-transaction admission before request validation, Codec
+extraction, or policy evaluation. A missing sink, legacy emit-only sink, or
+failed admission is `SIDECAR_FAILURE`, evaluates no policy, and forces Original.
+The admitted transaction is committed only after the final result is known. A
+commit failure can therefore occur after policy evaluation, but still forces a
+typed `SIDECAR_FAILURE` and exact Original before any actor provider send.
+Default `OFF` and recursion/kill bypasses remain safe without a sink because
+they perform no semantic work; their receipt publication is best-effort.
 
 The configured policy deadline is a real bounded wait. A policy worker that
 does not finish before the deadline is abandoned as a daemon computation and
 the actor immediately receives Original; its late return can never update the
 cached result or reach the actor provider. The global switch is checked both
-before semantic work and again at candidate-selection time. Activation during
-evaluation discards the candidate as a typed invariant fallback to Original.
+before semantic work and again at candidate-selection time. A monotonic
+activation generation detects both a held activation and an activate-then-
+deactivate pulse during evaluation; either discards the candidate as a typed
+invariant fallback to Original.
 Candidate selection is the kill-switch linearization point for a logical call:
 activation after that point applies to new logical decisions, while an already
 validated immutable result remains unchanged across its in-flight retries.
@@ -111,8 +126,9 @@ Provider attempt IDs remain distinct and may reference the same logical-call
 ID. The runtime produces one receipt for the logical call, not one per provider
 attempt.
 
-After an evaluated `SHADOW` or `ACTIVE` result, reusing a logical-call ID with
-a different raw-request hash is `REQUEST_DRIFT`. It MUST NOT trigger another
+After any non-bypass `SHADOW` or `ACTIVE` attempt, including a typed fallback
+that occurred before policy evaluation, reusing a logical-call ID with a
+different raw-request hash is `REQUEST_DRIFT`. It MUST NOT trigger another
 policy evaluation or apply the cached candidate to the changed request; only
 the current Original may proceed, with the typed fallback returned. A logical
 call already bypassed before semantic work remains a bypass for the current
@@ -120,10 +136,11 @@ Original and does not manufacture a failure solely because its request changed.
 
 ## 4. Transformation and invariant rules
 
-The caller-owned request and every nested value MUST remain unchanged. Runtime
-code works from a deep snapshot, binds it with the G1.2 canonical JSON SHA-256,
-and builds the candidate and final request as separate objects. No mutation is
-committed until the entire candidate has passed validation.
+For an admitted canonical-JSON request, the caller-owned request and every
+nested value MUST remain unchanged. Runtime code works from a deep snapshot,
+binds it with the G1.2 canonical JSON SHA-256, and builds the candidate and final
+request as separate objects. No mutation is committed until the entire
+candidate has passed validation.
 
 Only exact spans declared by the selected History Codec are eligible for the
 policy vocabulary `KEEP`, `DROP`, `REPLACE`, or `KEEP_UNCERTAIN`. R2.1 executes
@@ -185,14 +202,15 @@ credentials, or request content MUST NOT be copied into the lightweight receipt.
 
 ## 6. Receipt and restricted details
 
-Each logical call produces one lightweight receipt conforming to
+Each admitted canonical-JSON logical call produces one lightweight receipt conforming to
 `mobileworld.runtime.sentinel-receipt/v1`. It binds:
 
 - logical call, host, call role, configured/effective mode, bypass and kill
   switch state;
 - Codec and policy identities;
-- a canonical hash of the complete policy output (decision records plus the
-  optional transformation plan), without embedding that output;
+- a canonical hash of every structurally valid, canonicalizable complete policy
+  output (decision records plus the optional transformation plan), without
+  embedding that output, including an output later rejected by R2.1 admission;
 - raw, candidate, and final canonical request SHA-256 values (the candidate
   hash equals Original when no complete candidate exists);
 - decision kinds, the policy-output hash, whether evaluation occurred, and
@@ -212,11 +230,18 @@ operation reconstruction artifact. A future restricted-detail channel requires
 its own versioned contract and explicit configuration; it is not silently
 manufactured by this story.
 
-An external lightweight-receipt sink MUST fully write, sync, and validate a
-private temporary inode before atomically publishing the final logical-call
-name without replacement. Failure before publication leaves no final receipt;
-after atomic publication, cleanup failure cannot retroactively force the actor
-to Original against an already visible ACTIVE receipt.
+An external lightweight-receipt sink MUST reserve and sync a private owner-only
+transaction inode before semantic work. Commit MUST replace its fixed non-secret
+admission probe with the complete receipt, sync and validate that inode, then
+atomically publish the final logical-call name without replacement. Admission
+or commit failure before publication leaves no final receipt; after atomic
+publication, cleanup failure cannot retroactively force the actor to Original
+against an already visible ACTIVE receipt.
+
+The v1 external sink uses Linux anonymous `O_TMPFILE` storage and an fd-bound
+`/proc/self/fd` no-replace hard link. Lack of either capability fails safe as
+`SIDECAR_FAILURE`; cross-platform publication requires a later implementation
+with equivalent fd-bound admission and atomicity guarantees.
 
 Request views and exact diff bytes MAY be written only when an explicitly
 configured access-controlled root is outside the Git repository. Such a
@@ -236,8 +261,9 @@ R2.1 is accepted only when CPU tests prove:
 3. fake `ACTIVE` sends only a fully validated history-only candidate;
 4. transport retries, Qwen adapter retries, and streaming reuse one result and
    one logical-call ID;
-5. caller immutability, exact non-history invariants, atomic fallback, every
-   typed failure reason, and the closed receipt schema;
+5. caller immutability, exact non-history invariants, held and pulsed kill-switch
+   activation, pre-policy sidecar admission, post-policy commit failure, atomic
+   fallback, every typed failure reason, and the closed receipt schema;
 6. the existing fake provider receives the expected request while provider
    response normalization and host action parsing remain unchanged; and
 7. no live provider/model/GPU/backend/action path was invoked.

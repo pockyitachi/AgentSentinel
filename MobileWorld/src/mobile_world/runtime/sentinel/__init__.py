@@ -16,6 +16,7 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelPolicyOutput,
     SentinelReceipt,
     SentinelReceiptSink,
+    SentinelReceiptTransaction,
     SentinelResult,
     SentinelValidationStatus,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "SentinelPolicyOutput",
     "SentinelReceipt",
     "SentinelReceiptSink",
+    "SentinelReceiptTransaction",
     "SentinelResult",
     "SentinelValidationStatus",
     "bind_sentinel_logical_call",

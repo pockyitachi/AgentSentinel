@@ -449,8 +449,19 @@ class SentinelResult:
 
 
 @runtime_checkable
+class SentinelReceiptTransaction(Protocol):
+    """One admitted, single-use receipt publication transaction."""
+
+    def commit(self, receipt: SentinelReceipt) -> None: ...
+
+    def abort(self) -> None: ...
+
+
+@runtime_checkable
 class SentinelReceiptSink(Protocol):
-    def emit(self, receipt: SentinelReceipt) -> None: ...
+    """Admit durable receipt storage before any semantic Sentinel work."""
+
+    def begin(self, logical_call_id: str) -> SentinelReceiptTransaction: ...
 
 
 class SentinelContractError(ValueError):
@@ -473,6 +484,7 @@ __all__ = [
     "SentinelPolicyOutput",
     "SentinelReceipt",
     "SentinelReceiptSink",
+    "SentinelReceiptTransaction",
     "SentinelResult",
     "SentinelValidationStatus",
 ]

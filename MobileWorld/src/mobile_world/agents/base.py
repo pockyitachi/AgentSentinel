@@ -300,8 +300,8 @@ class BaseAgent(ABC):
                     attributes={} if attributes is None else attributes,
                 )
                 manager = bind_sentinel_logical_call(call)
-        except Exception as error:
-            logger.warning(f"Prompt Sentinel scope setup failed open to Original: {error}")
+        except Exception:
+            logger.warning("Prompt Sentinel scope setup failed open to Original")
             yield None
             return
         if manager is None:
@@ -367,11 +367,11 @@ class BaseAgent(ABC):
             elif "stream" in final_kwargs:
                 return model, messages, kwargs
             return final_model, final_messages, final_kwargs
-        except Exception as error:
+        except Exception:
             # Sentinel must never turn its own setup/serialization fault into an
             # actor-provider outage. Typed runtime failures are handled inside
             # PromptSentinel; this is the final integration backstop.
-            logger.warning(f"Prompt Sentinel failed open to Original: {error}")
+            logger.warning("Prompt Sentinel failed open to Original")
             return model, messages, kwargs
 
     @staticmethod

@@ -45,6 +45,7 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelPolicyOutput,
     SentinelReceipt,
     SentinelReceiptSink,
+    SentinelReceiptTransaction,
     SentinelResult,
     SentinelValidationStatus,
 )
@@ -63,17 +64,25 @@ class SentinelGlobalSwitch:
 
     def __init__(self, *, active: bool = False) -> None:
         self._active = bool(active)
+        self._activation_generation = 1 if self._active else 0
         self._lock = Lock()
 
     @property
     def active(self) -> bool:
+        return self.snapshot()[0]
+
+    def snapshot(self) -> tuple[bool, int]:
+        """Return one atomic level/activation-edge snapshot."""
+
         with self._lock:
-            return self._active
+            return self._active, self._activation_generation
 
     def set_active(self, active: bool) -> None:
         if type(active) is not bool:
             raise TypeError("kill switch state must be bool")
         with self._lock:
+            if active and not self._active:
+                self._activation_generation += 1
             self._active = active
 
 
@@ -128,8 +137,6 @@ class PromptSentinel:
             raise TypeError("policy must implement SentinelPolicy")
         if not isinstance(codec_registry, HistoryCodecResolver):
             raise TypeError("codec_registry must implement HistoryCodecResolver")
-        if receipt_sink is not None and not isinstance(receipt_sink, SentinelReceiptSink):
-            raise TypeError("receipt_sink must implement SentinelReceiptSink")
         if not isinstance(global_switch, SentinelGlobalSwitch):
             raise TypeError("global_switch must be SentinelGlobalSwitch")
         if not callable(logical_call_id_factory) or not callable(clock_ns):
@@ -212,7 +219,7 @@ class PromptSentinel:
         raw_json = canonical_json_bytes(raw)
         raw_sha256 = canonical_sha256(raw)
         config = self.host_config(context.host_id)
-        kill_switch_active = self._global_switch.active
+        kill_switch_active, kill_switch_generation = self._global_switch.snapshot()
 
         if role is SentinelCallRole.SENTINEL:
             return self._bypass_result(
@@ -265,7 +272,25 @@ class PromptSentinel:
                 reason=SentinelFallbackReason.SIDECAR_FAILURE,
                 check="semantic_mode_requires_receipt_sink",
                 started=started,
-                emit=False,
+                persist=False,
+                policy_evaluated=False,
+            )
+
+        try:
+            receipt_transaction = self._begin_receipt_transaction(context.logical_call_id)
+        except Exception:
+            return self._fallback_result(
+                raw=raw,
+                raw_json=raw_json,
+                raw_sha256=raw_sha256,
+                context=context,
+                config=config,
+                role=role,
+                history_codec_id=history_codec_id,
+                reason=SentinelFallbackReason.SIDECAR_FAILURE,
+                check="sidecar_admission_failed",
+                started=started,
+                persist=False,
                 policy_evaluated=False,
             )
 
@@ -341,12 +366,12 @@ class PromptSentinel:
             )
             try:
                 self._validate_policy_output(output)
+                policy_output_sha256 = canonical_sha256(output.to_dict())
                 if output.transformation_plan is None:
                     self._validate_no_plan_decisions(output)
                 else:
                     self._validate_decision_plan_binding(output)
                     validate_plan(raw, ir, output.transformation_plan)
-                policy_output_sha256 = canonical_sha256(output.to_dict())
             except _EvaluationFailure:
                 raise
             except Exception as exc:
@@ -406,7 +431,13 @@ class PromptSentinel:
                     SentinelFallbackReason.INVARIANT_FAILURE,
                     "caller_input_mutated",
                 )
-            if self._global_switch.active:
+            current_kill_switch_active, current_kill_switch_generation = (
+                self._global_switch.snapshot()
+            )
+            if (
+                current_kill_switch_active
+                or current_kill_switch_generation != kill_switch_generation
+            ):
                 raise _EvaluationFailure(
                     SentinelFallbackReason.INVARIANT_FAILURE,
                     "global_kill_switch_activated_during_evaluation",
@@ -449,6 +480,7 @@ class PromptSentinel:
                 candidate_json=candidate_json,
                 final_json=final_json,
                 fallback_context=(raw, context, config, role, history_codec_id, started),
+                transaction=receipt_transaction,
             )
         except _EvaluationFailure as failure:
             return self._fallback_result(
@@ -463,6 +495,22 @@ class PromptSentinel:
                 check=failure.check,
                 started=started,
                 policy_output_sha256=policy_output_sha256,
+                transaction=receipt_transaction,
+            )
+        except Exception:
+            return self._fallback_result(
+                raw=raw,
+                raw_json=raw_json,
+                raw_sha256=raw_sha256,
+                context=context,
+                config=config,
+                role=role,
+                history_codec_id=history_codec_id,
+                reason=SentinelFallbackReason.INVARIANT_FAILURE,
+                check="internal_evaluation_exception",
+                started=started,
+                policy_output_sha256=policy_output_sha256,
+                transaction=receipt_transaction,
             )
 
     def _evaluate_policy_with_timeout(
@@ -708,7 +756,7 @@ class PromptSentinel:
         bypass_reason: SentinelBypassReason,
         kill_switch_active: bool,
         started: int,
-        emit: bool = True,
+        persist: bool = True,
     ) -> SentinelResult:
         receipt = SentinelReceipt(
             logical_call_id=context.logical_call_id,
@@ -743,7 +791,7 @@ class PromptSentinel:
             _candidate_request_json=raw_json,
             _final_request_json=raw_json,
         )
-        if not emit:
+        if not persist:
             return result
         return self._finalize(
             receipt=receipt,
@@ -751,6 +799,7 @@ class PromptSentinel:
             candidate_json=raw_json,
             final_json=raw_json,
             fallback_context=(raw, context, config, role, history_codec_id, started),
+            transaction=None,
         )
 
     def bypass_reuse(
@@ -780,7 +829,7 @@ class PromptSentinel:
             bypass_reason=prior_receipt.bypass_reason,
             kill_switch_active=prior_receipt.global_kill_switch_active,
             started=started,
-            emit=False,
+            persist=False,
         )
 
     def _fallback_result(
@@ -796,9 +845,10 @@ class PromptSentinel:
         reason: SentinelFallbackReason,
         check: str,
         started: int,
-        emit: bool = True,
+        persist: bool = True,
         policy_evaluated: bool | None = None,
         policy_output_sha256: str = _EMPTY_POLICY_OUTPUT_SHA256,
+        transaction: SentinelReceiptTransaction | None = None,
     ) -> SentinelResult:
         if policy_evaluated is None:
             policy_evaluated = reason not in {
@@ -841,26 +891,16 @@ class PromptSentinel:
             _candidate_request_json=raw_json,
             _final_request_json=raw_json,
         )
-        if emit and self._receipt_sink is not None:
-            try:
-                self._receipt_sink.emit(receipt)
-            except Exception:
-                return self._fallback_result(
-                    raw=raw,
-                    raw_json=raw_json,
-                    raw_sha256=raw_sha256,
-                    context=context,
-                    config=config,
-                    role=role,
-                    history_codec_id=history_codec_id,
-                    reason=SentinelFallbackReason.SIDECAR_FAILURE,
-                    check="sidecar_emit_failed",
-                    started=started,
-                    emit=False,
-                    policy_evaluated=receipt.policy_evaluated,
-                    policy_output_sha256=receipt.policy_output_sha256,
-                )
-        return result
+        if not persist:
+            return result
+        return self._finalize(
+            receipt=receipt,
+            raw_json=raw_json,
+            candidate_json=raw_json,
+            final_json=raw_json,
+            fallback_context=(raw, context, config, role, history_codec_id, started),
+            transaction=transaction,
+        )
 
     def _finalize(
         self,
@@ -877,6 +917,7 @@ class PromptSentinel:
             str | None,
             int,
         ],
+        transaction: SentinelReceiptTransaction | None,
     ) -> SentinelResult:
         result = SentinelResult(
             receipt=receipt,
@@ -886,9 +927,17 @@ class PromptSentinel:
         )
         if self._receipt_sink is None:
             return result
+        selected_transaction = transaction
         try:
-            self._receipt_sink.emit(receipt)
+            if selected_transaction is None:
+                selected_transaction = self._begin_receipt_transaction(receipt.logical_call_id)
+            selected_transaction.commit(receipt)
         except Exception:
+            if selected_transaction is not None:
+                try:
+                    selected_transaction.abort()
+                except Exception:
+                    pass
             if receipt.validation_status is SentinelValidationStatus.BYPASSED:
                 return result
             raw, context, config, role, history_codec_id, started = fallback_context
@@ -901,13 +950,25 @@ class PromptSentinel:
                 role=role,
                 history_codec_id=history_codec_id,
                 reason=SentinelFallbackReason.SIDECAR_FAILURE,
-                check="sidecar_emit_failed",
+                check="sidecar_commit_failed",
                 started=started,
-                emit=False,
+                persist=False,
                 policy_evaluated=receipt.policy_evaluated,
                 policy_output_sha256=receipt.policy_output_sha256,
             )
         return result
+
+    def _begin_receipt_transaction(self, logical_call_id: str) -> SentinelReceiptTransaction:
+        sink = self._receipt_sink
+        if sink is None:
+            raise RuntimeError("Sentinel receipt sink is unavailable")
+        begin = getattr(sink, "begin", None)
+        if not callable(begin):
+            raise TypeError("Sentinel receipt sink has no admission boundary")
+        transaction = begin(logical_call_id)
+        if not isinstance(transaction, SentinelReceiptTransaction):
+            raise TypeError("Sentinel receipt sink returned an invalid transaction")
+        return transaction
 
     def request_drift_fallback(
         self,
@@ -933,7 +994,7 @@ class PromptSentinel:
             reason=SentinelFallbackReason.REQUEST_DRIFT,
             check="cached_raw_request_sha256_mismatch",
             started=started,
-            emit=False,
+            persist=False,
             policy_evaluated=policy_evaluated,
             policy_output_sha256=policy_output_sha256,
         )
