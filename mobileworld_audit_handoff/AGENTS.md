@@ -77,7 +77,8 @@ revived as a separate causal-evaluation effort after an explicit owner decision.
 
 Runtime Epic 2 is 1/6 complete at the repository engineering layer. ALE-324 /
 R2.1 has an accepted CPU/fake checkpoint at commit
-`b1b541d65bb915f65c534b61e15b1049f20682cd`. Linear workflow state remains
+`d5cf6c3476ffd609e510517f51c2b4ee6888932a`. It supersedes the earlier
+`b1b541d` checkpoint after focused audit hardening. Linear workflow state remains
 owner-managed. The repository dependency sequence is:
 
 ```text
@@ -132,6 +133,8 @@ Required behavior:
 
 - default mode `OFF`, plus explicit `SHADOW` and `ACTIVE`;
 - global kill switch and per-host configuration;
+- monotonic kill-switch activation detection, including an activation pulse
+  that returns to inactive before candidate selection;
 - one Sentinel evaluation per logical actor decision, identified by a stable
   logical-call ID, with the same validated result reused across BaseAgent
   transport retries, adapter-level parse retries (including Qwen's outer
@@ -148,6 +151,8 @@ Required behavior:
   payloads, or exact-diff preimages, and any future detail channel requires a
   separate access-controlled versioned contract with no secret or
   chain-of-thought logging;
+- sidecar transaction admission before SHADOW/ACTIVE semantic work, with
+  admission failure before policy and commit failure before provider transport;
 - existing provider transport, response normalization, action parser, runner,
   and action execution remain unchanged;
 - deterministic no-op/fake policy and fake-provider tests only in R2.1.
@@ -344,9 +349,10 @@ history-only invariants, requires destructive handling of user data, or would
 merge/revive the superseded causal-replay path.
 
 The R2.1 repository checkpoint is accepted only at commit
-`b1b541d65bb915f65c534b61e15b1049f20682cd`, where the shared seam, OFF/SHADOW
+`d5cf6c3476ffd609e510517f51c2b4ee6888932a`, where the shared seam, OFF/SHADOW
 parity, fake ACTIVE history-only transformation, retry reuse, recursion bypass,
-kill switch, typed fallback, transactional hash-only sidecar, and focused
-regressions were verified. Do not claim an automatic runtime policy, rubric,
-live transformation, success-rate gain, or causal effect before the
+held/pulsed kill switch, typed fallback, pre-policy sidecar admission,
+fd-bound transactional hash-only publication, rejected-output hashing, and
+focused regressions were verified. Do not claim an automatic runtime policy,
+rubric, live transformation, success-rate gain, or causal effect before the
 corresponding later work actually exists.

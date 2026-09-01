@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 1/6 repository engineering stories complete.** ALE-324 / R2.1 has an accepted CPU/fake implementation checkpoint at commit `b1b541d65bb915f65c534b61e15b1049f20682cd`; Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 1/6 repository engineering stories complete.** ALE-324 / R2.1 has an accepted CPU/fake implementation checkpoint at commit `d5cf6c3476ffd609e510517f51c2b4ee6888932a`; Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -69,7 +69,9 @@ history representation may still require a thin registered extractor/renderer.
 ## Accepted implementation boundary: ALE-324 / R2.1
 
 The repository now contains the accepted **Pre-Call Sentinel Runtime Seam**
-checkpoint at commit `b1b541d65bb915f65c534b61e15b1049f20682cd`.
+checkpoint at commit `d5cf6c3476ffd609e510517f51c2b4ee6888932a`. This
+supersedes the earlier `b1b541d` checkpoint after the focused receipt, kill-
+switch-pulse, and rejected-policy-output audit hardening.
 Its executable acceptance remains CPU-only and fake-provider-only until
 separately authorized otherwise.
 
@@ -101,6 +103,8 @@ proposals as frozen G1.2 curated plans.
 - `ACTIVE`: in tests only, send a validated deterministic transformed request
   to the existing fake provider.
 - Default to `OFF`; provide a global kill switch and explicit per-host mode.
+  Any activate-then-deactivate pulse before candidate selection must discard the
+  candidate to Original.
 - Invoke the seam exactly once per logical actor decision after host request
   assembly. Assign a stable logical-call identity and reuse the same validated
   `SentinelResult` across both BaseAgent transport retries and adapter-level
@@ -122,6 +126,9 @@ proposals as frozen G1.2 curated plans.
   views, operation payloads, or exact-diff preimages. Any future detail channel
   requires a separate versioned, access-controlled, repo-external contract;
   never duplicate secrets or chain of thought into receipts.
+- Require sidecar transaction admission before semantic work in SHADOW/ACTIVE;
+  admission failure evaluates no policy, and commit failure still forces
+  Original before provider transport.
 - Keep the existing provider transport, response normalization, action parser,
   runner, and action execution path unchanged.
 
