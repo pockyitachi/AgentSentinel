@@ -77,9 +77,10 @@ revived as a separate causal-evaluation effort after an explicit owner decision.
 
 Runtime Epic 2 is 1/6 complete at the repository engineering layer. ALE-324 /
 R2.1 has an accepted CPU/fake checkpoint at commit
-`d5cf6c3476ffd609e510517f51c2b4ee6888932a`. It supersedes the earlier
-`b1b541d` checkpoint after focused audit hardening. Linear workflow state remains
-owner-managed. The repository dependency sequence is:
+`58820a8d68870ad0b10df504b41fefb6c500561a`. It supersedes the `d5cf6c3`
+checkpoint after strict request-domain, cache, and policy-output hash-ordering
+hardening. Linear workflow state remains owner-managed. The repository
+dependency sequence is:
 
 ```text
 R2.1 / ALE-324
@@ -141,6 +142,10 @@ Required behavior:
   parse-retry loop), and the streaming path;
 - `call_role=sentinel` bypass to prevent recursion;
 - immutable raw request and a separately constructed final request;
+- strict finite canonical-JSON admission before copying, hashing, cache lookup,
+  or sidecar admission; serializer-coercible non-JSON values pass through the
+  fixed-message BaseAgent backstop as the exact Original with no semantic work
+  or receipt;
 - exact history-only edits with system/task/tools/current observation/images,
   roles/order, model/sampling parameters, and all non-history content preserved;
 - typed fallback to Original on timeout, exception, invalid output, unsupported
@@ -151,6 +156,9 @@ Required behavior:
   payloads, or exact-diff preimages, and any future detail channel requires a
   separate access-controlled versioned contract with no secret or
   chain-of-thought logging;
+- canonical hashing of every correctly typed policy output before duplicate-ID,
+  operation-binding, or later admission rejection; hashing never grants
+  admission;
 - sidecar transaction admission before SHADOW/ACTIVE semantic work, with
   admission failure before policy and commit failure before provider transport;
 - existing provider transport, response normalization, action parser, runner,
@@ -349,10 +357,11 @@ history-only invariants, requires destructive handling of user data, or would
 merge/revive the superseded causal-replay path.
 
 The R2.1 repository checkpoint is accepted only at commit
-`d5cf6c3476ffd609e510517f51c2b4ee6888932a`, where the shared seam, OFF/SHADOW
+`58820a8d68870ad0b10df504b41fefb6c500561a`, where the shared seam, OFF/SHADOW
 parity, fake ACTIVE history-only transformation, retry reuse, recursion bypass,
 held/pulsed kill switch, typed fallback, pre-policy sidecar admission,
-fd-bound transactional hash-only publication, rejected-output hashing, and
-focused regressions were verified. Do not claim an automatic runtime policy,
-rubric, live transformation, success-rate gain, or causal effect before the
-corresponding later work actually exists.
+fd-bound transactional hash-only publication, strict pre-copy/pre-cache JSON
+admission, complete rejected-output hashing, and focused regressions were
+verified. Do not claim an automatic runtime policy, rubric, live
+transformation, success-rate gain, or causal effect before the corresponding
+later work actually exists.

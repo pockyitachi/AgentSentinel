@@ -43,13 +43,14 @@ D-028 formal matrix。两个 v1 Codec 继续 `live_ready=false`，formal readine
 且没有新的 live/GPU 授权。**
 
 **Runtime ALE-324 / R2.1 的 repository engineering checkpoint 已在 commit
-`d5cf6c3476ffd609e510517f51c2b4ee6888932a` 完成。** 当前实现提供共享 pre-provider
+`58820a8d68870ad0b10df504b41fefb6c500561a` 完成。** 当前实现提供共享 pre-provider
 `PromptSentinel` seam、默认 OFF、显式 SHADOW/测试专用 ACTIVE、全局 kill switch、per-host
 配置、logical-call 单次求值与 transport/adapter/stream retry 复用、Sentinel-role 递归旁路、
-typed Original fallback、严格 history-only 验证，以及 transactional、hash-only、repo-external
-receipt。Qwen、MAI 与 Seed 接入复用现有 provider/parser/action 路径；未实现自动 validity policy、
-multi-path rubric、真实 actor/Sentinel 模型或 live transformation。Linear 工作流状态由 owner
-单独管理，本仓库交付没有修改 Linear。**
+typed Original fallback、严格 canonical-JSON admission 与 history-only 验证，以及
+transactional、hash-only、repo-external receipt。Qwen、MAI 与 Seed 接入复用现有
+provider/parser/action 路径；未实现自动 validity policy、multi-path rubric、真实
+actor/Sentinel 模型或 live transformation。Linear 工作流状态由 owner 单独管理，本仓库交付
+没有修改 Linear。**
 
 **Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
 并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
@@ -995,4 +996,13 @@ Canonical request boundary: R2.1 semantic admission remains limited to canonical
 Bindings: the updated R2.1 contract is SHA-256 `1909301ccf73ecae9da8c8abbac8ecf978d9df45d894ae7c918f3163cacacca2` / 14,659 bytes; the receipt schema remains byte-unchanged at SHA-256 `b7ea6999c474aa298d5569dfea85b71f572b033d9c222ad07c34e0321422b497` / 11,231 bytes. `seam.py` is SHA-256 `5836d017ef4b14847ad357ed45a3be67928123d088bae0e6cbaec6d28bc8b841`; `sidecar.py` is `ef899b7aa95174235d96c44842f8156e5867ba28004e9230c3b539c625912c31`; and the focused test file is `3206cad55b2038372d3d6e6d860b1157ecbf2ae4689a1ff9edaa509c6c41cfea`.
 Verification: the final focused R2.1 suite passed 50/50; the affected R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 485/485; and the complete MobileWorld test suite passed 1570/1570 on the final candidate. Ruff check/format, Python compilation, checked-in Draft 2020-12 receipt-schema validation, and Git diff checks passed. Independent cold reviews bound diff SHA-256 `4a355334272f8d2a601dceaa72075505bb38307bdfe37a778f74bbae2e498120` and reported no remaining P0/P1.
 Authority: this was CPU/offline and fake-provider-only maintenance. It invoked no live model/provider, network, GPU, MobileWorld backend, GUI/tool/action, replay, or external data mutation. It does not implement R2.2/R2.3, grant later-story/live authority, push or merge the branch, or change Linear; Linear workflow remains owner-managed.
+```
+
+```text
+Date: 2026-09-01 UTC
+ALE-324 / R2.1 strict admission hardening: commit `58820a8d68870ad0b10df504b41fefb6c500561a` supersedes the `d5cf6c3` repository checkpoint after closing two independently reproduced P1 gaps. Runtime semantic admission now requires an exact finite canonical-JSON Python tree before copying, hashing, logical-call cache lookup, or sidecar transaction admission. Tuples, non-string dictionary keys, Python container/scalar subclasses, non-finite floats, and other non-admitted values therefore follow the fixed-message BaseAgent backstop as the exact Original object graph, with policy evaluation 0, sidecar admission 0, and receipt count 0. This also prevents a list/tuple or string-key/integer-key canonical-hash collision from reusing a cached transformed result.
+Policy-output binding order: after the exact `SentinelPolicyOutput` type gate, R2.1 canonicalizes and hashes the complete output before duplicate decision-ID, operation-binding, DROP-only, or later G1.2 admission checks. A canonicalizable output rejected for duplicate decision IDs now retains its actual output SHA-256 rather than the empty-output sentinel; a wrong output type still retains the empty sentinel. Hashing records the evaluated output and never grants admission.
+Bindings: `seam.py` is SHA-256 `9bbfa78c849bbaf108a2fea01cb0ffaa6584e8423856f176d8b5e9299f27f9f4` / 43,347 bytes; the focused test file is `753567365eb7b6a3a350ce7c54409c056fbe78983f49aa11cbb00623963a8396` / 64,425 bytes; and the updated R2.1 contract is `efcbd1b904235822619d3b4cf76607a8c9884ee3a158de1d4daf9efa1fdc257f` / 15,705 bytes. The closed receipt schema remains byte-unchanged at SHA-256 `b7ea6999c474aa298d5569dfea85b71f572b033d9c222ad07c34e0321422b497` / 11,231 bytes.
+Verification: the final focused R2.1 suite passed 55/55; the affected R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 490/490; and the complete MobileWorld test suite passed 1575/1575. Ruff check/format, Python compilation, receipt-schema validation, and Git diff checks passed. Independent cold review reported no remaining P0/P1 on the final patch.
+Limitations and authority: non-canonical but SDK-coercible parameter objects intentionally receive no v1 typed Sentinel receipt; the exact Original is preserved, and any typed treatment would require a new versioned projection/passthrough contract. The earlier Linux `O_TMPFILE` and `/proc/self/fd` external-sidecar availability limitation remains unchanged. This was CPU/offline and fake-provider-only maintenance; it used no live model/provider, network, GPU, MobileWorld backend, replay, GUI/tool/action, or persistent repo-external artifact. It does not implement R2.2/R2.3, authorize later work, push or merge the branch, or change Linear; Linear workflow remains owner-managed.
 ```
