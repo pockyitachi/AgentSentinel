@@ -1,233 +1,271 @@
-# Agent instructions
+# AgentSentinel agent instructions
 
-This is the AgentSentinel monorepo. The active implementation target is
-`MobileWorld/`, but the authoritative scope and contracts live in
-`mobileworld_audit_handoff/`.
+Last synchronized with the owner and Linear: **2026-09-01 UTC**.
 
-Before changing code, read these files completely:
+This is the AgentSentinel monorepo. `MobileWorld/` is the active implementation
+tree. `mobileworld_audit_handoff/` contains the historical contracts, evidence
+provenance, and the detailed task instructions.
+
+## Current authority and precedence
+
+The owner has pivoted the active project from the former paper-grade G1 causal
+replay chain to a **Runtime Sentinel MVP**. This file and
+`mobileworld_audit_handoff/AGENTS.md` are the current execution authority for
+that pivot.
+
+Where older `README.md`, `STATUS.md`, `PROJECT_CONTEXT.md`,
+`SERVER_AGENT_INSTRUCTIONS.md`, G1.6 contracts, or dated status entries still
+call ALE-324 a human-curation task or prohibit all runtime Sentinel work, those
+sentences are historical and are superseded for current execution by these two
+AGENTS files. Their recorded evidence, hashes, limitations, and frozen-artifact
+rules remain valid.
+
+Do **not** merge or cherry-pick commit
+`478740c` from `codex/ale-324-g16-ai-curation-amendment`. It implements the
+superseded D-037 AI-replicate curation route and is not current authority.
+
+This pivot does not authorize live model/provider calls, external network use,
+GPU use, MobileWorld GUI/tool/action execution, backend restore, or replay.
+Those operations still require a separate, explicit owner authorization.
+
+## Progress snapshot
+
+| Workstream | Current state |
+| --- | --- |
+| Epic 1 motivation investigation | **Complete: 6/6 models**, 117 tasks per model, 702 model-task cases. The frozen audit reports 116 strict-MHR cases and 94 cases with observed local harm. All results remain observational and `causal_claim_supported=false`. |
+| Collector v1 | **Complete** for the six-model study: default-off, passive, fail-open, event-sourced, append-only, lossless for observable application-layer runtime data, and label-free. |
+| G1.1–G1.3 / ALE-319–321 | **Complete**: frozen replay protocol/registry, portable History IR/Core contracts, and an immutable v1.1 publication of 190 capsules with 0 exclusions. |
+| G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
+| G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
+| Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
+| Runtime Epic 2 / ALE-318 | **In progress: 0/6 runtime stories complete.** The next task is ALE-324 / R2.1. |
+
+Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
+observational associations into causal or cross-model ranking claims.
+
+## Runtime Sentinel objective
+
+The intended production boundary is:
+
+```text
+host assembles the exact actor request
+    -> PromptSentinel.before_model_call(...)
+    -> History Codec extracts host-native model-visible history
+    -> evidence-grounded policy proposes validity operations
+    -> independent rubric component proposes task-path relevance
+    -> invariant validator and renderer construct a protocol-valid request
+    -> the unchanged actor model chooses the GUI action
+```
+
+Sentinel modifies only the model-bound history view. It does not replace the
+planner, choose an action, parse an action, execute an action, or control the
+environment.
+
+`model-agnostic` means the seam, policy interface, validator, receipts, and
+fallback semantics do not branch on target model identity. Each distinct
+history representation may still require a thin registered extractor/renderer.
+
+## Active authorized implementation scope: ALE-324 / R2.1
+
+The next development task is **Implement the Pre-Call Sentinel Runtime Seam**.
+It is CPU-only and fake-provider-only until separately authorized otherwise.
+
+Before implementation, add a small versioned runtime decision/contract that
+records the pivot and the exact R2.1 interface. Then implement a shared seam,
+conceptually:
+
+```text
+PromptSentinel.before_model_call(
+    request,
+    context,
+    history_codec_id,
+    call_role,
+) -> SentinelResult
+```
+
+R2.1 may use only deterministic no-op/fake policies. Automatic claim validity,
+correction generation, multi-path rubric semantics, and real model-backed
+Sentinel decisions belong to later stories.
+
+### Required R2.1 behavior
+
+- `OFF`: perform no Sentinel semantic work and send the original request.
+- `SHADOW`: compute and record a fake/deterministic would-edit result, but send
+  the original request.
+- `ACTIVE`: in tests only, send a validated deterministic transformed request
+  to the existing fake provider.
+- Default to `OFF`; provide a global kill switch and explicit per-host mode.
+- Invoke the seam exactly once per logical actor decision after host request
+  assembly. Assign a stable logical-call identity and reuse the same validated
+  `SentinelResult` across both BaseAgent transport retries and adapter-level
+  parse retries, including Qwen's outer parse-retry loop. A streaming attempt
+  must use that same result and may not trigger a second Sentinel evaluation.
+- Mark Sentinel-owned calls as `call_role=sentinel`; they must bypass the hook
+  to prevent recursion.
+- Never mutate the caller's request. Preserve the immutable raw request and
+  return a separate final request.
+- Restrict changes to declared history spans. System policy, task instruction,
+  tools, current screenshot and other multimodal blocks, roles/order,
+  model/sampling settings, and all non-history bytes must remain invariant.
+- Timeout, exception, invalid schema, ambiguous span, unsupported family,
+  renderer failure, or invariant failure must produce a typed fallback to the
+  original request. A partially transformed request must never be sent.
+- Record a lightweight sidecar receipt: raw/final hashes, codec, mode,
+  operations, exact diff, validation, fallback reason, and latency. Store
+  request views and exact diffs only in a configured, access-controlled,
+  repo-external sidecar root; apply the existing credential exclusion/redaction
+  policy and never duplicate secrets or chain of thought into receipts.
+- Keep the existing provider transport, response normalization, action parser,
+  runner, and action execution path unchanged.
+
+The likely common boundary is
+`MobileWorld/src/mobile_world/agents/base.py::BaseAgent.openai_chat_completions_create`.
+Production-shaped request construction for the first two hosts is in
+`MobileWorld/src/mobile_world/agents/implementations/qwen3vl.py` and
+`MobileWorld/src/mobile_world/agents/implementations/mai_ui_agent.py`.
+Confirm the live code rather than trusting old line numbers.
+
+## Runtime Epic 2 sequence
+
+```text
+ALE-324 / R2.1 pre-call seam
+    -> { ALE-325 / R2.2 evidence-grounded SentinelPolicy (SHADOW first)
+       , ALE-326 / R2.3 multi-path rubric tracker }
+    -> ALE-327 / R2.4 Qwen + MAI runtime vertical slices
+    -> ALE-328 / R2.5 frozen 20–30 task real MobileWorld pilot
+    -> ALE-329 / R2.6 conditional six-family and GUI-117 expansion
+```
+
+R2.2 owns `KEEP / DROP / REPLACE / KEEP_UNCERTAIN` decisions grounded only in
+causally available GUI/execution evidence. R2.3 is a separate AND-OR path axis:
+it does not establish truth or recommend an action, and `ARCHIVE` remains
+SHADOW-only initially. R2.4 live smoke and R2.5 real execution require new
+resource/run authorization.
+
+The formal 190-unit, five-arm, 1,140-review, adjudication, admission-seal, and
+state-frozen replay program is no longer on the runtime MVP critical path. Its
+artifacts may be used as regression fixtures or revived later in a separate
+causal-evaluation epic after an explicit owner decision.
+
+## Reuse; do not rebuild or rewrite
+
+- Collector v1 under `MobileWorld/src/mobile_world/runtime/audit/` remains the
+  immutable evidence layer.
+- Reuse History IR, exact-span binding, target-only mutation, reversibility,
+  invariant validation, and sidecar concepts from
+  `MobileWorld/src/mobile_world/offline/causal_replay/`. Do not weaken the
+  accepted G1.2 contracts to make runtime behavior fit.
+- Reuse Qwen and MAI extraction/rendering logic from
+  `MobileWorld/src/mobile_world/offline/g1_history_codecs/`, but do not mutate
+  the frozen G1.5 publication or falsely flip either v1 Codec's
+  `live_ready=false` declaration. Runtime readiness requires a new overlay.
+- G1.3 capsules and the G1.4 runner/fake provider are optional regression/test
+  assets, not online dependencies and not blockers for R2.1–R2.3.
+- `sentinel_mvp/` is a legacy behavioral reference, not production runtime
+  code and not an authority over the new seam.
+
+## New-server resume checklist
+
+Clone recursively and do not assume any old machine path, process, port, GPU,
+virtual environment, credential, or external artifact exists:
+
+The clone/submodule fetch below is an owner/operator bootstrap action. An agent
+may run it only with explicit network authorization; this file does not grant
+network access.
+
+```bash
+git clone --recurse-submodules https://github.com/pockyitachi/AgentSentinel.git
+cd AgentSentinel
+git status --short --branch
+git rev-parse HEAD
+git submodule status --recursive
+test -d MobileWorld/src/mobile_world
+```
+
+Then:
+
+1. Read this file and `mobileworld_audit_handoff/AGENTS.md` completely.
+2. Confirm the checkout is clean and based on current `origin/main`; preserve
+   all unrelated user changes.
+3. Inspect `MobileWorld/pyproject.toml` and recreate or validate the Python
+   environment. Do not assume the old `.venv` is portable.
+4. Run the focused G1.2 and G1.5 CPU tests before modifying the seam, then add
+   focused R2.1 tests. Use the existing validated environment or an offline
+   dependency cache; stop for dependency-install/network authorization rather
+   than allowing a test command to fetch packages. Run the full suite before
+   handoff when feasible.
+5. Treat missing repo-external data as an availability fact, not permission to
+   regenerate or alter frozen data. R2.1–R2.3 CPU work must not depend on the
+   old server's raw datasets.
+
+Useful historical external bindings, if deliberately restored for regression:
+
+- G1.3 active manifest/content address:
+  `8b9fcc73630a12f6eb4ddc16b82ddfa3fcd5c7eed91451905fa0e3ae87f0e402`
+  (190 capsules, 0 exclusions, 1,600 files, 116,169,862 bytes).
+- G1.4 engineering smoke bundle: `g1_4_engineering_close_20260831`, manifest
+  SHA-256 `f70cee09e4870f3b0ab8dcd0d187efacd49362731c976b0872b4243600305179`.
+- G1.5 CPU publication manifest SHA-256:
+  `cffd7f24bf09f2e18c012b2a96591064e8ba200378c7e9c920d6fdd8f068d018`.
+
+These paths were under the old server's `/shared/linqiang/...` tree. Bind any
+restored data through configuration and verify hashes; never hardcode that
+prefix on a new server.
+
+R2.4/R2.5 later require separately provisioned Qwen and MAI model snapshots,
+the MobileWorld backend/emulator/container environment, loopback model
+services, external mode-0600 secrets, and repo-external output roots. None is
+needed or authorized for R2.1 CPU acceptance. Do not reuse old GPU indices,
+PIDs, tmux names, or port assumptions. At this handoff no project tmux session,
+port 8766 annotation site, or port 18007 model service should be assumed live.
+
+## Data, publication, and Git safety
+
+- Raw collections, capsules, live run outputs, credentials, and new reviewer
+  artifacts stay outside Git unless the owner creates an exact new exception.
+- The already published Epic 1 PDF, 39 screenshot allowlist, safe result
+  projection, and exact `_03` failure-link archive are owner-approved public
+  evidence. Do not expand that allowlist or rewrite those bytes casually.
+- Keep raw Collector events label-free. Runtime decisions belong in a derived
+  sidecar and must never be written back into Collector v1 events.
+- Never delete, overwrite, chmod, or repair frozen external publications.
+- Never reset, discard, or overwrite unrelated user work. Use explicit paths
+  for staging and destructive operations.
+- Do not merge the superseded D-037 branch. New work should normally use a
+  `codex/` branch unless the owner explicitly requests direct work on `main`.
+
+## Task-specific reading
+
+For R2.1, read completely before implementation:
 
 1. `mobileworld_audit_handoff/AGENTS.md`
-2. `mobileworld_audit_handoff/PROJECT_CONTEXT.md`
-3. `mobileworld_audit_handoff/DECISION_LOG.md`
-4. `mobileworld_audit_handoff/G1_4_DECISION_LOG.md`
-5. `mobileworld_audit_handoff/G1_5_DECISION_LOG.md`
-6. `mobileworld_audit_handoff/G1_6_DECISION_LOG.md`
-7. `mobileworld_audit_handoff/EVENT_CONTRACT_V1.md`
-8. `mobileworld_audit_handoff/SERVER_AGENT_INSTRUCTIONS.md`
-9. `mobileworld_audit_handoff/STATUS.md`
-10. `mobileworld_audit_handoff/G1_CAUSAL_REPLAY_PROTOCOL_V1.md`
-11. `mobileworld_audit_handoff/G1_LOCKED_ANALYSIS_PLAN_V1.md`
-12. `mobileworld_audit_handoff/G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
-13. `mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1.md`
-14. `mobileworld_audit_handoff/G1_REPLAY_CAPSULE_CONTRACT_V1_AMENDMENT_1.md`
-15. `mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_RUNNER_CONTRACT_V1.md`
-16. `mobileworld_audit_handoff/G1_EXACT_REQUEST_REPLAY_LIVE_PREPARATION_CONTRACT_V1.md`
-17. `mobileworld_audit_handoff/G1_4_NONFORMAL_LIVE_SMOKE_ENGINEERING_CLOSE_AMENDMENT_V1.md`
-18. `mobileworld_audit_handoff/schemas/g1_4/nonformal_live_smoke_manifest.v1.schema.json`
-19. `mobileworld_audit_handoff/g1_4/nonformal_live_smoke_manifest.v1.json`
-20. `mobileworld_audit_handoff/g1_4/nonformal_live_smoke_install_record.v1.json`
-21. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
-22. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
-23. `mobileworld_audit_handoff/G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`
-24. `mobileworld_audit_handoff/G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`
-25. `mobileworld_audit_handoff/G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md`
-26. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_ASSISTANCE_AMENDMENT_V1.md`
-27. `mobileworld_audit_handoff/G1_6_AI_ACTION_CANDIDATE_PROMPT_V1.md`
-28. `mobileworld_audit_handoff/G1_6_AI_ONLY_ACTION_LABELS_AMENDMENT_V1.md`
-29. `mobileworld_audit_handoff/G1_6_ANNOTATION_WORKSPACE_RUNBOOK.md`
-30. `mobileworld_audit_handoff/G1_SENTINEL_MVP_MIGRATION.md`
-31. `mobileworld_audit_handoff/g1/registry.lock.v1.json`
-32. `mobileworld_audit_handoff/schemas/g1_3/replay_capsule.v1_1.schema.json`
-33. `mobileworld_audit_handoff/schemas/g1_3/capsule_manifest.v1_1.schema.json`
-34. `mobileworld_audit_handoff/schemas/g1_3/capsule_integrity.v1_1.schema.json`
-35. `mobileworld_audit_handoff/schemas/g1_3/field_visibility.schema.json`
-36. `mobileworld_audit_handoff/schemas/g1_3/capsule_exclusion.schema.json`
+2. `mobileworld_audit_handoff/PROJECT_CONTEXT.md` for notation and scientific
+   boundaries; its old "current phase" prose is historical.
+3. `mobileworld_audit_handoff/EVENT_CONTRACT_V1.md`
+4. `mobileworld_audit_handoff/G1_PORTABLE_SENTINEL_CONTRACT_V1.md`
+5. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
+6. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
+7. `mobileworld_audit_handoff/G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`
+8. The current BaseAgent, Qwen, MAI, Collector, G1.2, G1.4 fake-provider, and
+   G1.5 Codec implementation/tests.
 
-The historical `replay_capsule.schema.json`, `capsule_manifest.schema.json`, and
-`capsule_integrity.schema.json` remain byte-frozen v1 references. Amendment 1
-and the three `v1_1` schemas are authoritative for formal G1 use.
+Read the G1.1/G1.3/G1.4/G1.6 contracts and `STATUS.md` when touching those
+historical artifacts or validating their provenance. They are not mandatory
+runtime-policy design documents and must not restore the superseded G1.6
+critical path.
 
-Latest completed scope: ALE-321 / G1.3, a CPU-only offline derivation that
-formally published immutable, self-validating decision capsules for exactly
-190 frozen targets (152 strict-MHR candidates plus 38 selected clean controls)
-from the frozen G1.1 registry and Collector v1 artifacts. The separate 38
-reserve clean controls remain census-only and outside G1.3 capsule/exclusion
-scope. Contract Amendment 1 corrected the explicit fail-closed authorization
-guards in a v1.1 content-addressed publication; the former v1 publication is
-immutable and superseded for formal G1 use.
+## Handoff discipline
 
-Closed engineering scope: ALE-322 / G1.4 has a validated CPU/fake checkpoint at
-commit `bf099a1a00f38edc33b6c5cbb1ab5d12d53bd18c`, covering the exact-request
-runner, invariant/diff guards, deterministic scheduling and idempotent derived
-attempt storage, blinded exports, versioned schemas/CLI, an in-process fake
-provider, and an injectable OpenAI-compatible Provider Codec exercised only
-through fake SDK clients. Formal v1.1 capsules remain read-only and retain
-`execution_ready=false`, `provider_invocation_allowed=false`, and
-`treatment_response_generation_allowed=false`. D-035 now closes the bounded
-engineering delivery as `NONFORMAL_LIVE_SMOKE_PASSED`, while formal replay is
-exactly `DEFERRED_TO_G1_7_NOT_AUTHORIZED`; there is no active G1.4 GPU/model,
-provider, replay, treatment, or action authority.
+Every delivery must report:
 
-`G1_4_DECISION_LOG.md` D-026 historically authorized inert/code-only preparation
-for a possible live/GPU proof: static frozen-model binding, pure call/block/launch
-and caller-injected response records, injected-only capacity assessment, schemas,
-and CPU tests. That preparation and the later D-034 smoke authority are consumed;
-they do not authorize a client, network, subprocess, GPU probe/use, model load,
-provider send, replay, treatment, or action.
+- outcome and exact scope;
+- files changed and commit;
+- behavior/invariance guarantees;
+- test commands and results;
+- artifacts created outside Git;
+- known limitations and unauthorized work not performed;
+- the next Linear story and whether it is actually unblocked.
 
-Closed engineering scope: ALE-323 / G1.5 is accepted under D-036 as
-`CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; its exact
-formal-live-readiness state is `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. The accepted
-delivery is the pure Qwen flat-progress and MAI raw-replay Codec implementation,
-exact external curated-span bindings, five-arm render/diff/reversibility and
-preview surfaces, secret-free fixtures and CPU publication, conformance/schema
-tests, fail-closed G1.4 integration, and ten D-035 non-formal prompt/parser
-compatibility observations. Those observations did not execute the formal
-History Codec-to-Provider Codec path and do not satisfy the D-028 formal matrix.
-Both v1 Codecs remain `live_ready=false`; all formal matrix, Provider Codec,
-complete per-attempt evidence, serving/isolation, and live seal duties are
-transferred to G1.7. No further standalone G1.5 live run is authorized.
-
-Active authorized scope: ALE-324 / G1.6 is the CPU-only, human-in-the-loop gold
-curation workspace defined by `G1_6_DECISION_LOG.md` D-029 and
-`G1_GOLD_HISTORY_INTERVENTION_CONTRACT_V1.md`. Work may project blinded
-reviewer packets from the immutable G1.3 publication, render no-send G1.5 CPU
-previews using locally hash-verified tokenizers, collect independent human
-reviews/adjudications in a repo-external append-only journal, and validate the
-workspace schemas. It may not infer, choose, or improve a target, correction,
-sham, oracle, accepted action, or adjudication on behalf of a human. Formal
-bundle export, admission/sealing, replay, and treatment generation remain
-blocked until their separate versioned gates are satisfied.
-
-`G1_6_DECISION_LOG.md` D-030 and
-`G1_6_SOLO_FIRST_PASS_AMENDMENT_V1.md` additionally authorize a mechanically
-non-formal one-person precursor workspace. It must use a separate root, key,
-manifest, and journal; enforce the global Action Gold → Transformation →
-Consistency stage order; and keep every independence, resolution, promotion,
-export, admission, replay, and seal authority false. It cannot replace or be
-promoted into the formal double-blind workspace.
-
-`G1_6_DECISION_LOG.md` D-031 additionally authorizes exactly three isolated Codex streams to
-prepare offline, non-authoritative `ACTION_GOLD` candidate predicates for the solo curator. The
-website may only display already frozen candidates and append separate per-item human decisions;
-it must never generate, rank, merge, auto-apply, save, lock, or promote a candidate. The only narrow
-exception is D-032: after the same solo curator makes every explicit three-way decision, one separate
-final click may let the server derive, validate, and append a non-formal solo lock from frozen
-candidate bytes while holding the decision-journal lock. It never becomes formal review or
-publication authority. These streams
-are not human reviewers, their outputs never count as independent review, and candidate exposure
-permanently excludes that principal from future formal G1.6 reviewer/adjudicator roles.
-
-`G1_6_DECISION_LOG.md` D-033 additionally authorizes three isolated Codex research agents to
-review the remaining 186 units as three exact 62-unit shards and publish a separate
-`AI_ONLY_ACTION_LABELS` research dataset. The agents may only retain/reject existing frozen D-031
-candidates or exclude a unit; they may not generate new predicates or read human/peer/history/future
-material. The publication is non-human, non-formal, cannot write or advance either annotation
-journal, and must keep every review/export/admission/promotion/replay authority false.
-
-Collector v1 remains event-sourced, lossless, label-free, zero-intervention,
-and byte-immutable. Do not invoke the target actor model or any project provider/client, use an
-external network or a GPU, load/serve project model weights, execute a MobileWorld/generated
-GUI/tool/action, restore a backend, run a deterministic prefix or live replay, generate a treatment
-response, automatically decide claim validity or choose a formal intervention, or implement runtime
-Sentinel behavior. The deterministic fake-provider conformance path, provider-free G1.5 CPU
-checkpoint, explicitly human-authored G1.6 CPU workspace, the already authorized three-stream
-D-031 offline candidate campaign, and the isolated D-033 AI-only research publication are the only
-permitted substitutes. D-031 is the sole candidate-suggestion exception: its outputs remain
-untrusted and require individual human decisions, and the
-annotation website itself must never invoke Codex or another model/provider.
-The separate D-033 AI-only label publication is the only additional semantic-labeling exception;
-it remains isolated from both human journals and cannot be treated as human review or gold.
-The sole socket exception is the owner-started, single-process D-029 annotation
-site bound to loopback with same-origin/CSRF checks and no remote assets. D-030
-also permits only the owner's single-port SSH local forward from client
-`127.0.0.1:8766` to server `127.0.0.1:8766`; reverse/dynamic forwarding,
-wildcard binds, shared proxies, and external hosting remain forbidden.
-Human clicks and form entry inside that annotation site are authorized curation
-inputs; they must never be converted into or executed as a MobileWorld action.
-Store real capsule, collection, and
-replay data outside the Git repository. Preserve unrelated user changes and
-record server findings and completed phases in
-`mobileworld_audit_handoff/STATUS.md`. ALE-322's exact bounded engineering-close
-state is `NONFORMAL_LIVE_SMOKE_PASSED`; it MUST NOT be called formal live proof
-or replay-ready. Its exact formal-replay state is
-`DEFERRED_TO_G1_7_NOT_AUTHORIZED`. ALE-323 is closed only under D-036's bounded
-engineering scope; both v1 Codecs remain `live_ready=false`, and G1.7 formal
-readiness remains unauthorized. ALE-324 must not be marked complete before all 190 units are independently
-reviewed, adjudicated where required, formally exported, validated, and sealed.
-
-Owner public-evidence exception (2026-09-01): notwithstanding the default
-repo-external rule above, the owner explicitly authorizes the public Git
-publication of exactly the 39 content-addressed PNG screenshots referenced by
-the canonical Epic 1 report under `motivation study/report_assets/screenshots/`
-and the single fixed PDF
-`motivation study/misleading_history_audit_report_20260825.pdf`. This exception
-does not cover raw cards, requests, trajectories, model responses, reviewer
-text, receipts, logs, replay data, or any other Collector blob. The repository
-is public, and the owner accepts that these exact bytes may persist in Git
-history, forks, and caches even after a later deletion. The screenshots contain
-synthetic/demo credential-like and identity-like fixture values as well as
-third-party application UI, trademarks, and imagery whose separate
-redistribution rights were not independently verified. Any medical-looking
-text visible in a benchmark screenshot is inert research evidence, not medical
-advice or endorsement. This documentation publication grants no model,
-provider, network, GPU, replay, treatment, GUI, tool, or action authority.
-
-Owner final failure-link archive exception (2026-09-01): as a separate,
-additive exception, the owner explicitly authorizes public Git publication of
-exactly `motivation study/failure_link_audit_raw/six_model_failure_link_audit_v1_20260824_03/`.
-The authorized tree is exactly 2,842 regular files / 119,555,475 bytes with
-path-sorted inventory SHA-256
-`a97f9d4541c339d3cb6782bf499eed61ade9bfe68270419b7a62f500f4aa944a`.
-It contains raw cards and requests, model responses, reviewer text and
-rationales, operational receipts, logs, and machine-local paths. No confirmed
-live secret was found in the pre-publication review, but the repository is
-public and these bytes may remain permanently in Git history, forks, mirrors,
-and caches. The deleted `_02` attempt is not authorized, and this exception
-does not cover any other collection, capsule, replay, or audit data. The v1/v2
-publication locks remain unchanged historical safe/report-publication scopes;
-they do not bind or certify this later raw-archive exception. This publication
-creates no model, provider, network, GPU, replay, treatment, GUI, tool, or
-action authority.
-
-Owner direct-smoke boundary (2026-08-30): notwithstanding the historical
-deferred/backlog language above, the owner authorized one non-formal direct
-smoke on GPU 0 with `CUDA_VISIBLE_DEVICES=0`, a loopback-only service at
-`127.0.0.1:18007`, Qwen followed by MAI, and exactly 22 secret-free synthetic
-calls. Cleanup may target only children and sessions created by this smoke; it
-must not read private `/proc` details of, signal, or take action against any
-foreign process, and it must not execute any returned action. Read-only
-GPU/process baseline checks, including a final `nvidia-smi`, remain allowed.
-Any failure ends the attempt with no retry. The former D-034
-authority/shim/formal-evidence chain is obsolete and must not be reused or
-treated as a gate.
-
-GPU 0 outcome and replacement authority (2026-08-31): the GPU 0 attempt failed
-safely before model loading with 0/22 calls because the installed vLLM does not
-support `--swap-space`; that attempt is closed and must not be retried. The
-owner authorizes exactly one replacement attempt on GPU 4 with
-`CUDA_VISIBLE_DEVICES=4`, the same loopback-only `127.0.0.1:18007` service,
-Qwen followed by MAI, and exactly 22 secret-free synthetic calls. It may clean
-up only its own children/session and must not signal, modify, stop, or otherwise
-act on `taoz` or any foreign process. Any failure ends the replacement attempt
-immediately with no retry. The obsolete authority/shim/formal-evidence chain
-remains prohibited.
-
-GPU 4 outcome and next-fix boundary (2026-08-31): the replacement attempt
-entered Qwen model loading/PROFILE, then failed safely with 0/22 calls because
-the bundled Triton `ptxas` was non-executable (`0644`, `EACCES`). MAI was not
-started; `taoz` PID 217927, its baseline/memory, and the loopback port were
-unchanged or restored to baseline. This attempt is closed and must not be
-retried. The only authorized follow-up fix is to point the smoke's child-process
-environment at system CUDA tool paths; it must not `chmod` or otherwise modify
-the shared venv.
-
-Final GPU 4 outcome and engineering close (2026-08-31): after the system-CUDA
-tool-path fix and production-prompt/parser correction, the one authorized smoke
-completed Qwen 11/11 followed by MAI 11/11, for exact 22/22 HTTP-200,
-host-parseable calls with zero retry and zero generated-action execution. The
-three artifacts are sealed read-only under the D-035 content-addressed bundle.
-This is `NONFORMAL_LIVE_SMOKE_PASSED` engineering evidence only; formal Provider
-Codec, serving-environment, isolation, treatment, and replay proof remain false
-and deferred to future G1.7 consideration. The GPU/model authority is consumed;
-no further GPU/model attempt is authorized.
+Do not claim a runtime Sentinel, rubric, live transformation, success-rate
+improvement, or causal effect before the corresponding implementation and
+evaluation have actually completed.
