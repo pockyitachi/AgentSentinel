@@ -1,6 +1,6 @@
 # Project Status：GUI Agent Previous-Step Misleading Motivation Study
 
-Last updated: 2026-08-31 (UTC)
+Last updated: 2026-09-01 (UTC)
 
 ## 1. Project objective
 
@@ -42,27 +42,37 @@ integration 已接受；D-035 的十个调用只算 non-formal prompt/parser com
 D-028 formal matrix。两个 v1 Codec 继续 `live_ready=false`，formal readiness 全部转交 G1.7，
 且没有新的 live/GPU 授权。**
 
-**ALE-324 / G1.6 已获 D-029 CPU-only 人工标注授权，并形成 private loopback-only manual
-annotation workspace checkpoint，并在 D-031 下部署三路已冻结的非权威 AI Action-Gold 候选。
-精确状态是 `IN_PROGRESS_HUMAN_CURATION_REQUIRED`。** 网页将
+**Runtime ALE-324 / R2.1 的 repository engineering checkpoint 已在 commit
+`b1b541d65bb915f65c534b61e15b1049f20682cd` 完成。** 当前实现提供共享 pre-provider
+`PromptSentinel` seam、默认 OFF、显式 SHADOW/测试专用 ACTIVE、全局 kill switch、per-host
+配置、logical-call 单次求值与 transport/adapter/stream retry 复用、Sentinel-role 递归旁路、
+typed Original fallback、严格 history-only 验证，以及 transactional、hash-only、repo-external
+receipt。Qwen、MAI 与 Seed 接入复用现有 provider/parser/action 路径；未实现自动 validity policy、
+multi-path rubric、真实 actor/Sentinel 模型或 live transformation。Linear 工作流状态由 owner
+单独管理，本仓库交付没有修改 Linear。**
+
+**Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
+并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
+的非权威 AI Action-Gold 候选。当时精确状态是
+`IN_PROGRESS_HUMAN_CURATION_REQUIRED`。** 网页将
 ACTION_GOLD、TRANSFORMATION、CONSISTENCY_AUDIT 与必要 adjudication 的人工选择显式化；G1.5
 preview、pinned local tokenizer、source packet、reviewer identity 与 append-only journal 均做
-hash binding。当前没有 formal G1.6 bundle、admission 或 seal；190 个单元的双盲 review/必要
-adjudication 与 formal exporter 仍待完成。D-031 诚实记录
+hash binding。该 checkpoint 没有 formal G1.6 bundle、admission 或 seal；190 个单元的双盲
+review/必要 adjudication 与 formal exporter 没有完成。D-031 诚实记录
 `ai_semantic_suggestion_performed=true`，但 target actor、project provider/client、external network、
-GPU、weights、replay、MobileWorld-generated action 与 treatment 路径保持禁用；owner-started
-loopback annotation HTTP、human curation clicks 与冻结的 D-031 offline candidate campaign 是
-现有窄幅例外。D-033 另将未由 owner 锁定的 186 条发布为隔离的
+GPU、weights、replay、MobileWorld-generated action 与 treatment 路径当时保持禁用；owner-started
+loopback annotation HTTP、human curation clicks 与冻结的 D-031 offline candidate campaign 是当时的
+窄幅例外。D-033 另将未由 owner 锁定的 186 条发布为隔离的
 `AI_ONLY_ACTION_LABELS`，诚实记录 `ai_semantic_labeling_performed=true`；该层不是 human review、
 gold 或 formal authority，不改变网页的 4/190 human 状态，也不打开 Transformation。G1.7 与任何
 live/GPU owner 授权仍未完成。
 
-**D-030 已在 commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405` 增加隔离的
+**Historical D-030 在 commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405` 增加隔离的
 `SOLO_FIRST_PASS`，供当前唯一一位真实 curator 做非正式 precursor。** 它强制全 190 条
 ACTION_GOLD → 全 190 条 TRANSFORMATION → 全 190 条 preliminary CONSISTENCY_AUDIT 的阶段顺序，
 使用独立 root/key/manifest/journal，且所有 independence/resolution/promotion/export/admission/
-replay authority 均为 false。当前 owner-authorized tmux 仅在 `127.0.0.1:8766` 运行该单进程
-网页；这不改变 ALE-324 的未完成状态，也不能替代未来真实独立双审。
+replay authority 均为 false。该历史 checkpoint 的 owner-authorized tmux 曾仅在
+`127.0.0.1:8766` 运行单进程网页；它没有完成 former G1.6，也不能替代未来真实独立双审。
 
 已确认的工程决策：
 
@@ -965,4 +975,14 @@ Informed public boundary: unlike the historical safe projection and screenshot/P
 Historical-lock boundary: `publication_lock.v1.json`, `public_summary.v1.json`, `publication_lock.v2.json`, and `public_summary.v2.json` remain byte-unchanged historical records of their narrower safe/report-publication scopes. They do not bind, certify, or silently expand to include this later raw archive. No other collection, capsule, replay, or audit data is approved for Git by this exception.
 Authority and execution: this was a file publication and documentation update only. It changed no source evidence, review result, aggregate conclusion, Collector event, G1 population, or formal/non-formal status, and grants no model/provider/network/GPU/replay/treatment/GUI/tool/action authority. No project model, provider, runtime network, GPU, replay, treatment, GUI, tool, or action was used; ordinary Git transport to the owner's repository is only the publication mechanism.
 Owner approval required: no additional approval to commit and push this exact verified `_03` tree and the accompanying boundary documentation; any byte replacement or scope expansion requires a new explicit owner decision.
+```
+
+```text
+Date: 2026-09-01 UTC
+ALE-324 / R2.1 repository engineering checkpoint: commit `b1b541d65bb915f65c534b61e15b1049f20682cd` implements the shared pre-provider PromptSentinel seam in BaseAgent and binds Qwen, MAI, and Seed logical-call scopes without replacing their provider transport, response normalization, parsers, runners, or action paths. The versioned contract is SHA-256 `2132cc4613c2bd741b54eadbf7dd9a0857605b7fc7e3455617a478810605b87b` / 12,846 bytes; the closed receipt schema is SHA-256 `b7ea6999c474aa298d5569dfea85b71f572b033d9c222ad07c34e0321422b497` / 11,231 bytes.
+Accepted behavior: mode defaults to OFF; explicit SHADOW computes but sends Original; deterministic test-only ACTIVE may send a validated DROP-only history transformation. One SentinelResult is cached per logical actor decision across Base transport retries, Qwen outer parse retries, and streaming attempts. Sentinel-role calls bypass recursively; a global kill switch and per-host settings fail closed; caller objects remain unchanged; every timeout, exception, schema/IR/policy/render/invariant failure returns typed Original. R2.1 rejects REPLACE and every renderer list insertion so current observation and all non-history content remain invariant.
+Receipt boundary: semantic modes require a sink. The external sink transactionally publishes one owner-only, no-replace, hash-only receipt outside Git. It binds raw/candidate/final request, canonical policy output, and exact diff by hash plus stable decision/mode/validation/fallback/latency fields; it stores no request view, operation payload, exact-diff preimage, secret, or chain of thought. External codec/policy/renderer error strings and exception class names are replaced by fixed phase codes before receipt creation.
+Verification: R2.1 focused tests passed 43/43. The final affected-surface suite—R2.1, all Collector runtime-audit tests, the portable G1.2 contract, and G1.5 History Codecs—passed 478/478. The broader MobileWorld suite passed 1560/1560 before the final narrow fail-closed/receipt hardening, and the complete impacted surface was rerun afterward. Ruff check/format, Python compilation, JSON/schema validation, and Git diff checks passed. Two independent cold reviews reported no remaining P0/P1.
+Limitations and next boundary: this checkpoint does not implement an evidence-grounded automatic policy, correction generation, multi-path rubric, live Qwen/MAI vertical slice, model/provider/network/GPU/backend/replay/GUI/tool/action execution, or causal/success-rate evaluation. R2.2 must define an additive runtime proposal/admission overlay rather than mislabel automatic proposals as frozen G1.2 curated plans. Future nested Sentinel-owned Base calls need explicit Collector retry-correlation isolation, and REQUEST_DRIFT/sidecar-failure anomaly telemetry remains a later secret-free observability improvement. No persistent repo-external artifact was created; tests used temporary roots only.
+Workflow: repository engineering evidence for R2.1 is complete, but the agent did not change Linear status. The owner manages Linear separately. No later story and no live/resource authority is granted by this entry.
 ```
