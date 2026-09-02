@@ -1,6 +1,6 @@
 # Instructions for AgentSentinel coding agents
 
-Last synchronized with the owner-facing repository state: **2026-09-01 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-02 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
 This directory preserves the scientific contracts and provenance for the
@@ -75,10 +75,13 @@ revived as a separate causal-evaluation effort after an explicit owner decision.
 
 ### Active runtime work
 
-Runtime Epic 2 is 1/6 complete at the repository engineering layer. ALE-324 /
-R2.1 has an accepted CPU/fake checkpoint at commit
-`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. It supersedes the `58820a8`
-checkpoint after recursively trusted policy-output and History-IR snapshots,
+Runtime Epic 2 has 2/6 repository engineering stories accepted. ALE-324 / R2.1
+has an accepted CPU/fake checkpoint at commit
+`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. ALE-325 / R2.2 has an accepted
+CPU/offline/injected-fake-Responses, SHADOW-only checkpoint at commit
+`3940ff7484c0236ac321ea210fc8266e282e5d27`. R2.1
+supersedes the `58820a8` checkpoint after recursively trusted policy-output and
+History-IR snapshots,
 precomputed renderer-result binding, worker-owned policy-evaluation census, and
 detached receipt-transaction hardening. Linear workflow state remains owner-
 managed. The repository dependency sequence is:
@@ -167,13 +170,42 @@ Required behavior:
 - deterministic no-op/fake policy and fake-provider tests only in R2.1.
 
 R2.1 executes only deterministic `DROP`. Every `REPLACE` plan and renderer list
-insertion fails closed to Original. R2.2 must introduce a versioned runtime
-proposal/admission overlay instead of representing automatic proposals as
-frozen G1.2 curated plans.
+insertion fails closed to Original. R2.2 adds the separate versioned runtime
+proposal/admission overlay below instead of representing automatic proposals
+as frozen G1.2 curated plans.
 
 `OFF` and `SHADOW` must send byte/semantic-equivalent Original requests.
 `ACTIVE` may send a transformed request only inside deterministic CPU/fake
 tests until a later live authorization exists.
+
+## 4A. Accepted scope: R2.2 CPU/offline/fake SHADOW policy
+
+R2.2 adds a separate automatic runtime proposal/admission overlay without
+changing the frozen G1.2 curated-plan provenance or the accepted R2.1 v1
+receipt. The owner-accepted repository implementation is commit
+`3940ff7484c0236ac321ea210fc8266e282e5d27`.
+
+Its module-owned evidence builder binds one exact actor request, logical call,
+host/Codec identity, complete task instruction, current screenshot, causal
+cutoff, role-projected evidence, and exact History IR targets. The injected
+fake Responses transport returns a closed proposal; independent deterministic
+admission supports `KEEP`, `DROP`, and `KEEP_UNCERTAIN`. Transition status is
+weak evidence, and invalidation must follow the target plus every cited
+support. `REPLACE` is schema-reserved but fails closed before admission and
+rendering until a typed/template fact representation exists. Admitted DROP
+operations are source-bound, history-only, reversible, and SHADOW-only.
+
+R2.2 emits a separate hash-only policy receipt and best-effort low-cardinality
+metrics. It reuses the R2.1 logical-call cache, recursion bypass, deadline, and
+Original fallback. Qwen and MAI captured fixtures cover the admitted decisions
+and REPLACE rejection, but neither frozen G1.5 Codec becomes `live_ready=true`.
+
+The accepted checkpoint used no live model/provider, network, GPU, backend, GUI,
+tool, action, replay, or external data source. The checked-in OpenAI adapter is
+inert without explicit owner authorization. R2.4 must still add real evidence
+plumbing, runtime target discovery, a cancellable live transport/attempt
+receipt, secret/resource authority, and a versioned zero-target bridge. R2.3
+is the next available repository story and remains an independent rubric axis.
 
 The shared candidate hook is
 `../MobileWorld/src/mobile_world/agents/base.py::BaseAgent.openai_chat_completions_create`.
@@ -192,8 +224,11 @@ editing. First-host prompt builders are under:
   `../MobileWorld/src/mobile_world/offline/causal_replay_runner/`
 - Qwen/MAI extraction, rendering, diff, preview:
   `../MobileWorld/src/mobile_world/offline/g1_history_codecs/`
+- R2.2 evidence, policy, admission, renderer, receipt, and metrics:
+  `../MobileWorld/src/mobile_world/runtime/sentinel/r2_2/`
 - Relevant tests:
   `../MobileWorld/tests/runtime/audit/`,
+  `../MobileWorld/tests/runtime/sentinel/test_r2_2_policy.py`,
   `../MobileWorld/tests/offline/test_portable_causal_replay_contract.py`,
   `../MobileWorld/tests/offline/test_causal_replay_runner.py`, and
   `../MobileWorld/tests/offline/test_g1_history_codecs.py`.
@@ -230,15 +265,17 @@ history-family differences belong in registered Codecs.
 
 Currently permitted:
 
-- documentation and additive R2.1 runtime-contract work;
+- documentation and additive R2.1/R2.2 runtime-contract work;
 - CPU-only implementation and tests for OFF/SHADOW/ACTIVE seam mechanics;
-- deterministic fake/no-op Sentinel policy;
+- deterministic fake/no-op R2.1 policy and the checked-in R2.2 automatic
+  policy under injected fake Responses transport in SHADOW only;
 - existing in-process fake provider and secret-free fixtures;
 - read-only inspection and hash validation of historical artifacts.
 
 Not currently permitted:
 
-- automatic semantic claim verifier or correction generator (R2.2);
+- live/model-backed R2.2 policy calls, ACTIVE R2.2 transformation, or an
+  unbound correction generator;
 - rubric generation/tracking or active `ARCHIVE` (R2.3);
 - a target actor/Sentinel model or any project provider/client;
 - external network, GPU probe/use, weight loading/serving, or model endpoint;
@@ -254,7 +291,7 @@ resource/run authorization.
 
 ## 8. Reading order
 
-Before R2.1 maintenance or dependent runtime changes, read completely:
+Before R2.1/R2.2 maintenance or dependent runtime changes, read completely:
 
 1. repository-root `AGENTS.md`;
 2. this file;
@@ -267,7 +304,10 @@ Before R2.1 maintenance or dependent runtime changes, read completely:
 8. `G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`;
 9. `R2_1_PRE_CALL_SENTINEL_RUNTIME_SEAM_CONTRACT_V1.md`;
 10. `schemas/r2_1/sentinel_receipt.v1.schema.json`;
-11. current implementation/test files listed in Section 5.
+11. `R2_2_EVIDENCE_GROUNDED_SENTINEL_POLICY_CONTRACT_V1.md`;
+12. all three schemas under `schemas/r2_2/`;
+13. current implementation/test files listed in Section 5, including
+    `../MobileWorld/src/mobile_world/runtime/sentinel/r2_2/`.
 
 Read `DECISION_LOG.md`, `G1_4_DECISION_LOG.md`,
 `G1_5_DECISION_LOG.md`, G1.1/G1.3/G1.4 contracts, and `STATUS.md` when
@@ -365,5 +405,11 @@ fd-bound transactional hash-only publication, strict pre-copy/pre-cache JSON
 admission, complete rejected-output hashing, recursively detached policy/IR/
 renderer boundaries, truthful worker-owned evaluation census, detached receipt
 commit, and focused regressions were verified. Do not claim an automatic
-runtime policy, rubric, live transformation, success-rate gain, or causal
-effect before the corresponding later work actually exists.
+live/model-backed policy, rubric, live transformation, success-rate gain, or
+causal effect before the corresponding later work actually exists.
+
+The corrected R2.2 repository checkpoint is accepted at
+`3940ff7484c0236ac321ea210fc8266e282e5d27`. It tests a bounded
+CPU/offline/fake SHADOW policy and its contracts, not live readiness,
+effectiveness, or permission to start R2.4 resources. Linear remains
+owner-managed.

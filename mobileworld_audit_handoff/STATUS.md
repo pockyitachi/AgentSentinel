@@ -1,6 +1,6 @@
 # Project Status：GUI Agent Previous-Step Misleading Motivation Study
 
-Last updated: 2026-09-01 (UTC)
+Last updated: 2026-09-02 (UTC)
 
 ## 1. Project objective
 
@@ -52,6 +52,16 @@ repo-external receipt。Qwen、MAI 与 Seed 接入复用现有
 provider/parser/action 路径；未实现自动 validity policy、multi-path rubric、真实
 actor/Sentinel 模型或 live transformation。Linear 工作流状态由 owner 单独管理，本仓库交付
 没有修改 Linear。**
+
+**Runtime ALE-325 / R2.2 的 repository engineering checkpoint 已由 owner 接受。**
+接受的实现 commit 为 `3940ff7484c0236ac321ea210fc8266e282e5d27`，范围仍严格限定为
+CPU/offline/injected-fake-Responses、SHADOW-only。它提供因果 cutoff 约束的 evidence
+packet、GPT-5.6 Sol Responses request/strict proposal contract、独立 deterministic
+admission，以及 `KEEP / DROP / KEEP_UNCERTAIN`；transition status 不能单独授权 material
+edit，invalidation 必须晚于 target 和所有 cited support，`REPLACE` 在 typed/template fact
+合同完成前一律 fail closed。该 accepted checkpoint 没有调用真实模型/provider、网络、GPU、
+MobileWorld backend/GUI/tool/action 或 replay；没有把两个 G1.5 v1 Codec 改成
+`live_ready=true`，也没有授权 R2.4。Linear 工作流状态仍由 owner 单独管理。**
 
 **Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
 并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
@@ -1016,4 +1026,39 @@ Receipt/census boundary: policy evaluation is tracked by a worker-owned marker s
 Bindings: `seam.py` is SHA-256 `086336482f02ea4b0a492189ef45b3505825943263844b28dc101a0e71069e20` / 68,802 bytes; the focused test file is `28335cc106c8797b6aa81f342f7d3c1f0b5795a7afae2f963d405c2978f77988` / 86,576 bytes; the updated R2.1 contract is `43282bdd5a9e737a06e8703caa6ecaf65185bf7858cc6fe5c8e0aa21efd1eb89` / 18,620 bytes. The receipt schema remains byte-unchanged at SHA-256 `b7ea6999c474aa298d5569dfea85b71f572b033d9c222ad07c34e0321422b497` / 11,231 bytes. The implementation patch diff SHA-256 is `9cfedc7085bcf41e7ccd28e27ee9834eb2205f38fb695888242c18c1cdf64f22`.
 Verification: focused R2.1 passed 75/75; the affected R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 510/510; and the complete MobileWorld suite passed 1595/1595 on the final candidate. Ruff check/format, Python compilation, Draft 2020-12 receipt-schema validation, and Git diff checks passed. Independent cold reviews reported no remaining P0/P1. A pre-final 10ms fake-policy test-helper scheduling failure was not counted as success; the general helper now uses the unchanged 250ms contract default, while explicit deadline tests retain narrow budgets and pass.
 Authority and limitations: this was CPU/offline and fake-provider-only maintenance. It invoked no live model/provider, network, GPU, MobileWorld backend, replay, GUI/tool/action, or persistent repo-external artifact. The Linux `O_TMPFILE` + `/proc/self/fd` external-sidecar availability limitation and canonical-JSON admission boundary remain unchanged. This commit does not implement R2.2/R2.3, authorize later work, push or merge the branch, or change Linear; Linear workflow remains owner-managed.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-325 / R2.2 evidence-grounded SentinelPolicy repository checkpoint: commit `3b9e721717df6218ff348945fd0dc7f30aca68f3` adds the versioned CPU/offline/fake SHADOW implementation without rewriting the accepted R2.1, frozen G1.2, or frozen G1.5 contracts. The module-owned evidence packet binds one logical call, host/Codec, untouched request, complete task instruction, current request image, causal cutoff, role-projected evidence, and exact eligible History IR spans. The strict automatic proposal and independent admission support `KEEP`, `DROP`, `REPLACE`, and `KEEP_UNCERTAIN`; material plans are `curated=false`, `deployment_prediction=true`, `SHADOW_ONLY`, source-bound, history-only, and reversible. Replacement text can only come from a pre-admitted declarative evidence fact and cannot carry actions, tools, coordinates, or retroactive actor speech.
+
+Runtime and audit behavior: `GPT56SentinelPolicy` builds a pinned `gpt-5.6-sol` / medium-reasoning Responses request with checked-in strict schema, retry count zero, bounded timeout, text plus the already request-bound current image, no tools, no storage, and no streaming. This checkpoint injected only a fake transport; the OpenAI adapter remains inert without explicit owner authority. R2.2 reuses R2.1 one-evaluation-per-logical-call caching, retry/stream reuse, Sentinel-role bypass, timeout/fallback, and Original parity. A separate closed policy receipt binds packet/prompt/schema/config/response/proposal/plan hashes and exact decision census without retaining request, evidence, screenshot, model output, reasoning, or exact diff content. Its in-memory metrics are low-cardinality, non-blocking, and non-authoritative.
+
+Bindings: the R2.2 contract is SHA-256 `e062f72bcc6668ef7beb232d1e205510b9688f6c297f034d72c9278f3fe7015a` / 29,080 bytes. Evidence, proposal, and receipt schemas are respectively `107fbf1e6e2d1afc683ea9143906b99979c4dec2c46dd7e06021d05823dd7511` / 19,905, `6d1372affafe5b93a923642c3448630ffa38ca5b08150e323ff8224222715a24` / 11,787, and `4df2cfe4e78ee2ae87e6814fe3e21ee2a4044802cdc91cd53d865b5c1e99e925` / 15,532 bytes. `seam.py` is `2b36f7782230d31dc8456a7e31cf67d4be9e476f89d5ce4bc673814c8ead8905`; `evidence.py` is `872e69369ff4e81d9fcea788d71a7a98d381eb6c3a3c5cba3a754fa53487423b`; `gpt56_policy.py` is `56bc63685c6a943af68d017337337736836fa6162a2e6b327e618c9d9e3a1686`; `runtime_overlay.py` is `e1f675c1bb1d27bc5b6fa7ffe2f37e4875597baf76664aa2f24f09ba9f0c60f3`; `sidecar.py` is `4b3ad533215cfbb1bc2d7a71e7ac7f4331f46a51c7c477d0c401d7f0a0c0413a`; and the focused test is `b6fa7dba3b95372e3fad22f44439a5f8a8f8824d5c710a8318aa1bbffe1d7e48`. The implementation binary diff SHA-256 is `3528addbfe0c3fa445e9c42dc7cb1c831c8a06a89e9998bb974ff28f66251c7e`.
+
+Verification: focused R2.2 passed 65/65; the R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 575/575; and the complete MobileWorld suite passed 1660/1660 on the final implementation candidate. Ruff check/format, mypy for all seven R2.2 source modules, Draft 2020-12 schema/runtime parity, and Git diff checks passed. A final independent read-only review of the frozen staged snapshot reported no remaining P0/P1 within the stated CPU/offline/fake SHADOW boundary.
+
+Limitations and next dependency: R2.1 v1 cannot represent a successful zero-target decisionless R2.2 output, so that seam bridge truthfully returns typed `INVARIANT_FAILURE` / exact Original until a versioned R2.4 bridge exists. R2.4 also needs real Collector-to-evidence plumbing, runtime span discovery/capability overlays, request-image/blob binding beyond the captured data-URL fixtures, cancellable live transport/attempt receipts, external secret/resource authorization, and separately authorized vertical slices. R2.3 is the next mechanically available repository dependency and owns only the independent multi-path rubric axis. No persistent repo-external artifact was created; no live model/provider, network, GPU, backend, replay, GUI/tool/action, push, merge, or Linear update occurred.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-325 / R2.2 owner-review correction candidate: commit `3940ff7484c0236ac321ea210fc8266e282e5d27` supersedes the repository acceptance claim attached to `3b9e721717df6218ff348945fd0dc7f30aca68f3` and its documentation checkpoint `8b54ff7a6f314610a9696f60e08b49d44ac838c3`. R2.2 remains pending owner re-review and is not counted as accepted or Done. The three normal-data P1 gaps are closed: `PRIOR_TRANSITION_STATUS` is weak evidence and cannot independently authorize a material edit; temporal invalidation requires `min(INVALIDATES.source_event_seq) > max(SUPPORTS.source_event_seq)` in addition to remaining later than target provenance; and every `REPLACE` proposal or plan fails closed before admission and again before rendering until a typed/template replacement-fact contract exists. `KEEP`, `DROP`, and `KEEP_UNCERTAIN` remain available in the CPU/offline/fake SHADOW candidate.
+
+Failure-path behavior: transition-status-only and reversed-temporal proposals publish `ADMISSION_REJECTED` with no admitted plan and zero decision/material census; metrics add no admitted or material count. The Qwen and MAI bridges preserve `raw_request == candidate_request == final_request == Original` and return typed R2.1 fallback. The corrected bindings are: `contracts.py` SHA-256 `7db633abe4e3d4483954d7a543d61b9aa1ab0208d74200201e251da5eec81355` / 82,196 bytes; `gpt56_policy.py` `a1338a906fc07cd5f610095f0378d3f787acb6ddadc7e342ca55ff0237d42e64` / 76,128 bytes; `runtime_overlay.py` `2fbb8680e5524bbe01866ce631b270b9cb4eb7e1eee3b06c92ff6d956af0ae43` / 87,600 bytes; focused test `674fd0b887a6d5cde200948779e3571eb374cba7a0c7b4185f633614b8224bfd` / 81,212 bytes; and R2.2 contract `e5cf31d0dfa8da3f2c5d186093a67ccbecb5ab0a1c6ee424b57fff4fad44c32c` / 29,519 bytes. The implementation binary diff from `8b54ff7a6f314610a9696f60e08b49d44ac838c3` to `3940ff7484c0236ac321ea210fc8266e282e5d27` is SHA-256 `dabdad101fbb2cf3d4867970a5455dc5bb2bdad26bb460a64b255eee8e8b58ba`.
+
+Verification: focused R2.2 passed 74/74; the R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 584/584; and the complete MobileWorld suite passed 1669/1669. Ruff check/format, all three Draft 2020-12 schemas, and Git diff checks passed. The repository-default mypy invocation is not green and reproducibly reports 59 errors in 4 files across the seven R2.2 modules, correcting the earlier historical claim that mypy passed; this is recorded as non-blocking technical debt rather than hidden. Independent review reported GO only for these three corrections; owner acceptance remains pending.
+
+Authority: this correction used CPU/offline tests and injected fake transport only. It called no live model/provider, network, GPU, backend, replay, GUI, tool, or action; created no persistent external artifact; did not push, merge, or modify Linear. Linear remains owner-managed.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-325 / R2.2 owner acceptance: the owner accepted corrected implementation commit `3940ff7484c0236ac321ea210fc8266e282e5d27` within the bounded CPU/offline/injected-fake-Responses, SHADOW-only repository engineering scope. The accepted-status contract is SHA-256 `98e4a42de6eb87cc0559ed2976ae191e7633dcf29dfcde8592781a9886535a82` / 29,548 bytes; its technical clauses are unchanged from the correction candidate. Runtime Epic 2 is now 2/6 repository engineering stories accepted, and ALE-325 was separately moved to Done in Linear under the owner's explicit instruction.
+
+Accepted behavior: `PRIOR_TRANSITION_STATUS` is weak evidence and cannot independently authorize a material edit; temporal invalidation must follow the target and every cited supporting observation; and every `REPLACE` proposal or runtime plan fails closed before admission/rendering. R2.2 v1 admits only `KEEP`, `DROP`, and `KEEP_UNCERTAIN`. Qwen and MAI SHADOW paths preserve exact Original, and the automatic backend remains an untrusted proposer behind deterministic packet, evidence, temporal, span, renderer, and non-history-invariance checks.
+
+Verification: owner re-review and independent checks found no remaining P0/P1. Focused R2.2 passed 74/74, the affected R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 584/584, the complete MobileWorld suite passed 1669/1669, and the targeted former-P1 subset passed 16/16. Ruff check/format, all three Draft 2020-12 schemas, and Git diff checks passed. The default mypy invocation still reports 59 `redundant-cast` / `redundant-expr` errors in 4 files across 7 modules; detailed phased metrics remain non-blocking observability debt.
+
+Boundary: acceptance does not establish live provider/model readiness, ACTIVE deployment safety, semantic accuracy, task-success improvement, or causal effect. No live model/provider, external network, GPU, backend, replay, GUI, tool, or action was used. R2.3 / ALE-326 is the next mechanically available repository story and owns the independent multi-path rubric axis.
 ```
