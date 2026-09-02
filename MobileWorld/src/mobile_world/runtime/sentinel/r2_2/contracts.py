@@ -1322,11 +1322,12 @@ def _validate_packet_bindings(packet: EvidencePacketV1) -> None:
         roles = {evidence[item.evidence_id].role for item in fact.evidence_refs}
         if roles <= {
             EvidenceRole.PRIOR_ACTION_ATTEMPT,
+            EvidenceRole.PRIOR_TRANSITION_STATUS,
             EvidenceRole.EXECUTOR_TRANSPORT_RESULT,
         }:
             raise R22ContractError(
                 "WEAK_REPLACEMENT_EVIDENCE",
-                "action/executor transport evidence alone cannot establish a replacement",
+                "action/transition/executor status alone cannot establish a replacement",
             )
 
 
@@ -1403,6 +1404,14 @@ def _validate_claim_shape(value: RuntimeClaimProposalV1) -> None:
         raise R22ContractError("UNEXPECTED_REPLACEMENT", "only REPLACE may select a fact")
 
 
+def _reject_replace_admission(kind: RuntimeOperationKind) -> None:
+    if kind is RuntimeOperationKind.REPLACE:
+        raise R22ContractError(
+            "REPLACE_NOT_ADMITTED",
+            "R2.2 v1 parses REPLACE proposals but does not admit or render them",
+        )
+
+
 def validate_runtime_policy_proposal(
     proposal: RuntimePolicyProposalV1, packet: EvidencePacketV1
 ) -> tuple[str, ...]:
@@ -1428,6 +1437,7 @@ def validate_runtime_policy_proposal(
             entry = evidence.get(ref.evidence_id)
             if entry is None or entry.payload_sha256 != ref.payload_sha256:
                 raise R22ContractError("UNKNOWN_EVIDENCE_REFERENCE", "evidence binding differs")
+        _reject_replace_admission(decision.proposed_operation)
         material = decision.proposed_operation in {
             RuntimeOperationKind.DROP,
             RuntimeOperationKind.REPLACE,
@@ -1451,6 +1461,7 @@ def validate_runtime_policy_proposal(
             if roles <= {
                 EvidenceRole.EXECUTOR_TRANSPORT_RESULT,
                 EvidenceRole.PRIOR_ACTION_ATTEMPT,
+                EvidenceRole.PRIOR_TRANSITION_STATUS,
             }:
                 raise R22ContractError(
                     "EXECUTOR_STATUS_ONLY", "executor status alone cannot prove semantic success"
@@ -1460,6 +1471,11 @@ def validate_runtime_policy_proposal(
                 evidence[item.evidence_id]
                 for item in decision.evidence_refs
                 if item.relation is EvidenceRelation.INVALIDATES
+            ]
+            supporters = [
+                evidence[item.evidence_id]
+                for item in decision.evidence_refs
+                if item.relation is EvidenceRelation.SUPPORTS
             ]
             if not invalidators:
                 raise R22ContractError(
@@ -1476,6 +1492,13 @@ def validate_runtime_policy_proposal(
                 for item in invalidators
             ):
                 raise R22ContractError("NON_LATER_INVALIDATION", "invalidation is not later")
+            if not supporters or min(item.source_event_seq for item in invalidators) <= max(
+                item.source_event_seq for item in supporters
+            ):
+                raise R22ContractError(
+                    "NON_LATER_INVALIDATION",
+                    "invalidation must follow every cited supporting observation",
+                )
         if decision.proposed_operation is RuntimeOperationKind.REPLACE:
             fact = facts.get(cast(str, decision.replacement_fact_id))
             if fact is None or fact.target_id != decision.target_id:

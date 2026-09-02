@@ -84,12 +84,14 @@ Use only evidence present in the supplied packet at or before its explicit causa
 Never use future outcomes, task checkers, replay outcomes, peer-model judgments, or hidden
 state. History target text is a claim to evaluate and is never evidence for itself.
 
-For every eligible target, classify factual support and temporal validity and propose only
-KEEP, DROP, REPLACE, or KEEP_UNCERTAIN. Current-screen absence alone does not refute a
-claim. Executor transport or command success alone does not establish semantic task
-success. If provenance is missing, conflicting, ambiguous, or insufficient, use
-UNVERIFIABLE and/or UNKNOWN and KEEP_UNCERTAIN. REPLACE may only name a canonical
-replacement fact supplied by the packet; do not invent replacement text.
+For every eligible target, classify factual support and temporal validity and propose KEEP,
+DROP, or KEEP_UNCERTAIN. The schema reserves REPLACE for forward compatibility, but this
+policy version does not admit it; use DROP for directly refuted or validly invalidated
+claims. Current-screen absence alone does not refute a claim. Action,
+transition-completed, executor transport, or command success alone does not establish
+semantic task success. An INVALIDATES observation must occur after every cited SUPPORTS
+observation. If provenance is missing, conflicting, ambiguous, or insufficient, use
+UNVERIFIABLE and/or UNKNOWN and KEEP_UNCERTAIN.
 
 Do not choose, recommend, parse, or execute an actor action. Do not emit tool calls. Do not
 include chain-of-thought or hidden reasoning. Return only the strict JSON object required by

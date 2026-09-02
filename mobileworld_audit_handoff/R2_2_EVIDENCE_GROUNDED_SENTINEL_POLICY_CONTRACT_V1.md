@@ -1,6 +1,6 @@
 # R2.2 Evidence-Grounded Sentinel Policy Contract v1
 
-Status: **LOCKED for ALE-325 CPU/offline/fake SHADOW implementation**
+Status: **CANDIDATE pending owner re-review for ALE-325 CPU/offline/fake SHADOW**
 Contract ID: `mobileworld.runtime.evidence-grounded-sentinel-policy/contract-v1`
 Evidence packet schema: `schemas/r2_2/evidence_packet.v1.schema.json`
 Proposal schema: `schemas/r2_2/policy_proposal.v1.schema.json`
@@ -59,8 +59,7 @@ The deterministic runtime retains sole authority for:
 3. event identity, causal cutoff, same-task and temporal checks;
 4. evidence-role and evidence-reference eligibility;
 5. verdict/temporal/operation consistency;
-6. replacement-fact identity, authorship, evidence, minimality, and content
-   restrictions;
+6. fail-closed rejection of every automatic `REPLACE` proposal and plan in v1;
 7. non-overlap, no-drift, renderer, reversibility, and history-only
    invariants; and
 8. exact Original fallback and receipt publication.
@@ -132,6 +131,12 @@ An earlier-looking wall clock cannot admit an event whose sequence is after
 the cutoff. Missing source-event provenance makes temporal status `UNKNOWN`; it
 does not permit an inferred order.
 
+For `SUPPORTED + INVALIDATED`, every cited `INVALIDATES` observation MUST be
+strictly later in Collector sequence than both the target provenance and every
+cited `SUPPORTS` observation. Equivalently,
+`max(SUPPORTS.source_event_seq) < min(INVALIDATES.source_event_seq)`. An
+invalidator cannot erase evidence observed after it.
+
 The packet's closed exclusions MUST remain false for:
 
 - future events and the target call's response, action, result, or post-state;
@@ -192,17 +197,14 @@ combination. In particular, `agent_decision` is not an eligible evidence event,
 current evidence cannot claim a prior execution parent, and every prior-event
 role must bind one.
 
-The v1 safe REPLACE boundary uses a finite `replacement_facts` pool. Each fact
-is bound to one exact target, exact text/hash, one or more exact evidence
-references, `author=SENTINEL`, and explicit negative action/tool and
-retroactive-actor-speech attestations. A proposal selects only an exact
-`replacement_fact_id`; free-form model text never becomes replacement bytes.
-A replacement fact is declarative history data, not an imperative. Leading UI
-or state-changing commands (for example open, delete, submit, or save), action
-coordinates, tool/function calls, and retroactive actor voice fail before a
-proposal can reference the fact.
-A future backend-generated correction must first pass this same independent
-fact admission and become a detached trusted fact before it can be referenced.
+The proposal/evidence schemas retain a reserved `replacement_facts` vocabulary
+so provider output can be parsed and audited, but R2.2 v1 does not admit or
+render any `REPLACE`. Free-form natural-language filtering is not a complete
+no-action proof: multilingual or indirect imperatives cannot be made safe by a
+finite keyword list. Every `REPLACE` proposal therefore fails closed with
+`REPLACE_NOT_ADMITTED`, produces no admitted plan or candidate, and preserves
+Original. R2.4 or a later version may enable replacement only after adding a
+closed typed/template-based fact representation and new acceptance.
 
 ## 4. Structured proposal
 
@@ -248,11 +250,11 @@ trusted Python contract:
 - `KEEP` is `SUPPORTED` plus `ACTIVE` or `N_A`, cites at least one `SUPPORTS`
   reference, uses `DIRECT_EVIDENCE_SUPPORT`, has no uncertainty code, and uses
   fallback `NONE`;
-- `DROP` and `REPLACE` have at least one reference, no uncertainty code, and
-  fallback `NONE`; their basis is either `REFUTED` with a `REFUTES` reference
-  and `DIRECT_EVIDENCE_REFUTATION`, or `SUPPORTED` plus `INVALIDATED` with both
-  `SUPPORTS` and `INVALIDATES` references and
-  `LATER_EVIDENCE_INVALIDATES`;
+- `DROP` and syntactically valid but non-admissible `REPLACE` have at least one
+  reference, no uncertainty code, and fallback `NONE`; their basis is either
+  `REFUTED` with a `REFUTES` reference and `DIRECT_EVIDENCE_REFUTATION`, or
+  `SUPPORTED` plus `INVALIDATED` with both `SUPPORTS` and `INVALIDATES`
+  references and `LATER_EVIDENCE_INVALIDATES`;
 - `UNVERIFIABLE` or `UNKNOWN` forces `KEEP_UNCERTAIN`, at least one uncertainty
   code, and `ABSTAIN_TO_ORIGINAL`; without either uncertainty state,
   `KEEP_UNCERTAIN` is forbidden; and
@@ -272,8 +274,8 @@ snapshotting, admission applies at least these rules:
 | Evidence conclusion | Admitted operation |
 | --- | --- |
 | directly supported and still active (or genuinely atemporal) | `KEEP` |
-| directly refuted by eligible evidence available at cutoff | `DROP`, or `REPLACE` using an independently admitted fact |
-| previously supported but invalidated by later, pre-cutoff eligible evidence | `DROP`, or `REPLACE` using an independently admitted fact |
+| directly refuted by eligible evidence available at cutoff | `DROP` |
+| previously supported but invalidated by later, pre-cutoff eligible evidence | `DROP` |
 | unverifiable, temporal provenance missing/unknown, conflicting, compound, or ambiguous | `KEEP_UNCERTAIN` |
 
 Additional mandatory rules:
@@ -283,16 +285,16 @@ Additional mandatory rules:
 - HTTP 200, action-attempted, `transition_completed`, executor return, or a
   generic success field proves only the corresponding transport/executor fact
   and cannot alone prove task-semantic success;
+- temporal invalidation must be later than the target and every cited support;
 - task instruction proves the requested goal, not completion;
 - actor history/reasoning cannot corroborate itself;
 - evidence after the cutoff, from another task, or from a forbidden role is
   invalid even if its text is persuasive;
 - uncertainty is not converted to a destructive operation by a confidence
   threshold; and
-- a replacement MUST match one exact packet fact, retain `SENTINEL`
-  authorship, remain minimal, cite direct eligible evidence, and contain no GUI
-  action, next-step recommendation, coordinate, tool call, role impersonation,
-  accepted-action predicate, or retroactive actor speech.
+- every `REPLACE` proposal and every runtime plan containing `REPLACE` is
+  rejected before candidate construction; v1 does not rely on action keywords
+  or caller attestations to authorize replacement text.
 
 An admitted runtime plan is rebuilt by Sentinel from the detached packet and
 proposal snapshots. Neither a backend serializer nor backend-owned object is
@@ -459,6 +461,10 @@ equal the four-operation census and, for `ADMITTED`, equal target count,
 material count to equal `DROP + REPLACE`, and abstain count to equal
 `KEEP_UNCERTAIN`.
 
+The schema retains a `REPLACE` census slot for forward-compatible failure
+accounting. Because deterministic v1 admission rejects every such proposal,
+the production path produces `replace_count=0` for every `ADMITTED` receipt.
+
 The receipt is hash-only. It embeds no task/history/evidence text, screenshot,
 request view, model output, proposal payload, exact diff, credential, provider
 header, hidden reasoning item, reasoning summary, or chain of thought. The
@@ -510,8 +516,8 @@ Acceptance requires deterministic, fake-transport tests for:
 3. forbidden future/outcome/checker/replay/peer/cross-task evidence;
 4. current-screen-absence-only and executor-success-only non-authorization;
 5. `KEEP_UNCERTAIN` preservation for unsupported or uncertain claims;
-6. replacement ID/text/hash/evidence/authorship/minimality and action/tool/
-   actor-voice rejection;
+6. every `REPLACE` proposal, including multilingual and indirect action-like
+   text, failing before an admitted plan or candidate;
 7. task/history/tool/screenshot prompt-injection strings remaining data;
    task-substring and current-image factory substitution rejection before the
    fake transport;
@@ -520,7 +526,7 @@ Acceptance requires deterministic, fake-transport tests for:
    failure;
 9. exactly one fake Responses call per logical decision, zero SDK retry,
    sentinel-call bypass, and reuse across transport/parse/streaming retries;
-10. exact SHADOW Original parity for every keep/edit/abstain/failure result;
+10. exact SHADOW Original parity for every keep/drop/abstain/failure result;
 11. policy receipt/schema parity, Draft 2020-12 meta-validation, bounded
     best-effort non-blocking metrics, binder/output equality, caller
     immutability, and full affected CPU regressions; and
@@ -542,7 +548,9 @@ R2.4 must separately provide and authorize:
   retry/timeout/Collector correlation, and a new authority/receipt profile;
 - returned model/config and complete live-attempt evidence;
 - production runtime Codec capability overlays without changing the frozen
-  G1.5 v1 `live_ready=false` bytes; and
+  G1.5 v1 `live_ready=false` bytes;
+- a closed typed/template-based replacement-fact contract before any
+  `REPLACE` admission or rendering;
 - a versioned representation or bypass for the zero-target clean-history
   bridge limitation without rewriting the accepted R2.1 v1 receipt; and
 - separately authorized OFF/SHADOW/ACTIVE vertical-slice resource tests.

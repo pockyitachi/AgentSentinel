@@ -1047,6 +1047,7 @@ def _validate_semantic_evidence_basis(
         EvidenceRole.CURRENT_UI_SCREENSHOT,
         EvidenceRole.CURRENT_ACCESSIBILITY,
         EvidenceRole.PRIOR_ACTION_ATTEMPT,
+        EvidenceRole.PRIOR_TRANSITION_STATUS,
         EvidenceRole.EXECUTOR_TRANSPORT_RESULT,
     }
     for decision in proposal.decisions:
@@ -1060,11 +1061,12 @@ def _validate_semantic_evidence_basis(
                 _fail("SUPPORTING_EVIDENCE_MISSING", "KEEP needs explicit supporting evidence")
             if {item.role for item in supporting} <= {
                 EvidenceRole.PRIOR_ACTION_ATTEMPT,
+                EvidenceRole.PRIOR_TRANSITION_STATUS,
                 EvidenceRole.EXECUTOR_TRANSPORT_RESULT,
             }:
                 _fail(
                     "EXECUTOR_STATUS_ONLY",
-                    "action/executor success alone cannot establish semantic support",
+                    "action/transition/executor status alone cannot establish semantic support",
                 )
             if decision.reason_code is not RuntimeReasonCode.DIRECT_EVIDENCE_SUPPORT:
                 _fail("REASON_CODE_MISMATCH", "KEEP reason must bind direct support")
@@ -1444,6 +1446,14 @@ def _validate_target_outside_non_history_regions(
                 )
 
 
+def _reject_replace_render(kind: RuntimeOperationKind) -> None:
+    if kind is RuntimeOperationKind.REPLACE:
+        _fail(
+            "REPLACE_NOT_ADMITTED",
+            "R2.2 v1 does not render automatic replacement operations",
+        )
+
+
 def _resolve_runtime_plan(
     source_request: JsonValue,
     history_ir: HistoryIR,
@@ -1476,6 +1486,7 @@ def _resolve_runtime_plan(
     resolved: list[_ResolvedRuntimeOperation] = []
     occupied: list[tuple[JsonPath, int, int]] = []
     for operation in plan.operations:
+        _reject_replace_render(operation.kind)
         records = [
             record
             for record in history_ir.records
