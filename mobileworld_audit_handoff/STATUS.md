@@ -63,12 +63,14 @@ edit，invalidation 必须晚于 target 和所有 cited support，`REPLACE` 在 
 MobileWorld backend/GUI/tool/action 或 replay；没有把两个 G1.5 v1 Codec 改成
 `live_ready=true`，也没有授权 R2.4。Linear 工作流状态仍由 owner 单独管理。**
 
-**Runtime ALE-326 / R2.3 已形成 repository engineering candidate commit
-`71ce0f670e9c56adbb831229710c555d98b07ca1`，当前等待 owner review，尚不计入
+**Runtime ALE-326 / R2.3 已形成 corrected repository engineering candidate commit
+`dc037efdda4cd8583f47c159e58edb4717cb9c87`，当前等待 owner review，尚不计入
 accepted/Done。** 候选范围严格限定为 CPU/offline/injected-fake、SHADOW-only：versioned
 exact-span `AND`/`OR` rubric、generate-once cache、显式 revision、history-free causal packet、
 milestone/path/frontier tracking、post-state relevance、hash-only receipt 与 low-cardinality
-metrics。`ARCHIVE_SHADOW` 只生成旁路提案，不写 history、不进入 renderer，也不执行 archive。
+metrics。共享 DAG 派生已 memoize，state validator 会独立重算 path/frontier，backend 输出先重建为
+detached trusted snapshot。当前没有可信的 record-level R2.2 resolver，因此所有 relevance disposition
+均为 `RETAIN`，`ARCHIVE_SHADOW` 仅保留在 schema vocabulary 中，不写 history、不进入 renderer，也不执行。
 Qwen/MAI 只使用 captured fixtures；没有真实模型/provider、网络、GPU、MobileWorld backend/
 GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 
@@ -1084,4 +1086,17 @@ Audit and bindings: receipts are closed, hash-only, no-content sidecars with exa
 Verification: focused R2.3 passed 42/42; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 626/626; and the complete MobileWorld suite passed 1711/1711 on the final implementation bytes. Ruff check/format, targeted mypy for all seven R2.3 source/test files, Python compilation during tests, all five Draft 2020-12 schemas, secret/path scan, and Git diff checks passed. Three independent read-only reviews reported no remaining normal typed-data P0/P1 in the stated scope.
 
 Authority and next boundary: this checkpoint used only CPU/offline code and injected fake backends with captured Qwen/MAI fixtures. It made no live model/provider or network call, used no GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. R2.4 is the next mechanically available repository dependency after owner review, but real Qwen/MAI vertical slices, resource provisioning, live evidence plumbing, provider/model calls, GPU, and MobileWorld execution each require separate explicit owner authorization. The repository agent did not push, merge, or modify Linear.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-326 / R2.3 owner-review correction candidate: implementation commit `dc037efdda4cd8583f47c159e58edb4717cb9c87` supersedes the `71ce0f670e9c56adbb831229710c555d98b07ca1` candidate and its `173266febf946405e125afa8ad4b60c683641e51` governance checkpoint after closing four independently reproduced normal-data P1 gaps and one latency-accounting P2. R2.3 remains pending owner review and is not accepted or Done; Runtime Epic 2 remains 2/6 accepted and Linear remains owner-managed.
+
+Corrected behavior: path viability, satisfaction, and per-path frontier traversal now share memoized graph-reference analyses, eliminating exponential recomputation on legal shared DAGs. State validation independently re-derives the canonical path-state/frontier tuple from admitted milestone records; non-blocking derived/optional uncertainty cannot lower a legal path or mask a violated blocking alternative. Generate, revise, and track rebuild backend-owned rubric/proposal graphs into recursively detached trusted snapshots before hashing, admission, storage, state derivation, result construction, or receipt publication. Backend exceptions and rejected outputs retain actual elapsed backend latency. This checkpoint has no trusted record-level R2.2 receipt/output/evidence resolver: arbitrary support hashes remain bound only as link input, every runtime relevance result carries a null support binding and `RETAIN`, and any forged support binding or `ARCHIVE_SHADOW` output is rejected with `R22_SUPPORT_RESOLVER_REQUIRED`.
+
+Bindings: `contracts.py` is SHA-256 `bb6eb3ebb6a2a0c921785c547868780585029c5d412b4495a8a30a55b9a36795` / 102,881 bytes; `session.py` is `c5b85ad449079ed66fc2351bd72573a8b08358d27505fcb62e946b5261a8b964` / 72,176; the focused test is `57c98371e74385cf4db01be0dfa3a53b197c2e55c40fef9051db0a6a7cbf8f46` / 92,196; and the corrected contract is `35f72cb663bce2a028ec66cf1573561a49f9240019b1c87a2c703e212a121baf` / 19,469. The five schemas are byte-unchanged: rubric `098e066db2ec24dade5f2b93a1c0d89d0736c8b0947cd157d5f25a612af50f94`, receipt `7d34084a5d65b529ed091064710c256c9d999630e6d5f8249de667412a4baf19`, topology `cffd40e793320eec45dc3ab7528554825597a49c6c3de148a612d46066329554`, tracker output `2d8be9e032182c9c7ff74cf3c2faf3447a644818ba9ddf837ff69891973ff62a`, and tracking packet `1a533a276de80320e6d7fa5f4918a8acd99509393bad3849075597c539544e07`. The correction binary diff from `173266f` to `dc037ef` is SHA-256 `cb716a23430f6314b76a77b86b760cf53b30d9efd83b3c2ed2ec986b9a7a9a39`; the complete main-to-candidate binary diff is `6c9f0ac4fd64ef6531f5aa736fd7963db4d56916749c76288e98a740a8e9fe26`.
+
+Verification: focused R2.3 passed 47/47 repeatedly; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 631/631; and the complete MobileWorld suite passed 1716/1716 on the final implementation/test bytes. Ruff check/format, targeted mypy, Python compilation, all five Draft 2020-12 schema meta-checks, and Git diff checks passed. Independent normal-data probes measured a 45-gate/depth-20 shared DAG at about 4.7 ms, verified recursive backend-output identity separation and stable receipt/state hashes after backend-side mutation, confirmed forged state/frontier rejection and fail-closed archive behavior, and observed positive bounded backend latency for start/revise/track exceptions and rejected outputs. Three independent read-only reviews reported no remaining P0/P1 in the stated scope.
+
+Authority and next boundary: this correction used only CPU/offline code, injected fake backends, and captured Qwen/MAI fixtures. It invoked no live model/provider, network, GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. A trusted record-level R2.2 `SUPPORTED + KEEP` resolver is an explicit R2.4 prerequisite before any `ARCHIVE_SHADOW`; all other live/resource/GPU/action work also remains separately unauthorized. The repository agent did not push, merge, or modify Linear.
 ```
