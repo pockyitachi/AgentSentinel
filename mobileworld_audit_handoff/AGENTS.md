@@ -79,7 +79,10 @@ Runtime Epic 2 has 2/6 repository engineering stories accepted. ALE-324 / R2.1
 has an accepted CPU/fake checkpoint at commit
 `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. ALE-325 / R2.2 has an accepted
 CPU/offline/injected-fake-Responses, SHADOW-only checkpoint at commit
-`3940ff7484c0236ac321ea210fc8266e282e5d27`. R2.1
+`3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a
+CPU/offline/injected-fake, SHADOW-only candidate at commit
+`71ce0f670e9c56adbb831229710c555d98b07ca1`, pending owner review and not
+counted as accepted. R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
 History-IR snapshots,
 precomputed renderer-result binding, worker-owned policy-evaluation census, and
@@ -204,8 +207,32 @@ The accepted checkpoint used no live model/provider, network, GPU, backend, GUI,
 tool, action, replay, or external data source. The checked-in OpenAI adapter is
 inert without explicit owner authorization. R2.4 must still add real evidence
 plumbing, runtime target discovery, a cancellable live transport/attempt
-receipt, secret/resource authority, and a versioned zero-target bridge. R2.3
-is the next available repository story and remains an independent rubric axis.
+receipt, secret/resource authority, and a versioned zero-target bridge.
+
+## 4B. Candidate scope: R2.3 CPU/offline/fake SHADOW rubric
+
+R2.3 adds the independent rubric/path-relevance axis without treating task
+relevance as factual validity or action advice. Candidate commit
+`71ce0f670e9c56adbb831229710c555d98b07ca1` provides exact Unicode instruction
+spans, an acyclic versioned `AND` / `OR` graph with legal alternatives and
+`OTHER_UNKNOWN`, generate-once caching, and explicit hash-bound revision.
+
+The tracker consumes a history-free packet bound to the task, causal cutoff,
+one current-observation event, prior completed transitions, and prior rubric
+state. It excludes actor history, request/model fields, History IR, and future
+outcomes. Generic transition status, post-UI change, and free-form tool results
+are weak; conflicting or insufficient evidence yields `unknown`. The runtime,
+not the fake backend, derives path viability, alternative-aware frontier,
+record relevance, and the `ARCHIVE_SHADOW` admission decision.
+
+`ARCHIVE_SHADOW` is never executed and never enters the R2.1/R2.2 renderer. It
+requires an inactive route plus a separately bound `SUPPORTED + KEEP` result.
+Receipts are hash-only, call census is cumulative, cache reuse is measured, and
+calibration labels are accepted only as explicit frozen offline inputs. Qwen
+and MAI coverage uses captured CPU fixtures and no host/model-specific runtime
+branch. This candidate is not owner-accepted yet and does not change Linear.
+R2.4 is mechanically next after review, but live/model/provider, network, GPU,
+backend, GUI/tool/action, replay, and resource authority remain separate.
 
 The shared candidate hook is
 `../MobileWorld/src/mobile_world/agents/base.py::BaseAgent.openai_chat_completions_create`.
@@ -265,10 +292,12 @@ history-family differences belong in registered Codecs.
 
 Currently permitted:
 
-- documentation and additive R2.1/R2.2 runtime-contract work;
+- documentation and additive R2.1/R2.2/R2.3 runtime-contract work;
 - CPU-only implementation and tests for OFF/SHADOW/ACTIVE seam mechanics;
 - deterministic fake/no-op R2.1 policy and the checked-in R2.2 automatic
   policy under injected fake Responses transport in SHADOW only;
+- the checked-in R2.3 rubric/tracker under injected fake backends in SHADOW
+  only, including derived `ARCHIVE_SHADOW` receipts but no archive execution;
 - existing in-process fake provider and secret-free fixtures;
 - read-only inspection and hash validation of historical artifacts.
 
@@ -276,7 +305,7 @@ Not currently permitted:
 
 - live/model-backed R2.2 policy calls, ACTIVE R2.2 transformation, or an
   unbound correction generator;
-- rubric generation/tracking or active `ARCHIVE` (R2.3);
+- live/model-backed rubric generation/tracking or active `ARCHIVE` (R2.3);
 - a target actor/Sentinel model or any project provider/client;
 - external network, GPU probe/use, weight loading/serving, or model endpoint;
 - MobileWorld backend/container/emulator task execution, GUI/tool/action,

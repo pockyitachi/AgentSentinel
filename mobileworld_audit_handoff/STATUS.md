@@ -49,9 +49,9 @@ D-028 formal matrix。两个 v1 Codec 继续 `live_ready=false`，formal readine
 typed Original fallback、严格 canonical-JSON admission、递归 trusted/detached policy/IR/
 renderer snapshots 与 history-only 验证，以及 transactional、hash-only、detached-commit、
 repo-external receipt。Qwen、MAI 与 Seed 接入复用现有
-provider/parser/action 路径；未实现自动 validity policy、multi-path rubric、真实
-actor/Sentinel 模型或 live transformation。Linear 工作流状态由 owner 单独管理，本仓库交付
-没有修改 Linear。**
+provider/parser/action 路径；R2.1 本身不实现自动 validity policy、multi-path rubric、真实
+actor/Sentinel 模型或 live transformation。后续 accepted R2.2 与 candidate R2.3 分别增加前
+两项的独立合同层。Linear 工作流状态由 owner 单独管理，本仓库交付没有修改 Linear。**
 
 **Runtime ALE-325 / R2.2 的 repository engineering checkpoint 已由 owner 接受。**
 接受的实现 commit 为 `3940ff7484c0236ac321ea210fc8266e282e5d27`，范围仍严格限定为
@@ -62,6 +62,15 @@ edit，invalidation 必须晚于 target 和所有 cited support，`REPLACE` 在 
 合同完成前一律 fail closed。该 accepted checkpoint 没有调用真实模型/provider、网络、GPU、
 MobileWorld backend/GUI/tool/action 或 replay；没有把两个 G1.5 v1 Codec 改成
 `live_ready=true`，也没有授权 R2.4。Linear 工作流状态仍由 owner 单独管理。**
+
+**Runtime ALE-326 / R2.3 已形成 repository engineering candidate commit
+`71ce0f670e9c56adbb831229710c555d98b07ca1`，当前等待 owner review，尚不计入
+accepted/Done。** 候选范围严格限定为 CPU/offline/injected-fake、SHADOW-only：versioned
+exact-span `AND`/`OR` rubric、generate-once cache、显式 revision、history-free causal packet、
+milestone/path/frontier tracking、post-state relevance、hash-only receipt 与 low-cardinality
+metrics。`ARCHIVE_SHADOW` 只生成旁路提案，不写 history、不进入 renderer，也不执行 archive。
+Qwen/MAI 只使用 captured fixtures；没有真实模型/provider、网络、GPU、MobileWorld backend/
+GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 
 **Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
 并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
@@ -105,7 +114,8 @@ Evaluation
 
 因此，第一次错误 taxonomy即使设计不合理，只需重跑离线 evaluator，不需要重新运行昂贵的 MobileWorld任务。
 
-当前仍不实现自动 claim extraction、verdict prediction、rubric、在线 filter 或自然轨迹干预。
+当前仍不实现 live claim extraction/verdict prediction、在线 filter、active archive 或自然轨迹
+干预；R2.3 rubric 仅为上述 CPU/offline/fake SHADOW candidate。
 
 ## 3. Canonical notation
 
@@ -1061,4 +1071,17 @@ Accepted behavior: `PRIOR_TRANSITION_STATUS` is weak evidence and cannot indepen
 Verification: owner re-review and independent checks found no remaining P0/P1. Focused R2.2 passed 74/74, the affected R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 584/584, the complete MobileWorld suite passed 1669/1669, and the targeted former-P1 subset passed 16/16. Ruff check/format, all three Draft 2020-12 schemas, and Git diff checks passed. The default mypy invocation still reports 59 `redundant-cast` / `redundant-expr` errors in 4 files across 7 modules; detailed phased metrics remain non-blocking observability debt.
 
 Boundary: acceptance does not establish live provider/model readiness, ACTIVE deployment safety, semantic accuracy, task-success improvement, or causal effect. No live model/provider, external network, GPU, backend, replay, GUI, tool, or action was used. R2.3 / ALE-326 is the next mechanically available repository story and owns the independent multi-path rubric axis.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-326 / R2.3 multi-path rubric tracker repository candidate: implementation commit `71ce0f670e9c56adbb831229710c555d98b07ca1` adds the independent task-path relevance axis without changing accepted R2.1/R2.2 or frozen G1 contracts. The candidate is pending owner review and is not counted as accepted or Done; Runtime Epic 2 remains 2/6 accepted and Linear remains owner-managed.
+
+Behavior: one task-start rubric binds exact Unicode/code-point/UTF-8 instruction spans, an acyclic versioned AND/OR graph, legal alternatives, and OTHER_UNKNOWN. Generation converges once per task; revisions require an explicit event and prior-version/hash compare-and-swap. A history-free packet binds the exact task, cutoff, one current-observation event, only prior completed-transition evidence, and prior rubric state while excluding actor history, request/model fields, History IR, and future/checker outcomes. Generic transition status, generic post-UI change, and free-form tool result are weak and cannot independently establish a milestone; conflicting/insufficient evidence yields UNKNOWN. The runtime derives path viability, an alternative-aware frontier, record relevance, and SHADOW-only ARCHIVE admission. ARCHIVE_SHADOW requires an inactive route plus a separately bound SUPPORTED+KEEP validity result, never mutates history, and is not consumed by the R2.1/R2.2 renderer. Actor-visible status defaults off and, when enabled in tests, is a module-owned deterministic status-only projection.
+
+Audit and bindings: receipts are closed, hash-only, no-content sidecars with exact canonical input/output hashes, cumulative operation census, and false resource/action attestations. Cache reuse and runtime state/path/relevance counts are low-cardinality metrics; false-completion and legal-alternative calibration require explicit frozen offline labels rather than causal runtime evidence. LINK input hashes and linkage IDs use a versioned canonical JSON projection, so delimiter-bearing legal IDs remain unambiguous. `contracts.py` is SHA-256 `89bc0cd5bf74f9a9f5edb3d825701b740e71a103c929d46767fb8f7d0a128f8b` / 94,637 bytes; `packet.py` is `380f2491af26bd741dd24adf1b638c77d483905e68f9596acd4b50d106d0b222` / 5,805; `session.py` is `4138dd6057164a160508fc7bfd0c6bb0244828143e6283febef1eb866e113a87` / 76,228; `sidecar.py` is `619e8afd290e6c4e2aee1f9e99e14a604780f234a3e121b603b8fd56fb65a626` / 12,038; `metrics.py` is `6e36c8dcbb9215798bf492873bc57c6e9181f3d75917cfb419bfa6ff805b454c` / 10,167; and the focused test is `28e1a9aeeacf77143569c5d062fa3841205cb0946188ff4eb642a3a8db237168` / 80,234. The contract is `ac28d50394f0ceb0a0f68eb8f3292f4689402efaf8b94d62bbbc784b4cad1cf2` / 18,158. Rubric, receipt, topology, tracker-output, and tracking-packet schemas are respectively `098e066db2ec24dade5f2b93a1c0d89d0736c8b0947cd157d5f25a612af50f94`, `7d34084a5d65b529ed091064710c256c9d999630e6d5f8249de667412a4baf19`, `cffd40e793320eec45dc3ab7528554825597a49c6c3de148a612d46066329554`, `2d8be9e032182c9c7ff74cf3c2faf3447a644818ba9ddf837ff69891973ff62a`, and `1a533a276de80320e6d7fa5f4918a8acd99509393bad3849075597c539544e07`. The implementation binary diff from main `372572ac569ba5118668376fcc57bc19d5c1514e` is `0179552b032f21a2cfd99ba4bd23db85bfc0836f6a03c18c15f9a4799a510c47`.
+
+Verification: focused R2.3 passed 42/42; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 626/626; and the complete MobileWorld suite passed 1711/1711 on the final implementation bytes. Ruff check/format, targeted mypy for all seven R2.3 source/test files, Python compilation during tests, all five Draft 2020-12 schemas, secret/path scan, and Git diff checks passed. Three independent read-only reviews reported no remaining normal typed-data P0/P1 in the stated scope.
+
+Authority and next boundary: this checkpoint used only CPU/offline code and injected fake backends with captured Qwen/MAI fixtures. It made no live model/provider or network call, used no GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. R2.4 is the next mechanically available repository dependency after owner review, but real Qwen/MAI vertical slices, resource provisioning, live evidence plumbing, provider/model calls, GPU, and MobileWorld execution each require separate explicit owner authorization. The repository agent did not push, merge, or modify Linear.
 ```
