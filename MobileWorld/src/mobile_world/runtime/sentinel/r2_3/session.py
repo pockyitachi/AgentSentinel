@@ -63,8 +63,17 @@ from mobile_world.runtime.sentinel.r2_3.contracts import (
     rubric_revision_request_sha256,
     rubric_sha256,
     rubric_tracking_state_sha256,
+    snapshot_backend_descriptor,
     snapshot_multi_path_rubric,
+    snapshot_path_relevance_output,
+    snapshot_record_path_binding,
+    snapshot_revision_request,
+    snapshot_supported_record_binding,
+    snapshot_task_instruction,
+    snapshot_task_start_request,
     snapshot_tracker_proposal,
+    snapshot_tracking_packet,
+    snapshot_tracking_state,
     task_start_request_sha256,
     tracker_proposal_sha256,
     tracking_packet_sha256,
@@ -184,6 +193,33 @@ class RubricSessionResultV1:
             raise ValueError("only tracking results may contain a proposal")
         if self.stage is not RubricSessionStage.LINK_RELEVANCE and self.relevance is not None:
             raise ValueError("only relevance results may contain relevance output")
+
+
+def _detached_session_result(value: RubricSessionResultV1) -> RubricSessionResultV1:
+    """Return a fresh public view with no session/cache authority aliases."""
+
+    if type(value) is not RubricSessionResultV1:
+        raise TypeError("session result must use exact RubricSessionResultV1")
+    return RubricSessionResultV1(
+        stage=value.stage,
+        status=value.status,
+        rubric=(None if value.rubric is None else snapshot_multi_path_rubric(value.rubric)),
+        state=None if value.state is None else snapshot_tracking_state(value.state),
+        proposal=(None if value.proposal is None else snapshot_tracker_proposal(value.proposal)),
+        relevance=(
+            None if value.relevance is None else snapshot_path_relevance_output(value.relevance)
+        ),
+        fallback=(
+            None
+            if value.fallback is None
+            else RubricSessionFallbackV1(
+                code=value.fallback.code,
+                contract_code=value.fallback.contract_code,
+            )
+        ),
+        backend_called=value.backend_called,
+        receipt_sha256=value.receipt_sha256,
+    )
 
 
 class _DirectExecutionControl:
@@ -325,25 +361,28 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
             raise TypeError("task must be an exact TaskInstructionV1")
         if type(actor_visible_enabled) is not bool:
             raise TypeError("actor_visible_enabled must be an exact bool")
-        builder_descriptor = builder_backend.descriptor
-        tracker_descriptor = tracker_backend.descriptor
+        authority_task = snapshot_task_instruction(task)
+        builder_descriptor = snapshot_backend_descriptor(builder_backend.descriptor)
+        tracker_descriptor = snapshot_backend_descriptor(tracker_backend.descriptor)
         # TaskStartRubricRequestV1 performs the exact descriptor/scope check.
         TaskStartRubricRequestV1(
             request_id="r23-constructor-check",
             task_run_id=task_run_id,
-            task=task,
+            task=authority_task,
             backend=builder_descriptor,
         )
         TaskStartRubricRequestV1(
             request_id="r23-tracker-check",
             task_run_id=task_run_id,
-            task=task,
+            task=authority_task,
             backend=tracker_descriptor,
         )
         self._task_run_id = task_run_id
-        self._task = task
+        self._task = authority_task
         self._builder_backend = builder_backend
         self._tracker_backend = tracker_backend
+        self._builder_descriptor = builder_descriptor
+        self._tracker_descriptor = tracker_descriptor
         self._execution_control = execution_control or _DirectExecutionControl()
         self._receipt_sink = receipt_sink or MemoryRubricReceiptSinkV1()
         self._metrics = metrics or RubricMetricsV1()
@@ -374,12 +413,12 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
     @property
     def rubric(self) -> MultiPathRubricV1 | None:
         with self._lock:
-            return self._rubric
+            return None if self._rubric is None else snapshot_multi_path_rubric(self._rubric)
 
     @property
     def state(self) -> RubricTrackingStateV1 | None:
         with self._lock:
-            return self._state
+            return None if self._state is None else snapshot_tracking_state(self._state)
 
     @property
     def task_start_generation_calls(self) -> int:
@@ -624,14 +663,16 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
         backend_called: bool = False,
         receipt_sha256: str | None = None,
     ) -> RubricSessionResultV1:
-        return RubricSessionResultV1(
-            stage=stage,
-            status=RubricSessionStatus.FALLBACK,
-            rubric=self._rubric,
-            state=self._state,
-            fallback=RubricSessionFallbackV1(code=code, contract_code=contract_code),
-            backend_called=backend_called,
-            receipt_sha256=receipt_sha256,
+        return _detached_session_result(
+            RubricSessionResultV1(
+                stage=stage,
+                status=RubricSessionStatus.FALLBACK,
+                rubric=self._rubric,
+                state=self._state,
+                fallback=RubricSessionFallbackV1(code=code, contract_code=contract_code),
+                backend_called=backend_called,
+                receipt_sha256=receipt_sha256,
+            )
         )
 
     def _audited_fallback(
@@ -751,51 +792,59 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     stage=RubricSessionStage.TASK_START_GENERATE,
                     result=self._generation_result,
                 )
-                return self._generation_result
+                return _detached_session_result(self._generation_result)
             stage = RubricSessionStage.TASK_START_GENERATE
             operation_started = time.monotonic_ns()
             try:
-                request = TaskStartRubricRequestV1(
-                    request_id=self._id_factory("r23-generate"),
-                    task_run_id=self._task_run_id,
-                    task=self._task,
-                    backend=self._builder_backend.descriptor,
+                request = snapshot_task_start_request(
+                    TaskStartRubricRequestV1(
+                        request_id=self._id_factory("r23-generate"),
+                        task_run_id=self._task_run_id,
+                        task=self._task,
+                        backend=self._builder_descriptor,
+                    )
                 )
+                input_hash = task_start_request_sha256(request)
+                backend_request = snapshot_task_start_request(request)
             except R23ContractError as error:
                 result = self._fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.INPUT_REJECTED,
                     contract_code=error.code,
                 )
-                self._generation_result = result
+                self._generation_result = _detached_session_result(result)
                 return result
             self._task_start_generation_calls += 1
             backend_started = time.monotonic_ns()
             try:
-                candidate = self._run_backend(lambda: self._builder_backend.generate(request))
+                candidate = self._run_backend(
+                    lambda: self._builder_backend.generate(backend_request)
+                )
             except Exception:
                 backend_latency = time.monotonic_ns() - backend_started
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.BACKEND_ERROR,
-                    descriptor=request.backend,
-                    input_sha256=task_start_request_sha256(request),
+                    descriptor=self._builder_descriptor,
+                    input_sha256=input_hash,
                     logical_call_id=None,
                     prior_state=None,
                     backend_called=True,
                     operation_started_ns=operation_started,
                     backend_latency_ns=backend_latency,
                 )
-                self._generation_result = result
+                self._generation_result = _detached_session_result(result)
                 return result
             backend_latency = time.monotonic_ns() - backend_started
             admission_started = time.monotonic_ns()
             snapshot_bound = False
+            raw_hash = _canonical_json_sha256_if_exact(candidate)
             try:
                 if type(candidate) is not MultiPathRubricV1:
                     raise R23ContractError(
                         "UNTRUSTED_TYPE", "builder must return an exact MultiPathRubricV1"
                     )
+                raw_hash = rubric_sha256(candidate)
                 candidate = snapshot_multi_path_rubric(candidate)
                 snapshot_bound = True
                 if (
@@ -811,17 +860,12 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     )
                 state = self._new_initial_state(candidate)
             except R23ContractError as error:
-                raw_hash = (
-                    rubric_sha256(candidate)
-                    if type(candidate) is MultiPathRubricV1
-                    else _canonical_json_sha256_if_exact(candidate)
-                )
                 parsed_hash = raw_hash if snapshot_bound else None
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.OUTPUT_REJECTED,
-                    descriptor=request.backend,
-                    input_sha256=task_start_request_sha256(request),
+                    descriptor=self._builder_descriptor,
+                    input_sha256=input_hash,
                     logical_call_id=None,
                     prior_state=None,
                     contract_code=error.code,
@@ -831,7 +875,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     raw_backend_output_sha256=raw_hash,
                     parsed_output_sha256=parsed_hash,
                 )
-                self._generation_result = result
+                self._generation_result = _detached_session_result(result)
                 return result
             admission_latency = time.monotonic_ns() - admission_started
             candidate_hash = rubric_sha256(candidate)
@@ -840,8 +884,8 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 stage=stage,
                 status=RubricSessionStatus.ADMITTED,
                 fallback=None,
-                descriptor=request.backend,
-                input_sha256=task_start_request_sha256(request),
+                descriptor=self._builder_descriptor,
+                input_sha256=input_hash,
                 logical_call_id=None,
                 rubric=candidate,
                 prior_state=None,
@@ -855,6 +899,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 state_update_latency_ns=0,
                 total_latency_ns=total_latency,
                 validation_checks=(
+                    "BACKEND_INPUT_SNAPSHOT_BOUND",
                     "BACKEND_OUTPUT_SNAPSHOT_BOUND",
                     "RUBRIC_GENERATED",
                     "INITIAL_STATE_DERIVED",
@@ -875,17 +920,19 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     backend_calls=1,
                     state=None,
                 )
-                self._generation_result = result
+                self._generation_result = _detached_session_result(result)
                 return result
             self._rubric = candidate
             self._state = state
-            result = RubricSessionResultV1(
-                stage=stage,
-                status=RubricSessionStatus.ADMITTED,
-                rubric=candidate,
-                state=state,
-                backend_called=True,
-                receipt_sha256=receipt_sha256,
+            result = _detached_session_result(
+                RubricSessionResultV1(
+                    stage=stage,
+                    status=RubricSessionStatus.ADMITTED,
+                    rubric=candidate,
+                    state=state,
+                    backend_called=True,
+                    receipt_sha256=receipt_sha256,
+                )
             )
             self._record_metric(
                 stage=stage,
@@ -894,7 +941,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 backend_calls=1,
                 state=state,
             )
-            self._generation_result = result
+            self._generation_result = _detached_session_result(result)
             return result
 
     def generate_once(self) -> RubricSessionResultV1:
@@ -913,17 +960,20 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
         with self._lock:
             if self._rubric is None:
                 raise R23ContractError("NOT_INITIALIZED", "task rubric has not been generated")
+            authority_task = snapshot_task_instruction(task)
             # RubricRevisionRequestV1 performs the exact RevisionReason check.
-            return RubricRevisionRequestV1(
-                request_id=request_id or self._id_factory("r23-revision"),
-                task_run_id=self._task_run_id,
-                previous_rubric_id=self._rubric.rubric_id,
-                previous_rubric_version=self._rubric.rubric_version,
-                previous_rubric_sha256=rubric_sha256(self._rubric),
-                revision_event_id=revision_event_id,
-                reason=reason,
-                task=task,
-                backend=self._builder_backend.descriptor,
+            return snapshot_revision_request(
+                RubricRevisionRequestV1(
+                    request_id=request_id or self._id_factory("r23-revision"),
+                    task_run_id=self._task_run_id,
+                    previous_rubric_id=self._rubric.rubric_id,
+                    previous_rubric_version=self._rubric.rubric_version,
+                    previous_rubric_sha256=rubric_sha256(self._rubric),
+                    revision_event_id=revision_event_id,
+                    reason=reason,
+                    task=authority_task,
+                    backend=self._builder_descriptor,
+                )
             )
 
     def revise(self, request: RubricRevisionRequestV1) -> RubricSessionResultV1:
@@ -938,42 +988,52 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     contract_code="UNTRUSTED_TYPE",
                 )
             operation_started = time.monotonic_ns()
+            try:
+                request = snapshot_revision_request(request)
+                input_hash = rubric_revision_request_sha256(request)
+            except R23ContractError as error:
+                return self._fallback(
+                    stage=stage,
+                    code=RubricSessionFallbackCode.INPUT_REJECTED,
+                    contract_code=error.code,
+                )
             cached = self._revision_cache.get(request.revision_event_id)
             if cached is not None:
                 cached_request, cached_result = cached
                 if cached_request == request:
                     self._record_cache_reuse(stage=stage, result=cached_result)
-                    return cached_result
+                    return _detached_session_result(cached_result)
                 return self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.LOGICAL_CALL_DRIFT,
-                    descriptor=self._builder_backend.descriptor,
-                    input_sha256=rubric_revision_request_sha256(request),
+                    descriptor=self._builder_descriptor,
+                    input_sha256=input_hash,
                     logical_call_id=None,
                     prior_state=self._state,
                     backend_called=False,
                     operation_started_ns=operation_started,
                     contract_code="REVISION_EVENT_DRIFT",
                 )
-            previous = self._rubric
-            if previous is None or self._state is None:
+            if self._rubric is None or self._state is None:
                 return self._fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.NOT_INITIALIZED,
                 )
-            previous_state = self._state
+            previous = snapshot_multi_path_rubric(self._rubric)
+            previous_state = snapshot_tracking_state(self._state)
+            previous_hash = rubric_sha256(previous)
             if (
                 request.task_run_id != self._task_run_id
                 or request.previous_rubric_id != previous.rubric_id
                 or request.previous_rubric_version != previous.rubric_version
-                or request.previous_rubric_sha256 != rubric_sha256(previous)
-                or request.backend != self._builder_backend.descriptor
+                or request.previous_rubric_sha256 != previous_hash
+                or request.backend != self._builder_descriptor
             ):
                 return self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.STATE_CONFLICT,
-                    descriptor=request.backend,
-                    input_sha256=rubric_revision_request_sha256(request),
+                    descriptor=self._builder_descriptor,
+                    input_sha256=input_hash,
                     logical_call_id=None,
                     prior_state=previous_state,
                     backend_called=False,
@@ -981,32 +1041,38 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     contract_code="REVISION_PARENT_MISMATCH",
                 )
             self._explicit_revision_calls += 1
+            backend_request = snapshot_revision_request(request)
             backend_started = time.monotonic_ns()
             try:
-                candidate = self._run_backend(lambda: self._builder_backend.revise(request))
+                candidate = self._run_backend(lambda: self._builder_backend.revise(backend_request))
             except Exception:
                 backend_latency = time.monotonic_ns() - backend_started
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.BACKEND_ERROR,
-                    descriptor=request.backend,
-                    input_sha256=rubric_revision_request_sha256(request),
+                    descriptor=self._builder_descriptor,
+                    input_sha256=input_hash,
                     logical_call_id=None,
                     prior_state=previous_state,
                     backend_called=True,
                     operation_started_ns=operation_started,
                     backend_latency_ns=backend_latency,
                 )
-                self._revision_cache[request.revision_event_id] = (request, result)
+                self._revision_cache[request.revision_event_id] = (
+                    request,
+                    _detached_session_result(result),
+                )
                 return result
             backend_latency = time.monotonic_ns() - backend_started
             admission_started = time.monotonic_ns()
             snapshot_bound = False
+            raw_hash = _canonical_json_sha256_if_exact(candidate)
             try:
                 if type(candidate) is not MultiPathRubricV1:
                     raise R23ContractError(
                         "UNTRUSTED_TYPE", "builder must return an exact MultiPathRubricV1"
                     )
+                raw_hash = rubric_sha256(candidate)
                 candidate = snapshot_multi_path_rubric(candidate)
                 snapshot_bound = True
                 if (
@@ -1022,17 +1088,12 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 validate_rubric_revision(previous, candidate)
                 state = self._new_initial_state(candidate)
             except R23ContractError as error:
-                raw_hash = (
-                    rubric_sha256(candidate)
-                    if type(candidate) is MultiPathRubricV1
-                    else _canonical_json_sha256_if_exact(candidate)
-                )
                 parsed_hash = raw_hash if snapshot_bound else None
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.OUTPUT_REJECTED,
-                    descriptor=request.backend,
-                    input_sha256=rubric_revision_request_sha256(request),
+                    descriptor=self._builder_descriptor,
+                    input_sha256=input_hash,
                     logical_call_id=None,
                     prior_state=previous_state,
                     contract_code=error.code,
@@ -1042,7 +1103,10 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     raw_backend_output_sha256=raw_hash,
                     parsed_output_sha256=parsed_hash,
                 )
-                self._revision_cache[request.revision_event_id] = (request, result)
+                self._revision_cache[request.revision_event_id] = (
+                    request,
+                    _detached_session_result(result),
+                )
                 return result
             admission_latency = time.monotonic_ns() - admission_started
             candidate_hash = rubric_sha256(candidate)
@@ -1050,8 +1114,8 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 stage=stage,
                 status=RubricSessionStatus.ADMITTED,
                 fallback=None,
-                descriptor=request.backend,
-                input_sha256=rubric_revision_request_sha256(request),
+                descriptor=self._builder_descriptor,
+                input_sha256=input_hash,
                 logical_call_id=None,
                 rubric=candidate,
                 prior_state=previous_state,
@@ -1065,6 +1129,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 state_update_latency_ns=0,
                 total_latency_ns=time.monotonic_ns() - operation_started,
                 validation_checks=(
+                    "BACKEND_INPUT_SNAPSHOT_BOUND",
                     "BACKEND_OUTPUT_SNAPSHOT_BOUND",
                     "EXPLICIT_REVISION_BOUND",
                     "INITIAL_STATE_DERIVED",
@@ -1085,19 +1150,24 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     backend_calls=1,
                     state=previous_state,
                 )
-                self._revision_cache[request.revision_event_id] = (request, result)
+                self._revision_cache[request.revision_event_id] = (
+                    request,
+                    _detached_session_result(result),
+                )
                 return result
             self._rubric = candidate
             self._state = state
             self._tracking_cache.clear()
             self._relevance_cache.clear()
-            result = RubricSessionResultV1(
-                stage=stage,
-                status=RubricSessionStatus.ADMITTED,
-                rubric=candidate,
-                state=state,
-                backend_called=True,
-                receipt_sha256=receipt_sha256,
+            result = _detached_session_result(
+                RubricSessionResultV1(
+                    stage=stage,
+                    status=RubricSessionStatus.ADMITTED,
+                    rubric=candidate,
+                    state=state,
+                    backend_called=True,
+                    receipt_sha256=receipt_sha256,
+                )
             )
             self._record_metric(
                 stage=stage,
@@ -1106,7 +1176,10 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 backend_calls=1,
                 state=state,
             )
-            self._revision_cache[request.revision_event_id] = (request, result)
+            self._revision_cache[request.revision_event_id] = (
+                request,
+                _detached_session_result(result),
+            )
             return result
 
     def make_tracking_packet(
@@ -1162,18 +1235,20 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
             current_observation.screenshot_content_sha256,
             evidence_key,
         )
-        return RubricTrackingPacketV1(
-            packet_id=resolved_packet_id,
-            logical_call_id=logical_call_id,
-            task_run_id=self._task_run_id,
-            step_id=cutoff.step_id,
-            rubric_binding=rubric_binding(self._rubric),
-            prior_state=self._state,
-            cutoff=cutoff,
-            task=self._rubric.task,
-            current_observation=current_observation,
-            evidence_index=evidence_index,
-            input_exclusions=input_exclusions or TrackingInputExclusionsV1(),
+        return snapshot_tracking_packet(
+            RubricTrackingPacketV1(
+                packet_id=resolved_packet_id,
+                logical_call_id=logical_call_id,
+                task_run_id=self._task_run_id,
+                step_id=cutoff.step_id,
+                rubric_binding=rubric_binding(self._rubric),
+                prior_state=self._state,
+                cutoff=cutoff,
+                task=self._rubric.task,
+                current_observation=current_observation,
+                evidence_index=evidence_index,
+                input_exclusions=input_exclusions or TrackingInputExclusionsV1(),
+            )
         )
 
     def track_step(
@@ -1220,7 +1295,9 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     code=RubricSessionFallbackCode.INPUT_REJECTED,
                     contract_code="UNTRUSTED_TYPE",
                 )
+            operation_started = time.monotonic_ns()
             try:
+                packet = snapshot_tracking_packet(packet)
                 packet_hash = tracking_packet_sha256(packet)
             except R23ContractError as error:
                 return self._fallback(
@@ -1228,17 +1305,16 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     code=RubricSessionFallbackCode.INPUT_REJECTED,
                     contract_code=error.code,
                 )
-            operation_started = time.monotonic_ns()
             cached = self._tracking_cache.get(packet.logical_call_id)
             if cached is not None:
                 cached_hash, cached_result = cached
                 if cached_hash == packet_hash:
                     self._record_cache_reuse(stage=stage, result=cached_result)
-                    return cached_result
+                    return _detached_session_result(cached_result)
                 return self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.LOGICAL_CALL_DRIFT,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=packet_hash,
                     logical_call_id=packet.logical_call_id,
                     prior_state=self._state,
@@ -1246,20 +1322,21 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     operation_started_ns=operation_started,
                     contract_code="LOGICAL_CALL_PACKET_DRIFT",
                 )
-            rubric = self._rubric
-            prior = self._state
-            if rubric is None or prior is None:
+            if self._rubric is None or self._state is None:
                 return self._fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.NOT_INITIALIZED,
                 )
+            rubric = snapshot_multi_path_rubric(self._rubric)
+            prior = snapshot_tracking_state(self._state)
+            prior_hash = rubric_tracking_state_sha256(prior)
             try:
                 validate_tracking_packet(packet, rubric)
             except R23ContractError as error:
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.INPUT_REJECTED,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=packet_hash,
                     logical_call_id=packet.logical_call_id,
                     prior_state=prior,
@@ -1267,15 +1344,19 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     operation_started_ns=operation_started,
                     contract_code=error.code,
                 )
-                self._tracking_cache[packet.logical_call_id] = (packet_hash, result)
+                self._tracking_cache[packet.logical_call_id] = (
+                    packet_hash,
+                    _detached_session_result(result),
+                )
                 return result
-            if packet.prior_state != prior or rubric_tracking_state_sha256(
-                packet.prior_state
-            ) != rubric_tracking_state_sha256(prior):
+            if (
+                packet.prior_state != prior
+                or rubric_tracking_state_sha256(packet.prior_state) != prior_hash
+            ):
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.STATE_CONFLICT,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=packet_hash,
                     logical_call_id=packet.logical_call_id,
                     prior_state=prior,
@@ -1283,18 +1364,22 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     operation_started_ns=operation_started,
                     contract_code="PRIOR_STATE_CAS_FAILED",
                 )
-                self._tracking_cache[packet.logical_call_id] = (packet_hash, result)
+                self._tracking_cache[packet.logical_call_id] = (
+                    packet_hash,
+                    _detached_session_result(result),
+                )
                 return result
             self._runtime_tracking_calls += 1
+            backend_packet = snapshot_tracking_packet(packet)
             backend_started = time.monotonic_ns()
             try:
-                proposal = self._run_backend(lambda: self._tracker_backend.track(packet))
+                proposal = self._run_backend(lambda: self._tracker_backend.track(backend_packet))
             except Exception:
                 backend_latency = time.monotonic_ns() - backend_started
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.BACKEND_ERROR,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=packet_hash,
                     logical_call_id=packet.logical_call_id,
                     prior_state=prior,
@@ -1302,32 +1387,32 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     operation_started_ns=operation_started,
                     backend_latency_ns=backend_latency,
                 )
-                self._tracking_cache[packet.logical_call_id] = (packet_hash, result)
+                self._tracking_cache[packet.logical_call_id] = (
+                    packet_hash,
+                    _detached_session_result(result),
+                )
                 return result
             backend_latency = time.monotonic_ns() - backend_started
             admission_started = time.monotonic_ns()
             snapshot_bound = False
+            raw_hash = _canonical_json_sha256_if_exact(proposal)
             try:
                 if type(proposal) is not RubricTrackerProposalV1:
                     raise R23ContractError(
                         "UNTRUSTED_TYPE",
                         "tracker must return an exact RubricTrackerProposalV1",
                     )
+                raw_hash = tracker_proposal_sha256(proposal)
                 proposal = snapshot_tracker_proposal(proposal)
                 snapshot_bound = True
                 validate_tracker_proposal(proposal, packet, rubric)
                 state = self._admit_tracking_state(packet, proposal, rubric)
             except R23ContractError as error:
-                raw_hash = (
-                    tracker_proposal_sha256(proposal)
-                    if type(proposal) is RubricTrackerProposalV1
-                    else _canonical_json_sha256_if_exact(proposal)
-                )
                 parsed_hash = raw_hash if snapshot_bound else None
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.OUTPUT_REJECTED,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=packet_hash,
                     logical_call_id=packet.logical_call_id,
                     prior_state=prior,
@@ -1338,7 +1423,10 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     raw_backend_output_sha256=raw_hash,
                     parsed_output_sha256=parsed_hash,
                 )
-                self._tracking_cache[packet.logical_call_id] = (packet_hash, result)
+                self._tracking_cache[packet.logical_call_id] = (
+                    packet_hash,
+                    _detached_session_result(result),
+                )
                 return result
             admission_latency = time.monotonic_ns() - admission_started
             proposal_hash = tracker_proposal_sha256(proposal)
@@ -1347,7 +1435,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 stage=stage,
                 status=RubricSessionStatus.ADMITTED,
                 fallback=None,
-                descriptor=self._tracker_backend.descriptor,
+                descriptor=self._tracker_descriptor,
                 input_sha256=packet_hash,
                 logical_call_id=packet.logical_call_id,
                 rubric=rubric,
@@ -1362,6 +1450,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 state_update_latency_ns=0,
                 total_latency_ns=time.monotonic_ns() - operation_started,
                 validation_checks=(
+                    "BACKEND_INPUT_SNAPSHOT_BOUND",
                     "BACKEND_OUTPUT_SNAPSHOT_BOUND",
                     "HISTORY_FREE_PACKET_BOUND",
                     "TRACKER_PROPOSAL_ADMITTED",
@@ -1383,17 +1472,22 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     backend_calls=1,
                     state=prior,
                 )
-                self._tracking_cache[packet.logical_call_id] = (packet_hash, result)
+                self._tracking_cache[packet.logical_call_id] = (
+                    packet_hash,
+                    _detached_session_result(result),
+                )
                 return result
             self._state = state
-            result = RubricSessionResultV1(
-                stage=stage,
-                status=RubricSessionStatus.ADMITTED,
-                rubric=rubric,
-                state=state,
-                proposal=proposal,
-                backend_called=True,
-                receipt_sha256=receipt_sha256,
+            result = _detached_session_result(
+                RubricSessionResultV1(
+                    stage=stage,
+                    status=RubricSessionStatus.ADMITTED,
+                    rubric=rubric,
+                    state=state,
+                    proposal=proposal,
+                    backend_called=True,
+                    receipt_sha256=receipt_sha256,
+                )
             )
             self._record_metric(
                 stage=stage,
@@ -1402,7 +1496,10 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 backend_calls=1,
                 state=state,
             )
-            self._tracking_cache[packet.logical_call_id] = (packet_hash, result)
+            self._tracking_cache[packet.logical_call_id] = (
+                packet_hash,
+                _detached_session_result(result),
+            )
             return result
 
     def _admit_tracking_state(
@@ -1464,9 +1561,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
 
         with self._lock:
             stage = RubricSessionStage.LINK_RELEVANCE
-            rubric = self._rubric
-            current = self._state
-            if rubric is None or current is None:
+            if self._rubric is None or self._state is None:
                 return self._fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.NOT_INITIALIZED,
@@ -1484,6 +1579,22 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     code=RubricSessionFallbackCode.INPUT_REJECTED,
                     contract_code="UNTRUSTED_TYPE",
                 )
+            try:
+                state = snapshot_tracking_state(state)
+                record_bindings = tuple(
+                    snapshot_record_path_binding(value) for value in record_bindings
+                )
+                supported_records = tuple(
+                    snapshot_supported_record_binding(value) for value in supported_records
+                )
+            except R23ContractError as error:
+                return self._fallback(
+                    stage=stage,
+                    code=RubricSessionFallbackCode.INPUT_REJECTED,
+                    contract_code=error.code,
+                )
+            rubric = snapshot_multi_path_rubric(self._rubric)
+            current = snapshot_tracking_state(self._state)
             cache_key = (
                 rubric_tracking_state_sha256(state),
                 record_bindings,
@@ -1504,7 +1615,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 return self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.STATE_CONFLICT,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=link_input_hash,
                     logical_call_id=logical_call_id,
                     prior_state=current,
@@ -1517,11 +1628,11 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 cached_key, cached_result = cached
                 if cached_key == cache_key:
                     self._record_cache_reuse(stage=stage, result=cached_result)
-                    return cached_result
+                    return _detached_session_result(cached_result)
                 return self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.LOGICAL_CALL_DRIFT,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=link_input_hash,
                     logical_call_id=logical_call_id,
                     prior_state=state,
@@ -1537,7 +1648,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.INPUT_REJECTED,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=link_input_hash,
                     logical_call_id=logical_call_id,
                     prior_state=current,
@@ -1545,13 +1656,16 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     operation_started_ns=operation_started,
                     contract_code="DUPLICATE_ID",
                 )
-                self._relevance_cache[logical_call_id] = (cache_key, result)
+                self._relevance_cache[logical_call_id] = (
+                    cache_key,
+                    _detached_session_result(result),
+                )
                 return result
             if not set(support_ids) <= set(binding_ids):
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.INPUT_REJECTED,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=link_input_hash,
                     logical_call_id=logical_call_id,
                     prior_state=current,
@@ -1559,7 +1673,10 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     operation_started_ns=operation_started,
                     contract_code="UNBOUND_SUPPORTED_RECORD",
                 )
-                self._relevance_cache[logical_call_id] = (cache_key, result)
+                self._relevance_cache[logical_call_id] = (
+                    cache_key,
+                    _detached_session_result(result),
+                )
                 return result
             self._relevance_link_calls += 1
             path_states = {value.path_id: value.state for value in state.path_states}
@@ -1609,7 +1726,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.OUTPUT_REJECTED,
-                    descriptor=self._tracker_backend.descriptor,
+                    descriptor=self._tracker_descriptor,
                     input_sha256=link_input_hash,
                     logical_call_id=logical_call_id,
                     prior_state=current,
@@ -1617,14 +1734,17 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     operation_started_ns=operation_started,
                     contract_code=error.code,
                 )
-                self._relevance_cache[logical_call_id] = (cache_key, result)
+                self._relevance_cache[logical_call_id] = (
+                    cache_key,
+                    _detached_session_result(result),
+                )
                 return result
             output_hash = path_relevance_output_sha256(output)
             receipt = self._receipt(
                 stage=stage,
                 status=RubricSessionStatus.ADMITTED,
                 fallback=None,
-                descriptor=self._tracker_backend.descriptor,
+                descriptor=self._tracker_descriptor,
                 input_sha256=link_input_hash,
                 logical_call_id=logical_call_id,
                 rubric=rubric,
@@ -1659,16 +1779,21 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     backend_calls=0,
                     state=state,
                 )
-                self._relevance_cache[logical_call_id] = (cache_key, result)
+                self._relevance_cache[logical_call_id] = (
+                    cache_key,
+                    _detached_session_result(result),
+                )
                 return result
-            result = RubricSessionResultV1(
-                stage=stage,
-                status=RubricSessionStatus.ADMITTED,
-                rubric=rubric,
-                state=state,
-                relevance=output,
-                backend_called=False,
-                receipt_sha256=receipt_sha256,
+            result = _detached_session_result(
+                RubricSessionResultV1(
+                    stage=stage,
+                    status=RubricSessionStatus.ADMITTED,
+                    rubric=rubric,
+                    state=state,
+                    relevance=output,
+                    backend_called=False,
+                    receipt_sha256=receipt_sha256,
+                )
             )
             self._record_metric(
                 stage=stage,
@@ -1678,7 +1803,10 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 state=state,
                 relevance=output,
             )
-            self._relevance_cache[logical_call_id] = (cache_key, result)
+            self._relevance_cache[logical_call_id] = (
+                cache_key,
+                _detached_session_result(result),
+            )
             return result
 
     def link(

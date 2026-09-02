@@ -30,6 +30,13 @@ RUBRIC_RECEIPT_SCHEMA_VERSION = "mobileworld.runtime.rubric-receipt/v1"
 TOPOLOGY_COMPARISON_SCHEMA_VERSION = "mobileworld.runtime.rubric-topology-comparison/v1"
 R23_CONTRACT_VERSION = "v1"
 
+# Trusted R2.3 graphs are shallow by contract even when a rubric contains the
+# maximum 512 gates. These limits protect the pre-validation snapshot/hash
+# boundary from post-construction cycles and structurally poisoned graphs while
+# leaving ample room for the largest valid v1 rubric and tracking packet.
+TRUSTED_GRAPH_MAX_DEPTH = 64
+TRUSTED_GRAPH_MAX_NODES = 262_144
+
 # These constants are part of the public safety boundary, not feature flags.
 RUBRIC_FACTUAL_AUTHORITY = False
 RUBRIC_HISTORY_EDIT_AUTHORITY = False
@@ -2205,51 +2212,230 @@ _PROJECTED_DATACLASS_TYPES = {
 }
 
 
-def _trusted_projection(value: object) -> JsonValue:
-    """Build a canonical view without invoking a replaceable serializer."""
+class _TrustedGraphBudget:
+    """Active-path cycle detector plus deterministic traversal budgets."""
 
+    __slots__ = ("active_ids", "node_count")
+
+    def __init__(self) -> None:
+        self.active_ids: set[int] = set()
+        self.node_count = 0
+
+    def visit(self, *, depth: int) -> None:
+        if depth > TRUSTED_GRAPH_MAX_DEPTH:
+            _fail(
+                "TRUSTED_GRAPH_DEPTH_EXCEEDED",
+                "trusted graph exceeds the maximum nesting depth",
+            )
+        self.node_count += 1
+        if self.node_count > TRUSTED_GRAPH_MAX_NODES:
+            _fail(
+                "TRUSTED_GRAPH_NODE_LIMIT_EXCEEDED",
+                "trusted graph exceeds the maximum node count",
+            )
+
+    def enter(self, value: object) -> int:
+        identity = id(value)
+        if identity in self.active_ids:
+            _fail("TRUSTED_GRAPH_CYCLE", "trusted graph contains a cycle")
+        self.active_ids.add(identity)
+        return identity
+
+    def leave(self, identity: int) -> None:
+        self.active_ids.remove(identity)
+
+
+def _project_trusted_graph(
+    value: object,
+    *,
+    budget: _TrustedGraphBudget,
+    depth: int,
+) -> JsonValue:
+    budget.visit(depth=depth)
     if value is None or type(value) in {str, int, bool}:
         return cast(JsonValue, value)
     if type(value) in _PROJECTED_ENUM_TYPES:
         return cast(StrEnum, value).value
     if type(value) is tuple:
-        return [_trusted_projection(item) for item in cast(tuple[object, ...], value)]
+        identity = budget.enter(value)
+        try:
+            return [
+                _project_trusted_graph(item, budget=budget, depth=depth + 1)
+                for item in cast(tuple[object, ...], value)
+            ]
+        finally:
+            budget.leave(identity)
     if type(value) in _PROJECTED_DATACLASS_TYPES:
-        field_names = cast(dict[str, object], getattr(type(value), "__dataclass_fields__"))
-        return {name: _trusted_projection(getattr(value, name)) for name in field_names}
+        identity = budget.enter(value)
+        try:
+            field_names = cast(dict[str, object], getattr(type(value), "__dataclass_fields__"))
+            return {
+                name: _project_trusted_graph(getattr(value, name), budget=budget, depth=depth + 1)
+                for name in field_names
+            }
+        finally:
+            budget.leave(identity)
     _fail("UNTRUSTED_TYPE", "value has no R2.3 canonical projection")
 
 
-def _trusted_snapshot(value: object) -> object:
-    """Rebuild one detached graph without calling a backend-owned serializer."""
+def _trusted_projection(value: object) -> JsonValue:
+    """Build one bounded canonical view without virtual serialization."""
 
+    try:
+        return _project_trusted_graph(value, budget=_TrustedGraphBudget(), depth=0)
+    except RecursionError:
+        _fail(
+            "TRUSTED_GRAPH_RECURSION_LIMIT",
+            "trusted graph exceeded the interpreter recursion limit",
+        )
+
+
+def _snapshot_trusted_graph(
+    value: object,
+    *,
+    budget: _TrustedGraphBudget,
+    depth: int,
+) -> object:
+    budget.visit(depth=depth)
     if value is None or type(value) in {str, int, bool}:
         return value
     if type(value) in _PROJECTED_ENUM_TYPES:
         return value
     if type(value) is tuple:
-        return tuple(_trusted_snapshot(item) for item in cast(tuple[object, ...], value))
+        identity = budget.enter(value)
+        try:
+            return tuple(
+                _snapshot_trusted_graph(item, budget=budget, depth=depth + 1)
+                for item in cast(tuple[object, ...], value)
+            )
+        finally:
+            budget.leave(identity)
     if type(value) in _PROJECTED_DATACLASS_TYPES:
-        field_names = cast(dict[str, object], getattr(type(value), "__dataclass_fields__"))
-        constructor = cast(Callable[..., object], type(value))
-        return constructor(
-            **{name: _trusted_snapshot(getattr(value, name)) for name in field_names}
-        )
+        identity = budget.enter(value)
+        try:
+            field_names = cast(dict[str, object], getattr(type(value), "__dataclass_fields__"))
+            constructor = cast(Callable[..., object], type(value))
+            return constructor(
+                **{
+                    name: _snapshot_trusted_graph(
+                        getattr(value, name), budget=budget, depth=depth + 1
+                    )
+                    for name in field_names
+                }
+            )
+        finally:
+            budget.leave(identity)
     _fail("UNTRUSTED_TYPE", "value has no R2.3 trusted snapshot")
 
 
-def snapshot_multi_path_rubric(value: MultiPathRubricV1) -> MultiPathRubricV1:
-    _require_exact(value, MultiPathRubricV1, "rubric")
+def _trusted_snapshot(value: object) -> object:
+    """Rebuild one bounded detached graph without virtual serialization."""
+
+    try:
+        return _snapshot_trusted_graph(value, budget=_TrustedGraphBudget(), depth=0)
+    except RecursionError:
+        _fail(
+            "TRUSTED_GRAPH_RECURSION_LIMIT",
+            "trusted graph exceeded the interpreter recursion limit",
+        )
+
+
+def _typed_snapshot(value: object, expected: type[object], name: str) -> object:
+    _require_exact(value, expected, name)
     snapshot = _trusted_snapshot(value)
-    assert type(snapshot) is MultiPathRubricV1
+    assert type(snapshot) is expected
     return snapshot
+
+
+def snapshot_multi_path_rubric(value: MultiPathRubricV1) -> MultiPathRubricV1:
+    return cast(
+        MultiPathRubricV1,
+        _typed_snapshot(value, MultiPathRubricV1, "rubric"),
+    )
 
 
 def snapshot_tracker_proposal(value: RubricTrackerProposalV1) -> RubricTrackerProposalV1:
-    _require_exact(value, RubricTrackerProposalV1, "tracker proposal")
-    snapshot = _trusted_snapshot(value)
-    assert type(snapshot) is RubricTrackerProposalV1
-    return snapshot
+    return cast(
+        RubricTrackerProposalV1,
+        _typed_snapshot(value, RubricTrackerProposalV1, "tracker proposal"),
+    )
+
+
+def snapshot_task_instruction(value: TaskInstructionV1) -> TaskInstructionV1:
+    return cast(
+        TaskInstructionV1,
+        _typed_snapshot(value, TaskInstructionV1, "task instruction"),
+    )
+
+
+def snapshot_backend_descriptor(
+    value: RubricBackendDescriptorV1,
+) -> RubricBackendDescriptorV1:
+    return cast(
+        RubricBackendDescriptorV1,
+        _typed_snapshot(value, RubricBackendDescriptorV1, "backend descriptor"),
+    )
+
+
+def snapshot_task_start_request(
+    value: TaskStartRubricRequestV1,
+) -> TaskStartRubricRequestV1:
+    return cast(
+        TaskStartRubricRequestV1,
+        _typed_snapshot(value, TaskStartRubricRequestV1, "task-start request"),
+    )
+
+
+def snapshot_revision_request(
+    value: RubricRevisionRequestV1,
+) -> RubricRevisionRequestV1:
+    return cast(
+        RubricRevisionRequestV1,
+        _typed_snapshot(value, RubricRevisionRequestV1, "revision request"),
+    )
+
+
+def snapshot_tracking_state(
+    value: RubricTrackingStateV1,
+) -> RubricTrackingStateV1:
+    return cast(
+        RubricTrackingStateV1,
+        _typed_snapshot(value, RubricTrackingStateV1, "tracking state"),
+    )
+
+
+def snapshot_tracking_packet(
+    value: RubricTrackingPacketV1,
+) -> RubricTrackingPacketV1:
+    return cast(
+        RubricTrackingPacketV1,
+        _typed_snapshot(value, RubricTrackingPacketV1, "tracking packet"),
+    )
+
+
+def snapshot_path_relevance_output(
+    value: PathRelevanceOutputV1,
+) -> PathRelevanceOutputV1:
+    return cast(
+        PathRelevanceOutputV1,
+        _typed_snapshot(value, PathRelevanceOutputV1, "path relevance output"),
+    )
+
+
+def snapshot_record_path_binding(value: RecordPathBindingV1) -> RecordPathBindingV1:
+    return cast(
+        RecordPathBindingV1,
+        _typed_snapshot(value, RecordPathBindingV1, "record path binding"),
+    )
+
+
+def snapshot_supported_record_binding(
+    value: SupportedRecordBindingV1,
+) -> SupportedRecordBindingV1:
+    return cast(
+        SupportedRecordBindingV1,
+        _typed_snapshot(value, SupportedRecordBindingV1, "supported record binding"),
+    )
 
 
 def _typed_projection(value: object, expected: type[object]) -> dict[str, JsonValue]:
@@ -2456,6 +2642,8 @@ __all__ = [
     "SupportedRecordBindingV1",
     "TaskInstructionV1",
     "TaskStartRubricRequestV1",
+    "TRUSTED_GRAPH_MAX_DEPTH",
+    "TRUSTED_GRAPH_MAX_NODES",
     "TextEvidenceProjectionV1",
     "TopologyComparisonV1",
     "TopologyDeclarationV1",
@@ -2478,6 +2666,15 @@ __all__ = [
     "rubric_tracking_state_projection",
     "rubric_tracking_state_sha256",
     "snapshot_multi_path_rubric",
+    "snapshot_backend_descriptor",
+    "snapshot_path_relevance_output",
+    "snapshot_record_path_binding",
+    "snapshot_revision_request",
+    "snapshot_supported_record_binding",
+    "snapshot_task_instruction",
+    "snapshot_task_start_request",
+    "snapshot_tracking_packet",
+    "snapshot_tracking_state",
     "snapshot_tracker_proposal",
     "supported_record_binding_projection",
     "supported_record_binding_sha256",

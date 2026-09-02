@@ -15,6 +15,7 @@ import pytest
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from mobile_world.runtime.sentinel.r2_3.contracts import (
+    TRUSTED_GRAPH_MAX_NODES,
     ActorVisibleRubricStateV1,
     CurrentObservationBindingV1,
     EvidenceMediaType,
@@ -72,10 +73,13 @@ from mobile_world.runtime.sentinel.r2_3.contracts import (
     multi_path_rubric_projection,
     path_relevance_output_projection,
     rubric_binding,
+    rubric_revision_request_sha256,
     rubric_sha256,
     rubric_tracking_state_projection,
     rubric_tracking_state_sha256,
+    snapshot_multi_path_rubric,
     supported_record_binding_sha256,
+    task_start_request_sha256,
     topology_comparison_projection,
     tracker_proposal_projection,
     tracker_proposal_sha256,
@@ -1153,7 +1157,10 @@ def test_task_start_generation_runs_once_and_freezes_the_initial_version() -> No
     first = session.start()
     second = session.generate_once()
 
-    assert first is second
+    assert first == second
+    assert first is not second
+    assert first.rubric is not second.rubric
+    assert first.state is not second.state
     assert first.status is RubricSessionStatus.ADMITTED
     assert first.rubric is not None and first.rubric.rubric_version == 1
     assert first.state is not None and first.state.state_version == 0
@@ -1189,7 +1196,9 @@ def test_task_start_generation_converges_under_concurrent_cache_reuse() -> None:
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = tuple(executor.map(lambda _: session.start(), range(32)))
 
-    assert all(result is results[0] for result in results)
+    assert all(result == results[0] for result in results)
+    assert all(result is not results[0] for result in results[1:])
+    assert len({id(result) for result in results}) == len(results)
     assert results[0].status is RubricSessionStatus.ADMITTED
     assert builder.generate_calls == 1
     metrics = session.metrics.snapshot()
@@ -1322,6 +1331,529 @@ def test_backend_outputs_are_detached_before_session_admission() -> None:
     assert track_receipt.raw_backend_output_sha256 == proposal_hash
     assert track_receipt.final_state_sha256 == state_hash
     assert "BACKEND_OUTPUT_SNAPSHOT_BOUND" in track_receipt.validation_checks
+
+
+def test_generate_backend_input_mutation_cannot_change_private_task_or_receipt_hash() -> None:
+    rubric = _rubric()
+
+    class MutatingBuilder(_FakeBuilderBackend):
+        request_hash_before: str | None = None
+        request_hash_after: str | None = None
+
+        def generate(self, request: TaskStartRubricRequestV1) -> MultiPathRubricV1:
+            self.generate_calls += 1
+            self.request_hash_before = task_start_request_sha256(request)
+            object.__setattr__(request.task, "source_event_seq", 2)
+            self.request_hash_after = task_start_request_sha256(request)
+            return self._rubric
+
+    builder = MutatingBuilder(rubric)
+    tracker = _FakeTrackerBackend(rubric.backend, _ambiguous_proposal)
+    session = RubricTaskSession(
+        task_run_id=rubric.task_run_id,
+        task=rubric.task,
+        builder_backend=builder,
+        tracker_backend=tracker,
+        id_factory=_DeterministicIds(),
+    )
+
+    result = session.start()
+
+    assert result.status is RubricSessionStatus.ADMITTED
+    assert result.rubric is not None and result.state is not None
+    assert result.rubric.task.source_event_seq == 1
+    assert rubric.task.source_event_seq == 1
+    assert builder.request_hash_before is not None
+    assert builder.request_hash_after is not None
+    assert builder.request_hash_before != builder.request_hash_after
+    assert isinstance(session.receipt_sink, MemoryRubricReceiptSinkV1)
+    receipt = session.receipt_sink.receipts[-1]
+    assert receipt.input_sha256 == builder.request_hash_before
+    assert receipt.input_sha256 != builder.request_hash_after
+
+
+def test_revision_backend_input_mutation_cannot_rebind_private_parent_or_cas() -> None:
+    rubric = _rubric()
+
+    class MutatingBuilder(_FakeBuilderBackend):
+        request_hash_before: str | None = None
+        request_hash_after: str | None = None
+
+        def revise(self, request: RubricRevisionRequestV1) -> MultiPathRubricV1:
+            self.revise_calls += 1
+            self.request_hash_before = rubric_revision_request_sha256(request)
+            object.__setattr__(request.task, "source_event_seq", 2)
+            self.request_hash_after = rubric_revision_request_sha256(request)
+            mutated_parent = replace(self._rubric, task=request.task)
+            self.last_revision = replace(
+                self._rubric,
+                rubric_version=request.previous_rubric_version + 1,
+                task=request.task,
+                revision=RubricRevisionV1(
+                    revision_id=f"revision-{request.previous_rubric_version + 1}",
+                    revision_event_id=request.revision_event_id,
+                    kind=RevisionKind.EXPLICIT_REVISION,
+                    reason=request.reason,
+                    previous_rubric_version=request.previous_rubric_version,
+                    previous_rubric_sha256=rubric_sha256(mutated_parent),
+                    hard_requirement_deltas=(),
+                    changed_node_ids=(),
+                ),
+            )
+            return self.last_revision
+
+    builder = MutatingBuilder(rubric)
+    tracker = _FakeTrackerBackend(rubric.backend, _ambiguous_proposal)
+    session = RubricTaskSession(
+        task_run_id=rubric.task_run_id,
+        task=rubric.task,
+        builder_backend=builder,
+        tracker_backend=tracker,
+        id_factory=_DeterministicIds(),
+    )
+    started = session.start()
+    assert started.rubric is not None and started.state is not None
+    request = session.make_revision_request(
+        revision_event_id="revision-event-2",
+        reason=RevisionReason.GRAPH_DEFECT_CORRECTION,
+        task=started.rubric.task,
+        request_id="revision-request-2",
+    )
+    request_hash = rubric_revision_request_sha256(request)
+    rubric_hash = rubric_sha256(started.rubric)
+    state_hash = rubric_tracking_state_sha256(started.state)
+
+    result = session.revise(request)
+    duplicate = session.revise(request)
+
+    assert result.status is RubricSessionStatus.FALLBACK
+    assert result.fallback is not None
+    assert result.fallback.code is RubricSessionFallbackCode.OUTPUT_REJECTED
+    assert result == duplicate and result is not duplicate
+    assert result.rubric is not duplicate.rubric
+    assert result.state is not duplicate.state
+    assert request.task.source_event_seq == 1
+    assert rubric_revision_request_sha256(request) == request_hash
+    assert builder.request_hash_before == request_hash
+    assert builder.request_hash_after is not None
+    assert builder.request_hash_after != request_hash
+    assert builder.revise_calls == 1
+    current_rubric = session.rubric
+    current_state = session.state
+    assert current_rubric is not None and current_state is not None
+    assert rubric_sha256(current_rubric) == rubric_hash
+    assert rubric_tracking_state_sha256(current_state) == state_hash
+    assert isinstance(session.receipt_sink, MemoryRubricReceiptSinkV1)
+    receipt = session.receipt_sink.receipts[-1]
+    assert receipt.input_sha256 == request_hash
+    assert receipt.prior_state_sha256 == state_hash
+    assert receipt.final_state_sha256 == state_hash
+
+
+def test_tracker_backend_input_mutation_cannot_change_private_packet_state_or_cas() -> None:
+    rubric = _rubric()
+
+    class MutatingTracker:
+        def __init__(self) -> None:
+            self.track_calls = 0
+            self.packet_hash_before: str | None = None
+            self.packet_hash_after: str | None = None
+
+        @property
+        def descriptor(self) -> RubricBackendDescriptorV1:
+            return rubric.backend
+
+        def track(self, packet: RubricTrackingPacketV1) -> RubricTrackerProposalV1:
+            self.track_calls += 1
+            self.packet_hash_before = tracking_packet_sha256(packet)
+            object.__setattr__(packet.prior_state, "state_id", "backend-mutated-prior")
+            object.__setattr__(packet.task, "source_event_seq", 2)
+            self.packet_hash_after = tracking_packet_sha256(packet)
+            return _ambiguous_proposal(packet)
+
+    builder = _FakeBuilderBackend(rubric)
+    tracker = MutatingTracker()
+    session = RubricTaskSession(
+        task_run_id=rubric.task_run_id,
+        task=rubric.task,
+        builder_backend=builder,
+        tracker_backend=tracker,
+        id_factory=_DeterministicIds(),
+    )
+    assert session.start().status is RubricSessionStatus.ADMITTED
+    packet = _session_packet(session)
+    packet_hash = tracking_packet_sha256(packet)
+    packet_state_id = packet.prior_state.state_id
+    state_hash = rubric_tracking_state_sha256(packet.prior_state)
+
+    result = session.track(packet)
+    duplicate = session.track(packet)
+
+    assert result.status is RubricSessionStatus.FALLBACK
+    assert result.fallback is not None
+    assert result.fallback.code is RubricSessionFallbackCode.OUTPUT_REJECTED
+    assert result == duplicate and result is not duplicate
+    assert result.rubric is not duplicate.rubric
+    assert result.state is not duplicate.state
+    assert tracker.track_calls == 1
+    assert tracker.packet_hash_before == packet_hash
+    assert tracker.packet_hash_after is not None
+    assert tracker.packet_hash_after != packet_hash
+    assert tracking_packet_sha256(packet) == packet_hash
+    assert packet.prior_state.state_id == packet_state_id
+    assert packet.task.source_event_seq == 1
+    current_state = session.state
+    assert current_state is not None
+    assert rubric_tracking_state_sha256(current_state) == state_hash
+    assert isinstance(session.receipt_sink, MemoryRubricReceiptSinkV1)
+    receipt = session.receipt_sink.receipts[-1]
+    assert receipt.input_sha256 == packet_hash
+    assert receipt.prior_state_sha256 == state_hash
+    assert receipt.final_state_sha256 == state_hash
+
+
+def test_session_properties_packets_results_links_and_cache_hits_are_detached() -> None:
+    session, builder, tracker = _session()
+
+    started = session.start()
+    started_cached = session.start()
+    assert started.status is RubricSessionStatus.ADMITTED
+    assert started.rubric is not None and started.state is not None
+    assert started == started_cached and started is not started_cached
+    assert started_cached.rubric is not None and started_cached.state is not None
+    assert started.rubric is not started_cached.rubric
+    assert started.rubric.task is not started_cached.rubric.task
+    assert started.state is not started_cached.state
+
+    property_rubric = session.rubric
+    property_rubric_again = session.rubric
+    property_state = session.state
+    property_state_again = session.state
+    assert property_rubric is not None and property_rubric_again is not None
+    assert property_state is not None and property_state_again is not None
+    assert property_rubric is not property_rubric_again
+    assert property_rubric.task is not property_rubric_again.task
+    assert property_state is not property_state_again
+    initial_rubric_hash = rubric_sha256(property_rubric_again)
+    initial_state_hash = rubric_tracking_state_sha256(property_state_again)
+
+    object.__setattr__(started.rubric, "rubric_id", "caller-mutated-start-rubric")
+    object.__setattr__(started.state, "state_id", "caller-mutated-start-state")
+    object.__setattr__(property_rubric, "rubric_id", "caller-mutated-property-rubric")
+    object.__setattr__(property_state, "state_id", "caller-mutated-property-state")
+    assert rubric_sha256(cast(MultiPathRubricV1, session.rubric)) == initial_rubric_hash
+    assert rubric_tracking_state_sha256(cast(RubricTrackingStateV1, session.state)) == (
+        initial_state_hash
+    )
+    started_after_mutation = session.start()
+    assert started_after_mutation.rubric == started_cached.rubric
+    assert started_after_mutation.state == started_cached.state
+    assert started_after_mutation.rubric is not started_cached.rubric
+    assert started_after_mutation.state is not started_cached.state
+
+    source = _packet(property_rubric_again)
+    first_packet = session.make_tracking_packet(
+        logical_call_id=source.logical_call_id,
+        cutoff=source.cutoff,
+        current_observation=source.current_observation,
+        evidence_index=source.evidence_index,
+        packet_id=source.packet_id,
+    )
+    second_packet = session.make_tracking_packet(
+        logical_call_id=source.logical_call_id,
+        cutoff=source.cutoff,
+        current_observation=source.current_observation,
+        evidence_index=source.evidence_index,
+        packet_id=source.packet_id,
+    )
+    second_packet_hash = tracking_packet_sha256(second_packet)
+    assert first_packet is not second_packet
+    assert first_packet.prior_state is not second_packet.prior_state
+    assert first_packet.task is not second_packet.task
+    object.__setattr__(first_packet.prior_state, "state_id", "caller-mutated-packet-state")
+    object.__setattr__(first_packet.task, "source_event_seq", 2)
+    assert tracking_packet_sha256(second_packet) == second_packet_hash
+    assert rubric_sha256(cast(MultiPathRubricV1, session.rubric)) == initial_rubric_hash
+    assert rubric_tracking_state_sha256(cast(RubricTrackingStateV1, session.state)) == (
+        initial_state_hash
+    )
+
+    revision_request = session.make_revision_request(
+        revision_event_id="revision-event-2",
+        reason=RevisionReason.GRAPH_DEFECT_CORRECTION,
+        task=started_cached.rubric.task,
+        request_id="revision-request-2",
+    )
+    revised = session.revise(revision_request)
+    revised_cached = session.revise(revision_request)
+    assert revised.status is RubricSessionStatus.ADMITTED
+    assert revised.rubric is not None and revised.state is not None
+    assert revised == revised_cached and revised is not revised_cached
+    assert revised_cached.rubric is not None and revised_cached.state is not None
+    assert revised.rubric is not revised_cached.rubric
+    assert revised.state is not revised_cached.state
+    revised_rubric_hash = rubric_sha256(revised_cached.rubric)
+    revised_state_hash = rubric_tracking_state_sha256(revised_cached.state)
+    object.__setattr__(revised.rubric, "rubric_id", "caller-mutated-revision-rubric")
+    object.__setattr__(revised.state, "state_id", "caller-mutated-revision-state")
+    revised_after_mutation = session.revise(revision_request)
+    assert revised_after_mutation.rubric is not None and revised_after_mutation.state is not None
+    assert rubric_sha256(revised_after_mutation.rubric) == revised_rubric_hash
+    assert rubric_tracking_state_sha256(revised_after_mutation.state) == revised_state_hash
+    assert rubric_sha256(cast(MultiPathRubricV1, session.rubric)) == revised_rubric_hash
+    assert rubric_tracking_state_sha256(cast(RubricTrackingStateV1, session.state)) == (
+        revised_state_hash
+    )
+
+    tracking_packet = _session_packet(session)
+    tracked = session.track(tracking_packet)
+    tracked_cached = session.track(tracking_packet)
+    assert tracked.status is RubricSessionStatus.ADMITTED
+    assert tracked.rubric is not None and tracked.state is not None and tracked.proposal is not None
+    assert tracked == tracked_cached and tracked is not tracked_cached
+    assert tracked_cached.rubric is not None
+    assert tracked_cached.state is not None
+    assert tracked_cached.proposal is not None
+    assert tracked.rubric is not tracked_cached.rubric
+    assert tracked.state is not tracked_cached.state
+    assert tracked.proposal is not tracked_cached.proposal
+    tracked_rubric_hash = rubric_sha256(tracked_cached.rubric)
+    tracked_state_hash = rubric_tracking_state_sha256(tracked_cached.state)
+    tracked_proposal_hash = tracker_proposal_sha256(tracked_cached.proposal)
+    object.__setattr__(tracked.rubric, "rubric_id", "caller-mutated-track-rubric")
+    object.__setattr__(tracked.state, "state_id", "caller-mutated-track-state")
+    object.__setattr__(tracked.proposal, "proposal_id", "caller-mutated-proposal")
+    tracked_after_mutation = session.track(tracking_packet)
+    assert tracked_after_mutation.rubric is not None
+    assert tracked_after_mutation.state is not None
+    assert tracked_after_mutation.proposal is not None
+    assert rubric_sha256(tracked_after_mutation.rubric) == tracked_rubric_hash
+    assert rubric_tracking_state_sha256(tracked_after_mutation.state) == tracked_state_hash
+    assert tracker_proposal_sha256(tracked_after_mutation.proposal) == tracked_proposal_hash
+    assert rubric_tracking_state_sha256(cast(RubricTrackingStateV1, session.state)) == (
+        tracked_state_hash
+    )
+
+    bindings = (
+        RecordPathBindingV1(
+            record_id="record-path-independent",
+            linked_path_ids=(),
+            path_independent=True,
+        ),
+    )
+    linked = session.link_records(
+        state=tracked_cached.state,
+        record_bindings=bindings,
+        supported_records=(),
+        logical_call_id=tracking_packet.logical_call_id,
+    )
+    linked_cached = session.link_records(
+        state=tracked_cached.state,
+        record_bindings=bindings,
+        supported_records=(),
+        logical_call_id=tracking_packet.logical_call_id,
+    )
+    assert linked.status is RubricSessionStatus.ADMITTED
+    assert linked.rubric is not None and linked.state is not None and linked.relevance is not None
+    assert linked == linked_cached and linked is not linked_cached
+    assert linked_cached.rubric is not None
+    assert linked_cached.state is not None
+    assert linked_cached.relevance is not None
+    assert linked.rubric is not linked_cached.rubric
+    assert linked.state is not linked_cached.state
+    assert linked.relevance is not linked_cached.relevance
+    linkage_id = linked_cached.relevance.linkage_id
+    object.__setattr__(linked.rubric, "rubric_id", "caller-mutated-link-rubric")
+    object.__setattr__(linked.state, "state_id", "caller-mutated-link-state")
+    object.__setattr__(linked.relevance, "linkage_id", "caller-mutated-link-output")
+    linked_after_mutation = session.link_records(
+        state=tracked_cached.state,
+        record_bindings=bindings,
+        supported_records=(),
+        logical_call_id=tracking_packet.logical_call_id,
+    )
+    assert linked_after_mutation.relevance is not None
+    assert linked_after_mutation.relevance.linkage_id == linkage_id
+    first_link_output = session.link(
+        state=tracked_cached.state,
+        record_bindings=bindings,
+        supported_records=(),
+        logical_call_id=tracking_packet.logical_call_id,
+    )
+    second_link_output = session.link(
+        state=tracked_cached.state,
+        record_bindings=bindings,
+        supported_records=(),
+        logical_call_id=tracking_packet.logical_call_id,
+    )
+    assert first_link_output == second_link_output
+    assert first_link_output is not second_link_output
+    assert builder.generate_calls == 1
+    assert builder.revise_calls == 1
+    assert tracker.track_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("malformation", "contract_code"),
+    [
+        ("cycle", "TRUSTED_GRAPH_CYCLE"),
+        ("depth", "TRUSTED_GRAPH_DEPTH_EXCEEDED"),
+    ],
+)
+def test_rubric_snapshot_cycle_and_depth_fail_closed_without_recursion(
+    malformation: str,
+    contract_code: str,
+) -> None:
+    rubric = _rubric()
+
+    class MalformedBuilder(_FakeBuilderBackend):
+        def generate(self, request: TaskStartRubricRequestV1) -> MultiPathRubricV1:
+            del request
+            self.generate_calls += 1
+            candidate = _rubric()
+            if malformation == "cycle":
+                object.__setattr__(candidate, "task", candidate)
+            else:
+                nested: object = "leaf"
+                for _ in range(256):
+                    nested = (nested,)
+                object.__setattr__(candidate, "milestones", nested)
+            return candidate
+
+    builder = MalformedBuilder(rubric)
+    tracker = _FakeTrackerBackend(rubric.backend, _ambiguous_proposal)
+    session = RubricTaskSession(
+        task_run_id=rubric.task_run_id,
+        task=rubric.task,
+        builder_backend=builder,
+        tracker_backend=tracker,
+        id_factory=_DeterministicIds(),
+    )
+
+    result = session.start()
+
+    assert result.status is RubricSessionStatus.FALLBACK
+    assert result.fallback is not None
+    assert result.fallback.code is RubricSessionFallbackCode.OUTPUT_REJECTED
+    assert result.fallback.contract_code == contract_code
+    assert result.backend_called is True
+    assert result.rubric is None and result.state is None
+    assert session.rubric is None and session.state is None
+    assert builder.generate_calls == 1
+    assert isinstance(session.receipt_sink, MemoryRubricReceiptSinkV1)
+    receipt = session.receipt_sink.receipts[-1]
+    assert receipt.status is RubricEvaluationStatus.ADMISSION_REJECTED
+    assert receipt.fallback_code == result.fallback.contract_code
+    assert receipt.backend_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("malformation", "contract_code"),
+    [
+        ("cycle", "TRUSTED_GRAPH_CYCLE"),
+        ("depth", "TRUSTED_GRAPH_DEPTH_EXCEEDED"),
+    ],
+)
+def test_proposal_snapshot_cycle_and_depth_fail_closed_without_state_change(
+    malformation: str,
+    contract_code: str,
+) -> None:
+    rubric = _rubric()
+
+    class MalformedTracker:
+        def __init__(self) -> None:
+            self.track_calls = 0
+
+        @property
+        def descriptor(self) -> RubricBackendDescriptorV1:
+            return rubric.backend
+
+        def track(self, packet: RubricTrackingPacketV1) -> RubricTrackerProposalV1:
+            self.track_calls += 1
+            proposal = _ambiguous_proposal(packet)
+            if malformation == "cycle":
+                object.__setattr__(proposal, "milestone_states", (proposal,))
+            else:
+                nested: object = proposal.milestone_states
+                for _ in range(256):
+                    nested = (nested,)
+                object.__setattr__(proposal, "milestone_states", nested)
+            return proposal
+
+    builder = _FakeBuilderBackend(rubric)
+    tracker = MalformedTracker()
+    session = RubricTaskSession(
+        task_run_id=rubric.task_run_id,
+        task=rubric.task,
+        builder_backend=builder,
+        tracker_backend=tracker,
+        id_factory=_DeterministicIds(),
+    )
+    started = session.start()
+    assert started.state is not None
+    state_hash = rubric_tracking_state_sha256(started.state)
+    packet = _session_packet(session)
+    packet_hash = tracking_packet_sha256(packet)
+
+    result = session.track(packet)
+
+    assert result.status is RubricSessionStatus.FALLBACK
+    assert result.fallback is not None
+    assert result.fallback.code is RubricSessionFallbackCode.OUTPUT_REJECTED
+    assert result.fallback.contract_code == contract_code
+    assert result.backend_called is True
+    assert result.state is not None
+    assert rubric_tracking_state_sha256(result.state) == state_hash
+    current_state = session.state
+    assert current_state is not None
+    assert rubric_tracking_state_sha256(current_state) == state_hash
+    assert tracking_packet_sha256(packet) == packet_hash
+    assert tracker.track_calls == 1
+    assert isinstance(session.receipt_sink, MemoryRubricReceiptSinkV1)
+    receipt = session.receipt_sink.receipts[-1]
+    assert receipt.status is RubricEvaluationStatus.ADMISSION_REJECTED
+    assert receipt.fallback_code == result.fallback.contract_code
+    assert receipt.input_sha256 == packet_hash
+    assert receipt.prior_state_sha256 == state_hash
+    assert receipt.final_state_sha256 == state_hash
+    assert receipt.backend_calls == 1
+
+
+def test_trusted_snapshot_node_budget_fails_with_a_typed_contract_error() -> None:
+    rubric = _rubric()
+    repeated_span = rubric.instruction_spans[0]
+    object.__setattr__(
+        rubric,
+        "instruction_spans",
+        (repeated_span,) * (TRUSTED_GRAPH_MAX_NODES + 1),
+    )
+
+    with pytest.raises(
+        R23ContractError,
+        match="TRUSTED_GRAPH_NODE_LIMIT_EXCEEDED",
+    ):
+        snapshot_multi_path_rubric(rubric)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    (multi_path_rubric_projection, rubric_sha256, snapshot_multi_path_rubric),
+)
+def test_trusted_graph_node_budget_counts_primitive_leaves(
+    operation: Callable[[MultiPathRubricV1], object],
+) -> None:
+    rubric = _rubric()
+    object.__setattr__(
+        rubric.revision,
+        "changed_node_ids",
+        ("wide-node",) * (TRUSTED_GRAPH_MAX_NODES + 1),
+    )
+
+    with pytest.raises(
+        R23ContractError,
+        match="TRUSTED_GRAPH_NODE_LIMIT_EXCEEDED",
+    ):
+        operation(rubric)
 
 
 def test_backend_failure_receipts_measure_backend_latency() -> None:
@@ -1458,7 +1990,11 @@ def test_ambiguous_tracking_yields_unknown_and_reuses_one_logical_call() -> None
     first = session.track(packet)
     second = session.track(packet)
 
-    assert first is second
+    assert first == second
+    assert first is not second
+    assert first.rubric is not second.rubric
+    assert first.state is not second.state
+    assert first.proposal is not second.proposal
     assert first.status is RubricSessionStatus.ADMITTED
     assert first.state is not None
     assert {item.state for item in first.state.milestone_states} == {MilestoneState.UNKNOWN}
@@ -1952,7 +2488,11 @@ def test_record_relevance_requires_a_resolver_before_shadow_archive() -> None:
         logical_call_id="logical-call-1",
     )
 
-    assert linked is duplicate
+    assert linked == duplicate
+    assert linked is not duplicate
+    assert linked.rubric is not duplicate.rubric
+    assert linked.state is not duplicate.state
+    assert linked.relevance is not duplicate.relevance
     assert linked.status is RubricSessionStatus.ADMITTED
     assert linked.backend_called is False
     assert linked.receipt_sha256 is not None

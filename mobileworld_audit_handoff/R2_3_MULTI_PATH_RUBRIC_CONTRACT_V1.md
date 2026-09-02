@@ -79,6 +79,26 @@ or mutable object graph is authoritative. Once a complete output is
 canonicalizable, its canonical hash is bound before later ID or semantic
 admission rejection. Hashing records what was proposed; it grants no authority.
 
+Session construction first rebuilds the task and both backend descriptors into
+private authority snapshots. Before each generate, revise, or track call, the
+runtime freezes a private request/packet/prior-state snapshot and its canonical
+input/CAS hashes. The replaceable backend receives a second detached copy.
+Admission, state transition, cache identity, and receipts read only the private
+authority graph and pre-call hashes; backend mutation of its copy cannot alter
+them. Public rubric/state properties, packet/revision builders, operation
+results, adapters, and every cache hit likewise return fresh detached graphs,
+never the session or cache authority objects.
+
+Every trusted projection and snapshot uses the same bounded traversal: active-
+path identity rejects cycles while permitting ordinary shared DAG references,
+maximum depth is 64, and maximum visits across containers, dataclasses, enums,
+and primitive leaves are 262,144. Cycle,
+depth, node-budget, and defensive interpreter-recursion failures are stable
+typed contract rejections. A non-canonical cyclic or over-budget backend output
+has null raw/parsed hashes rather than being re-traversed in the fallback path;
+a complete finite canonical output still binds its real hash before later
+semantic rejection.
+
 ## 3. Task-start rubric
 
 One `mobileworld.runtime.multi-path-rubric/v1` object binds one task run and the
@@ -242,8 +262,9 @@ unknown.
 The frontier is a deterministic canonical tuple of unique
 `(path_id, milestone_id)` pairs from non-inactive paths. It may contain
 multiple alternatives and is not a next action. Each state version binds the
-prior canonical state hash and advances through compare-and-swap; a conflict
-preserves the prior state.
+prior private-authority canonical state hash and advances through compare-and-
+swap; a conflict preserves the prior state. The backend never receives that
+authority object, only a detached packet copy.
 
 ## 7. Post-state record relevance and ARCHIVE
 
@@ -357,6 +378,11 @@ state store, never raw Collector events. The CPU checkpoint uses an in-memory
 transactional store/sink. Receipt or state commit failure discards the update,
 preserves prior state, and emits no archive proposal.
 
+Receipt input, prior-state, and final-state hashes bind the private authority
+snapshots fixed before the backend call and the independently admitted final
+state. They never bind a backend-mutated call copy or a caller-mutated public
+result.
+
 Metrics use only closed operation/status/state/path/relevance/stage labels.
 Task IDs, record IDs, logical-call IDs, raw reasons, or text are not metric
 labels. Runtime counts cover generation, revision, tracking, linking, cache
@@ -395,10 +421,18 @@ Acceptance requires deterministic injected-fake tests proving:
     configuration;
 11. explicit joint non-independence and prohibition on silently replacing the
     isolated result;
-12. exact trusted snapshots, complete rejected-output hash binding, typed
-    fallback, transactional receipt/state behavior, schema/projection parity,
-    and affected CPU regressions; and
-13. zero live provider/model/network/GPU/backend/GUI/tool/action/replay use.
+12. private pre-call task/request/packet/state snapshots and hashes, a separate
+    detached backend input for generate/revise/track, and rejection of backend
+    attempts to mutate or rebind input/CAS state;
+13. fresh detached public properties, packet/revision outputs, operation
+    results, adapters, and cache hits whose mutation cannot alter session or
+    cache authority;
+14. bounded trusted traversal with shared-DAG acceptance and typed cycle,
+    depth, and node-budget fallback without an escaping `RecursionError`;
+15. exact trusted output snapshots, complete finite rejected-output hash
+    binding, typed fallback, transactional receipt/state behavior,
+    schema/projection parity, and affected CPU regressions; and
+16. zero live provider/model/network/GPU/backend/GUI/tool/action/replay use.
 
 Passing establishes only a CPU/offline/injected-fake, SHADOW-only rubric
 engineering checkpoint. It does not establish semantic accuracy, live latency
