@@ -1,6 +1,6 @@
 # Project Status：GUI Agent Previous-Step Misleading Motivation Study
 
-Last updated: 2026-08-31 (UTC)
+Last updated: 2026-09-01 (UTC)
 
 ## 1. Project objective
 
@@ -42,27 +42,39 @@ integration 已接受；D-035 的十个调用只算 non-formal prompt/parser com
 D-028 formal matrix。两个 v1 Codec 继续 `live_ready=false`，formal readiness 全部转交 G1.7，
 且没有新的 live/GPU 授权。**
 
-**ALE-324 / G1.6 已获 D-029 CPU-only 人工标注授权，并形成 private loopback-only manual
-annotation workspace checkpoint，并在 D-031 下部署三路已冻结的非权威 AI Action-Gold 候选。
-精确状态是 `IN_PROGRESS_HUMAN_CURATION_REQUIRED`。** 网页将
+**Runtime ALE-324 / R2.1 的 repository engineering checkpoint 已在 commit
+`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46` 完成。** 当前实现提供共享 pre-provider
+`PromptSentinel` seam、默认 OFF、显式 SHADOW/测试专用 ACTIVE、全局 kill switch、per-host
+配置、logical-call 单次求值与 transport/adapter/stream retry 复用、Sentinel-role 递归旁路、
+typed Original fallback、严格 canonical-JSON admission、递归 trusted/detached policy/IR/
+renderer snapshots 与 history-only 验证，以及 transactional、hash-only、detached-commit、
+repo-external receipt。Qwen、MAI 与 Seed 接入复用现有
+provider/parser/action 路径；未实现自动 validity policy、multi-path rubric、真实
+actor/Sentinel 模型或 live transformation。Linear 工作流状态由 owner 单独管理，本仓库交付
+没有修改 Linear。**
+
+**Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
+并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
+的非权威 AI Action-Gold 候选。当时精确状态是
+`IN_PROGRESS_HUMAN_CURATION_REQUIRED`。** 网页将
 ACTION_GOLD、TRANSFORMATION、CONSISTENCY_AUDIT 与必要 adjudication 的人工选择显式化；G1.5
 preview、pinned local tokenizer、source packet、reviewer identity 与 append-only journal 均做
-hash binding。当前没有 formal G1.6 bundle、admission 或 seal；190 个单元的双盲 review/必要
-adjudication 与 formal exporter 仍待完成。D-031 诚实记录
+hash binding。该 checkpoint 没有 formal G1.6 bundle、admission 或 seal；190 个单元的双盲
+review/必要 adjudication 与 formal exporter 没有完成。D-031 诚实记录
 `ai_semantic_suggestion_performed=true`，但 target actor、project provider/client、external network、
-GPU、weights、replay、MobileWorld-generated action 与 treatment 路径保持禁用；owner-started
-loopback annotation HTTP、human curation clicks 与冻结的 D-031 offline candidate campaign 是
-现有窄幅例外。D-033 另将未由 owner 锁定的 186 条发布为隔离的
+GPU、weights、replay、MobileWorld-generated action 与 treatment 路径当时保持禁用；owner-started
+loopback annotation HTTP、human curation clicks 与冻结的 D-031 offline candidate campaign 是当时的
+窄幅例外。D-033 另将未由 owner 锁定的 186 条发布为隔离的
 `AI_ONLY_ACTION_LABELS`，诚实记录 `ai_semantic_labeling_performed=true`；该层不是 human review、
 gold 或 formal authority，不改变网页的 4/190 human 状态，也不打开 Transformation。G1.7 与任何
 live/GPU owner 授权仍未完成。
 
-**D-030 已在 commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405` 增加隔离的
+**Historical D-030 在 commit `3f7ccbef542aa37664fe2fb74ab54551ac5d5405` 增加隔离的
 `SOLO_FIRST_PASS`，供当前唯一一位真实 curator 做非正式 precursor。** 它强制全 190 条
 ACTION_GOLD → 全 190 条 TRANSFORMATION → 全 190 条 preliminary CONSISTENCY_AUDIT 的阶段顺序，
 使用独立 root/key/manifest/journal，且所有 independence/resolution/promotion/export/admission/
-replay authority 均为 false。当前 owner-authorized tmux 仅在 `127.0.0.1:8766` 运行该单进程
-网页；这不改变 ALE-324 的未完成状态，也不能替代未来真实独立双审。
+replay authority 均为 false。该历史 checkpoint 的 owner-authorized tmux 曾仅在
+`127.0.0.1:8766` 运行单进程网页；它没有完成 former G1.6，也不能替代未来真实独立双审。
 
 已确认的工程决策：
 
@@ -965,4 +977,43 @@ Informed public boundary: unlike the historical safe projection and screenshot/P
 Historical-lock boundary: `publication_lock.v1.json`, `public_summary.v1.json`, `publication_lock.v2.json`, and `public_summary.v2.json` remain byte-unchanged historical records of their narrower safe/report-publication scopes. They do not bind, certify, or silently expand to include this later raw archive. No other collection, capsule, replay, or audit data is approved for Git by this exception.
 Authority and execution: this was a file publication and documentation update only. It changed no source evidence, review result, aggregate conclusion, Collector event, G1 population, or formal/non-formal status, and grants no model/provider/network/GPU/replay/treatment/GUI/tool/action authority. No project model, provider, runtime network, GPU, replay, treatment, GUI, tool, or action was used; ordinary Git transport to the owner's repository is only the publication mechanism.
 Owner approval required: no additional approval to commit and push this exact verified `_03` tree and the accompanying boundary documentation; any byte replacement or scope expansion requires a new explicit owner decision.
+```
+
+```text
+Date: 2026-09-01 UTC
+ALE-324 / R2.1 repository engineering checkpoint: commit `b1b541d65bb915f65c534b61e15b1049f20682cd` implements the shared pre-provider PromptSentinel seam in BaseAgent and binds Qwen, MAI, and Seed logical-call scopes without replacing their provider transport, response normalization, parsers, runners, or action paths. The versioned contract is SHA-256 `2132cc4613c2bd741b54eadbf7dd9a0857605b7fc7e3455617a478810605b87b` / 12,846 bytes; the closed receipt schema is SHA-256 `b7ea6999c474aa298d5569dfea85b71f572b033d9c222ad07c34e0321422b497` / 11,231 bytes.
+Accepted behavior: mode defaults to OFF; explicit SHADOW computes but sends Original; deterministic test-only ACTIVE may send a validated DROP-only history transformation. One SentinelResult is cached per logical actor decision across Base transport retries, Qwen outer parse retries, and streaming attempts. Sentinel-role calls bypass recursively; a global kill switch and per-host settings fail closed; caller objects remain unchanged; every timeout, exception, schema/IR/policy/render/invariant failure returns typed Original. R2.1 rejects REPLACE and every renderer list insertion so current observation and all non-history content remain invariant.
+Receipt boundary: semantic modes require a sink. The external sink transactionally publishes one owner-only, no-replace, hash-only receipt outside Git. It binds raw/candidate/final request, canonical policy output, and exact diff by hash plus stable decision/mode/validation/fallback/latency fields; it stores no request view, operation payload, exact-diff preimage, secret, or chain of thought. External codec/policy/renderer error strings and exception class names are replaced by fixed phase codes before receipt creation.
+Verification: R2.1 focused tests passed 43/43. The final affected-surface suite—R2.1, all Collector runtime-audit tests, the portable G1.2 contract, and G1.5 History Codecs—passed 478/478. The broader MobileWorld suite passed 1560/1560 before the final narrow fail-closed/receipt hardening, and the complete impacted surface was rerun afterward. Ruff check/format, Python compilation, JSON/schema validation, and Git diff checks passed. Two independent cold reviews reported no remaining P0/P1.
+Limitations and next boundary: this checkpoint does not implement an evidence-grounded automatic policy, correction generation, multi-path rubric, live Qwen/MAI vertical slice, model/provider/network/GPU/backend/replay/GUI/tool/action execution, or causal/success-rate evaluation. R2.2 must define an additive runtime proposal/admission overlay rather than mislabel automatic proposals as frozen G1.2 curated plans. Future nested Sentinel-owned Base calls need explicit Collector retry-correlation isolation, and REQUEST_DRIFT/sidecar-failure anomaly telemetry remains a later secret-free observability improvement. No persistent repo-external artifact was created; tests used temporary roots only.
+Workflow: repository engineering evidence for R2.1 is complete, but the agent did not change Linear status. The owner manages Linear separately. No later story and no live/resource authority is granted by this entry.
+```
+
+```text
+Date: 2026-09-01 UTC
+ALE-324 / R2.1 focused audit hardening: commit `d5cf6c3476ffd609e510517f51c2b4ee6888932a` supersedes the earlier `b1b541d` repository checkpoint after closing three independently reproduced P1 gaps. A false→true→false global-kill-switch pulse is now detected by a monotonic activation generation and returns typed `INVARIANT_FAILURE` / exact Original. SHADOW/ACTIVE now require a two-stage receipt transaction admitted before request validation, Codec extraction, or policy evaluation; an unavailable/legacy sink therefore records `policy_evaluated=false`, while a later commit failure still returns typed `SIDECAR_FAILURE` / Original before provider transport. Every structurally valid canonical policy output is hashed before later R2.1 admission checks, so a rejected REPLACE binds its actual output hash rather than the empty-output sentinel.
+External sidecar hardening: the external sink uses a synced anonymous Linux `O_TMPFILE`, validates its fd identity/mode/owner/size, preflights `/proc/self/fd` linkage, revalidates the pinned and configured root identity/mode at commit, and publishes that exact fd under a no-replace final name. Policy-time named-temp substitution no longer exists; root chmod or root rename/replacement, partial writes, missing fd linkage, admission failure, and commit failure all fail to Original without exposing a final receipt. This has a known availability/portability limitation: filesystems without `O_TMPFILE` or systems without usable `/proc/self/fd` safely return `SIDECAR_FAILURE` and do not evaluate policy when capability admission fails.
+Canonical request boundary: R2.1 semantic admission remains limited to canonical-JSON provider envelopes. Opaque SDK parameter objects are passed to the existing provider unchanged by the fixed-message BaseAgent backstop, with no Codec/policy evaluation and no fabricated typed receipt. A future typed treatment needs a versioned semantic-projection/opaque-passthrough contract.
+Bindings: the updated R2.1 contract is SHA-256 `1909301ccf73ecae9da8c8abbac8ecf978d9df45d894ae7c918f3163cacacca2` / 14,659 bytes; the receipt schema remains byte-unchanged at SHA-256 `b7ea6999c474aa298d5569dfea85b71f572b033d9c222ad07c34e0321422b497` / 11,231 bytes. `seam.py` is SHA-256 `5836d017ef4b14847ad357ed45a3be67928123d088bae0e6cbaec6d28bc8b841`; `sidecar.py` is `ef899b7aa95174235d96c44842f8156e5867ba28004e9230c3b539c625912c31`; and the focused test file is `3206cad55b2038372d3d6e6d860b1157ecbf2ae4689a1ff9edaa509c6c41cfea`.
+Verification: the final focused R2.1 suite passed 50/50; the affected R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 485/485; and the complete MobileWorld test suite passed 1570/1570 on the final candidate. Ruff check/format, Python compilation, checked-in Draft 2020-12 receipt-schema validation, and Git diff checks passed. Independent cold reviews bound diff SHA-256 `4a355334272f8d2a601dceaa72075505bb38307bdfe37a778f74bbae2e498120` and reported no remaining P0/P1.
+Authority: this was CPU/offline and fake-provider-only maintenance. It invoked no live model/provider, network, GPU, MobileWorld backend, GUI/tool/action, replay, or external data mutation. It does not implement R2.2/R2.3, grant later-story/live authority, push or merge the branch, or change Linear; Linear workflow remains owner-managed.
+```
+
+```text
+Date: 2026-09-01 UTC
+ALE-324 / R2.1 strict admission hardening: commit `58820a8d68870ad0b10df504b41fefb6c500561a` supersedes the `d5cf6c3` repository checkpoint after closing two independently reproduced P1 gaps. Runtime semantic admission now requires an exact finite canonical-JSON Python tree before copying, hashing, logical-call cache lookup, or sidecar transaction admission. Tuples, non-string dictionary keys, Python container/scalar subclasses, non-finite floats, and other non-admitted values therefore follow the fixed-message BaseAgent backstop as the exact Original object graph, with policy evaluation 0, sidecar admission 0, and receipt count 0. This also prevents a list/tuple or string-key/integer-key canonical-hash collision from reusing a cached transformed result.
+Policy-output binding order: after the exact `SentinelPolicyOutput` type gate, R2.1 canonicalizes and hashes the complete output before duplicate decision-ID, operation-binding, DROP-only, or later G1.2 admission checks. A canonicalizable output rejected for duplicate decision IDs now retains its actual output SHA-256 rather than the empty-output sentinel; a wrong output type still retains the empty sentinel. Hashing records the evaluated output and never grants admission.
+Bindings: `seam.py` is SHA-256 `9bbfa78c849bbaf108a2fea01cb0ffaa6584e8423856f176d8b5e9299f27f9f4` / 43,347 bytes; the focused test file is `753567365eb7b6a3a350ce7c54409c056fbe78983f49aa11cbb00623963a8396` / 64,425 bytes; and the updated R2.1 contract is `efcbd1b904235822619d3b4cf76607a8c9884ee3a158de1d4daf9efa1fdc257f` / 15,705 bytes. The closed receipt schema remains byte-unchanged at SHA-256 `b7ea6999c474aa298d5569dfea85b71f572b033d9c222ad07c34e0321422b497` / 11,231 bytes.
+Verification: the final focused R2.1 suite passed 55/55; the affected R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 490/490; and the complete MobileWorld test suite passed 1575/1575. Ruff check/format, Python compilation, receipt-schema validation, and Git diff checks passed. Independent cold review reported no remaining P0/P1 on the final patch.
+Limitations and authority: non-canonical but SDK-coercible parameter objects intentionally receive no v1 typed Sentinel receipt; the exact Original is preserved, and any typed treatment would require a new versioned projection/passthrough contract. The earlier Linux `O_TMPFILE` and `/proc/self/fd` external-sidecar availability limitation remains unchanged. This was CPU/offline and fake-provider-only maintenance; it used no live model/provider, network, GPU, MobileWorld backend, replay, GUI/tool/action, or persistent repo-external artifact. It does not implement R2.2/R2.3, authorize later work, push or merge the branch, or change Linear; Linear workflow remains owner-managed.
+```
+
+```text
+Date: 2026-09-01 UTC
+ALE-324 / R2.1 trusted-snapshot hardening: commit `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46` supersedes the `58820a8` checkpoint after closing the independently reproduced policy-output serializer/receipt-binding P1 and the adjacent object-reference and evaluation-census variants found during cold review. Sentinel now manually projects an exact recursively trusted policy-output graph, fixes its canonical bytes/hash, rebuilds a detached base-dataclass graph, verifies byte equality, and uses only that graph for duplicate/operation binding, G1.2 admission, decision census, rendering, candidate selection, and diff hashing. Policy-owned subclasses, custom containers, serializer overrides, and non-canonical graph values cannot supply the receipt hash or later execution fields; an exact but semantically rejected canonical output still retains its real pre-admission hash.
+Codec and renderer boundary: extracted History IR is recursively rebuilt from exact trusted dataclasses before validation and policy use. Policy receives detached request/context/IR copies. Sentinel precomputes the authoritative G1.2 RenderResult from trusted inputs; the replaceable Codec receives only detached copies, and its result must match a manual exact projection. Candidate, restore validation, and diff therefore use only the precomputed result. Cyclic or untrusted IR fails before policy as typed `HISTORY_EXTRACTION_FAILURE` with `policy_evaluated=false`.
+Receipt/census boundary: policy evaluation is tracked by a worker-owned marker set under a cancellation gate immediately before policy invocation. Thread-start failure remains false, and a worker deferred beyond deadline is cancelled before it can evaluate. The seam validates its authoritative SentinelResult before sidecar commit, passes only a detached receipt copy to the transaction, and rechecks that copy before releasing the actor request; mutation forces typed `SIDECAR_FAILURE` and exact Original without contaminating the authoritative receipt.
+Bindings: `seam.py` is SHA-256 `086336482f02ea4b0a492189ef45b3505825943263844b28dc101a0e71069e20` / 68,802 bytes; the focused test file is `28335cc106c8797b6aa81f342f7d3c1f0b5795a7afae2f963d405c2978f77988` / 86,576 bytes; the updated R2.1 contract is `43282bdd5a9e737a06e8703caa6ecaf65185bf7858cc6fe5c8e0aa21efd1eb89` / 18,620 bytes. The receipt schema remains byte-unchanged at SHA-256 `b7ea6999c474aa298d5569dfea85b71f572b033d9c222ad07c34e0321422b497` / 11,231 bytes. The implementation patch diff SHA-256 is `9cfedc7085bcf41e7ccd28e27ee9834eb2205f38fb695888242c18c1cdf64f22`.
+Verification: focused R2.1 passed 75/75; the affected R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 510/510; and the complete MobileWorld suite passed 1595/1595 on the final candidate. Ruff check/format, Python compilation, Draft 2020-12 receipt-schema validation, and Git diff checks passed. Independent cold reviews reported no remaining P0/P1. A pre-final 10ms fake-policy test-helper scheduling failure was not counted as success; the general helper now uses the unchanged 250ms contract default, while explicit deadline tests retain narrow budgets and pass.
+Authority and limitations: this was CPU/offline and fake-provider-only maintenance. It invoked no live model/provider, network, GPU, MobileWorld backend, replay, GUI/tool/action, or persistent repo-external artifact. The Linux `O_TMPFILE` + `/proc/self/fd` external-sidecar availability limitation and canonical-JSON admission boundary remain unchanged. This commit does not implement R2.2/R2.3, authorize later work, push or merge the branch, or change Linear; Linear workflow remains owner-managed.
 ```

@@ -18,6 +18,9 @@ _AUDIT_VALUE_UNSET = object()
 class BaseAgent(ABC):
     """Abstract base class for all mobile automation agents."""
 
+    sentinel_host_id: str | None = None
+    sentinel_history_codec_id: str | None = None
+
     def __init__(
         self,
         *args: Any,
@@ -26,6 +29,15 @@ class BaseAgent(ABC):
         self._total_completion_tokens: int = 0
         self._total_prompt_tokens: int = 0
         self._total_cached_tokens: int = 0
+        self._prompt_sentinel = kwargs.get("prompt_sentinel")
+        self._sentinel_host_id = (
+            kwargs.get("sentinel_host_id")
+            or self.sentinel_host_id
+            or (f"{type(self).__module__}.{type(self).__qualname__}")
+        )
+        self._sentinel_history_codec_id = (
+            kwargs.get("sentinel_history_codec_id") or self.sentinel_history_codec_id
+        )
 
     def initialize(self, instruction: str) -> bool:
         """Initialize the agent with the given instruction."""
@@ -82,16 +94,31 @@ class BaseAgent(ABC):
         messages: list[dict],
         retry_times: int = 3,
         stream: bool = False,
+        call_role: str = "actor",
         **kwargs: Any,
     ) -> str | None:
         if stream:
             # Enable usage reporting in stream
             kwargs.setdefault("stream_options", {})
             kwargs["stream_options"]["include_usage"] = True
-            audit_call = self._begin_actor_model_audit_call()
+            provider_model, provider_messages, provider_kwargs = (
+                self._apply_prompt_sentinel_before_model_call(
+                    model=model,
+                    messages=messages,
+                    kwargs=kwargs,
+                    stream=True,
+                    call_role=call_role,
+                )
+            )
+            audit_call = self._begin_actor_model_audit_call(call_role=call_role)
             audit_attempt = None
             if audit_call is not None:
-                sdk_arguments = {"model": model, "messages": messages, **kwargs, "stream": True}
+                sdk_arguments = {
+                    "model": provider_model,
+                    "messages": provider_messages,
+                    **provider_kwargs,
+                    "stream": True,
+                }
                 audit_attempt = self._begin_model_audit_attempt(
                     audit_call,
                     sdk_arguments,
@@ -99,9 +126,9 @@ class BaseAgent(ABC):
                 )
             try:
                 response = self.openai_client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    **kwargs,
+                    model=provider_model,
+                    messages=provider_messages,
+                    **provider_kwargs,
                     stream=True,
                 )
             except Exception as error:
@@ -123,6 +150,10 @@ class BaseAgent(ABC):
 
         audit_call = None
         audit_call_initialized = False
+        provider_model = model
+        provider_messages = messages
+        provider_kwargs = kwargs
+        sentinel_request_initialized = False
         while retry_times > 0:
             try:
                 if "claude" in model:
@@ -143,12 +174,27 @@ class BaseAgent(ABC):
                 time.sleep(1)
                 continue
 
+            if not sentinel_request_initialized:
+                provider_model, provider_messages, provider_kwargs = (
+                    self._apply_prompt_sentinel_before_model_call(
+                        model=model,
+                        messages=messages,
+                        kwargs=kwargs,
+                        stream=False,
+                        call_role=call_role,
+                    )
+                )
+                sentinel_request_initialized = True
             if not audit_call_initialized:
-                audit_call = self._begin_actor_model_audit_call()
+                audit_call = self._begin_actor_model_audit_call(call_role=call_role)
                 audit_call_initialized = True
             audit_attempt = None
             if audit_call is not None:
-                sdk_arguments = {"model": model, "messages": messages, **kwargs}
+                sdk_arguments = {
+                    "model": provider_model,
+                    "messages": provider_messages,
+                    **provider_kwargs,
+                }
                 audit_attempt = self._begin_model_audit_attempt(
                     audit_call,
                     sdk_arguments,
@@ -159,9 +205,9 @@ class BaseAgent(ABC):
             response = None
             try:
                 response = self.openai_client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    **kwargs,
+                    model=provider_model,
+                    messages=provider_messages,
+                    **provider_kwargs,
                 )
                 provider_returned = True
 
@@ -180,7 +226,7 @@ class BaseAgent(ABC):
                     (
                         "max_tokens" in error_msg
                         and "max_completion_tokens" in error_msg
-                        and "max_tokens" in kwargs
+                        and "max_tokens" in provider_kwargs
                     )
                     or retry_times > 1
                     or self._model_audit_adapter_retry_planned(audit_attempt)
@@ -199,9 +245,9 @@ class BaseAgent(ABC):
 
                 # Check if error is about max_tokens parameter and retry with max_completion_tokens
                 if "max_tokens" in error_msg and "max_completion_tokens" in error_msg:
-                    if "max_tokens" in kwargs:
+                    if "max_tokens" in provider_kwargs:
                         logger.info("Retrying with max_completion_tokens instead of max_tokens")
-                        kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+                        provider_kwargs["max_completion_tokens"] = provider_kwargs.pop("max_tokens")
                         continue  # Retry immediately without decrementing retry_times
 
                 retry_times -= 1
@@ -211,6 +257,122 @@ class BaseAgent(ABC):
             self._record_model_audit_response(audit_attempt, response, final_content)
             return final_content
         return None
+
+    @contextmanager
+    def _sentinel_logical_call_scope(
+        self,
+        *,
+        call_role: str = "actor",
+        attributes: dict[str, Any] | None = None,
+    ) -> Any:
+        """Bind one short-lived Sentinel cache after host prompt assembly.
+
+        No Sentinel ID or import is created when the feature is not configured.
+        The scope is independent from Collector model-call/retry-group identity.
+        """
+
+        sentinel = self._prompt_sentinel
+        if sentinel is None:
+            yield None
+            return
+        try:
+            from mobile_world.runtime.sentinel import (
+                SentinelCallRole,
+                bind_sentinel_logical_call,
+                current_sentinel_logical_call,
+            )
+
+            role = SentinelCallRole(call_role)
+            current = current_sentinel_logical_call()
+            if current is not None and current.matches(
+                sentinel,
+                host_id=self._sentinel_host_id,
+                history_codec_id=self._sentinel_history_codec_id,
+                call_role=role,
+            ):
+                call = current
+                manager = None
+            else:
+                call = sentinel.logical_call(
+                    host_id=self._sentinel_host_id,
+                    history_codec_id=self._sentinel_history_codec_id,
+                    call_role=role,
+                    attributes={} if attributes is None else attributes,
+                )
+                manager = bind_sentinel_logical_call(call)
+        except Exception:
+            logger.warning("Prompt Sentinel scope setup failed open to Original")
+            yield None
+            return
+        if manager is None:
+            yield call
+        else:
+            with manager:
+                yield call
+
+    def _apply_prompt_sentinel_before_model_call(
+        self,
+        *,
+        model: str,
+        messages: list[dict],
+        kwargs: dict[str, Any],
+        stream: bool,
+        call_role: str,
+    ) -> tuple[str, list[dict], dict[str, Any]]:
+        """Select Original or one cached validated final request for the SDK."""
+
+        sentinel = self._prompt_sentinel
+        if sentinel is None:
+            return model, messages, kwargs
+        try:
+            from mobile_world.runtime.sentinel import (
+                SentinelCallRole,
+                current_sentinel_logical_call,
+            )
+
+            role = SentinelCallRole(call_role)
+            request: dict[str, Any] = {"model": model, "messages": messages, **kwargs}
+            if stream:
+                request["stream"] = True
+            logical_call = current_sentinel_logical_call()
+            if logical_call is None or not logical_call.matches(
+                sentinel,
+                host_id=self._sentinel_host_id,
+                history_codec_id=self._sentinel_history_codec_id,
+                call_role=role,
+            ):
+                logical_call = sentinel.logical_call(
+                    host_id=self._sentinel_host_id,
+                    history_codec_id=self._sentinel_history_codec_id,
+                    call_role=role,
+                )
+            result = logical_call.before_model_call(request)
+            # OFF, SHADOW, recursion bypass, kill switch, and every fallback
+            # preserve the original provider argument objects and identities.
+            if not result.use_transformed_request:
+                return model, messages, kwargs
+            final = result.final_request
+            if not isinstance(final, dict):
+                return model, messages, kwargs
+            final_model = final.get("model")
+            final_messages = final.get("messages")
+            if not isinstance(final_model, str) or not isinstance(final_messages, list):
+                return model, messages, kwargs
+            final_kwargs = {
+                key: value for key, value in final.items() if key not in {"model", "messages"}
+            }
+            if stream:
+                if final_kwargs.pop("stream", None) is not True:
+                    return model, messages, kwargs
+            elif "stream" in final_kwargs:
+                return model, messages, kwargs
+            return final_model, final_messages, final_kwargs
+        except Exception:
+            # Sentinel must never turn its own setup/serialization fault into an
+            # actor-provider outage. Typed runtime failures are handled inside
+            # PromptSentinel; this is the final integration backstop.
+            logger.warning("Prompt Sentinel failed open to Original")
+            return model, messages, kwargs
 
     @staticmethod
     def _handle_openai_error(error: Exception, kwargs: dict[str, Any]) -> bool:
@@ -225,7 +387,7 @@ class BaseAgent(ABC):
                 return True
         return False
 
-    def _begin_actor_model_audit_call(self) -> Any:
+    def _begin_actor_model_audit_call(self, *, call_role: str = "actor") -> Any:
         """Lazily enter audit capture only when an enabled task context exists."""
 
         try:
@@ -238,7 +400,7 @@ class BaseAgent(ABC):
             from mobile_world.runtime.audit.model_io import begin_model_call
 
             return begin_model_call(
-                call_role="actor",
+                call_role=call_role,
                 component=type(self).__module__,
                 client=self.openai_client,
             )

@@ -111,6 +111,9 @@ def parse_action_to_structure_output(text: str) -> dict[str, Any]:
 class MAIUINaivigationAgent(MCPAgent):
     """Mobile automation agent using vision-language models."""
 
+    sentinel_host_id = "mobileworld.mai-ui.actor"
+    sentinel_history_codec_id = "mobileworld.g1.history-codec.mai-raw-replay"
+
     def __init__(
         self,
         llm_base_url: str,
@@ -283,14 +286,15 @@ class MAIUINaivigationAgent(MCPAgent):
         messages = self._build_messages(obs_image, tool_call, ask_user_response)
         pretty_print_messages(messages, max_messages=10)
         logger.debug("*" * 100)
-        prediction = self.openai_chat_completions_create(
-            model=self.model_name,
-            messages=messages,
-            retry_times=3,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            top_p=self.top_p,
-        )
+        with self._sentinel_logical_call_scope(attributes={"adapter": "mai-ui"}):
+            prediction = self.openai_chat_completions_create(
+                model=self.model_name,
+                messages=messages,
+                retry_times=3,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
+            )
 
         if prediction is None:
             raise ValueError("Planner LLM failed")

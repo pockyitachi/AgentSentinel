@@ -1,0 +1,416 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_1/sentinel_receipt.v1.schema.json",
+  "title": "R2.1 Prompt Sentinel Lightweight Receipt v1",
+  "description": "Closed, hash-only receipt for one logical pre-call Sentinel result. Request views and exact diff bytes are never embedded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "logical_call_id",
+    "host_id",
+    "call_role",
+    "configured_mode",
+    "effective_mode",
+    "bypass_reason",
+    "global_kill_switch_active",
+    "history_codec_id",
+    "history_codec_contract_version",
+    "policy_id",
+    "policy_output_sha256",
+    "raw_request_sha256",
+    "candidate_request_sha256",
+    "final_request_sha256",
+    "exact_diff_sha256",
+    "decision_kinds",
+    "policy_evaluated",
+    "would_edit",
+    "edit_applied",
+    "fallback_reason",
+    "validation_status",
+    "validation_checks",
+    "latency_ns",
+    "request_views_persisted",
+    "exact_diffs_persisted"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "mobileworld.runtime.sentinel-receipt/v1"
+    },
+    "logical_call_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "host_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "call_role": {
+      "type": "string",
+      "enum": ["actor", "sentinel"]
+    },
+    "configured_mode": {"$ref": "#/$defs/mode"},
+    "effective_mode": {"$ref": "#/$defs/mode"},
+    "bypass_reason": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "string",
+          "enum": [
+            "MODE_OFF",
+            "GLOBAL_KILL_SWITCH",
+            "CALL_ROLE_SENTINEL"
+          ]
+        }
+      ]
+    },
+    "global_kill_switch_active": {"type": "boolean"},
+    "history_codec_id": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+        }
+      ]
+    },
+    "history_codec_contract_version": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      ]
+    },
+    "policy_id": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+        }
+      ]
+    },
+    "policy_output_sha256": {"$ref": "#/$defs/sha256"},
+    "raw_request_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_request_sha256": {"$ref": "#/$defs/sha256"},
+    "final_request_sha256": {"$ref": "#/$defs/sha256"},
+    "exact_diff_sha256": {"$ref": "#/$defs/sha256"},
+    "decision_kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["KEEP", "DROP", "REPLACE", "KEEP_UNCERTAIN"]
+      }
+    },
+    "policy_evaluated": {"type": "boolean"},
+    "would_edit": {"type": "boolean"},
+    "edit_applied": {"type": "boolean"},
+    "fallback_reason": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "string",
+          "enum": [
+            "POLICY_TIMEOUT",
+            "POLICY_EXCEPTION",
+            "INVALID_POLICY_OUTPUT",
+            "INVALID_REQUEST_SCHEMA",
+            "UNSUPPORTED_HISTORY_FAMILY",
+            "AMBIGUOUS_HISTORY_SPAN",
+            "HISTORY_EXTRACTION_FAILURE",
+            "RENDERER_FAILURE",
+            "INVARIANT_FAILURE",
+            "SIDECAR_FAILURE",
+            "REQUEST_DRIFT"
+          ]
+        }
+      ]
+    },
+    "validation_status": {
+      "type": "string",
+      "enum": ["BYPASSED", "PASSED", "FALLBACK_ORIGINAL"]
+    },
+    "validation_checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+      }
+    },
+    "latency_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "request_views_persisted": {
+      "type": "boolean",
+      "const": false,
+      "description": "Request views are never embedded in this lightweight receipt."
+    },
+    "exact_diffs_persisted": {
+      "type": "boolean",
+      "const": false,
+      "description": "Exact diff bytes are never embedded in this lightweight receipt."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"history_codec_id": {"type": "null"}},
+        "required": ["history_codec_id"]
+      },
+      "then": {
+        "properties": {
+          "history_codec_contract_version": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"history_codec_id": {"type": "string"}},
+        "required": ["history_codec_id"]
+      },
+      "then": {
+        "properties": {
+          "history_codec_contract_version": {"type": "string"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "configured_mode": {"const": "OFF"},
+          "call_role": {"const": "actor"},
+          "global_kill_switch_active": {"const": false}
+        },
+        "required": [
+          "configured_mode",
+          "call_role",
+          "global_kill_switch_active"
+        ]
+      },
+      "then": {
+        "properties": {
+          "effective_mode": {"const": "OFF"},
+          "bypass_reason": {"const": "MODE_OFF"},
+          "policy_evaluated": {"const": false},
+          "fallback_reason": {"type": "null"},
+          "validation_status": {"const": "BYPASSED"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "call_role": {"const": "actor"},
+          "global_kill_switch_active": {"const": true},
+          "validation_status": {"const": "BYPASSED"}
+        },
+        "required": [
+          "call_role",
+          "global_kill_switch_active",
+          "validation_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "effective_mode": {"const": "OFF"},
+          "bypass_reason": {"const": "GLOBAL_KILL_SWITCH"},
+          "policy_evaluated": {"const": false},
+          "fallback_reason": {"type": "null"},
+          "validation_status": {"const": "BYPASSED"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"effective_mode": {"const": "OFF"}},
+        "required": ["effective_mode"]
+      },
+      "then": {
+        "properties": {
+          "decision_kinds": {"maxItems": 0},
+          "would_edit": {"const": false},
+          "edit_applied": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"bypass_reason": {"const": "MODE_OFF"}},
+        "required": ["bypass_reason"]
+      },
+      "then": {
+        "properties": {
+          "configured_mode": {"const": "OFF"},
+          "call_role": {"const": "actor"},
+          "global_kill_switch_active": {"const": false}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"bypass_reason": {"const": "GLOBAL_KILL_SWITCH"}},
+        "required": ["bypass_reason"]
+      },
+      "then": {
+        "properties": {
+          "call_role": {"const": "actor"},
+          "global_kill_switch_active": {"const": true}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"bypass_reason": {"const": "CALL_ROLE_SENTINEL"}},
+        "required": ["bypass_reason"]
+      },
+      "then": {
+        "properties": {"call_role": {"const": "sentinel"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"bypass_reason": {"type": "string"}},
+        "required": ["bypass_reason"]
+      },
+      "then": {
+        "properties": {
+          "effective_mode": {"const": "OFF"},
+          "policy_evaluated": {"const": false},
+          "fallback_reason": {"type": "null"},
+          "validation_status": {"const": "BYPASSED"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"call_role": {"const": "sentinel"}},
+        "required": ["call_role"]
+      },
+      "then": {
+        "properties": {
+          "effective_mode": {"const": "OFF"},
+          "bypass_reason": {"const": "CALL_ROLE_SENTINEL"},
+          "fallback_reason": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"edit_applied": {"const": true}},
+        "required": ["edit_applied"]
+      },
+      "then": {
+        "properties": {
+          "effective_mode": {"const": "ACTIVE"},
+          "policy_evaluated": {"const": true},
+          "would_edit": {"const": true},
+          "fallback_reason": {"type": "null"},
+          "validation_status": {"const": "PASSED"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"effective_mode": {"const": "SHADOW"}},
+        "required": ["effective_mode"]
+      },
+      "then": {
+        "properties": {
+          "configured_mode": {"const": "SHADOW"},
+          "bypass_reason": {"type": "null"},
+          "policy_evaluated": {"const": true},
+          "edit_applied": {"const": false},
+          "fallback_reason": {"type": "null"},
+          "validation_status": {"const": "PASSED"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"effective_mode": {"const": "ACTIVE"}},
+        "required": ["effective_mode"]
+      },
+      "then": {
+        "properties": {
+          "configured_mode": {"const": "ACTIVE"},
+          "bypass_reason": {"type": "null"},
+          "policy_evaluated": {"const": true},
+          "fallback_reason": {"type": "null"},
+          "validation_status": {"const": "PASSED"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"validation_status": {"const": "FALLBACK_ORIGINAL"}},
+        "required": ["validation_status"]
+      },
+      "then": {
+        "properties": {
+          "effective_mode": {"const": "OFF"},
+          "bypass_reason": {"type": "null"},
+          "fallback_reason": {"type": "string"},
+          "edit_applied": {"const": false}
+        }
+      },
+      "else": {
+        "properties": {"fallback_reason": {"type": "null"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"validation_status": {"const": "BYPASSED"}},
+        "required": ["validation_status"]
+      },
+      "then": {
+        "properties": {"bypass_reason": {"type": "string"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"validation_status": {"const": "PASSED"}},
+        "required": ["validation_status"]
+      },
+      "then": {
+        "properties": {
+          "effective_mode": {"enum": ["SHADOW", "ACTIVE"]},
+          "bypass_reason": {"type": "null"},
+          "global_kill_switch_active": {"const": false},
+          "history_codec_id": {"type": "string"},
+          "history_codec_contract_version": {"type": "string"},
+          "policy_id": {"type": "string"},
+          "decision_kinds": {"minItems": 1},
+          "fallback_reason": {"type": "null"},
+          "policy_evaluated": {"const": true}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "mode": {
+      "type": "string",
+      "enum": ["OFF", "SHADOW", "ACTIVE"]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

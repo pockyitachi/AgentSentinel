@@ -1,6 +1,7 @@
 # Instructions for AgentSentinel coding agents
 
-Last synchronized with the owner and Linear: **2026-09-01 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-01 UTC**.
+Linear workflow state is owner-managed and is not changed by repository agents.
 
 This directory preserves the scientific contracts and provenance for the
 MobileWorld history-integrity project. The implementation tree is
@@ -74,8 +75,13 @@ revived as a separate causal-evaluation effort after an explicit owner decision.
 
 ### Active runtime work
 
-Runtime Epic 2 is 0/6 complete. ALE-324 is now **R2.1 — Implement the Pre-Call
-Sentinel Runtime Seam**, and is the next task. Linear dependencies are:
+Runtime Epic 2 is 1/6 complete at the repository engineering layer. ALE-324 /
+R2.1 has an accepted CPU/fake checkpoint at commit
+`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. It supersedes the `58820a8`
+checkpoint after recursively trusted policy-output and History-IR snapshots,
+precomputed renderer-result binding, worker-owned policy-evaluation census, and
+detached receipt-transaction hardening. Linear workflow state remains owner-
+managed. The repository dependency sequence is:
 
 ```text
 R2.1 / ALE-324
@@ -112,13 +118,13 @@ The two semantic axes remain independent:
    AND-OR rubric to describe active/inactive/unknown paths. The rubric is not
    truth evidence and does not choose an action. `ARCHIVE` begins SHADOW-only.
 
-## 4. Active scope: R2.1 CPU/fake seam
+## 4. Accepted scope: R2.1 CPU/fake seam
 
-R2.1 first creates a small additive runtime decision/contract. Do not edit
+R2.1 created a small additive runtime decision/contract without editing
 byte-frozen G1 contracts to manufacture runtime authorization.
 
-Implement one shared interface after request assembly and before transport
-retry, such as:
+The accepted shared interface operates after request assembly and before
+transport retry:
 
 ```text
 PromptSentinel.before_model_call(request, context, history_codec_id, call_role)
@@ -129,23 +135,41 @@ Required behavior:
 
 - default mode `OFF`, plus explicit `SHADOW` and `ACTIVE`;
 - global kill switch and per-host configuration;
+- monotonic kill-switch activation detection, including an activation pulse
+  that returns to inactive before candidate selection;
 - one Sentinel evaluation per logical actor decision, identified by a stable
   logical-call ID, with the same validated result reused across BaseAgent
   transport retries, adapter-level parse retries (including Qwen's outer
   parse-retry loop), and the streaming path;
 - `call_role=sentinel` bypass to prevent recursion;
 - immutable raw request and a separately constructed final request;
+- strict finite canonical-JSON admission before copying, hashing, cache lookup,
+  or sidecar admission; serializer-coercible non-JSON values pass through the
+  fixed-message BaseAgent backstop as the exact Original with no semantic work
+  or receipt;
 - exact history-only edits with system/task/tools/current observation/images,
   roles/order, model/sampling parameters, and all non-history content preserved;
 - typed fallback to Original on timeout, exception, invalid output, unsupported
   family, ambiguous/overlapping span, render failure, or invariant failure;
-- raw/final hashes, exact diff, codec/mode, operation, validation, fallback, and
-  latency in a derived, access-controlled, repo-external sidecar; request views
-  and diffs must follow the existing credential exclusion/redaction policy,
-  with no secret or chain-of-thought logging;
+- raw/candidate/final request hashes, canonical policy-output and exact-diff
+  hashes, codec/mode, decision kinds, validation, fallback, and latency in a
+  derived repo-external sidecar; R2.1 persists no request views, operation
+  payloads, or exact-diff preimages, and any future detail channel requires a
+  separate access-controlled versioned contract with no secret or
+  chain-of-thought logging;
+- canonical hashing of every correctly typed policy output before duplicate-ID,
+  operation-binding, or later admission rejection; hashing never grants
+  admission;
+- sidecar transaction admission before SHADOW/ACTIVE semantic work, with
+  admission failure before policy and commit failure before provider transport;
 - existing provider transport, response normalization, action parser, runner,
   and action execution remain unchanged;
 - deterministic no-op/fake policy and fake-provider tests only in R2.1.
+
+R2.1 executes only deterministic `DROP`. Every `REPLACE` plan and renderer list
+insertion fails closed to Original. R2.2 must introduce a versioned runtime
+proposal/admission overlay instead of representing automatic proposals as
+frozen G1.2 curated plans.
 
 `OFF` and `SHADOW` must send byte/semantic-equivalent Original requests.
 `ACTIVE` may send a transformed request only inside deterministic CPU/fake
@@ -223,13 +247,14 @@ Not currently permitted:
 - restarting the old G1.6 annotation site;
 - merging D-037 or reclassifying old AI-only labels as gold.
 
-Advance to later stories only after the current story's acceptance evidence is
-recorded and the Linear dependency is updated. Any live or real-environment
-work needs an additional owner resource/run authorization.
+Advance to a later story only after its owner-selected scope is recorded.
+Repository agents do not change Linear status; the owner manages that workflow
+separately. Any live or real-environment work needs an additional owner
+resource/run authorization.
 
 ## 8. Reading order
 
-Before R2.1 code changes, read completely:
+Before R2.1 maintenance or dependent runtime changes, read completely:
 
 1. repository-root `AGENTS.md`;
 2. this file;
@@ -240,7 +265,9 @@ Before R2.1 code changes, read completely:
 6. `G1_5_HISTORY_CODEC_CONTRACT_V1.md`;
 7. `G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`;
 8. `G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`;
-9. current implementation/test files listed in Section 5.
+9. `R2_1_PRE_CALL_SENTINEL_RUNTIME_SEAM_CONTRACT_V1.md`;
+10. `schemas/r2_1/sentinel_receipt.v1.schema.json`;
+11. current implementation/test files listed in Section 5.
 
 Read `DECISION_LOG.md`, `G1_4_DECISION_LOG.md`,
 `G1_5_DECISION_LOG.md`, G1.1/G1.3/G1.4 contracts, and `STATUS.md` when
@@ -322,15 +349,21 @@ event layer.
 
 For each story, report outcome, exact scope, files/commit, invariance evidence,
 test commands/results, repo-external artifacts, limitations, unauthorized work
-not performed, and next Linear dependency.
+not performed, and the next repository dependency. Linear workflow updates are
+performed separately by the owner.
 
 Stop and request owner direction before any action that needs live model/GPU/
 network/MobileWorld execution authority, changes scientific semantics, weakens
 history-only invariants, requires destructive handling of user data, or would
 merge/revive the superseded causal-replay path.
 
-Do not mark R2.1 complete until the shared seam, OFF/SHADOW parity, fake ACTIVE
-history-only transformation, retry reuse, recursion bypass, kill switch,
-typed fallback, sidecar, and focused regression tests are all verified. Do not
-claim a runtime policy, rubric, live transformation, success-rate gain, or
-causal effect before the corresponding later work actually exists.
+The R2.1 repository checkpoint is accepted only at commit
+`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`, where the shared seam, OFF/SHADOW
+parity, fake ACTIVE history-only transformation, retry reuse, recursion bypass,
+held/pulsed kill switch, typed fallback, pre-policy sidecar admission,
+fd-bound transactional hash-only publication, strict pre-copy/pre-cache JSON
+admission, complete rejected-output hashing, recursively detached policy/IR/
+renderer boundaries, truthful worker-owned evaluation census, detached receipt
+commit, and focused regressions were verified. Do not claim an automatic
+runtime policy, rubric, live transformation, success-rate gain, or causal
+effect before the corresponding later work actually exists.

@@ -1,6 +1,7 @@
 # AgentSentinel agent instructions
 
-Last synchronized with the owner and Linear: **2026-09-01 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-01 UTC**.
+Linear workflow state is owner-managed and is not changed by repository agents.
 
 This is the AgentSentinel monorepo. `MobileWorld/` is the active implementation
 tree. `mobileworld_audit_handoff/` contains the historical contracts, evidence
@@ -38,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 0/6 runtime stories complete.** The next task is ALE-324 / R2.1. |
+| Runtime Epic 2 / ALE-318 | **In progress: 1/6 repository engineering stories complete.** ALE-324 / R2.1 has an accepted CPU/fake implementation checkpoint at commit `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -65,14 +66,17 @@ environment.
 fallback semantics do not branch on target model identity. Each distinct
 history representation may still require a thin registered extractor/renderer.
 
-## Active authorized implementation scope: ALE-324 / R2.1
+## Accepted implementation boundary: ALE-324 / R2.1
 
-The next development task is **Implement the Pre-Call Sentinel Runtime Seam**.
-It is CPU-only and fake-provider-only until separately authorized otherwise.
+The repository now contains the accepted **Pre-Call Sentinel Runtime Seam**
+checkpoint at commit `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. This
+supersedes the `58820a8` checkpoint after recursively trusted policy-output and
+History-IR snapshotting, precomputed renderer-result binding, explicit worker-
+owned policy-evaluation census, and detached receipt-transaction hardening.
+Its executable acceptance remains CPU-only and fake-provider-only until
+separately authorized otherwise.
 
-Before implementation, add a small versioned runtime decision/contract that
-records the pivot and the exact R2.1 interface. Then implement a shared seam,
-conceptually:
+The versioned decision/contract and shared seam define this interface:
 
 ```text
 PromptSentinel.before_model_call(
@@ -87,6 +91,11 @@ R2.1 may use only deterministic no-op/fake policies. Automatic claim validity,
 correction generation, multi-path rubric semantics, and real model-backed
 Sentinel decisions belong to later stories.
 
+The executable R2.1 edit surface is deterministic `DROP` only. Every `REPLACE`
+plan and renderer list insertion fails closed to Original. R2.2 must add a
+versioned runtime proposal/admission overlay and must not mislabel automatic
+proposals as frozen G1.2 curated plans.
+
 ### Required R2.1 behavior
 
 - `OFF`: perform no Sentinel semantic work and send the original request.
@@ -95,6 +104,8 @@ Sentinel decisions belong to later stories.
 - `ACTIVE`: in tests only, send a validated deterministic transformed request
   to the existing fake provider.
 - Default to `OFF`; provide a global kill switch and explicit per-host mode.
+  Any activate-then-deactivate pulse before candidate selection must discard the
+  candidate to Original.
 - Invoke the seam exactly once per logical actor decision after host request
   assembly. Assign a stable logical-call identity and reuse the same validated
   `SentinelResult` across both BaseAgent transport retries and adapter-level
@@ -104,17 +115,29 @@ Sentinel decisions belong to later stories.
   to prevent recursion.
 - Never mutate the caller's request. Preserve the immutable raw request and
   return a separate final request.
+- Admit semantic work only for an exact finite canonical-JSON Python tree,
+  before copying, hashing, cache lookup, or sidecar admission. Serializer-
+  coercible non-JSON values such as tuples or non-string dictionary keys must
+  bypass Sentinel through the BaseAgent backstop as the exact Original, with no
+  policy evaluation or receipt.
 - Restrict changes to declared history spans. System policy, task instruction,
   tools, current screenshot and other multimodal blocks, roles/order,
   model/sampling settings, and all non-history bytes must remain invariant.
 - Timeout, exception, invalid schema, ambiguous span, unsupported family,
   renderer failure, or invariant failure must produce a typed fallback to the
   original request. A partially transformed request must never be sent.
-- Record a lightweight sidecar receipt: raw/final hashes, codec, mode,
-  operations, exact diff, validation, fallback reason, and latency. Store
-  request views and exact diffs only in a configured, access-controlled,
-  repo-external sidecar root; apply the existing credential exclusion/redaction
-  policy and never duplicate secrets or chain of thought into receipts.
+- Record a lightweight hash-only sidecar receipt: raw/candidate/final request
+  hashes, canonical policy-output hash, exact-diff hash, codec, mode, decision
+  kinds, validation, fallback reason, and latency. R2.1 does not persist request
+  views, operation payloads, or exact-diff preimages. Any future detail channel
+  requires a separate versioned, access-controlled, repo-external contract;
+  never duplicate secrets or chain of thought into receipts.
+- Once a policy returns the required output type, bind its complete canonical
+  hash before duplicate-ID, operation-binding, or later admission checks.
+  Hashing a rejected output records what was evaluated and does not admit it.
+- Require sidecar transaction admission before semantic work in SHADOW/ACTIVE;
+  admission failure evaluates no policy, and commit failure still forces
+  Original before provider transport.
 - Keep the existing provider transport, response normalization, action parser,
   runner, and action execution path unchanged.
 
@@ -236,7 +259,7 @@ port 8766 annotation site, or port 18007 model service should be assumed live.
 
 ## Task-specific reading
 
-For R2.1, read completely before implementation:
+For R2.1 maintenance or dependent runtime work, read completely:
 
 1. `mobileworld_audit_handoff/AGENTS.md`
 2. `mobileworld_audit_handoff/PROJECT_CONTEXT.md` for notation and scientific
@@ -246,8 +269,10 @@ For R2.1, read completely before implementation:
 5. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CONTRACT_V1.md`
 6. `mobileworld_audit_handoff/G1_5_HISTORY_CODEC_CAPABILITIES_V1.md`
 7. `mobileworld_audit_handoff/G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`
-8. The current BaseAgent, Qwen, MAI, Collector, G1.2, G1.4 fake-provider, and
-   G1.5 Codec implementation/tests.
+8. `mobileworld_audit_handoff/R2_1_PRE_CALL_SENTINEL_RUNTIME_SEAM_CONTRACT_V1.md`
+9. `mobileworld_audit_handoff/schemas/r2_1/sentinel_receipt.v1.schema.json`
+10. The current BaseAgent, Qwen, MAI, Collector, G1.2, G1.4 fake-provider, and
+    G1.5 Codec implementation/tests.
 
 Read the G1.1/G1.3/G1.4/G1.6 contracts and `STATUS.md` when touching those
 historical artifacts or validating their provenance. They are not mandatory
@@ -264,7 +289,10 @@ Every delivery must report:
 - test commands and results;
 - artifacts created outside Git;
 - known limitations and unauthorized work not performed;
-- the next Linear story and whether it is actually unblocked.
+- the next repository dependency and whether it is mechanically available.
+
+Repository agents report evidence but do not change Linear status; the owner
+performs that workflow update separately.
 
 Do not claim a runtime Sentinel, rubric, live transformation, success-rate
 improvement, or causal effect before the corresponding implementation and
