@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a corrected CPU/offline/injected-fake, SHADOW-only candidate at `7da7b0eb35cf5fce849b0f40c2c414ae3f223f99`, pending owner review and not counted as accepted. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a corrected CPU/offline/injected-fake, SHADOW-only candidate at `54381b7b56b06d5aa262005af62b65269b4cf0a6`, pending owner review and not counted as accepted. Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -177,7 +177,7 @@ versioned zero-target bridge.
 
 ## Candidate implementation boundary: ALE-326 / R2.3
 
-Commit `7da7b0eb35cf5fce849b0f40c2c414ae3f223f99` is the corrected
+Commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` is the corrected
 **Multi-Path Rubric Tracker** repository candidate pending owner review. Its
 tested boundary is CPU-only, offline, injected-fake, and SHADOW-only. It does
 not authorize or claim a live model/provider call, network or GPU use,
@@ -202,6 +202,10 @@ authority snapshots and hashes are never shared with the backend; the backend
 receives a second detached copy, and public properties, results, and cache hits
 return fresh detached graphs. One shared trusted-graph walker rejects cycles,
 depth beyond 64, or more than 262,144 total visits including primitive leaves.
+Semantic graph cycle/reachability validation, gate-state evaluation, and
+frontier traversal use explicit stacks plus children-first dynamic programming,
+so legal graphs through the 512-gate limit do not consume Python call-stack
+depth and are independent of gate declaration order.
 Post-state record relevance remains derived, but this checkpoint has no trusted
 record-level R2.2 `SUPPORTED + KEEP` resolver: arbitrary support hashes have no
 archive authority, every record remains `RETAIN`, and `ARCHIVE_SHADOW` is

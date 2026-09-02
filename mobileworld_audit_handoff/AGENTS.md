@@ -81,7 +81,7 @@ has an accepted CPU/fake checkpoint at commit
 CPU/offline/injected-fake-Responses, SHADOW-only checkpoint at commit
 `3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a
 corrected CPU/offline/injected-fake, SHADOW-only candidate at commit
-`7da7b0eb35cf5fce849b0f40c2c414ae3f223f99`, pending owner review and not
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`, pending owner review and not
 counted as accepted. R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
 History-IR snapshots,
@@ -213,7 +213,7 @@ receipt, secret/resource authority, and a versioned zero-target bridge.
 
 R2.3 adds the independent rubric/path-relevance axis without treating task
 relevance as factual validity or action advice. Candidate commit
-`7da7b0eb35cf5fce849b0f40c2c414ae3f223f99` provides exact Unicode instruction
+`54381b7b56b06d5aa262005af62b65269b4cf0a6` provides exact Unicode instruction
 spans, an acyclic versioned `AND` / `OR` graph with legal alternatives and
 `OTHER_UNKNOWN`, generate-once caching, and explicit hash-bound revision.
 
@@ -230,6 +230,9 @@ pre-call authority graphs and hashes remain internal, while backends and every
 public result/cache hit receive fresh detached copies. The common graph walker
 fails closed on cycles, depth beyond 64, or more than 262,144 total visits,
 including primitive leaves.
+Semantic graph validation and path/frontier derivation use explicit stacks and
+children-first dynamic programming through all 512 gates, independent of the
+Python recursion limit and gate declaration order.
 
 This checkpoint has no trusted record-level R2.2 `SUPPORTED + KEEP` resolver.
 Support hashes are input-bound but have no archive authority; every relevance
