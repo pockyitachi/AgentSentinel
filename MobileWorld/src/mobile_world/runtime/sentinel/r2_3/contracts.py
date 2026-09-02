@@ -743,7 +743,45 @@ def _validate_graph_ref(
         _fail("UNKNOWN_GRAPH_REFERENCE", "graph references an unknown gate")
 
 
-def _validate_graph(rubric: MultiPathRubricV1) -> None:
+def _gate_postorder(gates: dict[str, GateV1]) -> tuple[str, ...]:
+    """Return children-first gate order using an explicit color-DFS stack."""
+
+    white = 0
+    gray = 1
+    black = 2
+    colors = {gate_id: white for gate_id in gates}
+    postorder: list[str] = []
+    gate_children = {
+        gate_id: tuple(
+            child.ref_id for child in gate.children if child.ref_kind is GraphRefKind.GATE
+        )
+        for gate_id, gate in gates.items()
+    }
+    for root_gate_id in gates:
+        if colors[root_gate_id] == black:
+            continue
+        colors[root_gate_id] = gray
+        stack: list[tuple[str, int]] = [(root_gate_id, 0)]
+        while stack:
+            gate_id, child_index = stack[-1]
+            children = gate_children[gate_id]
+            if child_index == len(children):
+                colors[gate_id] = black
+                postorder.append(gate_id)
+                stack.pop()
+                continue
+            child_id = children[child_index]
+            stack[-1] = (gate_id, child_index + 1)
+            child_color = colors[child_id]
+            if child_color == gray:
+                _fail("CYCLIC_RUBRIC_GRAPH", "AND/OR graph must be acyclic")
+            if child_color == white:
+                colors[child_id] = gray
+                stack.append((child_id, 0))
+    return tuple(postorder)
+
+
+def _validate_graph(rubric: MultiPathRubricV1) -> tuple[str, ...]:
     milestones = {value.milestone_id: value for value in rubric.milestones}
     gates = {value.gate_id: value for value in rubric.gates}
     for gate in rubric.gates:
@@ -760,45 +798,27 @@ def _validate_graph(rubric: MultiPathRubricV1) -> None:
         assert path.root is not None
         _validate_graph_ref(path.root, milestones, gates)
 
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit_gate(gate_id: str) -> None:
-        if gate_id in visiting:
-            _fail("CYCLIC_RUBRIC_GRAPH", "AND/OR graph must be acyclic")
-        if gate_id in visited:
-            return
-        visiting.add(gate_id)
-        for child in gates[gate_id].children:
-            if child.ref_kind is GraphRefKind.GATE:
-                visit_gate(child.ref_id)
-        visiting.remove(gate_id)
-        visited.add(gate_id)
-
-    for gate_id in gates:
-        visit_gate(gate_id)
+    gate_postorder = _gate_postorder(gates)
 
     reachable_milestones: set[str] = set()
     reachable_gates: set[str] = set()
 
-    def mark(value: GraphRefV1) -> None:
-        if value.ref_kind is GraphRefKind.MILESTONE:
-            reachable_milestones.add(value.ref_id)
-            return
-        if value.ref_id in reachable_gates:
-            return
-        reachable_gates.add(value.ref_id)
-        for child in gates[value.ref_id].children:
-            mark(child)
-
     roots = [path.root for path in legal_paths]
     if rubric.common_root is not None:
         roots.append(rubric.common_root)
-    for root in roots:
-        assert root is not None
-        mark(root)
+    pending = [root for root in reversed(roots) if root is not None]
+    while pending:
+        value = pending.pop()
+        if value.ref_kind is GraphRefKind.MILESTONE:
+            reachable_milestones.add(value.ref_id)
+            continue
+        if value.ref_id in reachable_gates:
+            continue
+        reachable_gates.add(value.ref_id)
+        pending.extend(reversed(gates[value.ref_id].children))
     if reachable_milestones != set(milestones) or reachable_gates != set(gates):
         _fail("UNREACHABLE_GRAPH_NODE", "every graph node must be reachable from a declared root")
+    return gate_postorder
 
 
 @dataclass(frozen=True, slots=True)
@@ -1895,6 +1915,7 @@ def derive_path_states_and_frontier(
     milestone_state = {value.milestone_id: value.state for value in milestone_states}
     milestones = {value.milestone_id: value for value in rubric.milestones}
     gates = {value.gate_id: value for value in rubric.gates}
+    gate_postorder = _validate_graph(rubric)
     viability_cache: dict[tuple[GraphRefKind, str], PathViability] = {}
     satisfied_cache: dict[tuple[GraphRefKind, str], bool] = {}
     blocking_cache: dict[tuple[GraphRefKind, str], bool] = {}
@@ -1909,73 +1930,41 @@ def derive_path_states_and_frontier(
             return PathViability.UNKNOWN
         return PathViability.VIABLE
 
-    def contains_blocking(reference: GraphRefV1) -> bool:
-        key = reference_key(reference)
-        cached = blocking_cache.get(key)
-        if cached is not None:
-            return cached
-        if reference.ref_kind is GraphRefKind.MILESTONE:
-            result = milestones[reference.ref_id].blocking
+    for milestone_id, milestone in milestones.items():
+        key = (GraphRefKind.MILESTONE, milestone_id)
+        state = milestone_state[milestone_id]
+        blocking_cache[key] = milestone.blocking
+        satisfied_cache[key] = state is MilestoneState.SATISFIED
+        if not milestone.blocking:
+            viability_cache[key] = PathViability.VIABLE
+        elif state is MilestoneState.VIOLATED:
+            viability_cache[key] = PathViability.INACTIVE
+        elif state is MilestoneState.UNKNOWN:
+            viability_cache[key] = PathViability.UNKNOWN
         else:
-            result = any(contains_blocking(child) for child in gates[reference.ref_id].children)
-        blocking_cache[key] = result
-        return result
+            viability_cache[key] = PathViability.VIABLE
 
-    def evaluate(reference: GraphRefV1) -> PathViability:
-        key = reference_key(reference)
-        cached = viability_cache.get(key)
-        if cached is not None:
-            return cached
-        if reference.ref_kind is GraphRefKind.MILESTONE:
-            milestone = milestones[reference.ref_id]
-            state = milestone_state[reference.ref_id]
-            if not milestone.blocking:
-                result = PathViability.VIABLE
-            elif state is MilestoneState.VIOLATED:
-                result = PathViability.INACTIVE
-            elif state is MilestoneState.UNKNOWN:
-                result = PathViability.UNKNOWN
-            else:
-                result = PathViability.VIABLE
+    for gate_id in gate_postorder:
+        gate = gates[gate_id]
+        key = (GraphRefKind.GATE, gate_id)
+        child_keys = tuple(reference_key(child) for child in gate.children)
+        blocking_cache[key] = any(blocking_cache[child] for child in child_keys)
+        if gate.operator is GateOperator.AND:
+            viability_cache[key] = combine_and(
+                tuple(viability_cache[child] for child in child_keys)
+            )
+            satisfied_cache[key] = all(satisfied_cache[child] for child in child_keys)
         else:
-            gate = gates[reference.ref_id]
-            if gate.operator is GateOperator.AND:
-                children = tuple(evaluate(value) for value in gate.children)
-                result = combine_and(children)
+            blocking_children = tuple(child for child in child_keys if blocking_cache[child])
+            relevant_children = blocking_children or child_keys
+            child_viability = tuple(viability_cache[child] for child in relevant_children)
+            if any(value is PathViability.VIABLE for value in child_viability):
+                viability_cache[key] = PathViability.VIABLE
+            elif any(value is PathViability.UNKNOWN for value in child_viability):
+                viability_cache[key] = PathViability.UNKNOWN
             else:
-                blocking_children = tuple(
-                    value for value in gate.children if contains_blocking(value)
-                )
-                relevant_children = blocking_children or gate.children
-                children = tuple(evaluate(value) for value in relevant_children)
-                if any(value is PathViability.VIABLE for value in children):
-                    result = PathViability.VIABLE
-                elif any(value is PathViability.UNKNOWN for value in children):
-                    result = PathViability.UNKNOWN
-                else:
-                    result = PathViability.INACTIVE
-        viability_cache[key] = result
-        return result
-
-    def is_satisfied(reference: GraphRefV1) -> bool:
-        key = reference_key(reference)
-        cached = satisfied_cache.get(key)
-        if cached is not None:
-            return cached
-        if reference.ref_kind is GraphRefKind.MILESTONE:
-            result = milestone_state[reference.ref_id] is MilestoneState.SATISFIED
-        else:
-            gate = gates[reference.ref_id]
-            if gate.operator is GateOperator.AND:
-                result = all(is_satisfied(child) for child in gate.children)
-            else:
-                blocking_children = tuple(
-                    value for value in gate.children if contains_blocking(value)
-                )
-                relevant_children = blocking_children or gate.children
-                result = any(is_satisfied(child) for child in relevant_children)
-        satisfied_cache[key] = result
-        return result
+                viability_cache[key] = PathViability.INACTIVE
+            satisfied_cache[key] = any(satisfied_cache[child] for child in relevant_children)
 
     path_values: list[PathStateV1] = []
     for path in rubric.paths:
@@ -1984,7 +1973,7 @@ def derive_path_states_and_frontier(
         else:
             assert path.root is not None
             roots = (path.root,) if rubric.common_root is None else (rubric.common_root, path.root)
-            value = combine_and(tuple(evaluate(root) for root in roots))
+            value = combine_and(tuple(viability_cache[reference_key(root)] for root in roots))
         path_values.append(PathStateV1(path_id=path.path_id, state=value))
     path_states = tuple(path_values)
     path_lookup = {value.path_id: value.state for value in path_states}
@@ -1993,27 +1982,35 @@ def derive_path_states_and_frontier(
     seen_frontier: set[tuple[str, str]] = set()
     visited: set[tuple[str, GraphRefKind, str]] = set()
 
-    def collect(path_id: str, reference: GraphRefV1) -> None:
-        visit_key = (path_id, reference.ref_kind, reference.ref_id)
-        if visit_key in visited:
-            return
-        visited.add(visit_key)
-        if evaluate(reference) is PathViability.INACTIVE or is_satisfied(reference):
-            return
-        if reference.ref_kind is GraphRefKind.MILESTONE:
-            state = milestone_state[reference.ref_id]
-            if state in {
-                MilestoneState.PENDING,
-                MilestoneState.IN_PROGRESS,
-                MilestoneState.UNKNOWN,
-            }:
-                key = (path_id, reference.ref_id)
-                if key not in seen_frontier:
-                    seen_frontier.add(key)
-                    frontier.append(FrontierItemV1(path_id=path_id, milestone_id=reference.ref_id))
-            return
-        for child in gates[reference.ref_id].children:
-            collect(path_id, child)
+    def collect(path_id: str, root: GraphRefV1) -> None:
+        pending = [root]
+        while pending:
+            reference = pending.pop()
+            visit_key = (path_id, reference.ref_kind, reference.ref_id)
+            if visit_key in visited:
+                continue
+            visited.add(visit_key)
+            key = reference_key(reference)
+            if viability_cache[key] is PathViability.INACTIVE or satisfied_cache[key]:
+                continue
+            if reference.ref_kind is GraphRefKind.MILESTONE:
+                state = milestone_state[reference.ref_id]
+                if state in {
+                    MilestoneState.PENDING,
+                    MilestoneState.IN_PROGRESS,
+                    MilestoneState.UNKNOWN,
+                }:
+                    frontier_key = (path_id, reference.ref_id)
+                    if frontier_key not in seen_frontier:
+                        seen_frontier.add(frontier_key)
+                        frontier.append(
+                            FrontierItemV1(
+                                path_id=path_id,
+                                milestone_id=reference.ref_id,
+                            )
+                        )
+                continue
+            pending.extend(reversed(gates[reference.ref_id].children))
 
     for path in rubric.paths:
         if (

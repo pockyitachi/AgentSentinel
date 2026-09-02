@@ -368,6 +368,56 @@ def _rubric() -> MultiPathRubricV1:
     )
 
 
+def _maximum_gate_chain_rubric(
+    *,
+    operator: GateOperator,
+    reverse_declarations: bool,
+) -> MultiPathRubricV1:
+    base = _rubric()
+    gates = [
+        GateV1(
+            gate_id="deep-gate-0",
+            operator=operator,
+            children=tuple(
+                _ref(GraphRefKind.MILESTONE, milestone.milestone_id)
+                for milestone in base.milestones
+            ),
+        )
+    ]
+    for index in range(1, 512):
+        gates.append(
+            GateV1(
+                gate_id=f"deep-gate-{index}",
+                operator=operator,
+                children=(
+                    _ref(GraphRefKind.GATE, f"deep-gate-{index - 1}"),
+                    _ref(
+                        GraphRefKind.MILESTONE,
+                        base.milestones[index % len(base.milestones)].milestone_id,
+                    ),
+                ),
+            )
+        )
+    declarations = tuple(reversed(gates)) if reverse_declarations else tuple(gates)
+    return replace(
+        base,
+        gates=declarations,
+        common_root=None,
+        paths=(
+            RubricPathV1(
+                path_id="deep-route",
+                kind=PathKind.LEGAL_ALTERNATIVE,
+                root=_ref(GraphRefKind.GATE, "deep-gate-511"),
+            ),
+            RubricPathV1(
+                path_id="other-unknown",
+                kind=PathKind.OTHER_UNKNOWN,
+                root=None,
+            ),
+        ),
+    )
+
+
 def _initial_state(rubric: MultiPathRubricV1) -> RubricTrackingStateV1:
     milestone_states = tuple(
         MilestoneStateRecordV1(
@@ -1279,6 +1329,91 @@ def test_shared_dag_derivation_is_memoized_and_bounded() -> None:
     assert {item.milestone_id for item in result.state.frontier} == {
         item.milestone_id for item in rubric.milestones
     }
+
+
+@pytest.mark.parametrize("operator", (GateOperator.AND, GateOperator.OR))
+@pytest.mark.parametrize(
+    "reverse_declarations",
+    (False, True),
+    ids=("leaves-first", "root-first"),
+)
+def test_maximum_gate_chain_uses_iterative_validation_and_derivation(
+    operator: GateOperator,
+    reverse_declarations: bool,
+) -> None:
+    rubric = _maximum_gate_chain_rubric(
+        operator=operator,
+        reverse_declarations=reverse_declarations,
+    )
+    builder = _FakeBuilderBackend(rubric)
+    tracker = _FakeTrackerBackend(rubric.backend, _ambiguous_proposal)
+    session = RubricTaskSession(
+        task_run_id=rubric.task_run_id,
+        task=rubric.task,
+        builder_backend=builder,
+        tracker_backend=tracker,
+        id_factory=_DeterministicIds(),
+    )
+
+    try:
+        started = session.start()
+        assert started.rubric is not None and started.state is not None
+        validate_tracking_state(started.state, started.rubric)
+        tracked = session.track(_session_packet(session))
+    except RecursionError as error:  # pragma: no cover - explicit contract guard
+        pytest.fail(f"legal 512-gate rubric escaped RecursionError: {error}")
+
+    assert started.status is RubricSessionStatus.ADMITTED
+    assert started.state.path_states == (
+        PathStateV1(path_id="deep-route", state=PathViability.VIABLE),
+        PathStateV1(path_id="other-unknown", state=PathViability.UNKNOWN),
+    )
+    assert {item.milestone_id for item in started.state.frontier} == {
+        item.milestone_id for item in rubric.milestones
+    }
+    assert tracked.status is RubricSessionStatus.ADMITTED
+    assert tracked.state is not None
+    assert tracked.state.path_states == (
+        PathStateV1(path_id="deep-route", state=PathViability.UNKNOWN),
+        PathStateV1(path_id="other-unknown", state=PathViability.UNKNOWN),
+    )
+    assert builder.generate_calls == 1
+    assert tracker.track_calls == 1
+
+
+def test_maximum_gate_chain_cycle_and_unreachable_node_fail_typed() -> None:
+    rubric = _maximum_gate_chain_rubric(
+        operator=GateOperator.AND,
+        reverse_declarations=False,
+    )
+    cyclic_gates = tuple(
+        replace(
+            gate,
+            children=(
+                _ref(GraphRefKind.GATE, "deep-gate-511"),
+                _ref(GraphRefKind.MILESTONE, rubric.milestones[0].milestone_id),
+            ),
+        )
+        if gate.gate_id == "deep-gate-0"
+        else gate
+        for gate in rubric.gates
+    )
+
+    with pytest.raises(R23ContractError, match="CYCLIC_RUBRIC_GRAPH"):
+        replace(rubric, gates=cyclic_gates)
+
+    legal_path, other_path = rubric.paths
+    with pytest.raises(R23ContractError, match="UNREACHABLE_GRAPH_NODE"):
+        replace(
+            rubric,
+            paths=(
+                replace(
+                    legal_path,
+                    root=_ref(GraphRefKind.GATE, "deep-gate-510"),
+                ),
+                other_path,
+            ),
+        )
 
 
 def test_backend_outputs_are_detached_before_session_admission() -> None:

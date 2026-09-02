@@ -150,6 +150,9 @@ Milestones are leaves. Gates have operator `AND` or `OR` and at least two
 explicit child references. References resolve only to a declared milestone or
 gate. IDs are unique, milestone/gate namespaces are disjoint, every node is
 reachable from a common or legal-path root, and the gate graph is acyclic.
+Cycle validation and reachability use explicit stacks, so every legal graph up
+to the 512-gate schema limit is independent of the Python recursion limit and
+is admitted in either root-first or leaves-first declaration order.
 
 Every `LEGAL_ALTERNATIVE` has a root. Exactly one `OTHER_UNKNOWN` path has no
 root and is never forced viable or inactive. The graph does not encode a
@@ -247,8 +250,11 @@ The trusted runtime derives the complete `TRACKING_STATE` rather than trusting
 backend-supplied path/frontier fields. One module-owned memoized DAG analysis
 is shared by state construction and validation: viability and satisfaction for
 each shared graph reference are computed once, and each path's frontier walk
-visits a shared reference at most once. The validator recomputes path states
-and frontier from the admitted milestone records and rejects any mismatch.
+visits a shared reference at most once. Gate values are computed iteratively in
+children-first topological order, and frontier traversal uses an explicit stack;
+semantic graph depth never consumes the interpreter call stack. The validator
+recomputes path states and frontier from the admitted milestone records and
+rejects any mismatch.
 
 A blocking instruction-cited milestone with admitted `violated` evidence may
 make a path inactive. A blocking `unknown` makes the unresolved path unknown.
@@ -410,8 +416,9 @@ Acceptance requires deterministic injected-fake tests proving:
    History IR, future/outcome/checker/replay data, and raw-event mutation;
 6. ambiguous GUI state becoming `unknown`, and weak transition status not
    settling semantic completion/violation;
-7. memoized shared-DAG path/frontier computation, independent recomputation,
-   and state hash/CAS binding;
+7. iterative memoized shared-DAG path/frontier computation through the full
+   512-gate limit in both declaration orders, independent recomputation, no
+   escaping `RecursionError`, and state hash/CAS binding;
 8. all four relevance classes, unconditional `RETAIN` without a trusted R2.2
    resolver, non-authority of arbitrary support hashes, and rejection of
    `ARCHIVE_SHADOW`;
