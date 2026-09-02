@@ -1,6 +1,6 @@
 # AgentSentinel agent instructions
 
-Last synchronized with the owner-facing repository state: **2026-09-01 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-02 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
 This is the AgentSentinel monorepo. `MobileWorld/` is the active implementation
@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 1/6 repository engineering stories complete.** ALE-324 / R2.1 has an accepted CPU/fake implementation checkpoint at commit `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories complete.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 has a CPU/offline/fake SHADOW checkpoint at `3b9e721717df6218ff348945fd0dc7f30aca68f3`. Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -87,13 +87,14 @@ PromptSentinel.before_model_call(
 ) -> SentinelResult
 ```
 
-R2.1 may use only deterministic no-op/fake policies. Automatic claim validity,
-correction generation, multi-path rubric semantics, and real model-backed
-Sentinel decisions belong to later stories.
+At the accepted R2.1 checkpoint, only deterministic no-op/fake policies were
+available. The accepted R2.2 boundary below adds automatic-policy contracts and
+fake-transport behavior; multi-path rubric semantics and live model-backed
+Sentinel decisions still belong to later stories.
 
 The executable R2.1 edit surface is deterministic `DROP` only. Every `REPLACE`
-plan and renderer list insertion fails closed to Original. R2.2 must add a
-versioned runtime proposal/admission overlay and must not mislabel automatic
+plan and renderer list insertion fails closed to Original. R2.2 adds a separate
+versioned runtime proposal/admission overlay and does not mislabel automatic
 proposals as frozen G1.2 curated plans.
 
 ### Required R2.1 behavior
@@ -147,6 +148,31 @@ Production-shaped request construction for the first two hosts is in
 `MobileWorld/src/mobile_world/agents/implementations/qwen3vl.py` and
 `MobileWorld/src/mobile_world/agents/implementations/mai_ui_agent.py`.
 Confirm the live code rather than trusting old line numbers.
+
+## Accepted implementation boundary: ALE-325 / R2.2
+
+Commit `3b9e721717df6218ff348945fd0dc7f30aca68f3` is the accepted
+**Evidence-Grounded SentinelPolicy** repository checkpoint. Its executable
+acceptance is CPU-only, offline, injected-fake-Responses, and SHADOW-only. It
+does not authorize or claim a live OpenAI call, model evaluation, network use,
+GPU use, MobileWorld action, ACTIVE deployment, or effectiveness result.
+
+R2.2 provides closed evidence-packet, policy-proposal, runtime-plan, policy-
+output, receipt, and metrics contracts. A module-owned builder binds the exact
+task, current image, causal cutoff, evidence roles, and source-bound History IR
+targets to one logical actor call. Independent admission supports
+`KEEP / DROP / REPLACE / KEEP_UNCERTAIN`; only exact declarative replacement
+facts may produce a reversible history-only correction. Qwen and MAI captured
+fixtures prove SHADOW Original parity for all four decisions, one evaluation
+per logical call, cache reuse, recursion bypass, typed fallback, hash/census
+binding, and no late receipt after timeout.
+
+The checked-in OpenAI Responses adapter is inert without explicit owner
+authorization and is not exercised by this checkpoint. R2.4 must add real
+Collector-to-evidence plumbing, runtime span discovery/capability overlays, a
+cancellable live transport/attempt receipt, secrets/resource authority, and a
+versioned zero-target bridge. R2.3 remains the next mechanically available
+repository story and owns only the separate multi-path rubric axis.
 
 ## Runtime Epic 2 sequence
 
@@ -259,7 +285,7 @@ port 8766 annotation site, or port 18007 model service should be assumed live.
 
 ## Task-specific reading
 
-For R2.1 maintenance or dependent runtime work, read completely:
+For R2.1/R2.2 maintenance or dependent runtime work, read completely:
 
 1. `mobileworld_audit_handoff/AGENTS.md`
 2. `mobileworld_audit_handoff/PROJECT_CONTEXT.md` for notation and scientific
@@ -271,8 +297,11 @@ For R2.1 maintenance or dependent runtime work, read completely:
 7. `mobileworld_audit_handoff/G1_5_NONFORMAL_COMPATIBILITY_ENGINEERING_CLOSE_AMENDMENT_V1.md`
 8. `mobileworld_audit_handoff/R2_1_PRE_CALL_SENTINEL_RUNTIME_SEAM_CONTRACT_V1.md`
 9. `mobileworld_audit_handoff/schemas/r2_1/sentinel_receipt.v1.schema.json`
-10. The current BaseAgent, Qwen, MAI, Collector, G1.2, G1.4 fake-provider, and
-    G1.5 Codec implementation/tests.
+10. `mobileworld_audit_handoff/R2_2_EVIDENCE_GROUNDED_SENTINEL_POLICY_CONTRACT_V1.md`
+11. the three checked-in schemas under
+    `mobileworld_audit_handoff/schemas/r2_2/`;
+12. The current BaseAgent, Qwen, MAI, Collector, G1.2, G1.4 fake-provider,
+    G1.5 Codec, and `runtime/sentinel/r2_2/` implementation/tests.
 
 Read the G1.1/G1.3/G1.4/G1.6 contracts and `STATUS.md` when touching those
 historical artifacts or validating their provenance. They are not mandatory
