@@ -5,13 +5,14 @@ from __future__ import annotations
 import math
 import re
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar, Token, copy_context
 from copy import deepcopy
 from dataclasses import dataclass, fields
 from hashlib import sha256
 from threading import Event, Lock, Thread
-from typing import Any
+from typing import Any, cast
 
 from mobile_world.offline.causal_replay.contracts import (
     RENDER_RESULT_SCHEMA_VERSION,
@@ -83,6 +84,18 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelReceiptTransaction,
     SentinelResult,
     SentinelValidationStatus,
+)
+from mobile_world.runtime.sentinel.r2_2.contracts import (
+    PolicyExecutionControlV1,
+    RuntimeEvidencePolicyV1,
+    RuntimeExecutionScope,
+    RuntimeSentinelPolicyOutputV1,
+    runtime_policy_output_projection,
+)
+from mobile_world.runtime.sentinel.r2_2.runtime_overlay import (
+    RuntimeRenderResultV1,
+    render_runtime_admitted_plan,
+    validate_runtime_render_result,
 )
 
 _EMPTY_DIFF_SHA256 = canonical_sha256({"diffs": [], "list_insertions": []})
@@ -186,6 +199,53 @@ class _EvaluationFailure(Exception):
     check: str
 
 
+class _PolicyExecutionFence(PolicyExecutionControlV1):
+    """Seam-owned transport/receipt linearization fence for one R2.2 worker."""
+
+    def __init__(self, *, deadline_ns: int, clock_ns: Callable[[], int]) -> None:
+        self._deadline_ns = deadline_ns
+        self._clock_ns = clock_ns
+        self._cancelled = Event()
+        self._transport_started = False
+        self._receipt_published = False
+        self._transport_lock = Lock()
+        self._publication_lock = Lock()
+
+    def _require_open(self) -> None:
+        if self._cancelled.is_set() or self._clock_ns() >= self._deadline_ns:
+            raise TimeoutError("R2.2 policy execution deadline has closed")
+
+    def run_transport[T](self, call: Callable[[], T]) -> T:
+        if not callable(call):
+            raise TypeError("transport callback must be callable")
+        with self._transport_lock:
+            self._require_open()
+            if self._transport_started:
+                raise RuntimeError("R2.2 policy transport was already started")
+            self._transport_started = True
+            return call()
+
+    def publish_receipt(self, publish: Callable[[], None]) -> None:
+        if not callable(publish):
+            raise TypeError("receipt publish callback must be callable")
+        with self._publication_lock:
+            self._require_open()
+            if self._receipt_published:
+                raise RuntimeError("R2.2 policy receipt was already published")
+            publish()
+            self._receipt_published = True
+
+    def cancel(self) -> None:
+        """Close both gates without waiting for an in-flight bounded transport."""
+
+        self._cancelled.set()
+        # Publication is a module-owned constant-time append.  Waiting for this
+        # short critical section guarantees that no receipt appears after the
+        # actor receives its timeout fallback, without waiting for transport.
+        with self._publication_lock:
+            pass
+
+
 _HISTORY_IR_DATACLASS_TYPES = frozenset(
     {
         HistoryIR,
@@ -271,6 +331,15 @@ class _PolicyOutputSnapshot:
     """Detached trusted graph and its immutable canonical hash preimage."""
 
     output: SentinelPolicyOutput
+    canonical_bytes: bytes
+    sha256: str
+
+
+@dataclass(frozen=True)
+class _RuntimePolicyOutputSnapshot:
+    """Detached R2.2 graph and the exact preimage shared by all later gates."""
+
+    output: RuntimeSentinelPolicyOutputV1
     canonical_bytes: bytes
     sha256: str
 
@@ -601,6 +670,27 @@ def _snapshot_policy_output(
     )
 
 
+def _snapshot_runtime_policy_output(value: Any) -> _RuntimePolicyOutputSnapshot:
+    """Detach an exact R2.2 output without dispatching policy-owned serializers."""
+
+    canonical_bytes = canonical_json_bytes(runtime_policy_output_projection(value))
+    canonical_digest = sha256(canonical_bytes).hexdigest()
+    trusted = deepcopy(value)
+    if (
+        type(trusted) is not RuntimeSentinelPolicyOutputV1
+        or canonical_json_bytes(runtime_policy_output_projection(trusted)) != canonical_bytes
+    ):
+        raise _EvaluationFailure(
+            SentinelFallbackReason.INVALID_POLICY_OUTPUT,
+            "r2_2_policy_output_snapshot_mismatch",
+        )
+    return _RuntimePolicyOutputSnapshot(
+        output=trusted,
+        canonical_bytes=canonical_bytes,
+        sha256=canonical_digest,
+    )
+
+
 def _render_json_path(value: Any) -> list[str | int]:
     if type(value) is not tuple or any(type(item) not in {str, int} for item in value):
         raise SentinelContractError("renderer result contains an untrusted JSON path")
@@ -753,8 +843,15 @@ class PromptSentinel:
         policy_id = policy.policy_id
         if not isinstance(policy_id, str) or _SEMANTIC_ID.fullmatch(policy_id) is None:
             raise TypeError("policy.policy_id must be a bounded safe identifier")
+        runtime_evidence_policy = isinstance(policy, RuntimeEvidencePolicyV1)
+        if runtime_evidence_policy and (
+            type(policy.execution_scope) is not RuntimeExecutionScope
+            or policy.execution_scope is not RuntimeExecutionScope.SHADOW_ONLY
+        ):
+            raise TypeError("R2.2 runtime policy must declare the exact SHADOW_ONLY scope")
         self._policy = policy
         self._policy_id = policy_id
+        self._runtime_evidence_policy = runtime_evidence_policy
         self._codec_registry = codec_registry
         self._host_configs = configs
         self._default_host_config = default_host_config or SentinelHostConfig()
@@ -900,6 +997,22 @@ class PromptSentinel:
                 policy_evaluated=False,
             )
 
+        if self._runtime_evidence_policy and config.mode is not SentinelMode.SHADOW:
+            return self._fallback_result(
+                raw=raw,
+                raw_json=raw_json,
+                raw_sha256=raw_sha256,
+                context=context,
+                config=config,
+                role=role,
+                history_codec_id=history_codec_id,
+                reason=SentinelFallbackReason.INVALID_POLICY_OUTPUT,
+                check="r2_2_policy_is_shadow_only",
+                started=started,
+                transaction=receipt_transaction,
+                policy_evaluated=False,
+            )
+
         try:
             self._validate_request_schema(raw)
             if not history_codec_id:
@@ -980,96 +1093,152 @@ class PromptSentinel:
                 timeout_ms=config.policy_timeout_ms,
                 evaluation_started=policy_evaluation_started,
             )
-            try:
-                policy_output_bytes = canonical_json_bytes(_policy_output_canonical_view(output))
-                policy_output_sha256 = sha256(policy_output_bytes).hexdigest()
-                output_snapshot = _snapshot_policy_output(
-                    output,
-                    canonical_bytes=policy_output_bytes,
-                    canonical_digest=policy_output_sha256,
-                )
-                output = output_snapshot.output
-                self._validate_policy_output_admission(output)
-                if output.transformation_plan is None:
-                    self._validate_no_plan_decisions(output)
-                else:
-                    self._validate_decision_plan_binding(output)
-                    validate_plan(raw, ir, output.transformation_plan)
-            except _EvaluationFailure:
-                raise
-            except Exception as exc:
-                raise _EvaluationFailure(
-                    SentinelFallbackReason.INVALID_POLICY_OUTPUT,
-                    "policy_output_validation_exception",
-                ) from exc
-
             candidate = copy_json(raw)
-            render_result: RenderResult | None = None
-            checks = ["request_schema", "codec_extract", "policy_output_schema"]
-            if output.transformation_plan is not None:
+            legacy_render_result: RenderResult | None = None
+            runtime_render_result: RuntimeRenderResultV1 | None = None
+            decision_kinds: tuple[SentinelDecisionKind, ...]
+            checks = ["request_schema", "codec_extract"]
+            if self._runtime_evidence_policy:
                 try:
-                    expected_render_result = render_request(
-                        copy_json(raw),
+                    runtime_output_snapshot = _snapshot_runtime_policy_output(output)
+                    policy_output_sha256 = runtime_output_snapshot.sha256
+                    runtime_output = runtime_output_snapshot.output
+                except _EvaluationFailure:
+                    raise
+                except Exception as exc:
+                    raise _EvaluationFailure(
+                        SentinelFallbackReason.INVALID_POLICY_OUTPUT,
+                        "r2_2_policy_output_validation_exception",
+                    ) from exc
+                if not runtime_output.decisions:
+                    raise _EvaluationFailure(
+                        SentinelFallbackReason.INVARIANT_FAILURE,
+                        "r2_2_zero_target_r21_v1_unrepresentable",
+                    )
+                try:
+                    runtime_render_result = render_runtime_admitted_plan(
+                        raw,
                         ir,
-                        output.transformation_plan,
-                        execution_mode=ExecutionMode.RUNTIME,
-                        failure_policy=FailurePolicy.FAIL_OPEN_ORIGINAL,
+                        runtime_output.admitted_plan,
+                    )
+                    validate_runtime_render_result(
+                        raw,
+                        ir,
+                        runtime_output.admitted_plan,
+                        runtime_render_result,
                     )
                 except Exception as exc:
                     raise _EvaluationFailure(
                         SentinelFallbackReason.INVARIANT_FAILURE,
-                        "independent_render_exception",
+                        "r2_2_runtime_render_invalid",
                     ) from exc
-                try:
-                    observed_render_result = codec.render(
-                        copy_json(raw),
-                        deepcopy(ir),
-                        deepcopy(output.transformation_plan),
-                        execution_mode=ExecutionMode.RUNTIME,
-                        failure_policy=FailurePolicy.FAIL_OPEN_ORIGINAL,
-                    )
-                except PortableContractError as exc:
-                    raise _EvaluationFailure(
-                        SentinelFallbackReason.RENDERER_FAILURE,
-                        "render_failed",
-                    ) from exc
-                except Exception as exc:
-                    raise _EvaluationFailure(
-                        SentinelFallbackReason.RENDERER_FAILURE,
-                        "render_exception",
-                    ) from exc
-                try:
-                    if canonical_json_bytes(
-                        _render_result_canonical_view(observed_render_result)
-                    ) != canonical_json_bytes(
-                        _render_result_canonical_view(expected_render_result)
-                    ):
-                        raise SentinelContractError(
-                            "renderer result differs from precomputed G1.2 result"
-                        )
-                    self._validate_render_result(raw, expected_render_result)
-                except (PortableContractError, SentinelContractError) as exc:
-                    raise _EvaluationFailure(
-                        SentinelFallbackReason.INVARIANT_FAILURE,
-                        "invariant_validation_failed",
-                    ) from exc
-                except Exception as exc:
-                    raise _EvaluationFailure(
-                        SentinelFallbackReason.INVARIANT_FAILURE,
-                        "invariant_validation_exception",
-                    ) from exc
-                render_result = expected_render_result
-                candidate = copy_json(render_result.rendered_request)
+                candidate = runtime_render_result.candidate_request
+                decision_kinds = tuple(
+                    SentinelDecisionKind(item.proposed_operation.value)
+                    for item in runtime_output.decisions
+                )
                 checks.extend(
-                    (
-                        "g1_2_exact_span_render",
-                        "independent_render_recomputed",
-                        "reversible_source_mapping",
-                        "caller_input_immutable",
+                    dict.fromkeys(
+                        (
+                            "r2_2_runtime_output_schema",
+                            *runtime_output.validation_checks,
+                            *runtime_render_result.validation_checks,
+                            "r2_2_shadow_only",
+                            "caller_input_immutable",
+                        )
                     )
                 )
             else:
-                checks.append("no_transform_proposed")
+                try:
+                    policy_output_bytes = canonical_json_bytes(
+                        _policy_output_canonical_view(output)
+                    )
+                    policy_output_sha256 = sha256(policy_output_bytes).hexdigest()
+                    output_snapshot = _snapshot_policy_output(
+                        output,
+                        canonical_bytes=policy_output_bytes,
+                        canonical_digest=policy_output_sha256,
+                    )
+                    legacy_output = output_snapshot.output
+                    self._validate_policy_output_admission(legacy_output)
+                    if legacy_output.transformation_plan is None:
+                        self._validate_no_plan_decisions(legacy_output)
+                    else:
+                        self._validate_decision_plan_binding(legacy_output)
+                        validate_plan(raw, ir, legacy_output.transformation_plan)
+                except _EvaluationFailure:
+                    raise
+                except Exception as exc:
+                    raise _EvaluationFailure(
+                        SentinelFallbackReason.INVALID_POLICY_OUTPUT,
+                        "policy_output_validation_exception",
+                    ) from exc
+                checks.append("policy_output_schema")
+                decision_kinds = tuple(item.kind for item in legacy_output.decisions)
+                if legacy_output.transformation_plan is not None:
+                    try:
+                        expected_render_result = render_request(
+                            copy_json(raw),
+                            ir,
+                            legacy_output.transformation_plan,
+                            execution_mode=ExecutionMode.RUNTIME,
+                            failure_policy=FailurePolicy.FAIL_OPEN_ORIGINAL,
+                        )
+                    except Exception as exc:
+                        raise _EvaluationFailure(
+                            SentinelFallbackReason.INVARIANT_FAILURE,
+                            "independent_render_exception",
+                        ) from exc
+                    try:
+                        observed_render_result = codec.render(
+                            copy_json(raw),
+                            deepcopy(ir),
+                            deepcopy(legacy_output.transformation_plan),
+                            execution_mode=ExecutionMode.RUNTIME,
+                            failure_policy=FailurePolicy.FAIL_OPEN_ORIGINAL,
+                        )
+                    except PortableContractError as exc:
+                        raise _EvaluationFailure(
+                            SentinelFallbackReason.RENDERER_FAILURE,
+                            "render_failed",
+                        ) from exc
+                    except Exception as exc:
+                        raise _EvaluationFailure(
+                            SentinelFallbackReason.RENDERER_FAILURE,
+                            "render_exception",
+                        ) from exc
+                    try:
+                        if canonical_json_bytes(
+                            _render_result_canonical_view(observed_render_result)
+                        ) != canonical_json_bytes(
+                            _render_result_canonical_view(expected_render_result)
+                        ):
+                            raise SentinelContractError(
+                                "renderer result differs from precomputed G1.2 result"
+                            )
+                        self._validate_render_result(raw, expected_render_result)
+                    except (PortableContractError, SentinelContractError) as exc:
+                        raise _EvaluationFailure(
+                            SentinelFallbackReason.INVARIANT_FAILURE,
+                            "invariant_validation_failed",
+                        ) from exc
+                    except Exception as exc:
+                        raise _EvaluationFailure(
+                            SentinelFallbackReason.INVARIANT_FAILURE,
+                            "invariant_validation_exception",
+                        ) from exc
+                    legacy_render_result = expected_render_result
+                    candidate = copy_json(legacy_render_result.rendered_request)
+                    checks.extend(
+                        (
+                            "g1_2_exact_span_render",
+                            "independent_render_recomputed",
+                            "reversible_source_mapping",
+                            "caller_input_immutable",
+                        )
+                    )
+                else:
+                    checks.append("no_transform_proposed")
 
             if canonical_sha256(request) != raw_sha256:
                 raise _EvaluationFailure(
@@ -1093,7 +1262,11 @@ class PromptSentinel:
             edit_applied = config.mode is SentinelMode.ACTIVE and would_edit
             final = candidate if edit_applied else raw
             final_json = canonical_json_bytes(final)
-            diff_sha256 = self._diff_sha256(render_result)
+            diff_sha256 = (
+                runtime_render_result.exact_diff_sha256
+                if runtime_render_result is not None
+                else self._diff_sha256(legacy_render_result)
+            )
             receipt = SentinelReceipt(
                 logical_call_id=context.logical_call_id,
                 host_id=context.host_id,
@@ -1110,7 +1283,7 @@ class PromptSentinel:
                 candidate_request_sha256=candidate_sha256,
                 final_request_sha256=canonical_sha256(final),
                 exact_diff_sha256=diff_sha256,
-                decision_kinds=tuple(item.kind for item in output.decisions),
+                decision_kinds=decision_kinds,
                 policy_evaluated=True,
                 would_edit=would_edit,
                 edit_applied=edit_applied,
@@ -1168,13 +1341,22 @@ class PromptSentinel:
         history_ir: Any,
         timeout_ms: int,
         evaluation_started: Event,
-    ) -> SentinelPolicyOutput:
+    ) -> SentinelPolicyOutput | RuntimeSentinelPolicyOutputV1:
         """Run the replaceable backend behind a real, bounded daemon wait."""
 
         finished = Event()
         cancel_before_policy = Event()
         policy_start_gate = Lock()
         outcome: list[tuple[bool, Any]] = []
+        policy_started = self._clock_ns()
+        execution_fence = (
+            _PolicyExecutionFence(
+                deadline_ns=policy_started + timeout_ms * 1_000_000,
+                clock_ns=self._clock_ns,
+            )
+            if self._runtime_evidence_policy
+            else None
+        )
         thread_context = copy_context()
         policy_request = copy_json(request)
         policy_call_context = SentinelContext(
@@ -1190,11 +1372,20 @@ class PromptSentinel:
                     if cancel_before_policy.is_set():
                         return
                     evaluation_started.set()
-                value = self._policy.evaluate(
-                    request=policy_request,
-                    context=policy_call_context,
-                    history_ir=policy_history_ir,
-                )
+                if execution_fence is None:
+                    value = self._policy.evaluate(
+                        request=policy_request,
+                        context=policy_call_context,
+                        history_ir=policy_history_ir,
+                    )
+                else:
+                    runtime_policy = cast(RuntimeEvidencePolicyV1, self._policy)
+                    value = runtime_policy.evaluate_with_control(
+                        request=policy_request,
+                        context=policy_call_context,
+                        history_ir=policy_history_ir,
+                        execution_control=execution_fence,
+                    )
             except BaseException as error:
                 outcome.append((False, error))
             else:
@@ -1208,17 +1399,20 @@ class PromptSentinel:
             name="mobileworld-prompt-sentinel-policy",
             daemon=True,
         )
-        policy_started = self._clock_ns()
         worker.start()
         if not finished.wait(timeout_ms / 1000):
             with policy_start_gate:
                 cancel_before_policy.set()
+            if execution_fence is not None:
+                execution_fence.cancel()
             raise _EvaluationFailure(
                 SentinelFallbackReason.POLICY_TIMEOUT,
                 "policy_deadline_exceeded",
             )
         policy_elapsed = self._clock_ns() - policy_started
         if policy_elapsed > timeout_ms * 1_000_000:
+            if execution_fence is not None:
+                execution_fence.cancel()
             raise _EvaluationFailure(
                 SentinelFallbackReason.POLICY_TIMEOUT,
                 "policy_latency_budget_exceeded",
