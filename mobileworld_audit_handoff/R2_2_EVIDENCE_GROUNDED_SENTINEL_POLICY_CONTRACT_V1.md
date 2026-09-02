@@ -1,6 +1,6 @@
 # R2.2 Evidence-Grounded Sentinel Policy Contract v1
 
-Status: **CANDIDATE pending owner re-review for ALE-325 CPU/offline/fake SHADOW**
+Status: **ACCEPTED for ALE-325 CPU/offline/injected-fake-Responses, SHADOW-only repository engineering scope**
 Contract ID: `mobileworld.runtime.evidence-grounded-sentinel-policy/contract-v1`
 Evidence packet schema: `schemas/r2_2/evidence_packet.v1.schema.json`
 Proposal schema: `schemas/r2_2/policy_proposal.v1.schema.json`

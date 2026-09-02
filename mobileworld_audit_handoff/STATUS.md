@@ -53,13 +53,13 @@ provider/parser/action 路径；未实现自动 validity policy、multi-path rub
 actor/Sentinel 模型或 live transformation。Linear 工作流状态由 owner 单独管理，本仓库交付
 没有修改 Linear。**
 
-**Runtime ALE-325 / R2.2 当前是待 owner 复审的 repository candidate，不是 Done。**
-修正候选 commit 为 `3940ff7484c0236ac321ea210fc8266e282e5d27`，范围仍严格限定为
+**Runtime ALE-325 / R2.2 的 repository engineering checkpoint 已由 owner 接受。**
+接受的实现 commit 为 `3940ff7484c0236ac321ea210fc8266e282e5d27`，范围仍严格限定为
 CPU/offline/injected-fake-Responses、SHADOW-only。它提供因果 cutoff 约束的 evidence
 packet、GPT-5.6 Sol Responses request/strict proposal contract、独立 deterministic
 admission，以及 `KEEP / DROP / KEEP_UNCERTAIN`；transition status 不能单独授权 material
 edit，invalidation 必须晚于 target 和所有 cited support，`REPLACE` 在 typed/template fact
-合同完成前一律 fail closed。该 candidate 没有调用真实模型/provider、网络、GPU、
+合同完成前一律 fail closed。该 accepted checkpoint 没有调用真实模型/provider、网络、GPU、
 MobileWorld backend/GUI/tool/action 或 replay；没有把两个 G1.5 v1 Codec 改成
 `live_ready=true`，也没有授权 R2.4。Linear 工作流状态仍由 owner 单独管理。**
 
@@ -1050,4 +1050,15 @@ Failure-path behavior: transition-status-only and reversed-temporal proposals pu
 Verification: focused R2.2 passed 74/74; the R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 584/584; and the complete MobileWorld suite passed 1669/1669. Ruff check/format, all three Draft 2020-12 schemas, and Git diff checks passed. The repository-default mypy invocation is not green and reproducibly reports 59 errors in 4 files across the seven R2.2 modules, correcting the earlier historical claim that mypy passed; this is recorded as non-blocking technical debt rather than hidden. Independent review reported GO only for these three corrections; owner acceptance remains pending.
 
 Authority: this correction used CPU/offline tests and injected fake transport only. It called no live model/provider, network, GPU, backend, replay, GUI, tool, or action; created no persistent external artifact; did not push, merge, or modify Linear. Linear remains owner-managed.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-325 / R2.2 owner acceptance: the owner accepted corrected implementation commit `3940ff7484c0236ac321ea210fc8266e282e5d27` within the bounded CPU/offline/injected-fake-Responses, SHADOW-only repository engineering scope. The accepted-status contract is SHA-256 `98e4a42de6eb87cc0559ed2976ae191e7633dcf29dfcde8592781a9886535a82` / 29,548 bytes; its technical clauses are unchanged from the correction candidate. Runtime Epic 2 is now 2/6 repository engineering stories accepted, and ALE-325 was separately moved to Done in Linear under the owner's explicit instruction.
+
+Accepted behavior: `PRIOR_TRANSITION_STATUS` is weak evidence and cannot independently authorize a material edit; temporal invalidation must follow the target and every cited supporting observation; and every `REPLACE` proposal or runtime plan fails closed before admission/rendering. R2.2 v1 admits only `KEEP`, `DROP`, and `KEEP_UNCERTAIN`. Qwen and MAI SHADOW paths preserve exact Original, and the automatic backend remains an untrusted proposer behind deterministic packet, evidence, temporal, span, renderer, and non-history-invariance checks.
+
+Verification: owner re-review and independent checks found no remaining P0/P1. Focused R2.2 passed 74/74, the affected R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 584/584, the complete MobileWorld suite passed 1669/1669, and the targeted former-P1 subset passed 16/16. Ruff check/format, all three Draft 2020-12 schemas, and Git diff checks passed. The default mypy invocation still reports 59 `redundant-cast` / `redundant-expr` errors in 4 files across 7 modules; detailed phased metrics remain non-blocking observability debt.
+
+Boundary: acceptance does not establish live provider/model readiness, ACTIVE deployment safety, semantic accuracy, task-success improvement, or causal effect. No live model/provider, external network, GPU, backend, replay, GUI, tool, or action was used. R2.3 / ALE-326 is the next mechanically available repository story and owns the independent multi-path rubric axis.
 ```

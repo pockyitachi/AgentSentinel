@@ -75,11 +75,11 @@ revived as a separate causal-evaluation effort after an explicit owner decision.
 
 ### Active runtime work
 
-Runtime Epic 2 has 1/6 repository engineering stories accepted. ALE-324 / R2.1
+Runtime Epic 2 has 2/6 repository engineering stories accepted. ALE-324 / R2.1
 has an accepted CPU/fake checkpoint at commit
-`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. ALE-325 / R2.2 has a corrected
-CPU/offline/fake SHADOW candidate at commit
-`3940ff7484c0236ac321ea210fc8266e282e5d27`, pending owner re-review. R2.1
+`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. ALE-325 / R2.2 has an accepted
+CPU/offline/injected-fake-Responses, SHADOW-only checkpoint at commit
+`3940ff7484c0236ac321ea210fc8266e282e5d27`. R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
 History-IR snapshots,
 precomputed renderer-result binding, worker-owned policy-evaluation census, and
@@ -178,13 +178,12 @@ as frozen G1.2 curated plans.
 `ACTIVE` may send a transformed request only inside deterministic CPU/fake
 tests until a later live authorization exists.
 
-## 4A. Candidate scope: R2.2 CPU/offline/fake SHADOW policy
+## 4A. Accepted scope: R2.2 CPU/offline/fake SHADOW policy
 
 R2.2 adds a separate automatic runtime proposal/admission overlay without
 changing the frozen G1.2 curated-plan provenance or the accepted R2.1 v1
-receipt. The corrected candidate is commit
-`3940ff7484c0236ac321ea210fc8266e282e5d27` and remains pending owner
-re-review.
+receipt. The owner-accepted repository implementation is commit
+`3940ff7484c0236ac321ea210fc8266e282e5d27`.
 
 Its module-owned evidence builder binds one exact actor request, logical call,
 host/Codec identity, complete task instruction, current screenshot, causal
@@ -201,7 +200,7 @@ metrics. It reuses the R2.1 logical-call cache, recursion bypass, deadline, and
 Original fallback. Qwen and MAI captured fixtures cover the admitted decisions
 and REPLACE rejection, but neither frozen G1.5 Codec becomes `live_ready=true`.
 
-The candidate used no live model/provider, network, GPU, backend, GUI,
+The accepted checkpoint used no live model/provider, network, GPU, backend, GUI,
 tool, action, replay, or external data source. The checked-in OpenAI adapter is
 inert without explicit owner authorization. R2.4 must still add real evidence
 plumbing, runtime target discovery, a cancellable live transport/attempt
@@ -409,9 +408,8 @@ commit, and focused regressions were verified. Do not claim an automatic
 live/model-backed policy, rubric, live transformation, success-rate gain, or
 causal effect before the corresponding later work actually exists.
 
-The corrected R2.2 repository candidate is
-`3940ff7484c0236ac321ea210fc8266e282e5d27`. It remains pending owner
-re-review and is not counted as accepted or Done. It tests a bounded
+The corrected R2.2 repository checkpoint is accepted at
+`3940ff7484c0236ac321ea210fc8266e282e5d27`. It tests a bounded
 CPU/offline/fake SHADOW policy and its contracts, not live readiness,
 effectiveness, or permission to start R2.4 resources. Linear remains
 owner-managed.

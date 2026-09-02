@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 1/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 has a corrected CPU/offline/fake SHADOW candidate at `3940ff7484c0236ac321ea210fc8266e282e5d27` pending owner re-review. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`. Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -88,7 +88,7 @@ PromptSentinel.before_model_call(
 ```
 
 At the accepted R2.1 checkpoint, only deterministic no-op/fake policies were
-available. The R2.2 candidate boundary below adds automatic-policy contracts
+available. The accepted R2.2 boundary below adds automatic-policy contracts
 and fake-transport behavior; multi-path rubric semantics and live model-backed
 Sentinel decisions still belong to later stories.
 
@@ -149,11 +149,10 @@ Production-shaped request construction for the first two hosts is in
 `MobileWorld/src/mobile_world/agents/implementations/mai_ui_agent.py`.
 Confirm the live code rather than trusting old line numbers.
 
-## Candidate implementation boundary: ALE-325 / R2.2
+## Accepted implementation boundary: ALE-325 / R2.2
 
-Commit `3940ff7484c0236ac321ea210fc8266e282e5d27` is the corrected
-**Evidence-Grounded SentinelPolicy** repository candidate pending owner
-re-review. Its tested boundary is CPU-only, offline, injected-fake-Responses,
+Commit `3940ff7484c0236ac321ea210fc8266e282e5d27` is the owner-accepted
+**Evidence-Grounded SentinelPolicy** repository checkpoint. Its tested boundary is CPU-only, offline, injected-fake-Responses,
 and SHADOW-only. It does not authorize or claim a live OpenAI call, model
 evaluation, network use, GPU use, MobileWorld action, ACTIVE deployment, or
 effectiveness result.
@@ -189,8 +188,8 @@ ALE-324 / R2.1 pre-call seam
 ```
 
 R2.2's proposal vocabulary includes `KEEP / DROP / REPLACE / KEEP_UNCERTAIN`,
-grounded only in causally available GUI/execution evidence. The current v1
-candidate admits `KEEP / DROP / KEEP_UNCERTAIN`; `REPLACE` is reserved and
+grounded only in causally available GUI/execution evidence. The accepted v1
+checkpoint admits `KEEP / DROP / KEEP_UNCERTAIN`; `REPLACE` is reserved and
 fails closed. R2.3 is a separate AND-OR path axis: it does not establish truth
 or recommend an action, and `ARCHIVE` remains SHADOW-only initially. R2.4 live
 smoke and R2.5 real execution require new resource/run authorization.
