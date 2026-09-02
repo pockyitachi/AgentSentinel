@@ -75,12 +75,13 @@ revived as a separate causal-evaluation effort after an explicit owner decision.
 
 ### Active runtime work
 
-Runtime Epic 2 is 2/6 complete at the repository engineering layer. ALE-324 /
-R2.1 has an accepted CPU/fake checkpoint at commit
-`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. ALE-325 / R2.2 has an
-accepted CPU/offline/fake SHADOW checkpoint at commit
-`3b9e721717df6218ff348945fd0dc7f30aca68f3`. R2.1 supersedes the `58820a8`
-checkpoint after recursively trusted policy-output and History-IR snapshots,
+Runtime Epic 2 has 1/6 repository engineering stories accepted. ALE-324 / R2.1
+has an accepted CPU/fake checkpoint at commit
+`18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. ALE-325 / R2.2 has a corrected
+CPU/offline/fake SHADOW candidate at commit
+`3940ff7484c0236ac321ea210fc8266e282e5d27`, pending owner re-review. R2.1
+supersedes the `58820a8` checkpoint after recursively trusted policy-output and
+History-IR snapshots,
 precomputed renderer-result binding, worker-owned policy-evaluation census, and
 detached receipt-transaction hardening. Linear workflow state remains owner-
 managed. The repository dependency sequence is:
@@ -177,28 +178,30 @@ as frozen G1.2 curated plans.
 `ACTIVE` may send a transformed request only inside deterministic CPU/fake
 tests until a later live authorization exists.
 
-## 4A. Accepted scope: R2.2 CPU/offline/fake SHADOW policy
+## 4A. Candidate scope: R2.2 CPU/offline/fake SHADOW policy
 
 R2.2 adds a separate automatic runtime proposal/admission overlay without
 changing the frozen G1.2 curated-plan provenance or the accepted R2.1 v1
-receipt. The accepted checkpoint is commit
-`3b9e721717df6218ff348945fd0dc7f30aca68f3`.
+receipt. The corrected candidate is commit
+`3940ff7484c0236ac321ea210fc8266e282e5d27` and remains pending owner
+re-review.
 
 Its module-owned evidence builder binds one exact actor request, logical call,
 host/Codec identity, complete task instruction, current screenshot, causal
 cutoff, role-projected evidence, and exact History IR targets. The injected
 fake Responses transport returns a closed proposal; independent deterministic
-admission supports `KEEP`, `DROP`, `REPLACE`, and `KEEP_UNCERTAIN`. Material
-operations are source-bound, history-only, reversible, and SHADOW-only;
-replacement bytes must come from a pre-admitted declarative fact and cannot
-carry an action/tool directive or retroactive actor speech.
+admission supports `KEEP`, `DROP`, and `KEEP_UNCERTAIN`. Transition status is
+weak evidence, and invalidation must follow the target plus every cited
+support. `REPLACE` is schema-reserved but fails closed before admission and
+rendering until a typed/template fact representation exists. Admitted DROP
+operations are source-bound, history-only, reversible, and SHADOW-only.
 
 R2.2 emits a separate hash-only policy receipt and best-effort low-cardinality
 metrics. It reuses the R2.1 logical-call cache, recursion bypass, deadline, and
-Original fallback. Qwen and MAI captured fixtures cover all four decisions,
-but neither frozen G1.5 Codec becomes `live_ready=true`.
+Original fallback. Qwen and MAI captured fixtures cover the admitted decisions
+and REPLACE rejection, but neither frozen G1.5 Codec becomes `live_ready=true`.
 
-This checkpoint called no live model/provider, network, GPU, backend, GUI,
+The candidate used no live model/provider, network, GPU, backend, GUI,
 tool, action, replay, or external data source. The checked-in OpenAI adapter is
 inert without explicit owner authorization. R2.4 must still add real evidence
 plumbing, runtime target discovery, a cancellable live transport/attempt
@@ -406,8 +409,9 @@ commit, and focused regressions were verified. Do not claim an automatic
 live/model-backed policy, rubric, live transformation, success-rate gain, or
 causal effect before the corresponding later work actually exists.
 
-The R2.2 repository checkpoint is accepted only at commit
-`3b9e721717df6218ff348945fd0dc7f30aca68f3`. It proves a bounded
+The corrected R2.2 repository candidate is
+`3940ff7484c0236ac321ea210fc8266e282e5d27`. It remains pending owner
+re-review and is not counted as accepted or Done. It tests a bounded
 CPU/offline/fake SHADOW policy and its contracts, not live readiness,
 effectiveness, or permission to start R2.4 resources. Linear remains
 owner-managed.
