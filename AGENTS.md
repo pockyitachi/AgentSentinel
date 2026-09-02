@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a corrected CPU/offline/injected-fake, SHADOW-only candidate at `54381b7b56b06d5aa262005af62b65269b4cf0a6`, pending owner review and not counted as accepted. Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -89,8 +89,8 @@ PromptSentinel.before_model_call(
 
 At the accepted R2.1 checkpoint, only deterministic no-op/fake policies were
 available. The accepted R2.2 boundary below adds automatic-policy contracts
-and fake-transport behavior; multi-path rubric semantics and live model-backed
-Sentinel decisions still belong to later stories.
+and fake-transport behavior; the R2.3 candidate adds the separate multi-path
+rubric axis. Live model-backed Sentinel decisions still belong to later stories.
 
 The executable R2.1 edit surface is deterministic `DROP` only. Every `REPLACE`
 plan and renderer list insertion fails closed to Original. R2.2 adds a separate
@@ -173,8 +173,52 @@ The checked-in OpenAI Responses adapter is inert without explicit owner
 authorization and is not exercised by this checkpoint. R2.4 must add real
 Collector-to-evidence plumbing, runtime span discovery/capability overlays, a
 cancellable live transport/attempt receipt, secrets/resource authority, and a
-versioned zero-target bridge. R2.3 remains the next mechanically available
-repository story and owns only the separate multi-path rubric axis.
+versioned zero-target bridge.
+
+## Candidate implementation boundary: ALE-326 / R2.3
+
+Commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` is the corrected
+**Multi-Path Rubric Tracker** repository candidate pending owner review. Its
+tested boundary is CPU-only, offline, injected-fake, and SHADOW-only. It does
+not authorize or claim a live model/provider call, network or GPU use,
+MobileWorld execution, active history mutation, action selection, or task
+effectiveness.
+
+R2.3 provides a versioned exact-span task rubric with explicit acyclic `AND` /
+`OR` paths plus `OTHER_UNKNOWN`, generate-once caching, and explicit
+hash-bound revision. Its history-free packet binds the task, causal cutoff,
+one current observation event, prior completed transitions, and prior rubric
+state; actor history, request content, model identity, History IR, and future
+outcomes are excluded. Generic transition status, post-UI change, and free-form
+tool results are weak evidence and cannot independently force a milestone.
+Conflicting or insufficient evidence yields `unknown`.
+
+From admitted milestone records, the runtime uses one memoized shared-DAG
+derivation for path state and alternative-aware frontier, and independently
+recomputes both during state validation. Backend rubric/revision/proposal
+inputs and outputs are recursively rebuilt as detached trusted snapshots before
+backend dispatch, hashing, admission, storage, or receipts. Pre-call private
+authority snapshots and hashes are never shared with the backend; the backend
+receives a second detached copy, and public properties, results, and cache hits
+return fresh detached graphs. One shared trusted-graph walker rejects cycles,
+depth beyond 64, or more than 262,144 total visits including primitive leaves.
+Semantic graph cycle/reachability validation, gate-state evaluation, and
+frontier traversal use explicit stacks plus children-first dynamic programming,
+so legal graphs through the 512-gate limit do not consume Python call-stack
+depth and are independent of gate declaration order.
+Post-state record relevance remains derived, but this checkpoint has no trusted
+record-level R2.2 `SUPPORTED + KEEP` resolver: arbitrary support hashes have no
+archive authority, every record remains `RETAIN`, and `ARCHIVE_SHADOW` is
+schema-reserved until R2.4 supplies that resolver. Hash-only receipts include
+measured backend-failure latency; cumulative call census, cache metrics, and
+frozen-label-only calibration remain derived sidecars. Qwen and MAI are
+represented only by captured CPU fixtures; there is no host/model-specific
+runtime branch.
+
+R2.4 is now the next mechanically available repository dependency after owner
+review of this candidate, but any live vertical slice, provider/model use,
+resource provisioning, GPU, backend, GUI, tool, action, or replay still needs
+separate explicit owner authorization.
 
 ## Runtime Epic 2 sequence
 

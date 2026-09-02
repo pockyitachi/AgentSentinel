@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_3/tracker_output.v1.schema.json",
+  "title": "R2.3 Rubric Tracker Output v1",
+  "description": "Closed discriminated output for an untrusted milestone proposal, deterministic tracking state, or post-state record relevance. No variant can authorize factual truth, DROP, REPLACE, actions, tools, or active ARCHIVE.",
+  "oneOf": [
+    {"$ref": "#/$defs/milestoneProposal"},
+    {"$ref": "#/$defs/trackingState"},
+    {"$ref": "#/$defs/pathRelevance"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "runtimeId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "semanticId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+    "rubricBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rubric_id", "rubric_version", "rubric_sha256"],
+      "properties": {"rubric_id": {"$ref": "#/$defs/semanticId"}, "rubric_version": {"type": "integer", "minimum": 1}, "rubric_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["factual_truth_authority", "history_edit_authority", "action_or_tool_authority", "archive_execution_authority"],
+      "properties": {"factual_truth_authority": {"const": false}, "history_edit_authority": {"const": false}, "action_or_tool_authority": {"const": false}, "archive_execution_authority": {"const": false}}
+    },
+    "topology": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "independent_grounding_claim_eligible"],
+      "properties": {"kind": {"enum": ["ISOLATED_HISTORY_FREE", "JOINT_NON_INDEPENDENT"]}, "independent_grounding_claim_eligible": {"type": "boolean"}},
+      "allOf": [{"if": {"properties": {"kind": {"const": "ISOLATED_HISTORY_FREE"}}, "required": ["kind"]}, "then": {"properties": {"independent_grounding_claim_eligible": {"const": true}}}, "else": {"properties": {"independent_grounding_claim_eligible": {"const": false}}}}]
+    },
+    "evidenceRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_id", "payload_sha256", "relation"],
+      "properties": {"evidence_id": {"$ref": "#/$defs/semanticId"}, "payload_sha256": {"$ref": "#/$defs/sha256"}, "relation": {"enum": ["SUPPORTS_STATE", "REFUTES_STATE", "OBSERVES_PROGRESS"]}}
+    },
+    "milestoneState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["milestone_id", "state", "evidence_refs", "reason_code"],
+      "properties": {
+        "milestone_id": {"$ref": "#/$defs/semanticId"},
+        "state": {"enum": ["pending", "in_progress", "satisfied", "violated", "unknown"]},
+        "evidence_refs": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/evidenceRef"}},
+        "reason_code": {"enum": ["NOT_STARTED", "CURRENT_GUI_SUPPORT", "COMPLETED_TRANSITION_SUPPORT", "CURRENT_GUI_REFUTATION", "COMPLETED_TRANSITION_REFUTATION", "PROGRESS_OBSERVED", "PRESERVE_PRIOR_STATE", "AMBIGUOUS_GUI", "INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"]}
+      },
+      "allOf": [
+        {"if": {"properties": {"state": {"const": "pending"}}, "required": ["state"]}, "then": {"properties": {"evidence_refs": {"maxItems": 0}, "reason_code": {"const": "NOT_STARTED"}}}},
+        {"if": {"allOf": [{"properties": {"state": {"const": "satisfied"}}, "required": ["state"]}, {"not": {"properties": {"reason_code": {"const": "PRESERVE_PRIOR_STATE"}}, "required": ["reason_code"]}}]}, "then": {"properties": {"evidence_refs": {"minItems": 1, "contains": {"type": "object", "properties": {"relation": {"const": "SUPPORTS_STATE"}}, "required": ["relation"]}, "minContains": 1}, "reason_code": {"enum": ["CURRENT_GUI_SUPPORT", "COMPLETED_TRANSITION_SUPPORT"]}}}},
+        {"if": {"allOf": [{"properties": {"state": {"const": "violated"}}, "required": ["state"]}, {"not": {"properties": {"reason_code": {"const": "PRESERVE_PRIOR_STATE"}}, "required": ["reason_code"]}}]}, "then": {"properties": {"evidence_refs": {"minItems": 1, "contains": {"type": "object", "properties": {"relation": {"const": "REFUTES_STATE"}}, "required": ["relation"]}, "minContains": 1}, "reason_code": {"enum": ["CURRENT_GUI_REFUTATION", "COMPLETED_TRANSITION_REFUTATION"]}}}},
+        {"if": {"allOf": [{"properties": {"state": {"const": "in_progress"}}, "required": ["state"]}, {"not": {"properties": {"reason_code": {"const": "PRESERVE_PRIOR_STATE"}}, "required": ["reason_code"]}}]}, "then": {"properties": {"evidence_refs": {"minItems": 1, "contains": {"type": "object", "properties": {"relation": {"const": "OBSERVES_PROGRESS"}}, "required": ["relation"]}, "minContains": 1}, "reason_code": {"const": "PROGRESS_OBSERVED"}}}},
+        {"if": {"properties": {"reason_code": {"const": "PRESERVE_PRIOR_STATE"}}, "required": ["reason_code"]}, "then": {"properties": {"state": {"enum": ["in_progress", "satisfied", "violated", "unknown"]}}}},
+        {"if": {"properties": {"state": {"const": "unknown"}}, "required": ["state"]}, "then": {"properties": {"reason_code": {"enum": ["PRESERVE_PRIOR_STATE", "AMBIGUOUS_GUI", "INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"]}}}}
+      ]
+    },
+    "pathState": {"type": "object", "additionalProperties": false, "required": ["path_id", "state"], "properties": {"path_id": {"$ref": "#/$defs/semanticId"}, "state": {"enum": ["viable", "inactive", "unknown"]}}},
+    "frontier": {"type": "object", "additionalProperties": false, "required": ["path_id", "milestone_id"], "properties": {"path_id": {"$ref": "#/$defs/semanticId"}, "milestone_id": {"$ref": "#/$defs/semanticId"}}},
+    "actorVisible": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "exact_text", "text_sha256", "content_kind", "independently_configured", "actor_request_injected", "history_filtering_controlled"],
+      "properties": {"enabled": {"type": "boolean"}, "exact_text": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 8192}]}, "text_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "content_kind": {"const": "DETERMINISTIC_STATUS_ONLY"}, "independently_configured": {"const": true}, "actor_request_injected": {"const": false}, "history_filtering_controlled": {"const": false}},
+      "allOf": [{"if": {"properties": {"enabled": {"const": false}}, "required": ["enabled"]}, "then": {"properties": {"exact_text": {"type": "null"}, "text_sha256": {"type": "null"}}}, "else": {"properties": {"exact_text": {"type": "string", "minLength": 1}, "text_sha256": {"$ref": "#/$defs/sha256"}}}}]
+    },
+    "milestoneProposal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["proposal_id", "packet_id", "packet_sha256", "rubric_binding", "prior_state_sha256", "proposal_status", "milestone_states", "authority", "output_kind", "schema_version"],
+      "properties": {"proposal_id": {"$ref": "#/$defs/semanticId"}, "packet_id": {"$ref": "#/$defs/runtimeId"}, "packet_sha256": {"$ref": "#/$defs/sha256"}, "rubric_binding": {"$ref": "#/$defs/rubricBinding"}, "prior_state_sha256": {"$ref": "#/$defs/sha256"}, "proposal_status": {"enum": ["COMPLETE", "ABSTAIN"]}, "milestone_states": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/milestoneState"}}, "authority": {"$ref": "#/$defs/authority"}, "output_kind": {"const": "MILESTONE_PROPOSAL"}, "schema_version": {"const": "mobileworld.runtime.rubric-tracker-output/v1"}},
+      "allOf": [{"if": {"properties": {"proposal_status": {"const": "ABSTAIN"}}, "required": ["proposal_status"]}, "then": {"properties": {"milestone_states": {"items": {"allOf": [{"$ref": "#/$defs/milestoneState"}, {"properties": {"state": {"const": "unknown"}}}]}}}}}]
+    },
+    "trackingState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state_id", "rubric_binding", "state_version", "source_packet_id", "logical_call_id", "prior_state_sha256", "milestone_states", "path_states", "frontier", "topology", "actor_visible", "authority", "output_kind", "schema_version"],
+      "properties": {"state_id": {"$ref": "#/$defs/semanticId"}, "rubric_binding": {"$ref": "#/$defs/rubricBinding"}, "state_version": {"type": "integer", "minimum": 0}, "source_packet_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/runtimeId"}]}, "logical_call_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/runtimeId"}]}, "prior_state_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "milestone_states": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/milestoneState"}}, "path_states": {"type": "array", "minItems": 2, "maxItems": 128, "items": {"$ref": "#/$defs/pathState"}}, "frontier": {"type": "array", "maxItems": 4096, "items": {"$ref": "#/$defs/frontier"}}, "topology": {"$ref": "#/$defs/topology"}, "actor_visible": {"$ref": "#/$defs/actorVisible"}, "authority": {"$ref": "#/$defs/authority"}, "output_kind": {"const": "TRACKING_STATE"}, "schema_version": {"const": "mobileworld.runtime.rubric-tracker-output/v1"}},
+      "allOf": [{"if": {"properties": {"state_version": {"const": 0}}, "required": ["state_version"]}, "then": {"properties": {"source_packet_id": {"type": "null"}, "logical_call_id": {"type": "null"}, "prior_state_sha256": {"type": "null"}}}, "else": {"properties": {"source_packet_id": {"$ref": "#/$defs/runtimeId"}, "logical_call_id": {"$ref": "#/$defs/runtimeId"}, "prior_state_sha256": {"$ref": "#/$defs/sha256"}}}}]
+    },
+    "recordRelevance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record_id", "relevance", "linked_path_ids", "supported_record_binding_sha256", "disposition"],
+      "properties": {"record_id": {"$ref": "#/$defs/semanticId"}, "relevance": {"enum": ["active_path", "inactive_branch", "path_independent", "unknown"]}, "linked_path_ids": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/$defs/semanticId"}}, "supported_record_binding_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "disposition": {"enum": ["RETAIN", "ARCHIVE_SHADOW"]}},
+      "allOf": [{"if": {"properties": {"disposition": {"const": "ARCHIVE_SHADOW"}}, "required": ["disposition"]}, "then": {"properties": {"relevance": {"const": "inactive_branch"}, "supported_record_binding_sha256": {"$ref": "#/$defs/sha256"}}}}]
+    },
+    "pathRelevance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["linkage_id", "logical_call_id", "rubric_state_sha256", "records", "topology", "execution_scope", "authority", "output_kind", "schema_version"],
+      "properties": {"linkage_id": {"$ref": "#/$defs/runtimeId"}, "logical_call_id": {"$ref": "#/$defs/runtimeId"}, "rubric_state_sha256": {"$ref": "#/$defs/sha256"}, "records": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/recordRelevance"}}, "topology": {"$ref": "#/$defs/topology"}, "execution_scope": {"const": "SHADOW_ONLY"}, "authority": {"$ref": "#/$defs/authority"}, "output_kind": {"const": "PATH_RELEVANCE"}, "schema_version": {"const": "mobileworld.runtime.rubric-tracker-output/v1"}},
+      "allOf": [{"if": {"properties": {"topology": {"properties": {"kind": {"const": "JOINT_NON_INDEPENDENT"}}, "required": ["kind"]}}, "required": ["topology"]}, "then": {"properties": {"records": {"items": {"allOf": [{"$ref": "#/$defs/recordRelevance"}, {"properties": {"disposition": {"const": "RETAIN"}}}]}}}}}]
+    }
+  }
+}

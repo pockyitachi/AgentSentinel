@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_3/rubric_receipt.v1.schema.json",
+  "title": "R2.3 Rubric Hash-Only Receipt v1",
+  "description": "Closed CPU/offline/injected-fake SHADOW receipt. It stores hashes, bounded census, latency, and provenance but no task text, screenshot, backend output, reasoning, actor request, or Collector mutation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_id", "task_run_id", "operation", "topology_kind", "status",
+    "backend_id", "backend_version", "prompt_sha256", "output_schema_sha256",
+    "config_sha256", "input_sha256", "backend_calls",
+    "task_start_generation_calls", "explicit_revision_calls", "runtime_tracking_calls",
+    "relevance_link_calls", "packet_build_latency_ns", "backend_latency_ns",
+    "admission_latency_ns", "state_update_latency_ns", "total_latency_ns",
+    "pending_count", "in_progress_count", "satisfied_count", "violated_count",
+    "unknown_milestone_count", "viable_path_count", "inactive_path_count",
+    "unknown_path_count", "frontier_count", "active_path_relevance_count",
+    "inactive_branch_relevance_count", "path_independent_relevance_count",
+    "unknown_relevance_count", "archive_shadow_count", "unknown_or_abstain_count",
+    "validation_checks", "schema_version", "execution_scope", "backend_kind",
+    "transport_authority", "external_network_attempted", "model_call_attempted",
+    "local_gpu_used", "mobileworld_action_executed", "actor_request_mutated",
+    "collector_raw_mutated", "task_text_persisted", "screenshot_persisted",
+    "backend_output_persisted", "reasoning_persisted"
+  ],
+  "properties": {
+    "receipt_id": {"$ref": "#/$defs/safeId"},
+    "task_run_id": {"$ref": "#/$defs/safeId"},
+    "logical_call_id": {"$ref": "#/$defs/safeId"},
+    "operation": {"enum": ["TASK_START_GENERATE", "EXPLICIT_REVISION", "TRACK", "LINK_RELEVANCE", "COMPARE_TOPOLOGY"]},
+    "topology_kind": {"enum": ["ISOLATED_HISTORY_FREE", "JOINT_NON_INDEPENDENT"]},
+    "status": {"enum": ["ADMITTED", "INPUT_REJECTED", "BACKEND_ERROR", "INVALID_RESPONSE", "ADMISSION_REJECTED", "STATE_CONFLICT", "SIDECAR_FAILURE", "INTERNAL_ERROR"]},
+    "fallback_code": {"$ref": "#/$defs/safeId"},
+    "backend_id": {"$ref": "#/$defs/safeId"},
+    "backend_version": {"$ref": "#/$defs/safeId"},
+    "prompt_sha256": {"$ref": "#/$defs/sha256"},
+    "input_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "output_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "config_sha256": {"$ref": "#/$defs/sha256"},
+    "input_sha256": {"$ref": "#/$defs/sha256"},
+    "raw_backend_output_sha256": {"$ref": "#/$defs/sha256"},
+    "parsed_output_sha256": {"$ref": "#/$defs/sha256"},
+    "admitted_output_sha256": {"$ref": "#/$defs/sha256"},
+    "rubric_id": {"$ref": "#/$defs/safeId"},
+    "rubric_version": {"type": "integer", "minimum": 1},
+    "rubric_sha256": {"$ref": "#/$defs/sha256"},
+    "prior_state_sha256": {"$ref": "#/$defs/sha256"},
+    "final_state_sha256": {"$ref": "#/$defs/sha256"},
+    "backend_calls": {"type": "integer", "minimum": 0, "maximum": 1},
+    "task_start_generation_calls": {"$ref": "#/$defs/count"},
+    "explicit_revision_calls": {"$ref": "#/$defs/count"},
+    "runtime_tracking_calls": {"$ref": "#/$defs/count"},
+    "relevance_link_calls": {"$ref": "#/$defs/count"},
+    "packet_build_latency_ns": {"$ref": "#/$defs/count"},
+    "backend_latency_ns": {"$ref": "#/$defs/count"},
+    "admission_latency_ns": {"$ref": "#/$defs/count"},
+    "state_update_latency_ns": {"$ref": "#/$defs/count"},
+    "total_latency_ns": {"$ref": "#/$defs/count"},
+    "pending_count": {"$ref": "#/$defs/count"},
+    "in_progress_count": {"$ref": "#/$defs/count"},
+    "satisfied_count": {"$ref": "#/$defs/count"},
+    "violated_count": {"$ref": "#/$defs/count"},
+    "unknown_milestone_count": {"$ref": "#/$defs/count"},
+    "viable_path_count": {"$ref": "#/$defs/count"},
+    "inactive_path_count": {"$ref": "#/$defs/count"},
+    "unknown_path_count": {"$ref": "#/$defs/count"},
+    "frontier_count": {"$ref": "#/$defs/count"},
+    "active_path_relevance_count": {"$ref": "#/$defs/count"},
+    "inactive_branch_relevance_count": {"$ref": "#/$defs/count"},
+    "path_independent_relevance_count": {"$ref": "#/$defs/count"},
+    "unknown_relevance_count": {"$ref": "#/$defs/count"},
+    "archive_shadow_count": {"$ref": "#/$defs/count"},
+    "unknown_or_abstain_count": {"$ref": "#/$defs/count"},
+    "validation_checks": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/$defs/safeId"}},
+    "schema_version": {"const": "mobileworld.runtime.rubric-receipt/v1"},
+    "execution_scope": {"const": "SHADOW_ONLY"},
+    "backend_kind": {"const": "INJECTED_FAKE"},
+    "transport_authority": {"const": "CPU_OFFLINE_FAKE"},
+    "external_network_attempted": {"const": false},
+    "model_call_attempted": {"const": false},
+    "local_gpu_used": {"const": false},
+    "mobileworld_action_executed": {"const": false},
+    "actor_request_mutated": {"const": false},
+    "collector_raw_mutated": {"const": false},
+    "task_text_persisted": {"const": false},
+    "screenshot_persisted": {"const": false},
+    "backend_output_persisted": {"const": false},
+    "reasoning_persisted": {"const": false}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "ADMITTED"}}, "required": ["status"]},
+      "then": {"required": ["admitted_output_sha256"], "not": {"required": ["fallback_code"]}},
+      "else": {"required": ["fallback_code"], "not": {"required": ["admitted_output_sha256"]}}
+    },
+    {
+      "if": {"required": ["parsed_output_sha256"]},
+      "then": {"required": ["raw_backend_output_sha256"]}
+    },
+    {
+      "if": {"required": ["raw_backend_output_sha256"]},
+      "then": {"properties": {"backend_calls": {"const": 1}}}
+    },
+    {
+      "oneOf": [
+        {"required": ["rubric_id", "rubric_version", "rubric_sha256"]},
+        {"not": {"anyOf": [{"required": ["rubric_id"]}, {"required": ["rubric_version"]}, {"required": ["rubric_sha256"]}]}}
+      ]
+    },
+    {
+      "if": {"properties": {"operation": {"const": "TRACK"}}, "required": ["operation"]},
+      "then": {"required": ["input_schema_sha256"]},
+      "else": {"not": {"required": ["input_schema_sha256"]}}
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+    "count": {"type": "integer", "minimum": 0}
+  }
+}

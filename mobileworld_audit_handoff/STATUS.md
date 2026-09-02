@@ -49,9 +49,9 @@ D-028 formal matrix。两个 v1 Codec 继续 `live_ready=false`，formal readine
 typed Original fallback、严格 canonical-JSON admission、递归 trusted/detached policy/IR/
 renderer snapshots 与 history-only 验证，以及 transactional、hash-only、detached-commit、
 repo-external receipt。Qwen、MAI 与 Seed 接入复用现有
-provider/parser/action 路径；未实现自动 validity policy、multi-path rubric、真实
-actor/Sentinel 模型或 live transformation。Linear 工作流状态由 owner 单独管理，本仓库交付
-没有修改 Linear。**
+provider/parser/action 路径；R2.1 本身不实现自动 validity policy、multi-path rubric、真实
+actor/Sentinel 模型或 live transformation。后续 accepted R2.2 与 candidate R2.3 分别增加前
+两项的独立合同层。Linear 工作流状态由 owner 单独管理，本仓库交付没有修改 Linear。**
 
 **Runtime ALE-325 / R2.2 的 repository engineering checkpoint 已由 owner 接受。**
 接受的实现 commit 为 `3940ff7484c0236ac321ea210fc8266e282e5d27`，范围仍严格限定为
@@ -62,6 +62,17 @@ edit，invalidation 必须晚于 target 和所有 cited support，`REPLACE` 在 
 合同完成前一律 fail closed。该 accepted checkpoint 没有调用真实模型/provider、网络、GPU、
 MobileWorld backend/GUI/tool/action 或 replay；没有把两个 G1.5 v1 Codec 改成
 `live_ready=true`，也没有授权 R2.4。Linear 工作流状态仍由 owner 单独管理。**
+
+**Runtime ALE-326 / R2.3 已形成 corrected repository engineering candidate commit
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`，当前等待 owner review，尚不计入
+accepted/Done。** 候选范围严格限定为 CPU/offline/injected-fake、SHADOW-only：versioned
+exact-span `AND`/`OR` rubric、generate-once cache、显式 revision、history-free causal packet、
+milestone/path/frontier tracking、post-state relevance、hash-only receipt 与 low-cardinality
+metrics。共享 DAG 派生已 memoize 且以显式 stack/topological DP 覆盖完整 512-gate 上限，state validator
+会独立重算 path/frontier；backend 输入、输出与公开结果均通过有 cycle/depth/node budget 的 detached trusted snapshot 隔离。当前没有可信的 record-level R2.2 resolver，因此所有 relevance disposition
+均为 `RETAIN`，`ARCHIVE_SHADOW` 仅保留在 schema vocabulary 中，不写 history、不进入 renderer，也不执行。
+Qwen/MAI 只使用 captured fixtures；没有真实模型/provider、网络、GPU、MobileWorld backend/
+GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 
 **Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
 并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
@@ -105,7 +116,8 @@ Evaluation
 
 因此，第一次错误 taxonomy即使设计不合理，只需重跑离线 evaluator，不需要重新运行昂贵的 MobileWorld任务。
 
-当前仍不实现自动 claim extraction、verdict prediction、rubric、在线 filter 或自然轨迹干预。
+当前仍不实现 live claim extraction/verdict prediction、在线 filter、active archive 或自然轨迹
+干预；R2.3 rubric 仅为上述 CPU/offline/fake SHADOW candidate。
 
 ## 3. Canonical notation
 
@@ -1061,4 +1073,56 @@ Accepted behavior: `PRIOR_TRANSITION_STATUS` is weak evidence and cannot indepen
 Verification: owner re-review and independent checks found no remaining P0/P1. Focused R2.2 passed 74/74, the affected R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec surface passed 584/584, the complete MobileWorld suite passed 1669/1669, and the targeted former-P1 subset passed 16/16. Ruff check/format, all three Draft 2020-12 schemas, and Git diff checks passed. The default mypy invocation still reports 59 `redundant-cast` / `redundant-expr` errors in 4 files across 7 modules; detailed phased metrics remain non-blocking observability debt.
 
 Boundary: acceptance does not establish live provider/model readiness, ACTIVE deployment safety, semantic accuracy, task-success improvement, or causal effect. No live model/provider, external network, GPU, backend, replay, GUI, tool, or action was used. R2.3 / ALE-326 is the next mechanically available repository story and owns the independent multi-path rubric axis.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-326 / R2.3 multi-path rubric tracker repository candidate: implementation commit `71ce0f670e9c56adbb831229710c555d98b07ca1` adds the independent task-path relevance axis without changing accepted R2.1/R2.2 or frozen G1 contracts. The candidate is pending owner review and is not counted as accepted or Done; Runtime Epic 2 remains 2/6 accepted and Linear remains owner-managed.
+
+Behavior: one task-start rubric binds exact Unicode/code-point/UTF-8 instruction spans, an acyclic versioned AND/OR graph, legal alternatives, and OTHER_UNKNOWN. Generation converges once per task; revisions require an explicit event and prior-version/hash compare-and-swap. A history-free packet binds the exact task, cutoff, one current-observation event, only prior completed-transition evidence, and prior rubric state while excluding actor history, request/model fields, History IR, and future/checker outcomes. Generic transition status, generic post-UI change, and free-form tool result are weak and cannot independently establish a milestone; conflicting/insufficient evidence yields UNKNOWN. The runtime derives path viability, an alternative-aware frontier, record relevance, and SHADOW-only ARCHIVE admission. ARCHIVE_SHADOW requires an inactive route plus a separately bound SUPPORTED+KEEP validity result, never mutates history, and is not consumed by the R2.1/R2.2 renderer. Actor-visible status defaults off and, when enabled in tests, is a module-owned deterministic status-only projection.
+
+Audit and bindings: receipts are closed, hash-only, no-content sidecars with exact canonical input/output hashes, cumulative operation census, and false resource/action attestations. Cache reuse and runtime state/path/relevance counts are low-cardinality metrics; false-completion and legal-alternative calibration require explicit frozen offline labels rather than causal runtime evidence. LINK input hashes and linkage IDs use a versioned canonical JSON projection, so delimiter-bearing legal IDs remain unambiguous. `contracts.py` is SHA-256 `89bc0cd5bf74f9a9f5edb3d825701b740e71a103c929d46767fb8f7d0a128f8b` / 94,637 bytes; `packet.py` is `380f2491af26bd741dd24adf1b638c77d483905e68f9596acd4b50d106d0b222` / 5,805; `session.py` is `4138dd6057164a160508fc7bfd0c6bb0244828143e6283febef1eb866e113a87` / 76,228; `sidecar.py` is `619e8afd290e6c4e2aee1f9e99e14a604780f234a3e121b603b8fd56fb65a626` / 12,038; `metrics.py` is `6e36c8dcbb9215798bf492873bc57c6e9181f3d75917cfb419bfa6ff805b454c` / 10,167; and the focused test is `28e1a9aeeacf77143569c5d062fa3841205cb0946188ff4eb642a3a8db237168` / 80,234. The contract is `ac28d50394f0ceb0a0f68eb8f3292f4689402efaf8b94d62bbbc784b4cad1cf2` / 18,158. Rubric, receipt, topology, tracker-output, and tracking-packet schemas are respectively `098e066db2ec24dade5f2b93a1c0d89d0736c8b0947cd157d5f25a612af50f94`, `7d34084a5d65b529ed091064710c256c9d999630e6d5f8249de667412a4baf19`, `cffd40e793320eec45dc3ab7528554825597a49c6c3de148a612d46066329554`, `2d8be9e032182c9c7ff74cf3c2faf3447a644818ba9ddf837ff69891973ff62a`, and `1a533a276de80320e6d7fa5f4918a8acd99509393bad3849075597c539544e07`. The implementation binary diff from main `372572ac569ba5118668376fcc57bc19d5c1514e` is `0179552b032f21a2cfd99ba4bd23db85bfc0836f6a03c18c15f9a4799a510c47`.
+
+Verification: focused R2.3 passed 42/42; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 626/626; and the complete MobileWorld suite passed 1711/1711 on the final implementation bytes. Ruff check/format, targeted mypy for all seven R2.3 source/test files, Python compilation during tests, all five Draft 2020-12 schemas, secret/path scan, and Git diff checks passed. Three independent read-only reviews reported no remaining normal typed-data P0/P1 in the stated scope.
+
+Authority and next boundary: this checkpoint used only CPU/offline code and injected fake backends with captured Qwen/MAI fixtures. It made no live model/provider or network call, used no GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. R2.4 is the next mechanically available repository dependency after owner review, but real Qwen/MAI vertical slices, resource provisioning, live evidence plumbing, provider/model calls, GPU, and MobileWorld execution each require separate explicit owner authorization. The repository agent did not push, merge, or modify Linear.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-326 / R2.3 owner-review correction candidate: implementation commit `dc037efdda4cd8583f47c159e58edb4717cb9c87` supersedes the `71ce0f670e9c56adbb831229710c555d98b07ca1` candidate and its `173266febf946405e125afa8ad4b60c683641e51` governance checkpoint after closing four independently reproduced normal-data P1 gaps and one latency-accounting P2. R2.3 remains pending owner review and is not accepted or Done; Runtime Epic 2 remains 2/6 accepted and Linear remains owner-managed.
+
+Corrected behavior: path viability, satisfaction, and per-path frontier traversal now share memoized graph-reference analyses, eliminating exponential recomputation on legal shared DAGs. State validation independently re-derives the canonical path-state/frontier tuple from admitted milestone records; non-blocking derived/optional uncertainty cannot lower a legal path or mask a violated blocking alternative. Generate, revise, and track rebuild backend-owned rubric/proposal graphs into recursively detached trusted snapshots before hashing, admission, storage, state derivation, result construction, or receipt publication. Backend exceptions and rejected outputs retain actual elapsed backend latency. This checkpoint has no trusted record-level R2.2 receipt/output/evidence resolver: arbitrary support hashes remain bound only as link input, every runtime relevance result carries a null support binding and `RETAIN`, and any forged support binding or `ARCHIVE_SHADOW` output is rejected with `R22_SUPPORT_RESOLVER_REQUIRED`.
+
+Bindings: `contracts.py` is SHA-256 `bb6eb3ebb6a2a0c921785c547868780585029c5d412b4495a8a30a55b9a36795` / 102,881 bytes; `session.py` is `c5b85ad449079ed66fc2351bd72573a8b08358d27505fcb62e946b5261a8b964` / 72,176; the focused test is `57c98371e74385cf4db01be0dfa3a53b197c2e55c40fef9051db0a6a7cbf8f46` / 92,196; and the corrected contract is `35f72cb663bce2a028ec66cf1573561a49f9240019b1c87a2c703e212a121baf` / 19,469. The five schemas are byte-unchanged: rubric `098e066db2ec24dade5f2b93a1c0d89d0736c8b0947cd157d5f25a612af50f94`, receipt `7d34084a5d65b529ed091064710c256c9d999630e6d5f8249de667412a4baf19`, topology `cffd40e793320eec45dc3ab7528554825597a49c6c3de148a612d46066329554`, tracker output `2d8be9e032182c9c7ff74cf3c2faf3447a644818ba9ddf837ff69891973ff62a`, and tracking packet `1a533a276de80320e6d7fa5f4918a8acd99509393bad3849075597c539544e07`. The correction binary diff from `173266f` to `dc037ef` is SHA-256 `cb716a23430f6314b76a77b86b760cf53b30d9efd83b3c2ed2ec986b9a7a9a39`; the complete main-to-candidate binary diff is `6c9f0ac4fd64ef6531f5aa736fd7963db4d56916749c76288e98a740a8e9fe26`.
+
+Verification: focused R2.3 passed 47/47 repeatedly; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 631/631; and the complete MobileWorld suite passed 1716/1716 on the final implementation/test bytes. Ruff check/format, targeted mypy, Python compilation, all five Draft 2020-12 schema meta-checks, and Git diff checks passed. Independent normal-data probes measured a 45-gate/depth-20 shared DAG at about 4.7 ms, verified recursive backend-output identity separation and stable receipt/state hashes after backend-side mutation, confirmed forged state/frontier rejection and fail-closed archive behavior, and observed positive bounded backend latency for start/revise/track exceptions and rejected outputs. Three independent read-only reviews reported no remaining P0/P1 in the stated scope.
+
+Authority and next boundary: this correction used only CPU/offline code, injected fake backends, and captured Qwen/MAI fixtures. It invoked no live model/provider, network, GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. A trusted record-level R2.2 `SUPPORTED + KEEP` resolver is an explicit R2.4 prerequisite before any `ARCHIVE_SHADOW`; all other live/resource/GPU/action work also remains separately unauthorized. The repository agent did not push, merge, or modify Linear.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-326 / R2.3 backend-boundary correction candidate: implementation commit `7da7b0eb35cf5fce849b0f40c2c414ae3f223f99` supersedes the `dc037efdda4cd8583f47c159e58edb4717cb9c87` implementation candidate and its `51eef1ccb4815421252958c17cb99c80c7f4927d` governance checkpoint after closing two independently reproduced normal-data P1 trust-boundary gaps. R2.3 remains pending owner review and is not accepted or Done; Runtime Epic 2 remains 2/6 accepted and Linear remains owner-managed.
+
+Corrected behavior: task and backend descriptors are fixed as private snapshots at session construction. Generate, revise, and track each bind a private authority input and its hash before backend dispatch, give the backend a second detached copy, and use only the private graph for admission, CAS, cache, state, and receipt binding. Public properties, packet/revision builders, operation results, adapters, and every cache hit return fresh detached graphs, so backend- or caller-side mutation cannot alter session authority or previously bound hashes. Canonical projection, hashing, and snapshotting use one active-path walker that permits legal shared DAG reuse but fails closed on cycles, depth beyond 64, or more than 262,144 total visits across containers, dataclasses, enums, and primitive leaves. These failures are typed; no `RecursionError` escapes and no failing branch re-hashes the rejected graph.
+
+Bindings: `contracts.py` is SHA-256 `9c61579b223ec349b2930066a0c8046a5ceb70e7a30eb6394a5ad66b41e90e52` / 108,526 bytes; `session.py` is `8bd78e34570b468ead209a6ee98d6d6426a7f618a92bada592c25e8cf13c8340` / 77,460; the focused test is `3ee46306404c01e1cbb810e6f378f7b80c01829c495ff2381e7c6c8a1ac1d6a7` / 115,384; and the corrected contract is `a24dbea8b40907a651077f8d26f865f1dac994654dd593f22a688dc650b39e9e` / 21,629. All five R2.3 schemas are byte-unchanged from the prior checkpoint. The four-file correction binary diff from `51eef1ccb4815421252958c17cb99c80c7f4927d` to `7da7b0eb35cf5fce849b0f40c2c414ae3f223f99` is SHA-256 `eaba5b784c325f0528e3ae4c32a8f20a793b7330d0d005719d3809c78123ab4b`; the complete main-to-candidate binary diff is `51a56659b059e5edb959da785fc539d60869189301cbe4307453d97690e3a050`.
+
+Verification: focused R2.3 passed 59/59; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 643/643; and the complete MobileWorld suite passed 1728/1728 in 429.12 seconds. Ruff check/format, targeted mypy for all seven R2.3 source/test files, Python compilation, all five Draft 2020-12 schema meta-checks, and Git diff checks passed. Independent read-only probes confirmed pre-call receipt/CAS binding under backend mutation, fresh detached public/cache graphs, typed cycle/depth/node failures for projection/hash/snapshot, primitive- and enum-leaf budget enforcement, and no remaining P0/P1 in the stated exact-type scope.
+
+Authority and next boundary: this correction used only CPU/offline code, injected fake backends, and captured Qwen/MAI fixtures. It invoked no live model/provider, network, GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. R2.4 remains the next dependency only after owner acceptance of R2.3 and separate authorization for any live/resource/GPU/action work. The repository agent did not push, merge, or modify Linear.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-326 / R2.3 iterative-graph correction candidate: implementation commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` supersedes the `7da7b0eb35cf5fce849b0f40c2c414ae3f223f99` implementation candidate and its `e6e073e3d7882bb1693e5edee549e07928f75e4e` governance checkpoint after closing the remaining legal-deep-graph P1. R2.3 remains pending owner review and is not accepted or Done; Runtime Epic 2 remains 2/6 accepted and Linear remains owner-managed.
+
+Corrected behavior: graph-reference validation now produces a children-first order with an explicit color-DFS stack and detects cycles without Python recursion. Reachability uses a separate explicit stack. Blocking presence, viability, and satisfaction are evaluated once per milestone/gate in children-first dynamic-programming order, while each path's frontier uses a deterministic explicit LIFO walk with reversed child insertion to preserve the existing declared traversal order. Legal acyclic graphs through the full 512-gate contract maximum therefore have bounded `O(V+E)` graph analysis and cannot escape as `RecursionError`, regardless of root-first or leaves-first gate declaration order. Typed `CYCLIC_RUBRIC_GRAPH` and `UNREACHABLE_GRAPH_NODE` rejection remains unchanged.
+
+Bindings: `contracts.py` is SHA-256 `faccf4ca02467f88cf5124db63a2187b3b30e69bab9acc679ebadafb9919a0a0` / 108,705 bytes; unchanged `session.py` is `8bd78e34570b468ead209a6ee98d6d6426a7f618a92bada592c25e8cf13c8340` / 77,460; the focused test is `9d54ff3b6afa5bd998735824f21294a2c42d93cb2144579d52aec5ffb81acb5a` / 119,788; and the corrected contract is `fc6f1ecee356f00868b593c8482cb4ab926871cbecfcad638410a8587f11851a` / 22,141. All five R2.3 schemas are byte-unchanged. The three-file correction binary diff from `e6e073e3d7882bb1693e5edee549e07928f75e4e` to `54381b7b56b06d5aa262005af62b65269b4cf0a6` is SHA-256 `a843932a7b0b8d831a3e4a6edb0a63316e1b1b3e3bebf64f0d8f9e1b758db555`; the complete main-to-candidate binary diff is `8baff1002cc55b3acaf19a1365c48eba138e3cca8879e0c6889a6a31e8aa9afa`.
+
+Verification: focused R2.3 passed 64/64; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 648/648; and the complete MobileWorld suite passed 1733/1733 in 425.59 seconds. Ruff check/format, targeted mypy for all seven R2.3 source/test files, Python compilation, all five Draft 2020-12 schema meta-checks, and Git diff checks passed. Independent read-only review exercised 512-gate AND/OR chains in both declaration orders, repeated them with the interpreter recursion limit reduced to 80, verified typed cycle/unreachable rejection, and compared 400 random reachable DAG/state cases against the prior semantics with exact path/frontier agreement; no remaining P0/P1 was found in scope.
+
+Authority and next boundary: this correction used only CPU/offline code, injected fake backends, and captured Qwen/MAI fixtures. It invoked no live model/provider, network, GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. R2.4 remains the next dependency only after owner acceptance of R2.3 and separate authorization for any live/resource/GPU/action work. The repository agent did not push, merge, or modify Linear.
 ```
