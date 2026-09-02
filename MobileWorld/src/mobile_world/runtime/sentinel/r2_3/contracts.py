@@ -1867,6 +1867,162 @@ def validate_tracker_proposal(
             )
 
 
+def derive_path_states_and_frontier(
+    rubric: MultiPathRubricV1,
+    milestone_states: tuple[MilestoneStateRecordV1, ...],
+) -> tuple[tuple[PathStateV1, ...], tuple[FrontierItemV1, ...]]:
+    """Derive the only admitted path/frontier view in bounded DAG time."""
+
+    _require_exact(rubric, MultiPathRubricV1, "rubric")
+    _require_tuple(
+        milestone_states,
+        MilestoneStateRecordV1,
+        "milestone_states",
+        minimum=1,
+        maximum=512,
+    )
+    expected_milestone_ids = {value.milestone_id for value in rubric.milestones}
+    if {value.milestone_id for value in milestone_states} != expected_milestone_ids:
+        _fail("MILESTONE_CENSUS_MISMATCH", "state needs one entry per milestone")
+
+    milestone_state = {value.milestone_id: value.state for value in milestone_states}
+    milestones = {value.milestone_id: value for value in rubric.milestones}
+    gates = {value.gate_id: value for value in rubric.gates}
+    viability_cache: dict[tuple[GraphRefKind, str], PathViability] = {}
+    satisfied_cache: dict[tuple[GraphRefKind, str], bool] = {}
+    blocking_cache: dict[tuple[GraphRefKind, str], bool] = {}
+
+    def reference_key(reference: GraphRefV1) -> tuple[GraphRefKind, str]:
+        return (reference.ref_kind, reference.ref_id)
+
+    def combine_and(values: tuple[PathViability, ...]) -> PathViability:
+        if any(value is PathViability.INACTIVE for value in values):
+            return PathViability.INACTIVE
+        if any(value is PathViability.UNKNOWN for value in values):
+            return PathViability.UNKNOWN
+        return PathViability.VIABLE
+
+    def contains_blocking(reference: GraphRefV1) -> bool:
+        key = reference_key(reference)
+        cached = blocking_cache.get(key)
+        if cached is not None:
+            return cached
+        if reference.ref_kind is GraphRefKind.MILESTONE:
+            result = milestones[reference.ref_id].blocking
+        else:
+            result = any(contains_blocking(child) for child in gates[reference.ref_id].children)
+        blocking_cache[key] = result
+        return result
+
+    def evaluate(reference: GraphRefV1) -> PathViability:
+        key = reference_key(reference)
+        cached = viability_cache.get(key)
+        if cached is not None:
+            return cached
+        if reference.ref_kind is GraphRefKind.MILESTONE:
+            milestone = milestones[reference.ref_id]
+            state = milestone_state[reference.ref_id]
+            if not milestone.blocking:
+                result = PathViability.VIABLE
+            elif state is MilestoneState.VIOLATED:
+                result = PathViability.INACTIVE
+            elif state is MilestoneState.UNKNOWN:
+                result = PathViability.UNKNOWN
+            else:
+                result = PathViability.VIABLE
+        else:
+            gate = gates[reference.ref_id]
+            if gate.operator is GateOperator.AND:
+                children = tuple(evaluate(value) for value in gate.children)
+                result = combine_and(children)
+            else:
+                blocking_children = tuple(
+                    value for value in gate.children if contains_blocking(value)
+                )
+                relevant_children = blocking_children or gate.children
+                children = tuple(evaluate(value) for value in relevant_children)
+                if any(value is PathViability.VIABLE for value in children):
+                    result = PathViability.VIABLE
+                elif any(value is PathViability.UNKNOWN for value in children):
+                    result = PathViability.UNKNOWN
+                else:
+                    result = PathViability.INACTIVE
+        viability_cache[key] = result
+        return result
+
+    def is_satisfied(reference: GraphRefV1) -> bool:
+        key = reference_key(reference)
+        cached = satisfied_cache.get(key)
+        if cached is not None:
+            return cached
+        if reference.ref_kind is GraphRefKind.MILESTONE:
+            result = milestone_state[reference.ref_id] is MilestoneState.SATISFIED
+        else:
+            gate = gates[reference.ref_id]
+            if gate.operator is GateOperator.AND:
+                result = all(is_satisfied(child) for child in gate.children)
+            else:
+                blocking_children = tuple(
+                    value for value in gate.children if contains_blocking(value)
+                )
+                relevant_children = blocking_children or gate.children
+                result = any(is_satisfied(child) for child in relevant_children)
+        satisfied_cache[key] = result
+        return result
+
+    path_values: list[PathStateV1] = []
+    for path in rubric.paths:
+        if path.kind is PathKind.OTHER_UNKNOWN:
+            value = PathViability.UNKNOWN
+        else:
+            assert path.root is not None
+            roots = (path.root,) if rubric.common_root is None else (rubric.common_root, path.root)
+            value = combine_and(tuple(evaluate(root) for root in roots))
+        path_values.append(PathStateV1(path_id=path.path_id, state=value))
+    path_states = tuple(path_values)
+    path_lookup = {value.path_id: value.state for value in path_states}
+
+    frontier: list[FrontierItemV1] = []
+    seen_frontier: set[tuple[str, str]] = set()
+    visited: set[tuple[str, GraphRefKind, str]] = set()
+
+    def collect(path_id: str, reference: GraphRefV1) -> None:
+        visit_key = (path_id, reference.ref_kind, reference.ref_id)
+        if visit_key in visited:
+            return
+        visited.add(visit_key)
+        if evaluate(reference) is PathViability.INACTIVE or is_satisfied(reference):
+            return
+        if reference.ref_kind is GraphRefKind.MILESTONE:
+            state = milestone_state[reference.ref_id]
+            if state in {
+                MilestoneState.PENDING,
+                MilestoneState.IN_PROGRESS,
+                MilestoneState.UNKNOWN,
+            }:
+                key = (path_id, reference.ref_id)
+                if key not in seen_frontier:
+                    seen_frontier.add(key)
+                    frontier.append(FrontierItemV1(path_id=path_id, milestone_id=reference.ref_id))
+            return
+        for child in gates[reference.ref_id].children:
+            collect(path_id, child)
+
+    for path in rubric.paths:
+        if (
+            path.kind is PathKind.OTHER_UNKNOWN
+            or path_lookup[path.path_id] is PathViability.INACTIVE
+        ):
+            continue
+        if rubric.common_root is not None:
+            collect(path.path_id, rubric.common_root)
+        assert path.root is not None
+        collect(path.path_id, path.root)
+    if len(frontier) > 4096:
+        _fail("FRONTIER_LIMIT_EXCEEDED", "derived frontier exceeds the contract bound")
+    return path_states, tuple(frontier)
+
+
 def validate_tracking_state(state: RubricTrackingStateV1, rubric: MultiPathRubricV1) -> None:
     _require_exact(state, RubricTrackingStateV1, "tracking state")
     _require_exact(rubric, MultiPathRubricV1, "rubric")
@@ -1878,6 +2034,20 @@ def validate_tracking_state(state: RubricTrackingStateV1, rubric: MultiPathRubri
     paths = {value.path_id: value for value in rubric.paths}
     if {value.path_id for value in state.path_states} != set(paths):
         _fail("PATH_CENSUS_MISMATCH", "state needs one entry per path")
+    expected_path_states, expected_frontier = derive_path_states_and_frontier(
+        rubric,
+        state.milestone_states,
+    )
+    if state.path_states != expected_path_states:
+        _fail(
+            "PATH_STATE_DERIVATION_MISMATCH",
+            "path states must be recomputed from admitted milestone state",
+        )
+    if state.frontier != expected_frontier:
+        _fail(
+            "FRONTIER_DERIVATION_MISMATCH",
+            "frontier must be recomputed from admitted milestone state",
+        )
     path_states = {value.path_id: value.state for value in state.path_states}
     for path in rubric.paths:
         if (
@@ -1924,8 +2094,8 @@ def validate_path_relevance_output(
             "relevance output must bind the state-producing logical call",
         )
     bindings = {value.record_id: value for value in record_bindings}
-    supported = {value.record_id: value for value in supported_records}
-    if len(bindings) != len(record_bindings) or len(supported) != len(supported_records):
+    supported_ids = {value.record_id for value in supported_records}
+    if len(bindings) != len(record_bindings) or len(supported_ids) != len(supported_records):
         _fail("DUPLICATE_ID", "record bindings must be unique")
     if {value.record_id for value in output.records} != set(bindings):
         _fail("RECORD_CENSUS_MISMATCH", "relevance output needs one result per record")
@@ -1955,22 +2125,14 @@ def validate_path_relevance_output(
             expected = RecordRelevance.INACTIVE_BRANCH
         if result.relevance is not expected:
             _fail("RELEVANCE_DERIVATION_MISMATCH", "record relevance is not graph-derived")
-        support = supported.get(result.record_id)
-        expected_support_hash = (
-            None if support is None else supported_record_binding_sha256(support)
-        )
-        if result.supported_record_binding_sha256 != expected_support_hash:
-            _fail("VALIDITY_BINDING_MISMATCH", "record support binding differs")
-        archive_allowed = (
-            expected is RecordRelevance.INACTIVE_BRANCH
-            and support is not None
-            and output.topology.kind is TopologyKind.ISOLATED_HISTORY_FREE
-        )
-        expected_disposition = (
-            RelevanceDisposition.ARCHIVE_SHADOW if archive_allowed else RelevanceDisposition.RETAIN
-        )
-        if result.disposition is not expected_disposition:
-            _fail("ARCHIVE_ADMISSION_MISMATCH", "ARCHIVE is not safely derivable")
+        if (
+            result.supported_record_binding_sha256 is not None
+            or result.disposition is not RelevanceDisposition.RETAIN
+        ):
+            _fail(
+                "R22_SUPPORT_RESOLVER_REQUIRED",
+                "R2.3 cannot admit a support binding or ARCHIVE without a trusted R2.2 resolver",
+            )
 
 
 _PROJECTED_ENUM_TYPES = {
@@ -2056,6 +2218,38 @@ def _trusted_projection(value: object) -> JsonValue:
         field_names = cast(dict[str, object], getattr(type(value), "__dataclass_fields__"))
         return {name: _trusted_projection(getattr(value, name)) for name in field_names}
     _fail("UNTRUSTED_TYPE", "value has no R2.3 canonical projection")
+
+
+def _trusted_snapshot(value: object) -> object:
+    """Rebuild one detached graph without calling a backend-owned serializer."""
+
+    if value is None or type(value) in {str, int, bool}:
+        return value
+    if type(value) in _PROJECTED_ENUM_TYPES:
+        return value
+    if type(value) is tuple:
+        return tuple(_trusted_snapshot(item) for item in cast(tuple[object, ...], value))
+    if type(value) in _PROJECTED_DATACLASS_TYPES:
+        field_names = cast(dict[str, object], getattr(type(value), "__dataclass_fields__"))
+        constructor = cast(Callable[..., object], type(value))
+        return constructor(
+            **{name: _trusted_snapshot(getattr(value, name)) for name in field_names}
+        )
+    _fail("UNTRUSTED_TYPE", "value has no R2.3 trusted snapshot")
+
+
+def snapshot_multi_path_rubric(value: MultiPathRubricV1) -> MultiPathRubricV1:
+    _require_exact(value, MultiPathRubricV1, "rubric")
+    snapshot = _trusted_snapshot(value)
+    assert type(snapshot) is MultiPathRubricV1
+    return snapshot
+
+
+def snapshot_tracker_proposal(value: RubricTrackerProposalV1) -> RubricTrackerProposalV1:
+    _require_exact(value, RubricTrackerProposalV1, "tracker proposal")
+    snapshot = _trusted_snapshot(value)
+    assert type(snapshot) is RubricTrackerProposalV1
+    return snapshot
 
 
 def _typed_projection(value: object, expected: type[object]) -> dict[str, JsonValue]:
@@ -2273,6 +2467,7 @@ __all__ = [
     "TrackerProposalStatus",
     "TrackingInputExclusionsV1",
     "derive_actor_visible_rubric_state",
+    "derive_path_states_and_frontier",
     "multi_path_rubric_projection",
     "path_relevance_output_projection",
     "path_relevance_output_sha256",
@@ -2282,6 +2477,8 @@ __all__ = [
     "rubric_sha256",
     "rubric_tracking_state_projection",
     "rubric_tracking_state_sha256",
+    "snapshot_multi_path_rubric",
+    "snapshot_tracker_proposal",
     "supported_record_binding_projection",
     "supported_record_binding_sha256",
     "task_instruction_projection",

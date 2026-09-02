@@ -24,15 +24,10 @@ from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_3.contracts import (
     CurrentObservationBindingV1,
     FrontierItemV1,
-    GateOperator,
-    GraphRefKind,
-    GraphRefV1,
     MilestoneReasonCode,
     MilestoneState,
     MilestoneStateRecordV1,
-    MilestoneV1,
     MultiPathRubricV1,
-    PathKind,
     PathRelevanceInterfaceV1,
     PathRelevanceOutputV1,
     PathStateV1,
@@ -62,12 +57,14 @@ from mobile_world.runtime.sentinel.r2_3.contracts import (
     TrackerProposalStatus,
     TrackingInputExclusionsV1,
     derive_actor_visible_rubric_state,
+    derive_path_states_and_frontier,
     path_relevance_output_sha256,
     rubric_binding,
     rubric_revision_request_sha256,
     rubric_sha256,
     rubric_tracking_state_sha256,
-    supported_record_binding_sha256,
+    snapshot_multi_path_rubric,
+    snapshot_tracker_proposal,
     task_start_request_sha256,
     tracker_proposal_sha256,
     tracking_packet_sha256,
@@ -648,6 +645,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
         prior_state: RubricTrackingStateV1 | None,
         backend_called: bool,
         operation_started_ns: int,
+        backend_latency_ns: int = 0,
         contract_code: str | None = None,
         raw_backend_output_sha256: str | None = None,
         parsed_output_sha256: str | None = None,
@@ -668,7 +666,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
             parsed_output_sha256=parsed_output_sha256,
             admitted_output_sha256=None,
             backend_calls=int(backend_called),
-            backend_latency_ns=0,
+            backend_latency_ns=backend_latency_ns,
             admission_latency_ns=0,
             state_update_latency_ns=0,
             total_latency_ns=time.monotonic_ns() - operation_started_ns,
@@ -776,6 +774,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
             try:
                 candidate = self._run_backend(lambda: self._builder_backend.generate(request))
             except Exception:
+                backend_latency = time.monotonic_ns() - backend_started
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.BACKEND_ERROR,
@@ -785,16 +784,20 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     prior_state=None,
                     backend_called=True,
                     operation_started_ns=operation_started,
+                    backend_latency_ns=backend_latency,
                 )
                 self._generation_result = result
                 return result
             backend_latency = time.monotonic_ns() - backend_started
             admission_started = time.monotonic_ns()
+            snapshot_bound = False
             try:
                 if type(candidate) is not MultiPathRubricV1:
                     raise R23ContractError(
                         "UNTRUSTED_TYPE", "builder must return an exact MultiPathRubricV1"
                     )
+                candidate = snapshot_multi_path_rubric(candidate)
+                snapshot_bound = True
                 if (
                     candidate.task_run_id != request.task_run_id
                     or candidate.task != request.task
@@ -813,7 +816,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     if type(candidate) is MultiPathRubricV1
                     else _canonical_json_sha256_if_exact(candidate)
                 )
-                parsed_hash = raw_hash if type(candidate) is MultiPathRubricV1 else None
+                parsed_hash = raw_hash if snapshot_bound else None
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.OUTPUT_REJECTED,
@@ -824,6 +827,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     contract_code=error.code,
                     backend_called=True,
                     operation_started_ns=operation_started,
+                    backend_latency_ns=backend_latency,
                     raw_backend_output_sha256=raw_hash,
                     parsed_output_sha256=parsed_hash,
                 )
@@ -850,7 +854,11 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 admission_latency_ns=admission_latency,
                 state_update_latency_ns=0,
                 total_latency_ns=total_latency,
-                validation_checks=("RUBRIC_GENERATED", "INITIAL_STATE_DERIVED"),
+                validation_checks=(
+                    "BACKEND_OUTPUT_SNAPSHOT_BOUND",
+                    "RUBRIC_GENERATED",
+                    "INITIAL_STATE_DERIVED",
+                ),
             )
             try:
                 receipt_sha256 = self._emit(receipt)
@@ -977,6 +985,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
             try:
                 candidate = self._run_backend(lambda: self._builder_backend.revise(request))
             except Exception:
+                backend_latency = time.monotonic_ns() - backend_started
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.BACKEND_ERROR,
@@ -986,16 +995,20 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     prior_state=previous_state,
                     backend_called=True,
                     operation_started_ns=operation_started,
+                    backend_latency_ns=backend_latency,
                 )
                 self._revision_cache[request.revision_event_id] = (request, result)
                 return result
             backend_latency = time.monotonic_ns() - backend_started
             admission_started = time.monotonic_ns()
+            snapshot_bound = False
             try:
                 if type(candidate) is not MultiPathRubricV1:
                     raise R23ContractError(
                         "UNTRUSTED_TYPE", "builder must return an exact MultiPathRubricV1"
                     )
+                candidate = snapshot_multi_path_rubric(candidate)
+                snapshot_bound = True
                 if (
                     candidate.task != request.task
                     or candidate.backend != request.backend
@@ -1014,7 +1027,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     if type(candidate) is MultiPathRubricV1
                     else _canonical_json_sha256_if_exact(candidate)
                 )
-                parsed_hash = raw_hash if type(candidate) is MultiPathRubricV1 else None
+                parsed_hash = raw_hash if snapshot_bound else None
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.OUTPUT_REJECTED,
@@ -1025,6 +1038,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     contract_code=error.code,
                     backend_called=True,
                     operation_started_ns=operation_started,
+                    backend_latency_ns=backend_latency,
                     raw_backend_output_sha256=raw_hash,
                     parsed_output_sha256=parsed_hash,
                 )
@@ -1050,7 +1064,11 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 admission_latency_ns=admission_latency,
                 state_update_latency_ns=0,
                 total_latency_ns=time.monotonic_ns() - operation_started,
-                validation_checks=("EXPLICIT_REVISION_BOUND", "INITIAL_STATE_DERIVED"),
+                validation_checks=(
+                    "BACKEND_OUTPUT_SNAPSHOT_BOUND",
+                    "EXPLICIT_REVISION_BOUND",
+                    "INITIAL_STATE_DERIVED",
+                ),
             )
             try:
                 receipt_sha256 = self._emit(receipt)
@@ -1272,6 +1290,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
             try:
                 proposal = self._run_backend(lambda: self._tracker_backend.track(packet))
             except Exception:
+                backend_latency = time.monotonic_ns() - backend_started
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.BACKEND_ERROR,
@@ -1281,12 +1300,21 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     prior_state=prior,
                     backend_called=True,
                     operation_started_ns=operation_started,
+                    backend_latency_ns=backend_latency,
                 )
                 self._tracking_cache[packet.logical_call_id] = (packet_hash, result)
                 return result
             backend_latency = time.monotonic_ns() - backend_started
             admission_started = time.monotonic_ns()
+            snapshot_bound = False
             try:
+                if type(proposal) is not RubricTrackerProposalV1:
+                    raise R23ContractError(
+                        "UNTRUSTED_TYPE",
+                        "tracker must return an exact RubricTrackerProposalV1",
+                    )
+                proposal = snapshot_tracker_proposal(proposal)
+                snapshot_bound = True
                 validate_tracker_proposal(proposal, packet, rubric)
                 state = self._admit_tracking_state(packet, proposal, rubric)
             except R23ContractError as error:
@@ -1295,7 +1323,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     if type(proposal) is RubricTrackerProposalV1
                     else _canonical_json_sha256_if_exact(proposal)
                 )
-                parsed_hash = raw_hash if type(proposal) is RubricTrackerProposalV1 else None
+                parsed_hash = raw_hash if snapshot_bound else None
                 result = self._audited_fallback(
                     stage=stage,
                     code=RubricSessionFallbackCode.OUTPUT_REJECTED,
@@ -1306,6 +1334,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                     contract_code=error.code,
                     backend_called=True,
                     operation_started_ns=operation_started,
+                    backend_latency_ns=backend_latency,
                     raw_backend_output_sha256=raw_hash,
                     parsed_output_sha256=parsed_hash,
                 )
@@ -1333,6 +1362,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 state_update_latency_ns=0,
                 total_latency_ns=time.monotonic_ns() - operation_started,
                 validation_checks=(
+                    "BACKEND_OUTPUT_SNAPSHOT_BOUND",
                     "HISTORY_FREE_PACKET_BOUND",
                     "TRACKER_PROPOSAL_ADMITTED",
                     "PATH_STATE_DERIVED",
@@ -1420,103 +1450,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
         rubric: MultiPathRubricV1,
         milestone_states: tuple[MilestoneStateRecordV1, ...],
     ) -> tuple[tuple[PathStateV1, ...], tuple[FrontierItemV1, ...]]:
-        milestone_state = {value.milestone_id: value.state for value in milestone_states}
-        milestones: dict[str, MilestoneV1] = {
-            value.milestone_id: value for value in rubric.milestones
-        }
-        gates = {value.gate_id: value for value in rubric.gates}
-
-        def combine_and(values: tuple[PathViability, ...]) -> PathViability:
-            if any(value is PathViability.INACTIVE for value in values):
-                return PathViability.INACTIVE
-            if any(value is PathViability.UNKNOWN for value in values):
-                return PathViability.UNKNOWN
-            return PathViability.VIABLE
-
-        def evaluate(reference: GraphRefV1) -> PathViability:
-            if reference.ref_kind is GraphRefKind.MILESTONE:
-                value = milestone_state[reference.ref_id]
-                if value is MilestoneState.VIOLATED and milestones[reference.ref_id].blocking:
-                    return PathViability.INACTIVE
-                if value is MilestoneState.UNKNOWN:
-                    return PathViability.UNKNOWN
-                return PathViability.VIABLE
-            gate = gates[reference.ref_id]
-            children = tuple(evaluate(value) for value in gate.children)
-            if gate.operator is GateOperator.AND:
-                return combine_and(children)
-            if any(value is PathViability.VIABLE for value in children):
-                return PathViability.VIABLE
-            if any(value is PathViability.UNKNOWN for value in children):
-                return PathViability.UNKNOWN
-            return PathViability.INACTIVE
-
-        def is_satisfied(reference: GraphRefV1) -> bool:
-            if reference.ref_kind is GraphRefKind.MILESTONE:
-                return milestone_state[reference.ref_id] is MilestoneState.SATISFIED
-            gate = gates[reference.ref_id]
-            child_values = tuple(is_satisfied(child) for child in gate.children)
-            if gate.operator is GateOperator.AND:
-                return all(child_values)
-            return any(child_values)
-
-        path_values: list[PathStateV1] = []
-        for path in rubric.paths:
-            if path.kind is PathKind.OTHER_UNKNOWN:
-                value = PathViability.UNKNOWN
-            else:
-                assert path.root is not None
-                roots = (
-                    (path.root,) if rubric.common_root is None else (rubric.common_root, path.root)
-                )
-                value = combine_and(tuple(evaluate(root) for root in roots))
-            path_values.append(PathStateV1(path_id=path.path_id, state=value))
-        path_states = tuple(path_values)
-        path_lookup = {value.path_id: value.state for value in path_states}
-
-        frontier: list[FrontierItemV1] = []
-        seen: set[tuple[str, str]] = set()
-
-        def collect(path_id: str, reference: GraphRefV1) -> None:
-            if evaluate(reference) is PathViability.INACTIVE:
-                return
-            # A satisfied OR branch completes that gate.  Its unresolved legal
-            # alternatives are not current frontier items and remain available
-            # only as alternative graph structure.
-            if is_satisfied(reference):
-                return
-            if reference.ref_kind is GraphRefKind.MILESTONE:
-                state = milestone_state[reference.ref_id]
-                if state in {
-                    MilestoneState.PENDING,
-                    MilestoneState.IN_PROGRESS,
-                    MilestoneState.UNKNOWN,
-                }:
-                    key = (path_id, reference.ref_id)
-                    if key not in seen:
-                        seen.add(key)
-                        frontier.append(
-                            FrontierItemV1(path_id=path_id, milestone_id=reference.ref_id)
-                        )
-                return
-            for child in gates[reference.ref_id].children:
-                collect(path_id, child)
-
-        for path in rubric.paths:
-            if (
-                path.kind is PathKind.OTHER_UNKNOWN
-                or path_lookup[path.path_id] is PathViability.INACTIVE
-            ):
-                continue
-            if rubric.common_root is not None:
-                collect(path.path_id, rubric.common_root)
-            assert path.root is not None
-            collect(path.path_id, path.root)
-        if len(frontier) > 4096:
-            raise R23ContractError(
-                "FRONTIER_LIMIT_EXCEEDED", "derived frontier exceeds the contract bound"
-            )
-        return path_states, tuple(frontier)
+        return derive_path_states_and_frontier(rubric, milestone_states)
 
     def link_records(
         self,
@@ -1629,7 +1563,6 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 return result
             self._relevance_link_calls += 1
             path_states = {value.path_id: value.state for value in state.path_states}
-            supported = {value.record_id: value for value in supported_records}
             records: list[RecordRelevanceResultV1] = []
             try:
                 for binding in record_bindings:
@@ -1649,32 +1582,13 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                         relevance = RecordRelevance.UNKNOWN
                     else:
                         relevance = RecordRelevance.INACTIVE_BRANCH
-                    support = supported.get(binding.record_id)
-                    archive = (
-                        relevance is RecordRelevance.INACTIVE_BRANCH
-                        and support is not None
-                        and bool(binding.linked_path_ids)
-                        and all(
-                            path_states.get(path_id) is PathViability.INACTIVE
-                            for path_id in binding.linked_path_ids
-                        )
-                        and state.topology.kind is TopologyKind.ISOLATED_HISTORY_FREE
-                    )
                     records.append(
                         RecordRelevanceResultV1(
                             record_id=binding.record_id,
                             relevance=relevance,
                             linked_path_ids=binding.linked_path_ids,
-                            supported_record_binding_sha256=(
-                                None
-                                if support is None
-                                else supported_record_binding_sha256(support)
-                            ),
-                            disposition=(
-                                RelevanceDisposition.ARCHIVE_SHADOW
-                                if archive
-                                else RelevanceDisposition.RETAIN
-                            ),
+                            supported_record_binding_sha256=None,
+                            disposition=RelevanceDisposition.RETAIN,
                         )
                     )
                 output = PathRelevanceOutputV1(
@@ -1728,7 +1642,7 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 validation_checks=(
                     "POST_STATE_LINK_BOUND",
                     "RELEVANCE_DERIVED",
-                    "ARCHIVE_SHADOW_ONLY",
+                    "ARCHIVE_REQUIRES_R22_RESOLVER",
                 ),
             )
             try:

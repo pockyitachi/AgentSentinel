@@ -30,8 +30,10 @@ task instruction + current GUI + completed transition evidence + prior state
   -> milestone state + viable/inactive/unknown paths + frontier
 
 frozen rubric state + explicit record/path bindings
-  + separately supported history binding
-  -> record relevance + optional ARCHIVE_SHADOW proposal
+  -> record relevance + RETAIN
+
+separately claimed R2.2 support hashes
+  -> input-bound only; no ARCHIVE without a trusted R2.2 resolver
 ```
 
 The rubric has four constant false authority fields:
@@ -65,8 +67,8 @@ runtime code exclusively owns:
 4. version and explicit-revision validation;
 5. evidence identity, same-task, and causal-cutoff checks;
 6. milestone evidence strength checks;
-7. deterministic path viability, frontier, relevance, and ARCHIVE_SHADOW
-   admission;
+7. deterministic path viability, frontier, relevance, and fail-closed
+   `ARCHIVE_SHADOW` admission;
 8. state compare-and-swap and sidecar publication; and
 9. all no-authority and no-resource-use guarantees.
 
@@ -222,16 +224,26 @@ through `PRESERVE_PRIOR_STATE`; the state and its prior evidence references
 must be copied exactly. It cannot silently regress to `pending`.
 
 The trusted runtime derives the complete `TRACKING_STATE` rather than trusting
-backend-supplied path/frontier fields. A blocking instruction-cited milestone
-with admitted `violated` evidence may make a path inactive. A blocking
-`unknown` makes the unresolved path unknown. Otherwise pending/in-progress
-requirements leave the path viable. Derived or optional checkpoint failure
-does not create an invented hard failure. `OTHER_UNKNOWN` remains unknown.
+backend-supplied path/frontier fields. One module-owned memoized DAG analysis
+is shared by state construction and validation: viability and satisfaction for
+each shared graph reference are computed once, and each path's frontier walk
+visits a shared reference at most once. The validator recomputes path states
+and frontier from the admitted milestone records and rejects any mismatch.
 
-The frontier is a unique unordered set of `(path_id, milestone_id)` pairs from
-non-inactive paths. It may contain multiple alternatives and is not a next
-action. Each state version binds the prior canonical state hash and advances
-through compare-and-swap; a conflict preserves the prior state.
+A blocking instruction-cited milestone with admitted `violated` evidence may
+make a path inactive. A blocking `unknown` makes the unresolved path unknown.
+Otherwise pending/in-progress requirements leave the path viable. Derived or
+optional checkpoint failure does not create an invented hard failure. When an
+`OR` contains any blocking-bearing child, non-blocking siblings cannot rescue
+a violated blocking alternative; an all-non-blocking checkpoint gate remains
+viable and may still contribute frontier items. `OTHER_UNKNOWN` remains
+unknown.
+
+The frontier is a deterministic canonical tuple of unique
+`(path_id, milestone_id)` pairs from non-inactive paths. It may contain
+multiple alternatives and is not a next action. Each state version binds the
+prior canonical state hash and advances through compare-and-swap; a conflict
+preserves the prior state.
 
 ## 7. Post-state record relevance and ARCHIVE
 
@@ -257,18 +269,21 @@ The runtime deterministically derives them:
 - explicit path-independent binding -> `path_independent`;
 - no path binding -> `unknown`.
 
-`ARCHIVE_SHADOW` is a separate relevance disposition, not a history operation.
-It is admitted only when all of these hold:
+`ARCHIVE_SHADOW` is a schema-reserved relevance disposition, not a history
+operation. This checkpoint has no trusted resolver that can prove a
+record-level `SUPPORTED + KEEP` result from the committed R2.2 receipt,
+policy output, and evidence packet. Two syntactically valid SHA-256 values are
+therefore never archive authority. The runtime emits
+`supported_record_binding_sha256=null` and `RETAIN` for every record, and the
+validator rejects any non-null support binding or `ARCHIVE_SHADOW` disposition
+with `R22_SUPPORT_RESOLVER_REQUIRED`.
 
-1. relevance is `inactive_branch`;
-2. the record is independently bound to an admitted `SUPPORTED + KEEP`
-   validity result and receipt hash;
-3. every linked route is inactive, with no viable or unknown route;
-4. topology is `ISOLATED_HISTORY_FREE`; and
-5. execution scope is `SHADOW_ONLY`.
-
-Otherwise disposition is `RETAIN`. No R2.1/R2.2 transformation plan or
-renderer consumes `ARCHIVE_SHADOW` in R2.3.
+A later version may admit `ARCHIVE_SHADOW` only after a module-owned resolver
+mechanically verifies the committed R2.2 receipt/output/evidence chain, exact
+logical call and record coverage, and `SUPPORTED + KEEP` for every eligible
+target in the record, in addition to inactive linked routes,
+`ISOLATED_HISTORY_FREE`, and `SHADOW_ONLY`. No R2.1/R2.2 renderer consumes
+`ARCHIVE_SHADOW` in R2.3.
 
 ## 8. Actor-visible state
 
@@ -318,7 +333,8 @@ linking, and topology comparison. The receipt records:
   parsed output, admitted output, rubric, and state hashes as stages permit;
 - typed status/fallback and bounded validation checks;
 - backend calls and cumulative task-start/revision/tracking/link call census;
-- packet/backend/admission/state-update/total latency;
+- packet/backend/admission/state-update/total latency, including elapsed
+  backend time on exception, timeout, or rejected output;
 - milestone/path/frontier/relevance/archive/unknown census; and
 - constant false network/model/GPU/action/mutation/persistence attestations.
 
@@ -344,7 +360,8 @@ preserves prior state, and emits no archive proposal.
 Metrics use only closed operation/status/state/path/relevance/stage labels.
 Task IDs, record IDs, logical-call IDs, raw reasons, or text are not metric
 labels. Runtime counts cover generation, revision, tracking, linking, cache
-reuse, unknown/abstention, ARCHIVE_SHADOW, and latency.
+reuse, unknown/abstention, the reserved archive census (zero without a
+resolver), and latency.
 
 Invented requirement, false completion, legal-alternative false deviation,
 and false archive are measured only against explicit offline fixture/pilot
@@ -367,9 +384,11 @@ Acceptance requires deterministic injected-fake tests proving:
    History IR, future/outcome/checker/replay data, and raw-event mutation;
 6. ambiguous GUI state becoming `unknown`, and weak transition status not
    settling semantic completion/violation;
-7. deterministic path/frontier computation and state hash/CAS binding;
-8. all four relevance classes and ARCHIVE_SHADOW only for independently
-   supported records whose linked paths are all inactive;
+7. memoized shared-DAG path/frontier computation, independent recomputation,
+   and state hash/CAS binding;
+8. all four relevance classes, unconditional `RETAIN` without a trusted R2.2
+   resolver, non-authority of arbitrary support hashes, and rejection of
+   `ARCHIVE_SHADOW`;
 9. closed-schema rejection of factual authority, `DROP`, `REPLACE`, active
    `ARCHIVE`, next-action, tool/action, and unexpected fields;
 10. actor-visible state disablement without changing rubric/relevance/history
@@ -390,9 +409,11 @@ or causal effect.
 
 R2.4 must separately add and authorize real Qwen/MAI task/current-GUI/
 transition plumbing, external state/receipt resources, any live replaceable
-backend transport, cancellable attempt receipts, secrets authority, and the
-joint-versus-isolated runtime comparison. It must decide the call topology from
-measured latency and safety without relabeling a joint result as independent.
+backend transport, cancellable attempt receipts, secrets authority, a trusted
+record-level R2.2 `SUPPORTED + KEEP` resolver before any `ARCHIVE_SHADOW`, and
+the joint-versus-isolated runtime comparison. It must decide the call topology
+from measured latency and safety without relabeling a joint result as
+independent.
 
 Until then, missing live inputs are availability facts, not permission to use
 actor history as truth, invoke a provider, mutate an actor request, or execute
