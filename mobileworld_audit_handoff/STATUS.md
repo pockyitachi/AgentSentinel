@@ -64,12 +64,12 @@ MobileWorld backend/GUI/tool/action 或 replay；没有把两个 G1.5 v1 Codec �
 `live_ready=true`，也没有授权 R2.4。Linear 工作流状态仍由 owner 单独管理。**
 
 **Runtime ALE-326 / R2.3 已形成 corrected repository engineering candidate commit
-`dc037efdda4cd8583f47c159e58edb4717cb9c87`，当前等待 owner review，尚不计入
+`7da7b0eb35cf5fce849b0f40c2c414ae3f223f99`，当前等待 owner review，尚不计入
 accepted/Done。** 候选范围严格限定为 CPU/offline/injected-fake、SHADOW-only：versioned
 exact-span `AND`/`OR` rubric、generate-once cache、显式 revision、history-free causal packet、
 milestone/path/frontier tracking、post-state relevance、hash-only receipt 与 low-cardinality
-metrics。共享 DAG 派生已 memoize，state validator 会独立重算 path/frontier，backend 输出先重建为
-detached trusted snapshot。当前没有可信的 record-level R2.2 resolver，因此所有 relevance disposition
+metrics。共享 DAG 派生已 memoize，state validator 会独立重算 path/frontier；backend 输入、输出与公开
+结果均通过有 cycle/depth/node budget 的 detached trusted snapshot 隔离。当前没有可信的 record-level R2.2 resolver，因此所有 relevance disposition
 均为 `RETAIN`，`ARCHIVE_SHADOW` 仅保留在 schema vocabulary 中，不写 history、不进入 renderer，也不执行。
 Qwen/MAI 只使用 captured fixtures；没有真实模型/provider、网络、GPU、MobileWorld backend/
 GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
@@ -1099,4 +1099,17 @@ Bindings: `contracts.py` is SHA-256 `bb6eb3ebb6a2a0c921785c547868780585029c5d412
 Verification: focused R2.3 passed 47/47 repeatedly; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 631/631; and the complete MobileWorld suite passed 1716/1716 on the final implementation/test bytes. Ruff check/format, targeted mypy, Python compilation, all five Draft 2020-12 schema meta-checks, and Git diff checks passed. Independent normal-data probes measured a 45-gate/depth-20 shared DAG at about 4.7 ms, verified recursive backend-output identity separation and stable receipt/state hashes after backend-side mutation, confirmed forged state/frontier rejection and fail-closed archive behavior, and observed positive bounded backend latency for start/revise/track exceptions and rejected outputs. Three independent read-only reviews reported no remaining P0/P1 in the stated scope.
 
 Authority and next boundary: this correction used only CPU/offline code, injected fake backends, and captured Qwen/MAI fixtures. It invoked no live model/provider, network, GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. A trusted record-level R2.2 `SUPPORTED + KEEP` resolver is an explicit R2.4 prerequisite before any `ARCHIVE_SHADOW`; all other live/resource/GPU/action work also remains separately unauthorized. The repository agent did not push, merge, or modify Linear.
+```
+
+```text
+Date: 2026-09-02 UTC
+ALE-326 / R2.3 backend-boundary correction candidate: implementation commit `7da7b0eb35cf5fce849b0f40c2c414ae3f223f99` supersedes the `dc037efdda4cd8583f47c159e58edb4717cb9c87` implementation candidate and its `51eef1ccb4815421252958c17cb99c80c7f4927d` governance checkpoint after closing two independently reproduced normal-data P1 trust-boundary gaps. R2.3 remains pending owner review and is not accepted or Done; Runtime Epic 2 remains 2/6 accepted and Linear remains owner-managed.
+
+Corrected behavior: task and backend descriptors are fixed as private snapshots at session construction. Generate, revise, and track each bind a private authority input and its hash before backend dispatch, give the backend a second detached copy, and use only the private graph for admission, CAS, cache, state, and receipt binding. Public properties, packet/revision builders, operation results, adapters, and every cache hit return fresh detached graphs, so backend- or caller-side mutation cannot alter session authority or previously bound hashes. Canonical projection, hashing, and snapshotting use one active-path walker that permits legal shared DAG reuse but fails closed on cycles, depth beyond 64, or more than 262,144 total visits across containers, dataclasses, enums, and primitive leaves. These failures are typed; no `RecursionError` escapes and no failing branch re-hashes the rejected graph.
+
+Bindings: `contracts.py` is SHA-256 `9c61579b223ec349b2930066a0c8046a5ceb70e7a30eb6394a5ad66b41e90e52` / 108,526 bytes; `session.py` is `8bd78e34570b468ead209a6ee98d6d6426a7f618a92bada592c25e8cf13c8340` / 77,460; the focused test is `3ee46306404c01e1cbb810e6f378f7b80c01829c495ff2381e7c6c8a1ac1d6a7` / 115,384; and the corrected contract is `a24dbea8b40907a651077f8d26f865f1dac994654dd593f22a688dc650b39e9e` / 21,629. All five R2.3 schemas are byte-unchanged from the prior checkpoint. The four-file correction binary diff from `51eef1ccb4815421252958c17cb99c80c7f4927d` to `7da7b0eb35cf5fce849b0f40c2c414ae3f223f99` is SHA-256 `eaba5b784c325f0528e3ae4c32a8f20a793b7330d0d005719d3809c78123ab4b`; the complete main-to-candidate binary diff is `51a56659b059e5edb959da785fc539d60869189301cbe4307453d97690e3a050`.
+
+Verification: focused R2.3 passed 59/59; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 643/643; and the complete MobileWorld suite passed 1728/1728 in 429.12 seconds. Ruff check/format, targeted mypy for all seven R2.3 source/test files, Python compilation, all five Draft 2020-12 schema meta-checks, and Git diff checks passed. Independent read-only probes confirmed pre-call receipt/CAS binding under backend mutation, fresh detached public/cache graphs, typed cycle/depth/node failures for projection/hash/snapshot, primitive- and enum-leaf budget enforcement, and no remaining P0/P1 in the stated exact-type scope.
+
+Authority and next boundary: this correction used only CPU/offline code, injected fake backends, and captured Qwen/MAI fixtures. It invoked no live model/provider, network, GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. R2.4 remains the next dependency only after owner acceptance of R2.3 and separate authorization for any live/resource/GPU/action work. The repository agent did not push, merge, or modify Linear.
 ```
