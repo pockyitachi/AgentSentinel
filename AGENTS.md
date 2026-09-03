@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. The initial joint R2.4/R2.5 CPU repository-preparation implementation is `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it **NO-GO**. Its remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains pending owner re-review: do not merge it or authorize live work. No `OWNER_AUTHORIZED` manifest was issued, no live smoke or pilot was run, and no persistent 117-row executable source, selected cohort, or frozen pilot manifest/hash exists. Only tooling/protocol preparation is claimed. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. The initial joint R2.4/R2.5 CPU repository-preparation implementation is `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it **NO-GO**. Its latest remediation candidate is `4053a90c3ed97ad76cba133d6a2e26089d7f1888` and remains pending owner re-review: R2.4 remains In Progress / NO-GO; do not merge it or authorize live work. No `OWNER_AUTHORIZED` manifest was issued, no live smoke or pilot was run, and no persistent 117-row executable source, selected cohort, or frozen pilot manifest/hash exists. Only tooling/protocol preparation is claimed. Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -230,12 +230,21 @@ history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified that candidate **NO-GO**.
-The remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains pending
-owner re-review. It must not be merged and does not authorize live execution.
-Neither checkpoint is an R2.4 live-smoke result or an R2.5 pilot result.
+The latest remediation candidate is
+`4053a90c3ed97ad76cba133d6a2e26089d7f1888` and remains pending owner
+re-review. It suppresses pinned OpenAI/httpx/httpcore standard logging inside
+strict production calls, compares sealed JSON schemas as type-sensitive
+canonical bytes, binds live-rubric proof to module-owned prompt, Collector,
+current-image, Responses-envelope, and output anchors, and turns
+`TERMINATION_UNCONFIRMED` into a run-fatal latch before actor/later dispatch.
+It also reserves a bounded cleanup window cross-bound to the seven-second
+termination upper bound, requires at least eight seconds of cleanup grace, and
+records typed cleanup failure. It must not be merged and does not authorize
+live execution. No repository-preparation or remediation checkpoint is an
+R2.4 live-smoke result or an R2.5 pilot result.
 
-This checkpoint made no live OpenAI/model/provider call; used no external
-network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
+These repository candidates made no live OpenAI/model/provider call; used no
+external network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
 GUI/tool/action, or replay; issued no `OWNER_AUTHORIZED` manifest; and
 established no effectiveness or causal claim. No persistent 117-row executable
 task source, selected cohort, frozen pilot manifest, or corresponding content

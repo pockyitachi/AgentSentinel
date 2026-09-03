@@ -81,11 +81,14 @@ GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 **Runtime ALE-327 / R2.4 与 ALE-328 / R2.5 的初始 joint
 CPU-only/offline/injected-fake repository engineering preparation implementation
 是 `344e1c42596a4dca717da66374eeca3d936c3f61`；owner review 结论为
-`NO-GO`。整改候选 commit 为 `91c224446679b4c312a054f3d34f9d4853f6d24f`，已完成代码整改但仍须 owner
-复审；R2.4 保持 In Progress，不得 merge，也不得进入 live 授权。** 复审发现的
-四项 P1 是严格生产日志泄露 task instruction、live runner 未独立核验 sealed-stage
-最终请求、原地修改 accepted R2.3 v1 schema/语义、治理绑定错误；两项 P2 是
-worker 终止未确认时的状态分类不严，以及把尚未持久化的 source/cohort 描述成已冻结。
+`NO-GO`。最新整改候选 commit 为
+`4053a90c3ed97ad76cba133d6a2e26089d7f1888`，已完成 CPU-only 代码整改但仍须
+owner 复审；R2.4 保持 In Progress，不得 merge，也不得进入 live 授权。** 最新整改在前一
+候选基础上进一步封闭四项独立复审 P1：OpenAI SDK/http 标准 logging 请求泄露、sealed
+JSON Schema 的 Python `1 == true` 类型混淆、rubric live proof 缺少可信 prompt/Collector/
+current-image/provider-output 锚点，以及 `TERMINATION_UNCONFIRMED` 未真正阻断 actor/later
+dispatch。该整改还为终止与清理划分 hash-bound 时限：清理窗口与七秒终止上界交叉绑定，
+最小 grace 为八秒，过期或不足均产生 typed cleanup failure。
 当前只有 tooling/protocol preparation：没有持久化的 117-row executable task source、
 selected cohort、frozen pilot manifest 或对应 hash。R2.4 的 6 个 action-free live
 smoke cases 未运行；R2.5 的 80--120-cell pilot 未获授权且未执行。没有
@@ -1210,4 +1213,54 @@ meta-validation; the five restored R2.3 implementation/schema files are
 byte-identical to `54381b7b56b06d5aa262005af62b65269b4cf0a6`; and Git diff checks passed.
 These results make `91c2244...` a remediation candidate for owner re-review,
 not permission to merge or issue live authority.
+```
+
+```text
+Date: 2026-09-03 UTC
+Latest ALE-327 / R2.4 CPU remediation candidate: implementation commit
+`4053a90c3ed97ad76cba133d6a2e26089d7f1888` supersedes the prior remediation
+candidate after closing four additional independently reproduced live-boundary
+P1 findings. This is repository engineering evidence for owner re-review, not
+an R2.4 live-smoke result. R2.4 remains In Progress / NO-GO, must not be merged,
+and does not authorize live work. R2.5 remains blocked on a future R2.4 GO.
+Runtime Epic 2 remains 3/6 accepted through the already accepted R2.3 mainline
+merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`; Linear was not changed.
+
+Remediated behavior: strict production scope suppresses pinned OpenAI,
+httpx, and httpcore standard logging around both Responses and actor Chat
+Completions calls while leaving non-production logging unchanged. Sealed JSON
+Schema equality is now checked using type-sensitive canonical JSON bytes, so
+numeric and boolean values cannot compare equal through Python coercion.
+Live-rubric validation recomputes module-owned prompt hashes and binds exact
+same-cutoff Collector stimulus, current-image bytes/metadata, Responses
+envelope, provider output, requested/returned model, and usage back to the
+coordinated call. A one-way run-fatal latch trips on the first exact
+`TERMINATION_UNCONFIRMED`, blocks the current Original actor call at the final
+SDK gate, and blocks later reset/runtime/model/backend/task-goal/action/score/
+cell dispatch. Cleanup is the sole closed recovery exception: its separately
+frozen bounded window is cross-bound to the seven-second termination upper
+bound, production authority requires at least eight seconds of cleanup grace,
+and insufficient or expired cleanup time is retained as typed failure evidence.
+
+Verification: focused R2.3--R2.5 tests passed 413/413; the complete MobileWorld
+suite passed 2102/2102. Independent normal-exact red teams reported GO for the
+code boundary, including real SDK MockTransport logging probes, nested
+boolean/integer sealed-schema mutations, proof-anchor mutation attempts,
+run-fatal dispatch probes, and execution-deadline/cleanup-window probes. Ruff
+check and format check passed. Targeted mypy passed over 28 source files;
+`runtime/client.py` still has 16 pre-existing unrelated diagnostics, with no
+new-line diagnostic introduced by this candidate. All 17 R2.3--R2.5 Draft
+2020-12 schemas passed validation; the five accepted R2.3 v1 implementation and
+schema files remain byte-identical to
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`; and Git diff checks passed.
+
+Authority and artifact boundary: this work used no external network, live
+OpenAI/API/provider call, credential/secret, GPU, Docker, model service or
+weights, MobileWorld backend/emulator, GUI/tool/action, replay, pilot, or live
+resource. It issued no `OWNER_AUTHORIZED` manifest and created no persistent
+117-row executable source, selected cohort, frozen pilot manifest, or
+corresponding artifact/hash. Only tooling/protocol preparation is claimed; no
+effectiveness or causal claim is established. Owner re-review is the next
+repository decision, and any later resource/run authority remains a separate
+owner action.
 ```

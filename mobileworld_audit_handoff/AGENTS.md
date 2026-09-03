@@ -85,10 +85,12 @@ CPU/offline/injected-fake, SHADOW-only checkpoint at commit
 `2aa0a268b7d709cf05d524e74c3fba8612f64003`. ALE-327 / R2.4 and ALE-328 /
 R2.5 have an initial joint CPU-only/offline/injected-fake repository-preparation
 implementation at `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
-**NO-GO**. The remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains
-pending owner re-review: do not merge it or authorize live work. Neither
-checkpoint issued an `OWNER_AUTHORIZED` manifest or ran the six-case live smoke
-or any pilot. No persistent 117-row executable source, selected cohort, or
+**NO-GO**. The latest remediation candidate is
+`4053a90c3ed97ad76cba133d6a2e26089d7f1888` and remains pending owner
+re-review: R2.4 remains In Progress / NO-GO; do not merge it or authorize live
+work. No repository-preparation or remediation checkpoint issued an `OWNER_AUTHORIZED`
+manifest or ran the six-case live smoke or any pilot. No persistent 117-row
+executable source, selected cohort, or
 frozen pilot manifest/hash exists; only tooling/protocol preparation is
 claimed. R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
@@ -271,13 +273,21 @@ overlay, same-cutoff Collector evidence, independent history-free rubric and
 history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
-fixtures and injected fakes. Owner review classified it **NO-GO**. The
-remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains pending owner
-re-review. It must not be merged and does not authorize live execution. Neither
-checkpoint is an R2.4 live-smoke result or an R2.5 pilot result.
+fixtures and injected fakes. Owner review classified it **NO-GO**. The latest
+remediation candidate is `4053a90c3ed97ad76cba133d6a2e26089d7f1888`
+and remains pending owner re-review. It suppresses pinned SDK/HTTP standard
+logging inside strict production calls, performs type-sensitive canonical-byte
+sealed-schema comparison, binds live-rubric proof to module-owned prompt,
+Collector, current-image, Responses-envelope, and output anchors, and uses a
+run-fatal latch to block the current actor call and every later dispatch after
+`TERMINATION_UNCONFIRMED`. Cleanup alone receives a bounded reserved window
+cross-bound to the seven-second termination upper bound, with at least eight
+seconds of grace and typed cleanup failure. It must not be merged and does not
+authorize live execution. No repository-preparation or remediation checkpoint
+is an R2.4 live-smoke result or an R2.5 pilot result.
 
-This checkpoint made no live OpenAI/model/provider call; used no external
-network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
+These repository candidates made no live OpenAI/model/provider call; used no
+external network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
 GUI/tool/action, or replay; issued no `OWNER_AUTHORIZED` manifest; and
 established no effectiveness or causal claim. No persistent 117-row executable
 task source, selected cohort, frozen pilot manifest, or corresponding content
@@ -509,11 +519,12 @@ owner-managed.
 
 The initial joint R2.4/R2.5 repository-preparation implementation is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
-**NO-GO**. Its remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains
-pending owner re-review. It is CPU-only, offline, injected-fake engineering
-evidence and must not be merged or treated as live authority. Neither
-checkpoint issued live authority or ran a smoke or pilot, and neither created
-a persistent executable-task source, selected cohort, or frozen pilot
-manifest/hash. R2.3 is accepted through merge
+**NO-GO**. Its latest remediation candidate is
+`4053a90c3ed97ad76cba133d6a2e26089d7f1888` and remains pending owner
+re-review. It is CPU-only, offline, injected-fake engineering
+evidence and must not be merged or treated as live authority. No
+repository-preparation or remediation checkpoint issued live authority, ran a
+smoke or pilot, or created a persistent executable-task source, selected
+cohort, or frozen pilot manifest/hash. R2.3 is accepted through merge
 `2aa0a268b7d709cf05d524e74c3fba8612f64003`; Runtime Epic 2 remains 3/6
 accepted, and Linear remains owner-managed.

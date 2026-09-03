@@ -92,6 +92,14 @@ stimulus fails closed. The coordinator executes task-start generation, state
 tracking, and post-state relevance before returning the R2.2 evidence input.
 Any rubric failure prevents the history-policy transport from starting.
 
+Live rubric proof is accepted only against module-owned trust anchors. The
+validator recomputes the fixed operation and prompt-bundle hashes and binds the
+exact same-cutoff Collector stimulus, current-image bytes/hash/dimensions,
+Responses envelope, provider-output hash, requested/returned model identity,
+and usage to the coordinated logical call. A completed backend call without
+the corresponding trusted Coordinator root fails closed; caller-supplied or
+downstream-rehashed proof fields do not establish authority.
+
 Until a separately trusted record-level R2.2 resolver is installed, record
 relevance remains graph-derived (`ACTIVE_PATH`, `INACTIVE_BRANCH`,
 `PATH_INDEPENDENT`, or `UNKNOWN`), while every v1 disposition remains
@@ -205,6 +213,16 @@ per-dispatch re-attestation, host-local disable/kill controls, bounded cleanup,
 and retained recovery evidence when cleanup cannot complete. No CPU test
 starts Docker, loads weights, opens the network, or executes a GUI action.
 
+Each production unit freezes separate execution and cleanup deadlines within
+the owner stage deadline. The reserved cleanup window is hash-bound to the
+runtime configuration, cross-bound to the seven-second TERM/KILL/waitpid upper
+bound, and requires at least eight seconds of production shutdown grace.
+Insufficient authority window fails before I/O. Reset, runtime/model/backend,
+task-goal, actor, action, score, and later-cell work may use only the execution
+deadline; CLEANUP is the sole closed recovery stage that may use the cleanup
+deadline. Expiry or teardown failure remains typed, journaled failure evidence
+and cannot be promoted to success.
+
 ## 8. OpenAI secret, transport, cancellation, and accounting
 
 The live key is a repo-external regular file owned by the current operator,
@@ -221,6 +239,19 @@ attempt runs in a clean spawned child. A deadline causes TERM, then bounded
 KILL if necessary, followed by `waitpid`; the run cannot continue while worker
 termination is unconfirmed.
 
+Strict production scope suppresses the pinned OpenAI, httpx, and httpcore
+standard loggers during the Sentinel Responses child setup/dispatch and actor
+Chat Completions dispatch, including when `OPENAI_LOG=debug` is present.
+Base-managed actor client construction is scoped as well. The scope is
+restored after the call and does not change ordinary non-production
+diagnostics. Request, task, evidence, image, or secret content must never reach
+ordinary production logs.
+
+Every sealed request component, including JSON Schema, is compared as
+canonical JSON bytes rather than with Python container equality. JSON numeric
+and boolean values are therefore type-distinct; a mutation such as `1` to
+`true` fails before secret access or provider dispatch.
+
 The accepted R2.3 v1 descriptor, receipt, and schema bytes remain unchanged and
 cannot represent a live Responses call. Live rubric execution uses additive,
 versioned R2.4 backend-extension and call-receipt records. The extension binds
@@ -230,6 +261,10 @@ model identities. The R2.4 call receipt records both requested and returned
 model; a missing or mismatched returned identity fails closed. CPU/fake mode
 keeps both model fields null. An unreaped worker or otherwise unconfirmed
 termination is recorded as `TERMINATION_UNCONFIRMED`, never ordinary `FAILED`.
+The first exact occurrence trips a module-owned one-way run-fatal latch before
+the final actor SDK gate. It blocks the current Original actor call and every
+later reset, runtime/model, backend, task-goal, action, score, or cell dispatch;
+only the bounded CLEANUP recovery stage may still run.
 
 `DISPATCHED` is emitted immediately before the SDK provider invocation and is
 conservatively counted as one attempt; the narrow signal-to-call crash window
@@ -313,8 +348,15 @@ artifacts, and cleanup census. Until the owner reviews that candidate and
 separately authorizes a frozen live manifest, R2.4 remains In Progress. The
 initial implementation commit is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
-**NO-GO**. Its remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains
-pending owner re-review. It must not be merged, and the six live-smoke cases
+**NO-GO**. Its latest remediation candidate is
+`4053a90c3ed97ad76cba133d6a2e26089d7f1888` and remains pending owner
+re-review. Focused R2.3--R2.5 tests passed 413/413 and the complete MobileWorld
+suite passed 2102/2102; independent normal-exact red teams reported GO for the
+code boundary. Ruff check/format, targeted mypy over 28 source files, all 17
+R2.3--R2.5 schemas, accepted R2.3 byte-equality, and Git diff checks also
+passed. `runtime/client.py` retains 16 pre-existing unrelated mypy diagnostics;
+the remediation introduced none on changed lines. These CPU checks are not a
+live result. The candidate must not be merged, and the six live-smoke cases
 remain unauthorized.
 
 R2.3 commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` is accepted through
