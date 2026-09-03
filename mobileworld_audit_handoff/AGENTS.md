@@ -86,7 +86,7 @@ CPU/offline/injected-fake, SHADOW-only checkpoint at commit
 R2.5 have an initial joint CPU-only/offline/injected-fake repository-preparation
 implementation at `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. The latest remediation candidate is
-`4053a90c3ed97ad76cba133d6a2e26089d7f1888` and remains pending owner
+`c03c3c0848f76adbbac049bde5e498e7e89355f0` and remains pending owner
 re-review: R2.4 remains In Progress / NO-GO; do not merge it or authorize live
 work. No repository-preparation or remediation checkpoint issued an `OWNER_AUTHORIZED`
 manifest or ran the six-case live smoke or any pilot. No persistent 117-row
@@ -274,7 +274,7 @@ history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified it **NO-GO**. The latest
-remediation candidate is `4053a90c3ed97ad76cba133d6a2e26089d7f1888`
+remediation candidate is `c03c3c0848f76adbbac049bde5e498e7e89355f0`
 and remains pending owner re-review. It suppresses pinned SDK/HTTP standard
 logging inside strict production calls, performs type-sensitive canonical-byte
 sealed-schema comparison, binds live-rubric proof to module-owned prompt,
@@ -285,6 +285,15 @@ cross-bound to the seven-second termination upper bound, with at least eight
 seconds of grace and typed cleanup failure. It must not be merged and does not
 authorize live execution. No repository-preparation or remediation checkpoint
 is an R2.4 live-smoke result or an R2.5 pilot result.
+
+Cleanup teardown cannot initialize a backend: an uninitialized client produces
+the hash-bound `NOT_INITIALIZED_NO_IO` outcome without a dispatch callback,
+resource re-attestation, or backend request. Each admitted live-rubric attempt,
+including failed, cancelled, and termination-unconfirmed attempts, is bound to
+a module-sealed complete canonical provider request. The owner-only durable
+proof independently reconstructs the request and cross-binds its exact prompt,
+task or tracking packet, Coordinator packet root, Collector stimulus, current
+image, schema/settings, attempt receipt, and any completed-call receipt.
 
 These repository candidates made no live OpenAI/model/provider call; used no
 external network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
@@ -520,7 +529,7 @@ owner-managed.
 The initial joint R2.4/R2.5 repository-preparation implementation is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. Its latest remediation candidate is
-`4053a90c3ed97ad76cba133d6a2e26089d7f1888` and remains pending owner
+`c03c3c0848f76adbbac049bde5e498e7e89355f0` and remains pending owner
 re-review. It is CPU-only, offline, injected-fake engineering
 evidence and must not be merged or treated as live authority. No
 repository-preparation or remediation checkpoint issued live authority, ran a

@@ -155,6 +155,12 @@ Resource PID/container/model identity and health are re-attested before actor,
 reset, task, goal, action, score, and teardown dispatch. Failure, expiry,
 ownership drift, unknown cleanup, or unknown provider cost stops the sequence.
 
+Normal task startup may initialize the backend, but failure cleanup may not.
+Cleanup-only teardown never calls initialization or reinitialization. If the
+client was not initialized, it performs zero HTTP/backend I/O and records the
+typed, hash-bound `NOT_INITIALIZED_NO_IO` outcome with
+`request_dispatched=false`; this is retained as failure/recovery evidence.
+
 ## 6. Sentinel semantics in the two arms
 
 BASELINE performs zero rubric and history-policy OpenAI calls and sends the
@@ -221,6 +227,14 @@ unit journal must bind those attempts, costs, actions, and terminal phase before
 control returns. If final publication fails, previously fsynced evidence
 remains recoverable under an owner-only partial marker and is never labeled
 successful.
+
+Every admitted JOINT_SENTINEL rubric attempt inherits the R2.4 complete
+canonical provider-request proof. Its exact attempt order, terminal receipt,
+task or tracking packet, Coordinator/Collector roots, current image, fixed
+prompt, schema/settings, and request hash remain independently verifiable in
+the owner-only detail. A failed, cancelled, or termination-unconfirmed attempt
+does not lose that request preimage merely because no provider response or
+completed-call receipt exists.
 
 Raw Collector streams remain label-free and immutable. Derived semantic and
 experimental results live only in the access-controlled sidecar/output root.

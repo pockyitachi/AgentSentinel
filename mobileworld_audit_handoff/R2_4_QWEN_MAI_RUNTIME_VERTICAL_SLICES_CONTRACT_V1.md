@@ -17,6 +17,7 @@ Live-rubric schemas:
 - `schemas/r2_4/rubric_track_output.v1.schema.json`
 - `schemas/r2_4/rubric_backend_extension.v1.schema.json`
 - `schemas/r2_4/rubric_call_receipt.v1.schema.json`
+- `schemas/r2_4/rubric_request_proof.v1.schema.json`
 
 Decision date: 2026-09-03 UTC
 
@@ -99,6 +100,16 @@ Responses envelope, provider-output hash, requested/returned model identity,
 and usage to the coordinated logical call. A completed backend call without
 the corresponding trusted Coordinator root fails closed; caller-supplied or
 downstream-rehashed proof fields do not establish authority.
+
+For every admitted rubric attempt, the trust anchor retains a detached copy of
+the complete canonical provider request and can reconstruct it without trusting
+the attempt or call receipt. Reconstruction binds the fixed operation prompt
+and instructions, task and rubric/tracking packet, Coordinator packet root,
+Collector stimulus, current image/data URL, response schema, model, reasoning,
+tool, storage, streaming, truncation, and output-token settings. Its canonical
+request hash must equal the corresponding attempt request hash and, for a
+completed call, the call-receipt request hash. Rewriting those hashes and their
+downstream roots while leaving the anchor unchanged fails closed.
 
 Until a separately trusted record-level R2.2 resolver is installed, record
 relevance remains graph-derived (`ACTIVE_PATH`, `INACTIVE_BRANCH`,
@@ -223,6 +234,14 @@ deadline; CLEANUP is the sole closed recovery stage that may use the cleanup
 deadline. Expiry or teardown failure remains typed, journaled failure evidence
 and cannot be promoted to success.
 
+Cleanup teardown is recovery-only and must never initialize or reinitialize the
+backend. If client/backend initialization (`/init`) was not locally confirmed,
+cleanup performs no dispatch callback, resource re-attestation, or backend
+request and records the typed, hash-bound `NOT_INITIALIZED_NO_IO` outcome with
+`request_dispatched=false`.
+Local client closure and any already-created audit lifecycle finalization still
+run; the outcome remains a failed/recoverable unit rather than success.
+
 ## 8. OpenAI secret, transport, cancellation, and accounting
 
 The live key is a repo-external regular file owned by the current operator,
@@ -286,7 +305,18 @@ detail contract. It uses owner-only repo-external directories/files and binds:
 - the SDK arguments immediately adjacent to the actual actor call;
 - actor attempt/response locator, parser result, action projection, and
   latency/census; and
-- every OpenAI attempt authority, receipt, usage/cost status, and receipt root.
+- every OpenAI attempt authority, receipt, usage/cost status, and receipt root;
+  plus, for every live rubric attempt whose request reaches admission, a
+  module-sealed request anchor registered before transport authorization. A
+  normal attempt linearizes the anchor after `begin` returns and before
+  transport; if START/READY admission instead publishes
+  `TERMINATION_UNCONFIRMED`, the port linearizes the same anchor only after
+  reading that exact terminal from the attempt sink. The
+  restricted durable projection binds its attempt ID, exact order, terminal
+  status/dispatch count/receipt hash, Collector/current-image preimages, and
+  complete canonical provider-request preimage/hash. Failed, cancelled, and
+  termination-unconfirmed attempts retain this proof without claiming a
+  completed rubric call or provider response.
 
 Hidden provider chain-of-thought is not requested or separately persisted in
 the derived audit detail or ordinary production logs. Observable actor output
@@ -300,6 +330,11 @@ evidence under mode `0700/0600`, fsyncs files/directories, and commits by atomic
 rename. Pilot analysis is a later, separate fresh mode-0600 publication. Once
 live work has occurred, a publication failure must retain recoverable
 owner-only evidence and must never relabel it as success.
+If a production-audit terminal commit has unknown outcome, its module-sealed
+recovery receipt retains the full pre-provider projection and hash as well as
+the attempted terminal and actor-attempt census. Thus a rubric request proof,
+including a zero-dispatch `TERMINATION_UNCONFIRMED` proof, remains independently
+reconstructible even if the external transaction removes its temporary file.
 
 ## 10. R2.4 live-smoke acceptance
 
@@ -349,10 +384,10 @@ separately authorizes a frozen live manifest, R2.4 remains In Progress. The
 initial implementation commit is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. Its latest remediation candidate is
-`4053a90c3ed97ad76cba133d6a2e26089d7f1888` and remains pending owner
-re-review. Focused R2.3--R2.5 tests passed 413/413 and the complete MobileWorld
-suite passed 2102/2102; independent normal-exact red teams reported GO for the
-code boundary. Ruff check/format, targeted mypy over 28 source files, all 17
+`c03c3c0848f76adbbac049bde5e498e7e89355f0` and remains pending owner
+re-review. Focused R2.3--R2.5 tests passed 443/443 and the complete MobileWorld
+suite passed 2133/2133; independent normal-exact red teams reported GO for the
+code boundary. Ruff check/format, targeted mypy over 28 source files, all 18
 R2.3--R2.5 schemas, accepted R2.3 byte-equality, and Git diff checks also
 passed. `runtime/client.py` retains 16 pre-existing unrelated mypy diagnostics;
 the remediation introduced none on changed lines. These CPU checks are not a

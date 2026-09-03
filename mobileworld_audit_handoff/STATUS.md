@@ -82,13 +82,18 @@ GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 CPU-only/offline/injected-fake repository engineering preparation implementation
 是 `344e1c42596a4dca717da66374eeca3d936c3f61`；owner review 结论为
 `NO-GO`。最新整改候选 commit 为
-`4053a90c3ed97ad76cba133d6a2e26089d7f1888`，已完成 CPU-only 代码整改但仍须
+`c03c3c0848f76adbbac049bde5e498e7e89355f0`，已完成 CPU-only 代码整改但仍须
 owner 复审；R2.4 保持 In Progress，不得 merge，也不得进入 live 授权。** 最新整改在前一
 候选基础上进一步封闭四项独立复审 P1：OpenAI SDK/http 标准 logging 请求泄露、sealed
 JSON Schema 的 Python `1 == true` 类型混淆、rubric live proof 缺少可信 prompt/Collector/
 current-image/provider-output 锚点，以及 `TERMINATION_UNCONFIRMED` 未真正阻断 actor/later
 dispatch。该整改还为终止与清理划分 hash-bound 时限：清理窗口与七秒终止上界交叉绑定，
-最小 grace 为八秒，过期或不足均产生 typed cleanup failure。
+最小 grace 为八秒，过期或不足均产生 typed cleanup failure；并进一步禁止 cleanup 在初始
+`/init` 失败后重新初始化 backend，未初始化 cleanup 以
+`NOT_INITIALIZED_NO_IO`/zero-I/O 形成 hash-bound recovery evidence。每个 admitted rubric
+attempt（包括 failed、cancelled 与 `TERMINATION_UNCONFIRMED`）均绑定完整 canonical
+provider request，owner-only proof 可独立重建 prompt、task/tracking packet、Coordinator/
+Collector roots、current image、schema/settings 与 request/receipt hashes。
 当前只有 tooling/protocol preparation：没有持久化的 117-row executable task source、
 selected cohort、frozen pilot manifest 或对应 hash。R2.4 的 6 个 action-free live
 smoke cases 未运行；R2.5 的 80--120-cell pilot 未获授权且未执行。没有
@@ -1253,6 +1258,55 @@ new-line diagnostic introduced by this candidate. All 17 R2.3--R2.5 Draft
 2020-12 schemas passed validation; the five accepted R2.3 v1 implementation and
 schema files remain byte-identical to
 `54381b7b56b06d5aa262005af62b65269b4cf0a6`; and Git diff checks passed.
+
+Authority and artifact boundary: this work used no external network, live
+OpenAI/API/provider call, credential/secret, GPU, Docker, model service or
+weights, MobileWorld backend/emulator, GUI/tool/action, replay, pilot, or live
+resource. It issued no `OWNER_AUTHORIZED` manifest and created no persistent
+117-row executable source, selected cohort, frozen pilot manifest, or
+corresponding artifact/hash. Only tooling/protocol preparation is claimed; no
+effectiveness or causal claim is established. Owner re-review is the next
+repository decision, and any later resource/run authority remains a separate
+owner action.
+```
+
+```text
+Date: 2026-09-03 UTC
+Latest ALE-327 / R2.4 CPU remediation candidate: implementation commit
+`c03c3c0848f76adbbac049bde5e498e7e89355f0` supersedes
+`4053a90c3ed97ad76cba133d6a2e26089d7f1888` after closing two further
+independently reproduced production-boundary P1 findings. This remains
+CPU-only repository engineering evidence for owner re-review, not an R2.4
+live-smoke result. R2.4 remains In Progress / NO-GO, must not be merged, and
+does not authorize live work. R2.5 remains blocked on a future R2.4 GO. Runtime
+Epic 2 remains 3/6 accepted; Linear was not changed.
+
+Remediated behavior: cleanup teardown is now recovery-only and cannot call
+backend initialization. After an initial `/init` failure, cleanup records the
+typed, hash-bound `NOT_INITIALIZED_NO_IO` outcome with
+`request_dispatched=false`, performs no dispatch callback, resource
+re-attestation, or backend HTTP request, and still closes local state and
+finalizes any already-created audit lifecycle. Every admitted live-rubric
+attempt now has a module-sealed request anchor created from the complete
+canonical provider request. The independent owner-only proof reconstructs and
+cross-binds the fixed prompt/instructions, task or tracking packet,
+Coordinator packet root, same-cutoff Collector stimulus, current image/data
+URL, response schema, model/settings, exact attempt order and terminal receipt,
+request hash, and any completed-call receipt. Failed, cancelled, and
+`TERMINATION_UNCONFIRMED` attempts retain the request proof without inventing a
+provider response. A termination-unconfirmed request and an audit publication
+fault both preserve recoverable proof while the one-way fatal latch continues
+to block actor and action dispatch.
+
+Verification: focused R2.3--R2.5 tests passed 443/443 in 139.68 seconds; the
+complete MobileWorld suite passed 2133/2133 in 558.25 seconds. The final
+request-proof implementation subset passed 201/201, and independent cold-red
+team probes passed 25/25 with no remaining normal-exact P0/P1 in scope. Ruff
+check and format check passed on all 14 changed Python files. Targeted mypy
+passed over 28 source files; `runtime/client.py` retains exactly 16 historical
+diagnostics, none on added or modified lines. All 18 R2.3--R2.5 Draft 2020-12
+schemas passed validation; accepted R2.3 implementation/schema bytes remain
+identical to `54381b7b56b06d5aa262005af62b65269b4cf0a6`; and Git diff checks passed.
 
 Authority and artifact boundary: this work used no external network, live
 OpenAI/API/provider call, credential/secret, GPU, Docker, model service or
