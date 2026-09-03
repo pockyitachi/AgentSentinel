@@ -1,6 +1,6 @@
 # AgentSentinel agent instructions
 
-Last synchronized with the owner-facing repository state: **2026-09-02 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-03 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
 This is the AgentSentinel monorepo. `MobileWorld/` is the active implementation
@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a corrected CPU/offline/injected-fake, SHADOW-only candidate at `54381b7b56b06d5aa262005af62b65269b4cf0a6`, pending owner review and not counted as accepted. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a corrected CPU/offline/injected-fake, SHADOW-only candidate at `54381b7b56b06d5aa262005af62b65269b4cf0a6`, pending owner review and not counted as accepted. ALE-327 / R2.4 and ALE-328 / R2.5 additionally have a joint CPU-only/offline/injected-fake repository-preparation candidate at `344e1c452e54aa01dc1bf29650af234f30a23f81`, also pending owner review and not counted as accepted. No `OWNER_AUTHORIZED` manifest was issued, and no live smoke or pilot was run. Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -220,6 +220,22 @@ review of this candidate, but any live vertical slice, provider/model use,
 resource provisioning, GPU, backend, GUI, tool, action, or replay still needs
 separate explicit owner authorization.
 
+## Candidate repository-preparation boundary: ALE-327 / R2.4 and ALE-328 / R2.5
+
+Commit `344e1c452e54aa01dc1bf29650af234f30a23f81` prepares the two-host runtime
+overlay, same-cutoff Collector evidence, independent history-free rubric and
+history-policy orchestration, typed no-history behavior, sealed
+authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
+evidence, and a frozen 20-task / 80-cell pilot protocol under CPU fixtures and
+injected fakes. It is not an R2.4 live-smoke result or an R2.5 pilot result.
+
+This checkpoint made no live OpenAI/model/provider call; used no external
+network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
+GUI/tool/action, or replay; issued no `OWNER_AUTHORIZED` manifest; and
+established no effectiveness or causal claim. The frozen G1.5 Codecs remain
+`live_ready=false`. R2.3 remains pending owner review, Runtime Epic 2 remains
+2/6 accepted, and Linear remains owner-managed.
+
 ## Runtime Epic 2 sequence
 
 ```text
@@ -257,6 +273,12 @@ causal-evaluation epic after an explicit owner decision.
   `live_ready=false` declaration. Runtime readiness requires a new overlay.
 - G1.3 capsules and the G1.4 runner/fake provider are optional regression/test
   assets, not online dependencies and not blockers for R2.1–R2.3.
+- R2.3, R2.4, and R2.5 runtime contracts, CPU fixtures, authority builders,
+  audit/analysis layers, and tests live under
+  `MobileWorld/src/mobile_world/runtime/sentinel/r2_3/`, `r2_4/`, `r2_5/`,
+  `MobileWorld/tests/runtime/sentinel/`, and `mobileworld_audit_handoff/`.
+  Their production entrypoints remain inert without an exact separately
+  promoted owner authority and passing production preflight.
 - `sentinel_mvp/` is a legacy behavioral reference, not production runtime
   code and not an authority over the new seam.
 
@@ -308,12 +330,13 @@ These paths were under the old server's `/shared/linqiang/...` tree. Bind any
 restored data through configuration and verify hashes; never hardcode that
 prefix on a new server.
 
-R2.4/R2.5 later require separately provisioned Qwen and MAI model snapshots,
-the MobileWorld backend/emulator/container environment, loopback model
-services, external mode-0600 secrets, and repo-external output roots. None is
-needed or authorized for R2.1 CPU acceptance. Do not reuse old GPU indices,
-PIDs, tmux names, or port assumptions. At this handoff no project tmux session,
-port 8766 annotation site, or port 18007 model service should be assumed live.
+R2.4/R2.5 live execution requires separately provisioned Qwen and MAI model
+snapshots, the MobileWorld backend/emulator/container environment,
+loopback-only model services, external mode-0600 secrets, and repo-external
+output roots. None is needed or authorized for the CPU repository-preparation
+candidate. Do not reuse old GPU indices, PIDs, tmux names, or port assumptions.
+At this handoff no project tmux session, port 8766 annotation site, or port
+18007 model service should be assumed live.
 
 ## Data, publication, and Git safety
 
@@ -347,8 +370,15 @@ For R2.1/R2.2 maintenance or dependent runtime work, read completely:
 10. `mobileworld_audit_handoff/R2_2_EVIDENCE_GROUNDED_SENTINEL_POLICY_CONTRACT_V1.md`
 11. the three checked-in schemas under
     `mobileworld_audit_handoff/schemas/r2_2/`;
-12. The current BaseAgent, Qwen, MAI, Collector, G1.2, G1.4 fake-provider,
-    G1.5 Codec, and `runtime/sentinel/r2_2/` implementation/tests.
+12. `mobileworld_audit_handoff/R2_3_MULTI_PATH_RUBRIC_CONTRACT_V1.md`
+    and the checked-in schemas under `mobileworld_audit_handoff/schemas/r2_3/`;
+13. `mobileworld_audit_handoff/R2_4_QWEN_MAI_RUNTIME_VERTICAL_SLICES_CONTRACT_V1.md`,
+    `mobileworld_audit_handoff/R2_5_MOBILEWORLD_PILOT_PROTOCOL_V1.md`, and the
+    checked-in schemas under `mobileworld_audit_handoff/schemas/r2_4/` and
+    `mobileworld_audit_handoff/schemas/r2_5/`;
+14. The current BaseAgent, Qwen, MAI, Collector, G1.2, G1.4 fake-provider,
+    G1.5 Codec, and `runtime/sentinel/r2_2/`, `r2_3/`, `r2_4/`, and `r2_5/`
+    implementation/tests.
 
 Read the G1.1/G1.3/G1.4/G1.6 contracts and `STATUS.md` when touching those
 historical artifacts or validating their provenance. They are not mandatory

@@ -1,6 +1,6 @@
 # Instructions for AgentSentinel coding agents
 
-Last synchronized with the owner-facing repository state: **2026-09-02 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-03 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
 This directory preserves the scientific contracts and provenance for the
@@ -82,7 +82,11 @@ CPU/offline/injected-fake-Responses, SHADOW-only checkpoint at commit
 `3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a
 corrected CPU/offline/injected-fake, SHADOW-only candidate at commit
 `54381b7b56b06d5aa262005af62b65269b4cf0a6`, pending owner review and not
-counted as accepted. R2.1
+counted as accepted. ALE-327 / R2.4 and ALE-328 / R2.5 additionally have a
+joint CPU-only/offline/injected-fake repository-preparation candidate at commit
+`344e1c452e54aa01dc1bf29650af234f30a23f81`, pending owner review and not
+counted as accepted. It issued no `OWNER_AUTHORIZED` manifest and ran neither
+the six-case live smoke nor the 80-cell pilot. R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
 History-IR snapshots,
 precomputed renderer-result binding, worker-owned policy-evaluation census, and
@@ -253,6 +257,23 @@ editing. First-host prompt builders are under:
 - `../MobileWorld/src/mobile_world/agents/implementations/qwen3vl.py`
 - `../MobileWorld/src/mobile_world/agents/implementations/mai_ui_agent.py`
 
+## 4C. Candidate scope: R2.4/R2.5 CPU-only repository preparation
+
+Commit `344e1c452e54aa01dc1bf29650af234f30a23f81` prepares the two-host runtime
+overlay, same-cutoff Collector evidence, independent history-free rubric and
+history-policy orchestration, typed no-history behavior, sealed
+authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
+evidence, and a frozen 20-task / 80-cell pilot protocol under CPU fixtures and
+injected fakes. It is not an R2.4 live-smoke result or an R2.5 pilot result.
+
+This checkpoint made no live OpenAI/model/provider call; used no external
+network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
+GUI/tool/action, or replay; issued no `OWNER_AUTHORIZED` manifest; and
+established no effectiveness or causal claim. A DRAFT authority does not grant
+execution permission. The frozen G1.5 Codecs remain `live_ready=false`, R2.3
+remains pending owner review, Runtime Epic 2 remains 2/6 accepted, and Linear
+remains owner-managed.
+
 ## 5. Reusable implementation assets
 
 - Collector: `../MobileWorld/src/mobile_world/runtime/audit/`
@@ -264,9 +285,16 @@ editing. First-host prompt builders are under:
   `../MobileWorld/src/mobile_world/offline/g1_history_codecs/`
 - R2.2 evidence, policy, admission, renderer, receipt, and metrics:
   `../MobileWorld/src/mobile_world/runtime/sentinel/r2_2/`
+- R2.3 rubric plus R2.4/R2.5 CPU preparation, authority, audit, and analysis:
+  `../MobileWorld/src/mobile_world/runtime/sentinel/r2_3/`,
+  `../MobileWorld/src/mobile_world/runtime/sentinel/r2_4/`, and
+  `../MobileWorld/src/mobile_world/runtime/sentinel/r2_5/`
 - Relevant tests:
   `../MobileWorld/tests/runtime/audit/`,
   `../MobileWorld/tests/runtime/sentinel/test_r2_2_policy.py`,
+  `../MobileWorld/tests/runtime/sentinel/test_r2_3_rubric.py`,
+  `../MobileWorld/tests/runtime/sentinel/test_r2_4_*.py`,
+  `../MobileWorld/tests/runtime/sentinel/test_r2_5_*.py`,
   `../MobileWorld/tests/offline/test_portable_causal_replay_contract.py`,
   `../MobileWorld/tests/offline/test_causal_replay_runner.py`, and
   `../MobileWorld/tests/offline/test_g1_history_codecs.py`.
@@ -310,6 +338,9 @@ Currently permitted:
 - the checked-in R2.3 rubric/tracker under injected fake backends in SHADOW
   only, including derived relevance receipts; `ARCHIVE_SHADOW` remains
   schema-reserved and all current dispositions are `RETAIN`;
+- the checked-in R2.4/R2.5 contracts, CPU orchestration, topology evidence,
+  sealed production doubles, audit/analysis, and authority-building mechanics
+  under CPU fixtures and injected fakes only;
 - existing in-process fake provider and secret-free fixtures;
 - read-only inspection and hash validation of historical artifacts.
 
@@ -318,6 +349,10 @@ Not currently permitted:
 - live/model-backed R2.2 policy calls, ACTIVE R2.2 transformation, or an
   unbound correction generator;
 - live/model-backed rubric generation/tracking or active `ARCHIVE` (R2.3);
+- promotion or use of an `OWNER_AUTHORIZED` R2.4/R2.5 run manifest without a
+  new explicit owner approval of its exact digest;
+- the real six-case R2.4 smoke or any R2.5 backend reset, model call, GUI
+  action, score collection, or 80-cell pilot execution;
 - a target actor/Sentinel model or any project provider/client;
 - external network, GPU probe/use, weight loading/serving, or model endpoint;
 - MobileWorld backend/container/emulator task execution, GUI/tool/action,
@@ -347,8 +382,13 @@ Before R2.1/R2.2 maintenance or dependent runtime changes, read completely:
 10. `schemas/r2_1/sentinel_receipt.v1.schema.json`;
 11. `R2_2_EVIDENCE_GROUNDED_SENTINEL_POLICY_CONTRACT_V1.md`;
 12. all three schemas under `schemas/r2_2/`;
-13. current implementation/test files listed in Section 5, including
-    `../MobileWorld/src/mobile_world/runtime/sentinel/r2_2/`.
+13. `R2_3_MULTI_PATH_RUBRIC_CONTRACT_V1.md` and the schemas under
+    `schemas/r2_3/`;
+14. `R2_4_QWEN_MAI_RUNTIME_VERTICAL_SLICES_CONTRACT_V1.md`,
+    `R2_5_MOBILEWORLD_PILOT_PROTOCOL_V1.md`, and the schemas under
+    `schemas/r2_4/` and `schemas/r2_5/`;
+15. current implementation/test files listed in Section 5, including the
+    `r2_2/`, `r2_3/`, `r2_4/`, and `r2_5/` runtime packages.
 
 Read `DECISION_LOG.md`, `G1_4_DECISION_LOG.md`,
 `G1_5_DECISION_LOG.md`, G1.1/G1.3/G1.4 contracts, and `STATUS.md` when
@@ -454,3 +494,9 @@ The corrected R2.2 repository checkpoint is accepted at
 CPU/offline/fake SHADOW policy and its contracts, not live readiness,
 effectiveness, or permission to start R2.4 resources. Linear remains
 owner-managed.
+
+The joint R2.4/R2.5 repository-preparation candidate is
+`344e1c452e54aa01dc1bf29650af234f30a23f81`. It is CPU-only, offline, and
+injected-fake engineering evidence pending owner review. It did not issue live
+authority or run a smoke or pilot, does not accept R2.3, and does not change
+the 2/6 accepted count or Linear.
