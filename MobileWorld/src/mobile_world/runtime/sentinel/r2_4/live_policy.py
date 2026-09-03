@@ -109,8 +109,17 @@ from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     case_execution_lease_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+    LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
+    LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
     LiveOpenAIRubricBackendV1,
+    LiveRubricCallReceiptV1,
+    LiveRubricExecutionScopeV1,
+    LiveRubricOperationV1,
     ProductionRubricProviderPortV1,
+    R24RubricBackendExtensionDescriptorV1,
+    live_rubric_call_receipt_sha256,
+    snapshot_live_rubric_call_receipt,
+    snapshot_r24_rubric_backend_extension_descriptor,
 )
 from mobile_world.runtime.sentinel.r2_5.pilot import PilotArmV1, PilotHostV1
 
@@ -920,7 +929,9 @@ class ResolvedLivePolicyCallBindingV1:
     preflight_report_sha256: str
     factory_binding_sha256: str
     pricing_binding_sha256: str
+    rubric_backend_extension_descriptor_sha256: str
     rubric_attempt_receipt_sha256s: tuple[str, ...]
+    rubric_call_receipt_sha256s: tuple[str, ...]
     history_policy_attempt_receipt_sha256: str | None
     output_sha256: str | None
     openai_calls: int
@@ -939,6 +950,7 @@ class ResolvedLivePolicyCallBindingV1:
             "preflight_report_sha256",
             "factory_binding_sha256",
             "pricing_binding_sha256",
+            "rubric_backend_extension_descriptor_sha256",
         ):
             _require_sha256(getattr(self, name), name)
         for name in (
@@ -957,6 +969,15 @@ class ResolvedLivePolicyCallBindingV1:
             )
         for value in self.rubric_attempt_receipt_sha256s:
             _require_sha256(value, "rubric_attempt_receipt_sha256")
+        if type(self.rubric_call_receipt_sha256s) is not tuple or len(
+            self.rubric_call_receipt_sha256s
+        ) != len(self.rubric_attempt_receipt_sha256s):
+            raise R24ContractError(
+                "INVALID_CALL_BINDING",
+                "R2.4 rubric-call and provider-attempt receipt census differs",
+            )
+        for value in self.rubric_call_receipt_sha256s:
+            _require_sha256(value, "rubric_call_receipt_sha256")
         history_policy_present = self.history_policy_attempt_receipt_sha256 is not None
         if history_policy_present != (
             self.source_transport_binding_sha256 is not None
@@ -1008,7 +1029,11 @@ def resolved_live_policy_call_binding_projection(
         "preflight_report_sha256": value.preflight_report_sha256,
         "factory_binding_sha256": value.factory_binding_sha256,
         "pricing_binding_sha256": value.pricing_binding_sha256,
+        "rubric_backend_extension_descriptor_sha256": (
+            value.rubric_backend_extension_descriptor_sha256
+        ),
         "rubric_attempt_receipt_sha256s": list(value.rubric_attempt_receipt_sha256s),
+        "rubric_call_receipt_sha256s": list(value.rubric_call_receipt_sha256s),
         "history_policy_attempt_receipt_sha256": value.history_policy_attempt_receipt_sha256,
         "output_sha256": value.output_sha256,
         "openai_calls": value.openai_calls,
@@ -1020,6 +1045,266 @@ def resolved_live_policy_call_binding_sha256(
     value: ResolvedLivePolicyCallBindingV1,
 ) -> str:
     return canonical_sha256(cast(JsonValue, resolved_live_policy_call_binding_projection(value)))
+
+
+def validate_live_rubric_cross_bindings_v1(
+    *,
+    logical_call_id: str,
+    actor_request_sha256: str,
+    attempts: tuple[LiveAttemptReceiptV1, ...],
+    rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...],
+    rubric_backend_extension: R24RubricBackendExtensionDescriptorV1 | None,
+    binding: ResolvedLivePolicyCallBindingV1 | None,
+    actor_call_index: int | None,
+    expect_history_policy: bool | None,
+    allow_incomplete: bool,
+) -> None:
+    """Validate one exact ordered R2.4 rubric/attempt/binding proof graph.
+
+    ``allow_incomplete`` is reserved for the generic Original-fallback path,
+    where a terminal failed attempt can exist without a completed rubric call
+    receipt or resolved policy binding.  Every completed rubric call receipt
+    must still match the corresponding ordered RUBRIC attempt exactly.
+    """
+
+    _require_id(logical_call_id, "logical_call_id")
+    _require_sha256(actor_request_sha256, "actor_request_sha256")
+    if type(allow_incomplete) is not bool:
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "incomplete-proof flag is untrusted"
+        )
+    if actor_call_index is not None and (
+        type(actor_call_index) is not int or actor_call_index <= 0
+    ):
+        raise R24ContractError("RUBRIC_CROSS_BINDING_MISMATCH", "actor call index is invalid")
+    if expect_history_policy is not None and type(expect_history_policy) is not bool:
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "history-policy expectation is untrusted"
+        )
+    if type(attempts) is not tuple or type(rubric_call_receipts) is not tuple:
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "rubric proof collections are not tuples"
+        )
+    if any(type(item) is not LiveAttemptReceiptV1 for item in attempts) or any(
+        type(item) is not LiveRubricCallReceiptV1 for item in rubric_call_receipts
+    ):
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "rubric proof values have untrusted types"
+        )
+
+    try:
+        trusted_attempts = tuple(snapshot_live_attempt_receipt(item) for item in attempts)
+        trusted_rubric_calls = tuple(
+            snapshot_live_rubric_call_receipt(item) for item in rubric_call_receipts
+        )
+        trusted_extension = (
+            None
+            if rubric_backend_extension is None
+            else snapshot_r24_rubric_backend_extension_descriptor(rubric_backend_extension)
+        )
+        trusted_binding = (
+            None
+            if binding is None
+            else ResolvedLivePolicyCallBindingV1(
+                **{name: getattr(binding, name) for name in binding.__dataclass_fields__}
+            )
+        )
+    except Exception as exc:
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "rubric proof snapshot failed"
+        ) from exc
+
+    if len({item.attempt_id for item in trusted_attempts}) != len(trusted_attempts) or len(
+        {item.receipt_id for item in trusted_rubric_calls}
+    ) != len(trusted_rubric_calls):
+        raise R24ContractError("RUBRIC_CROSS_BINDING_MISMATCH", "rubric proof repeats an identity")
+    if any(
+        item.logical_call_id != logical_call_id or item.actor_request_sha256 != actor_request_sha256
+        for item in trusted_attempts
+    ) or any(item.logical_call_id != logical_call_id for item in trusted_rubric_calls):
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "rubric proof belongs to another actor call"
+        )
+
+    if trusted_extension is None:
+        if (
+            trusted_attempts
+            or trusted_rubric_calls
+            or trusted_binding is not None
+            or actor_call_index is not None
+        ):
+            raise R24ContractError(
+                "RUBRIC_CROSS_BINDING_MISMATCH",
+                "nonempty rubric proof lacks its extension descriptor",
+            )
+        if not allow_incomplete:
+            raise R24ContractError(
+                "RUBRIC_CROSS_BINDING_MISMATCH", "complete rubric proof is absent"
+            )
+        return
+    if trusted_extension.execution_scope is not LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE:
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH",
+            "production rubric proof has a non-live extension scope",
+        )
+
+    rubric_attempts = tuple(
+        item for item in trusted_attempts if item.role is LiveAttemptRoleV1.RUBRIC
+    )
+    proof_complete = not allow_incomplete or trusted_binding is not None
+    if trusted_attempts and (actor_call_index is None or expect_history_policy is None):
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "rubric attempt sequence authority is absent"
+        )
+    if trusted_binding is not None and actor_call_index != trusted_binding.actor_call_index:
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "actor call index differs from the binding"
+        )
+    if len(trusted_rubric_calls) > len(rubric_attempts) or (
+        proof_complete and len(trusted_rubric_calls) != len(rubric_attempts)
+    ):
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "rubric call/attempt census differs"
+        )
+
+    operations = tuple(item.operation for item in trusted_rubric_calls)
+    expected_rubric_operations = (
+        (LiveRubricOperationV1.GENERATE, LiveRubricOperationV1.TRACK)
+        if actor_call_index == 1
+        else (LiveRubricOperationV1.TRACK,)
+    )
+    expected_roles = (
+        (LiveAttemptRoleV1.RUBRIC,) * len(expected_rubric_operations)
+        + ((LiveAttemptRoleV1.HISTORY_POLICY,) if expect_history_policy else ())
+        if actor_call_index is not None and expect_history_policy is not None
+        else ()
+    )
+    actual_roles = tuple(item.role for item in trusted_attempts)
+    if (
+        operations != expected_rubric_operations[: len(operations)]
+        or actual_roles != expected_roles[: len(actual_roles)]
+        or (proof_complete and operations != expected_rubric_operations)
+        or (proof_complete and actual_roles != expected_roles)
+    ):
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "rubric operation or attempt order differs"
+        )
+    if not proof_complete and len(trusted_rubric_calls) < len(rubric_attempts):
+        first_unmatched = tuple(
+            index
+            for index, item in enumerate(trusted_attempts)
+            if item.role is LiveAttemptRoleV1.RUBRIC
+        )[len(trusted_rubric_calls)]
+        if first_unmatched != len(trusted_attempts) - 1:
+            raise R24ContractError(
+                "RUBRIC_CROSS_BINDING_MISMATCH",
+                "an unmatched rubric attempt is followed by another attempt",
+            )
+
+    for rubric_call, attempt in zip(
+        trusted_rubric_calls,
+        rubric_attempts[: len(trusted_rubric_calls)],
+        strict=True,
+    ):
+        generate = rubric_call.operation is LiveRubricOperationV1.GENERATE
+        expected_input_schema = (
+            LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION
+            if generate
+            else LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION
+        )
+        expected_output_schema = (
+            trusted_extension.generate_output_schema_sha256
+            if generate
+            else trusted_extension.track_output_schema_sha256
+        )
+        if (
+            attempt.role is not LiveAttemptRoleV1.RUBRIC
+            or attempt.status is not LiveAttemptStatusV1.COMPLETED
+            or not attempt.passed
+            or rubric_call.backend_extension_descriptor_sha256 != trusted_extension.sha256
+            or rubric_call.r23_compatibility_descriptor_sha256
+            != trusted_extension.r23_compatibility_descriptor_sha256
+            or rubric_call.execution_scope is not trusted_extension.execution_scope
+            or rubric_call.transport_kind is not trusted_extension.transport_kind
+            or rubric_call.transport_authority is not trusted_extension.transport_authority
+            or rubric_call.requested_model != trusted_extension.configured_model
+            or rubric_call.returned_model != trusted_extension.configured_model
+            or rubric_call.requested_model != attempt.requested_model
+            or rubric_call.returned_model != attempt.returned_model
+            or rubric_call.provider_input_schema_version != expected_input_schema
+            or rubric_call.provider_output_schema_sha256 != expected_output_schema
+            or (rubric_call.current_image_binding_sha256 is None) != generate
+            or rubric_call.manifest_sha256 != attempt.manifest_sha256
+            or rubric_call.preflight_sha256 != attempt.preflight_sha256
+            or rubric_call.case_execution_lease_sha256 != attempt.case_execution_lease_sha256
+            or rubric_call.stage_sha256 != attempt.stage_sha256
+            or rubric_call.attempt_authority_sha256 != attempt.authority_sha256
+            or rubric_call.attempt_receipt_sha256 != live_attempt_receipt_sha256(attempt)
+            or rubric_call.provider_request_sha256 != attempt.request_sha256
+            or rubric_call.transport_binding_sha256 != attempt.transport_binding_sha256
+            or rubric_call.pricing_binding_sha256 != attempt.pricing_binding_sha256
+            or rubric_call.dispatch_count != attempt.dispatch_count
+            or rubric_call.input_tokens != attempt.input_tokens
+            or rubric_call.output_tokens != attempt.output_tokens
+            or rubric_call.total_tokens != attempt.total_tokens
+            or rubric_call.cost_usd_micros != attempt.cost_usd_micros
+        ):
+            raise R24ContractError(
+                "RUBRIC_CROSS_BINDING_MISMATCH",
+                "R2.4 rubric call receipt differs from its extension or attempt",
+            )
+
+    if trusted_binding is None:
+        if not allow_incomplete:
+            raise R24ContractError(
+                "RUBRIC_CROSS_BINDING_MISMATCH", "complete policy binding is absent"
+            )
+        return
+
+    rubric_attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in rubric_attempts)
+    rubric_call_hashes = tuple(
+        live_rubric_call_receipt_sha256(item) for item in trusted_rubric_calls
+    )
+    history_attempt_hashes = tuple(
+        live_attempt_receipt_sha256(item)
+        for item in trusted_attempts
+        if item.role is LiveAttemptRoleV1.HISTORY_POLICY
+    )
+    expected_history_hashes = (
+        ()
+        if trusted_binding.history_policy_attempt_receipt_sha256 is None
+        else (trusted_binding.history_policy_attempt_receipt_sha256,)
+    )
+    exact_costs = tuple(item.cost_usd_micros for item in trusted_attempts)
+    if (
+        any(not item.passed for item in trusted_attempts)
+        or trusted_binding.logical_call_id != logical_call_id
+        or trusted_binding.actor_request_sha256 != actor_request_sha256
+        or trusted_binding.rubric_backend_extension_descriptor_sha256 != trusted_extension.sha256
+        or any(
+            item.manifest_sha256 != trusted_binding.execution_authority_sha256
+            or item.case_execution_lease_sha256 != trusted_binding.case_execution_lease_sha256
+            or item.preflight_sha256 != trusted_binding.preflight_report_sha256
+            or item.pricing_binding_sha256 != trusted_binding.pricing_binding_sha256
+            for item in trusted_attempts
+        )
+        or rubric_attempt_hashes != trusted_binding.rubric_attempt_receipt_sha256s
+        or rubric_call_hashes != trusted_binding.rubric_call_receipt_sha256s
+        or history_attempt_hashes != expected_history_hashes
+        or (
+            bool(history_attempt_hashes)
+            and trusted_attempts[-1].transport_binding_sha256
+            != trusted_binding.source_transport_binding_sha256
+        )
+        or trusted_binding.openai_calls != len(trusted_attempts)
+        or trusted_binding.openai_calls != sum(item.dispatch_count for item in trusted_attempts)
+        or any(value is None for value in exact_costs)
+        or trusted_binding.cost_usd_micros != sum(cast(int, value) for value in exact_costs)
+    ):
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH",
+            "live policy binding differs from its ordered attempt proof",
+        )
 
 
 class _PerCallAdmissionBridgeV1:
@@ -1692,6 +1977,19 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 )
             return value
 
+    def actor_call_index_for_call(self, logical_call_id: str) -> int:
+        """Return the immutable per-case call index assigned before live work."""
+
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            indices = getattr(self, "_call_indices", None)
+            value = None if type(indices) is not dict else indices.get(logical_call_id)
+            if type(value) is not int or value <= 0:
+                raise R24ContractError(
+                    "PER_CALL_INDEX_UNAVAILABLE", "logical call was never registered"
+                )
+            return value
+
     def attempt_receipts_for_call(self, logical_call_id: str) -> tuple[LiveAttemptReceiptV1, ...]:
         _require_id(logical_call_id, "logical_call_id")
         with self._lock:
@@ -1704,6 +2002,43 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 for value in self._attempt_sink.receipts
                 if value.logical_call_id == logical_call_id
             )
+
+    def rubric_call_receipts_for_call(
+        self,
+        logical_call_id: str,
+    ) -> tuple[LiveRubricCallReceiptV1, ...]:
+        """Return detached R2.4 rubric transport receipts for one actor call."""
+
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            if logical_call_id not in self._call_inputs:
+                raise R24ContractError(
+                    "PER_CALL_ATTEMPTS_UNAVAILABLE", "logical call was never registered"
+                )
+            backend = getattr(self, "_rubric_backend", None)
+            if type(backend) is not LiveOpenAIRubricBackendV1:
+                raise R24ContractError(
+                    "RUBRIC_RECEIPTS_UNAVAILABLE",
+                    "live rubric backend is unavailable",
+                )
+            return tuple(
+                snapshot_live_rubric_call_receipt(value)
+                for value in backend.call_receipts_for_call(logical_call_id)
+            )
+
+    def rubric_backend_extension_descriptor(
+        self,
+    ) -> R24RubricBackendExtensionDescriptorV1:
+        """Return the detached R2.4 transport descriptor bound by call receipts."""
+
+        with self._lock:
+            backend = getattr(self, "_rubric_backend", None)
+            if type(backend) is not LiveOpenAIRubricBackendV1:
+                raise R24ContractError(
+                    "RUBRIC_DESCRIPTOR_UNAVAILABLE",
+                    "live rubric backend descriptor is unavailable",
+                )
+            return snapshot_r24_rubric_backend_extension_descriptor(backend.extension_descriptor)
 
     def failure_for_call(self, logical_call_id: str) -> str | None:
         """Expose a stable failure code without requiring a successful binding."""
@@ -1849,30 +2184,21 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                         "COLLECTOR_TASK_AUTHORITY_MISMATCH",
                         "Collector rubric evidence binds another task run",
                     )
-                if not receipts or any(
-                    value.logical_call_id != context.logical_call_id
-                    or value.actor_request_sha256 != actor_request_sha256
-                    or value.case_execution_lease_sha256 != case_lease_hash
-                    or value.status is not LiveAttemptStatusV1.COMPLETED
-                    or not value.passed
-                    or value.role is not LiveAttemptRoleV1.RUBRIC
-                    for value in receipts
-                ):
+                if any(value.cost_usd_micros is None for value in receipts):
                     raise R24ContractError(
                         "INCOMPLETE_ATTEMPT_PROOF",
-                        "no-history rubric attempts lack exact terminal receipts",
+                        "no-history rubric attempt cost is unavailable",
                     )
-                if len(receipts) != expected_rubric:
-                    raise R24ContractError(
-                        "OPENAI_ROLE_CENSUS_MISMATCH",
-                        "no-history call must contain only rubric generation/tracking",
-                    )
-                exact_cost_usd_micros = sum(cast(int, value.cost_usd_micros) for value in receipts)
-                self._budget_ledger.settle_call(
-                    reservation,
-                    exact_cost_usd_micros=exact_cost_usd_micros,
+                rubric_attempt_hashes = tuple(
+                    live_attempt_receipt_sha256(value)
+                    for value in receipts
+                    if value.role is LiveAttemptRoleV1.RUBRIC
                 )
-                reservation = None
+                rubric_call_receipts = self._rubric_backend.call_receipts_for_call(
+                    context.logical_call_id
+                )
+                rubric_extension = self._rubric_backend.extension_descriptor
+                exact_cost_usd_micros = sum(cast(int, value.cost_usd_micros) for value in receipts)
                 binding = ResolvedLivePolicyCallBindingV1(
                     logical_call_id=context.logical_call_id,
                     actor_call_index=actor_call_index,
@@ -1885,14 +2211,32 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     preflight_report_sha256=self._factory.preflight_report_sha256,
                     factory_binding_sha256=self._factory.factory_binding_sha256,
                     pricing_binding_sha256=self._factory.pricing_binding_sha256,
-                    rubric_attempt_receipt_sha256s=tuple(
-                        live_attempt_receipt_sha256(value) for value in receipts
+                    rubric_backend_extension_descriptor_sha256=(rubric_extension.sha256),
+                    rubric_attempt_receipt_sha256s=rubric_attempt_hashes,
+                    rubric_call_receipt_sha256s=tuple(
+                        live_rubric_call_receipt_sha256(value) for value in rubric_call_receipts
                     ),
                     history_policy_attempt_receipt_sha256=None,
                     output_sha256=None,
                     openai_calls=len(receipts),
                     cost_usd_micros=exact_cost_usd_micros,
                 )
+                validate_live_rubric_cross_bindings_v1(
+                    logical_call_id=context.logical_call_id,
+                    actor_request_sha256=actor_request_sha256,
+                    attempts=receipts,
+                    rubric_call_receipts=rubric_call_receipts,
+                    rubric_backend_extension=rubric_extension,
+                    binding=binding,
+                    actor_call_index=actor_call_index,
+                    expect_history_policy=False,
+                    allow_incomplete=False,
+                )
+                self._budget_ledger.settle_call(
+                    reservation,
+                    exact_cost_usd_micros=exact_cost_usd_micros,
+                )
+                reservation = None
                 self._bindings[context.logical_call_id] = binding
                 return record
             except Exception as exc:
@@ -2045,16 +2389,9 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                         "COLLECTOR_TASK_AUTHORITY_MISMATCH",
                         "Collector evidence binds another task run",
                     )
-                if not receipts or any(
-                    value.logical_call_id != context.logical_call_id
-                    or value.actor_request_sha256 != actor_request_sha256
-                    or value.case_execution_lease_sha256 != case_lease_hash
-                    or value.status is not LiveAttemptStatusV1.COMPLETED
-                    or not value.passed
-                    for value in receipts
-                ):
+                if any(value.cost_usd_micros is None for value in receipts):
                     raise R24ContractError(
-                        "INCOMPLETE_ATTEMPT_PROOF", "live attempts lack exact terminal receipts"
+                        "INCOMPLETE_ATTEMPT_PROOF", "live attempt cost is unavailable"
                     )
                 rubric_receipts = tuple(
                     value for value in receipts if value.role is LiveAttemptRoleV1.RUBRIC
@@ -2062,17 +2399,18 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 history_receipts = tuple(
                     value for value in receipts if value.role is LiveAttemptRoleV1.HISTORY_POLICY
                 )
-                expected_rubric = 2 if actor_call_index == 1 else 1
-                if len(rubric_receipts) != expected_rubric or len(history_receipts) != 1:
+                if len(history_receipts) != 1:
                     raise R24ContractError(
                         "OPENAI_ROLE_CENSUS_MISMATCH", "rubric/history attempt census differs"
                     )
-                exact_cost_usd_micros = sum(cast(int, value.cost_usd_micros) for value in receipts)
-                self._budget_ledger.settle_call(
-                    reservation,
-                    exact_cost_usd_micros=exact_cost_usd_micros,
+                rubric_attempt_hashes = tuple(
+                    live_attempt_receipt_sha256(value) for value in rubric_receipts
                 )
-                reservation = None
+                rubric_call_receipts = self._rubric_backend.call_receipts_for_call(
+                    context.logical_call_id
+                )
+                rubric_extension = self._rubric_backend.extension_descriptor
+                exact_cost_usd_micros = sum(cast(int, value.cost_usd_micros) for value in receipts)
                 transport_binding_sha256 = adapter.source_transport_binding_sha256
                 binding = ResolvedLivePolicyCallBindingV1(
                     logical_call_id=context.logical_call_id,
@@ -2086,8 +2424,10 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     preflight_report_sha256=self._factory.preflight_report_sha256,
                     factory_binding_sha256=self._factory.factory_binding_sha256,
                     pricing_binding_sha256=self._factory.pricing_binding_sha256,
-                    rubric_attempt_receipt_sha256s=tuple(
-                        live_attempt_receipt_sha256(value) for value in rubric_receipts
+                    rubric_backend_extension_descriptor_sha256=(rubric_extension.sha256),
+                    rubric_attempt_receipt_sha256s=rubric_attempt_hashes,
+                    rubric_call_receipt_sha256s=tuple(
+                        live_rubric_call_receipt_sha256(value) for value in rubric_call_receipts
                     ),
                     history_policy_attempt_receipt_sha256=live_attempt_receipt_sha256(
                         history_receipts[0]
@@ -2096,6 +2436,22 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     openai_calls=len(receipts),
                     cost_usd_micros=exact_cost_usd_micros,
                 )
+                validate_live_rubric_cross_bindings_v1(
+                    logical_call_id=context.logical_call_id,
+                    actor_request_sha256=actor_request_sha256,
+                    attempts=receipts,
+                    rubric_call_receipts=rubric_call_receipts,
+                    rubric_backend_extension=rubric_extension,
+                    binding=binding,
+                    actor_call_index=actor_call_index,
+                    expect_history_policy=True,
+                    allow_incomplete=False,
+                )
+                self._budget_ledger.settle_call(
+                    reservation,
+                    exact_cost_usd_micros=exact_cost_usd_micros,
+                )
+                reservation = None
                 if (
                     output.policy_id != self._policy_id
                     or output.execution_authority_sha256 != binding.execution_authority_sha256
@@ -2170,4 +2526,5 @@ __all__ = [
     "promote_owner_authorized_live_policy_output",
     "resolved_live_policy_call_binding_projection",
     "resolved_live_policy_call_binding_sha256",
+    "validate_live_rubric_cross_bindings_v1",
 ]

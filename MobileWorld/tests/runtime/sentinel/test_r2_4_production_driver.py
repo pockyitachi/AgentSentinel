@@ -349,6 +349,8 @@ def _completed_semantic_attempt(
         late_output_detected=False,
         duration_ns=attempt_index,
         failure_code=None,
+        requested_model="gpt-5.6-sol",
+        returned_model="gpt-5.6-sol",
     )
 
 

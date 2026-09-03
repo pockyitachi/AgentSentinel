@@ -989,7 +989,10 @@ class MCPAgent(BaseAgent):
         self.instruction = instruction
 
         self.initialize_hook(self.instruction)
-        logger.debug(f"initialized the agent with the given instruction: {self.instruction}")
+        if self._production_safe_logging_active():
+            logger.debug("Initialized production MCP actor instruction")
+        else:
+            logger.debug(f"initialized the agent with the given instruction: {self.instruction}")
         return True
 
     def reset_tools(self, tools: list[dict]) -> None:

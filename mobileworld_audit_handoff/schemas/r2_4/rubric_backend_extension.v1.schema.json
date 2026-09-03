@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/rubric_backend_extension.v1.schema.json",
+  "title": "R2.4 Rubric Backend Extension Descriptor v1",
+  "description": "Additive R2.4 transport provenance over the immutable CPU/offline R2.3 v1 compatibility descriptor.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "descriptor_id", "descriptor_version", "execution_scope", "transport_kind",
+    "transport_authority", "r23_compatibility_descriptor_sha256",
+    "provider_config_sha256", "prompt_sha256", "rubric_schema_sha256",
+    "tracking_packet_schema_sha256", "tracker_schema_sha256",
+    "generate_output_schema_sha256", "track_output_schema_sha256",
+    "configured_model", "external_network_attempted", "model_call_attempted",
+    "local_gpu_used", "schema_version"
+  ],
+  "properties": {
+    "descriptor_id": {"$ref": "#/$defs/safeId"},
+    "descriptor_version": {"$ref": "#/$defs/safeId"},
+    "execution_scope": {"enum": ["CPU_TEST_LOCAL", "OWNER_AUTHORIZED_LIVE"]},
+    "transport_kind": {"enum": ["INJECTED_FAKE", "OPENAI_RESPONSES"]},
+    "transport_authority": {"enum": ["CPU_OFFLINE_FAKE", "EXPLICIT_OWNER_AUTHORIZATION"]},
+    "r23_compatibility_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_config_sha256": {"$ref": "#/$defs/sha256"},
+    "prompt_sha256": {"$ref": "#/$defs/sha256"},
+    "rubric_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "tracking_packet_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "tracker_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "generate_output_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "track_output_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "configured_model": {"const": "gpt-5.6-sol"},
+    "external_network_attempted": {"type": "boolean"},
+    "model_call_attempted": {"type": "boolean"},
+    "local_gpu_used": {"const": false},
+    "schema_version": {"const": "mobileworld.runtime.sentinel-r2.4-rubric-backend-extension/v1"}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "execution_scope": {"const": "CPU_TEST_LOCAL"},
+        "transport_kind": {"const": "INJECTED_FAKE"},
+        "transport_authority": {"const": "CPU_OFFLINE_FAKE"},
+        "external_network_attempted": {"const": false},
+        "model_call_attempted": {"const": false}
+      }
+    },
+    {
+      "properties": {
+        "execution_scope": {"const": "OWNER_AUTHORIZED_LIVE"},
+        "transport_kind": {"const": "OPENAI_RESPONSES"},
+        "transport_authority": {"const": "EXPLICIT_OWNER_AUTHORIZATION"},
+        "external_network_attempted": {"const": true},
+        "model_call_attempted": {"const": true}
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"}
+  }
+}

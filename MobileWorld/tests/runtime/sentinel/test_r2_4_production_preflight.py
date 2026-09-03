@@ -83,6 +83,66 @@ def _sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _sealed_openai_request_kwargs(role: LiveAttemptRoleV1) -> dict[str, object]:
+    if role is LiveAttemptRoleV1.HISTORY_POLICY:
+        from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+            GPT56_OUTPUT_SCHEMA_NAME,
+            GPT56_POLICY_INSTRUCTIONS,
+            GPT56_REASONING_EFFORT,
+            ProposalSchemaSnapshotV1,
+        )
+
+        instructions = GPT56_POLICY_INSTRUCTIONS
+        reasoning_effort = GPT56_REASONING_EFFORT
+        schema_name = GPT56_OUTPUT_SCHEMA_NAME
+        schema = ProposalSchemaSnapshotV1.from_checked_in().as_dict()
+        max_output_tokens = 4096
+        content: list[dict[str, object]] = [
+            {"type": "input_text", "text": "{}"},
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,AA==",
+                "detail": "high",
+            },
+        ]
+    else:
+        from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+            _GENERATE_INSTRUCTIONS,
+            LIVE_RUBRIC_REASONING_EFFORT,
+            live_rubric_generate_schema,
+        )
+
+        schema_snapshot = live_rubric_generate_schema()
+        instructions = _GENERATE_INSTRUCTIONS
+        reasoning_effort = LIVE_RUBRIC_REASONING_EFFORT
+        schema_name = schema_snapshot.name
+        schema = schema_snapshot.as_dict()
+        max_output_tokens = 8192
+        content = [{"type": "input_text", "text": "{}"}]
+    return {
+        "model": "gpt-5.6-sol",
+        "instructions": instructions,
+        "input": [{"role": "user", "content": content}],
+        "reasoning": {"effort": reasoning_effort},
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": schema_name,
+                "strict": True,
+                "schema": schema,
+            },
+            "verbosity": "low",
+        },
+        "tools": [],
+        "tool_choice": "none",
+        "parallel_tool_calls": False,
+        "store": False,
+        "stream": False,
+        "truncation": "disabled",
+        "max_output_tokens": max_output_tokens,
+    }
+
+
 def _write(path: Path, raw: bytes) -> tuple[str, int]:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(raw)
@@ -686,7 +746,7 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
         pricing=pricing,
         confirmed_pricing_sha256=pricing_sha256,
     )
-    request = build_canonical_openai_request({"model": "gpt-5.6-sol", "input": [], "store": False})
+    request = build_canonical_openai_request(_sealed_openai_request_kwargs(role))
     reservation = live_attempt_worst_case_cost_usd_micros(
         pricing,
         request_byte_count=request.byte_count,

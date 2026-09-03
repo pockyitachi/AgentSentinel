@@ -182,30 +182,12 @@
         "tracking_packet_schema_sha256": {"$ref": "#/$defs/sha256"},
         "tracker_schema_sha256": {"$ref": "#/$defs/sha256"},
         "config_sha256": {"$ref": "#/$defs/sha256"},
-        "backend_kind": {"enum": ["INJECTED_FAKE", "OPENAI_RESPONSES"]},
-        "transport_authority": {"enum": ["CPU_OFFLINE_FAKE", "EXPLICIT_OWNER_AUTHORIZATION"]},
-        "external_network_attempted": {"type": "boolean"},
-        "model_call_attempted": {"type": "boolean"},
+        "backend_kind": {"const": "INJECTED_FAKE"},
+        "transport_authority": {"const": "CPU_OFFLINE_FAKE"},
+        "external_network_attempted": {"const": false},
+        "model_call_attempted": {"const": false},
         "local_gpu_used": {"const": false}
-      },
-      "oneOf": [
-        {
-          "properties": {
-            "backend_kind": {"const": "INJECTED_FAKE"},
-            "transport_authority": {"const": "CPU_OFFLINE_FAKE"},
-            "external_network_attempted": {"const": false},
-            "model_call_attempted": {"const": false}
-          }
-        },
-        {
-          "properties": {
-            "backend_kind": {"const": "OPENAI_RESPONSES"},
-            "transport_authority": {"const": "EXPLICIT_OWNER_AUTHORIZATION"},
-            "external_network_attempted": {"const": true},
-            "model_call_attempted": {"const": true}
-          }
-        }
-      ]
+      }
     },
     "authority": {
       "type": "object", "additionalProperties": false,

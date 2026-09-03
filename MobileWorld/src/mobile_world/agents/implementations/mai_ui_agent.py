@@ -172,7 +172,10 @@ class MAIUINaivigationAgent(MCPAgent):
 
     def initialize_hook(self, instruction: str) -> None:
         """Hook for initializing the agent with instruction."""
-        logger.info(f"Initializing MAI UI agent with instruction: {instruction}")
+        if self._production_safe_logging_active():
+            logger.info("Initializing production MAI UI agent")
+        else:
+            logger.info(f"Initializing MAI UI agent with instruction: {instruction}")
         self.reset()
 
     def _get_user_message(

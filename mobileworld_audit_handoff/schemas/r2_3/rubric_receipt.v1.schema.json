@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentsentinel.local/schemas/r2_3/rubric_receipt.v1.schema.json",
   "title": "R2.3 Rubric Hash-Only Receipt v1",
-  "description": "Closed SHADOW rubric receipt for either CPU/offline injected-fake or explicitly owner-authorized live Responses transport. It stores hashes, bounded census, latency, and provenance but no task text, screenshot, backend output, reasoning, actor request, or Collector mutation.",
+  "description": "Closed CPU/offline/injected-fake SHADOW receipt. It stores hashes, bounded census, latency, and provenance but no task text, screenshot, backend output, reasoning, actor request, or Collector mutation.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -74,10 +74,10 @@
     "validation_checks": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/$defs/safeId"}},
     "schema_version": {"const": "mobileworld.runtime.rubric-receipt/v1"},
     "execution_scope": {"const": "SHADOW_ONLY"},
-    "backend_kind": {"enum": ["INJECTED_FAKE", "OPENAI_RESPONSES"]},
-    "transport_authority": {"enum": ["CPU_OFFLINE_FAKE", "EXPLICIT_OWNER_AUTHORIZATION"]},
-    "external_network_attempted": {"type": "boolean"},
-    "model_call_attempted": {"type": "boolean"},
+    "backend_kind": {"const": "INJECTED_FAKE"},
+    "transport_authority": {"const": "CPU_OFFLINE_FAKE"},
+    "external_network_attempted": {"const": false},
+    "model_call_attempted": {"const": false},
     "local_gpu_used": {"const": false},
     "mobileworld_action_executed": {"const": false},
     "actor_request_mutated": {"const": false},
@@ -88,26 +88,6 @@
     "reasoning_persisted": {"const": false}
   },
   "allOf": [
-    {
-      "oneOf": [
-        {
-          "properties": {
-            "backend_kind": {"const": "INJECTED_FAKE"},
-            "transport_authority": {"const": "CPU_OFFLINE_FAKE"},
-            "external_network_attempted": {"const": false},
-            "model_call_attempted": {"const": false}
-          }
-        },
-        {
-          "properties": {
-            "backend_kind": {"const": "OPENAI_RESPONSES"},
-            "transport_authority": {"const": "EXPLICIT_OWNER_AUTHORIZATION"},
-            "external_network_attempted": {"const": true},
-            "model_call_attempted": {"const": true}
-          }
-        }
-      ]
-    },
     {
       "if": {"properties": {"status": {"const": "ADMITTED"}}, "required": ["status"]},
       "then": {"required": ["admitted_output_sha256"], "not": {"required": ["fallback_code"]}},

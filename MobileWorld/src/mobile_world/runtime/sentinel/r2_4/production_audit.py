@@ -89,6 +89,7 @@ from mobile_world.runtime.sentinel.r2_4.live_policy import (
     ResolvedLivePolicyCallBindingV1,
     resolved_live_policy_call_binding_projection,
     resolved_live_policy_call_binding_sha256,
+    validate_live_rubric_cross_bindings_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.orchestration import (
     R24CoordinatedCallRecordV1,
@@ -105,6 +106,16 @@ from mobile_world.runtime.sentinel.r2_4.renderer import (
     vertical_render_result_sha256,
     vertical_source_mapping_projection,
     vertical_text_diff_projection,
+)
+from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+    LiveRubricCallReceiptV1,
+    LiveRubricExecutionScopeV1,
+    R24RubricBackendExtensionDescriptorV1,
+    live_rubric_call_receipt_projection,
+    live_rubric_call_receipt_sha256,
+    r24_rubric_backend_extension_descriptor_projection,
+    snapshot_live_rubric_call_receipt,
+    snapshot_r24_rubric_backend_extension_descriptor,
 )
 
 PRODUCTION_RUNTIME_AUDIT_PRE_PROVIDER_SCHEMA_VERSION = (
@@ -2079,6 +2090,8 @@ class ProductionRuntimeAuditV1:
             )
         binding = self._policy.call_binding(logical_call_id)
         attempts = self._policy.attempt_receipts_for_call(logical_call_id)
+        rubric_call_receipts = self._policy.rubric_call_receipts_for_call(logical_call_id)
+        rubric_backend_extension = self._policy.rubric_backend_extension_descriptor()
         coordinated = self._policy.coordinated_record_for_call(logical_call_id)
         self._validate_live_bindings(
             logical_call_id=logical_call_id,
@@ -2086,6 +2099,8 @@ class ProductionRuntimeAuditV1:
             policy_output=policy_output,
             binding=binding,
             attempts=attempts,
+            rubric_call_receipts=rubric_call_receipts,
+            rubric_backend_extension=rubric_backend_extension,
             coordinated=coordinated,
         )
         assert coordinated.rubric_result.relevance is not None
@@ -2142,6 +2157,13 @@ class ProductionRuntimeAuditV1:
             "live_attempt_receipts": [
                 cast(JsonValue, live_attempt_receipt_projection(item)) for item in attempts
             ],
+            "r2_4_rubric_call_receipts": [
+                cast(JsonValue, live_rubric_call_receipt_projection(item))
+                for item in rubric_call_receipts
+            ],
+            "r2_4_rubric_backend_extension": (
+                r24_rubric_backend_extension_descriptor_projection(rubric_backend_extension)
+            ),
             "semantic_stage_projections_persisted": True,
             "raw_request_persisted_in_owner_only_detail": True,
             "provider_response_via_collector_locator": True,
@@ -2476,45 +2498,77 @@ class ProductionRuntimeAuditV1:
             )
 
         attempts: tuple[LiveAttemptReceiptV1, ...] = ()
+        rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...] = ()
+        rubric_backend_extension: R24RubricBackendExtensionDescriptorV1 | None = None
+        actor_call_index: int | None = None
         policy_failure_code: str | None = None
         try:
             attempts = tuple(
                 snapshot_live_attempt_receipt(item)
                 for item in self._policy.attempt_receipts_for_call(logical_call_id)
             )
-            policy_failure_code = self._policy.failure_for_call(logical_call_id)
         except R24ContractError:
             # Extraction/validation can fail before the per-call live policy is
             # registered.  That is an exact zero-attempt census, not missing data.
             attempts = ()
-            policy_failure_code = None
-        if len({item.attempt_id for item in attempts}) != len(attempts) or any(
-            item.logical_call_id != logical_call_id
-            or item.actor_request_sha256 != raw_hash
-            or item.role not in {LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.HISTORY_POLICY}
-            for item in attempts
-        ):
-            raise ProductionRuntimeAuditError(
-                "INVALID_ATTEMPT_CENSUS", "fallback live attempt census differs"
-            )
+        else:
+            try:
+                rubric_call_receipts = tuple(
+                    snapshot_live_rubric_call_receipt(item)
+                    for item in self._policy.rubric_call_receipts_for_call(logical_call_id)
+                )
+                rubric_backend_extension = snapshot_r24_rubric_backend_extension_descriptor(
+                    self._policy.rubric_backend_extension_descriptor()
+                )
+                actor_call_index = self._policy.actor_call_index_for_call(logical_call_id)
+                policy_failure_code = self._policy.failure_for_call(logical_call_id)
+            except R24ContractError as exc:
+                if attempts:
+                    raise ProductionRuntimeAuditError(
+                        "RUBRIC_CROSS_BINDING_MISMATCH",
+                        "registered fallback call lost its rubric proof",
+                    ) from exc
+                rubric_call_receipts = ()
+                rubric_backend_extension = None
+                actor_call_index = None
+                policy_failure_code = None
         live_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
-        known_cost = sum(item.cost_usd_micros or 0 for item in attempts)
-        cost_exact = all(item.cost_usd_micros is not None for item in attempts)
 
         binding: ResolvedLivePolicyCallBindingV1 | None = None
         try:
             binding = self._policy.call_binding(logical_call_id)
         except R24ContractError:
             binding = None
-        dispatched_calls = sum(item.dispatch_count for item in attempts)
-        if binding is not None and (
-            binding.logical_call_id != logical_call_id
-            or binding.actor_request_sha256 != raw_hash
-            or binding.openai_calls != dispatched_calls
-        ):
-            raise ProductionRuntimeAuditError(
-                "TRACE_BINDING_MISMATCH", "fallback live binding differs"
+        try:
+            validate_live_rubric_cross_bindings_v1(
+                logical_call_id=logical_call_id,
+                actor_request_sha256=raw_hash,
+                attempts=attempts,
+                rubric_call_receipts=rubric_call_receipts,
+                rubric_backend_extension=rubric_backend_extension,
+                binding=binding,
+                actor_call_index=(
+                    binding.actor_call_index if binding is not None else actor_call_index
+                ),
+                expect_history_policy=(
+                    binding.history_policy_attempt_receipt_sha256 is not None
+                    if binding is not None
+                    else (
+                        None
+                        if actor_call_index is None
+                        else receipt.fallback_reason
+                        is not SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE
+                    )
+                ),
+                allow_incomplete=True,
             )
+        except R24ContractError as exc:
+            raise ProductionRuntimeAuditError(
+                exc.code, "fallback rubric cross-binding differs"
+            ) from exc
+        known_cost = sum(item.cost_usd_micros or 0 for item in attempts)
+        cost_exact = all(item.cost_usd_micros is not None for item in attempts)
+        dispatched_calls = sum(item.dispatch_count for item in attempts)
         first_attempt = attempts[0] if attempts else None
         validator_projection: dict[str, JsonValue] = {
             "status": "FALLBACK_ORIGINAL",
@@ -2546,6 +2600,15 @@ class ProductionRuntimeAuditV1:
             "live_attempt_receipts": [
                 cast(JsonValue, live_attempt_receipt_projection(item)) for item in attempts
             ],
+            "r2_4_rubric_call_receipts": [
+                cast(JsonValue, live_rubric_call_receipt_projection(item))
+                for item in rubric_call_receipts
+            ],
+            "r2_4_rubric_backend_extension": (
+                None
+                if rubric_backend_extension is None
+                else r24_rubric_backend_extension_descriptor_projection(rubric_backend_extension)
+            ),
             "raw_request_persisted_in_owner_only_detail": True,
             "provider_response_via_collector_locator": True,
             "provider_reasoning_persisted": False,
@@ -2587,7 +2650,13 @@ class ProductionRuntimeAuditV1:
             ),
             factory_binding_sha256=(None if binding is None else binding.factory_binding_sha256),
             execution_authority_sha256=(
-                None if first_attempt is None else first_attempt.authority_sha256
+                None
+                if first_attempt is None
+                else (
+                    binding.execution_authority_sha256
+                    if binding is not None
+                    else self._policy.execution_authority_sha256
+                )
             ),
             source_transport_binding_sha256=(
                 None if binding is None else binding.source_transport_binding_sha256
@@ -2716,7 +2785,30 @@ class ProductionRuntimeAuditV1:
             snapshot_live_attempt_receipt(item)
             for item in self._policy.attempt_receipts_for_call(logical_call_id)
         )
+        rubric_call_receipts = tuple(
+            snapshot_live_rubric_call_receipt(item)
+            for item in self._policy.rubric_call_receipts_for_call(logical_call_id)
+        )
+        rubric_backend_extension = snapshot_r24_rubric_backend_extension_descriptor(
+            self._policy.rubric_backend_extension_descriptor()
+        )
         policy_failure_code = self._policy.failure_for_call(logical_call_id)
+        try:
+            validate_live_rubric_cross_bindings_v1(
+                logical_call_id=logical_call_id,
+                actor_request_sha256=raw_hash,
+                attempts=attempts,
+                rubric_call_receipts=rubric_call_receipts,
+                rubric_backend_extension=rubric_backend_extension,
+                binding=binding,
+                actor_call_index=binding.actor_call_index,
+                expect_history_policy=False,
+                allow_incomplete=False,
+            )
+        except R24ContractError as exc:
+            raise ProductionRuntimeAuditError(
+                exc.code, "no-history rubric cross-binding differs"
+            ) from exc
         live_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
         if (
             policy_failure_code is not None
@@ -2729,7 +2821,20 @@ class ProductionRuntimeAuditV1:
             or binding.output_sha256 is not None
             or binding.openai_calls != 2
             or len(attempts) != 2
+            or len(rubric_call_receipts) != 2
             or live_hashes != binding.rubric_attempt_receipt_sha256s
+            or tuple(live_rubric_call_receipt_sha256(item) for item in rubric_call_receipts)
+            != binding.rubric_call_receipt_sha256s
+            or tuple(item.attempt_receipt_sha256 for item in rubric_call_receipts) != live_hashes
+            or binding.rubric_backend_extension_descriptor_sha256 != rubric_backend_extension.sha256
+            or rubric_backend_extension.execution_scope
+            is not LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE
+            or any(
+                item.backend_extension_descriptor_sha256 != rubric_backend_extension.sha256
+                or item.r23_compatibility_descriptor_sha256
+                != rubric_backend_extension.r23_compatibility_descriptor_sha256
+                for item in rubric_call_receipts
+            )
             or any(
                 item.logical_call_id != logical_call_id
                 or item.actor_request_sha256 != raw_hash
@@ -2798,6 +2903,13 @@ class ProductionRuntimeAuditV1:
             "live_attempt_receipts": [
                 cast(JsonValue, live_attempt_receipt_projection(item)) for item in attempts
             ],
+            "r2_4_rubric_call_receipts": [
+                cast(JsonValue, live_rubric_call_receipt_projection(item))
+                for item in rubric_call_receipts
+            ],
+            "r2_4_rubric_backend_extension": (
+                r24_rubric_backend_extension_descriptor_projection(rubric_backend_extension)
+            ),
             "semantic_stage_projections_persisted": True,
             "raw_request_persisted_in_owner_only_detail": True,
             "provider_response_via_collector_locator": True,
@@ -2923,6 +3035,8 @@ class ProductionRuntimeAuditV1:
         policy_output: RuntimeVerticalPolicyOutputV1,
         binding: ResolvedLivePolicyCallBindingV1,
         attempts: tuple[LiveAttemptReceiptV1, ...],
+        rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...],
+        rubric_backend_extension: R24RubricBackendExtensionDescriptorV1,
         coordinated: R24CoordinatedCallRecordV1,
     ) -> None:
         if (
@@ -2930,8 +3044,27 @@ class ProductionRuntimeAuditV1:
             or type(coordinated) is not R24CoordinatedCallRecordV1
         ):
             raise ProductionRuntimeAuditError("UNTRUSTED_TYPE", "live binding type differs")
+        try:
+            validate_live_rubric_cross_bindings_v1(
+                logical_call_id=logical_call_id,
+                actor_request_sha256=raw_request_sha256,
+                attempts=attempts,
+                rubric_call_receipts=rubric_call_receipts,
+                rubric_backend_extension=rubric_backend_extension,
+                binding=binding,
+                actor_call_index=binding.actor_call_index,
+                expect_history_policy=True,
+                allow_incomplete=False,
+            )
+        except R24ContractError as exc:
+            raise ProductionRuntimeAuditError(
+                exc.code, "live rubric cross-binding differs"
+            ) from exc
         resolved_live_policy_call_binding_projection(binding)
         r24_coordinated_call_record_projection(coordinated)
+        trusted_rubric_extension = snapshot_r24_rubric_backend_extension_descriptor(
+            rubric_backend_extension
+        )
         if (
             binding.logical_call_id != logical_call_id
             or binding.actor_request_sha256 != raw_request_sha256
@@ -2943,6 +3076,9 @@ class ProductionRuntimeAuditV1:
             or coordinated.logical_call_id != logical_call_id
             or coordinated.rubric_result.status is not RubricSessionStatus.ADMITTED
             or coordinated.rubric_result.relevance is None
+            or binding.rubric_backend_extension_descriptor_sha256 != trusted_rubric_extension.sha256
+            or trusted_rubric_extension.execution_scope
+            is not LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE
         ):
             raise ProductionRuntimeAuditError("TRACE_BINDING_MISMATCH", "live call binding differs")
         if type(attempts) is not tuple or len(attempts) != binding.openai_calls:
@@ -2975,6 +3111,26 @@ class ProductionRuntimeAuditV1:
             binding.history_policy_attempt_receipt_sha256,
         ):
             raise ProductionRuntimeAuditError("INVALID_ATTEMPT_CENSUS", "live role roots differ")
+        trusted_rubric_calls = tuple(
+            snapshot_live_rubric_call_receipt(item) for item in rubric_call_receipts
+        )
+        if (
+            tuple(live_rubric_call_receipt_sha256(item) for item in trusted_rubric_calls)
+            != binding.rubric_call_receipt_sha256s
+            or tuple(item.attempt_receipt_sha256 for item in trusted_rubric_calls) != rubric
+            or any(
+                item.logical_call_id != logical_call_id
+                or item.execution_scope is not LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE
+                or item.backend_extension_descriptor_sha256 != trusted_rubric_extension.sha256
+                or item.r23_compatibility_descriptor_sha256
+                != trusted_rubric_extension.r23_compatibility_descriptor_sha256
+                for item in trusted_rubric_calls
+            )
+        ):
+            raise ProductionRuntimeAuditError(
+                "RUBRIC_RECEIPT_BINDING_MISMATCH",
+                "R2.4 rubric receipts differ from provider attempts",
+            )
 
     def bind_actor_sdk_arguments(
         self,

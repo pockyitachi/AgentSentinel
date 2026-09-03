@@ -52,13 +52,11 @@ from mobile_world.runtime.sentinel.r2_3.contracts import (
     RevisionKind,
     RevisionReason,
     RubricBackendDescriptorV1,
-    RubricBackendKind,
     RubricPathV1,
     RubricRevisionRequestV1,
     RubricRevisionV1,
     RubricTrackerProposalV1,
     RubricTrackingPacketV1,
-    RubricTransportAuthority,
     TaskStartRubricRequestV1,
     TrackerProposalStatus,
     rubric_tracking_state_sha256,
@@ -89,6 +87,9 @@ from mobile_world.runtime.sentinel.r2_4.production_preflight import (
 
 LIVE_RUBRIC_CALL_RECEIPT_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-live-rubric-call-receipt/v1"
+)
+LIVE_RUBRIC_BACKEND_EXTENSION_SCHEMA_VERSION = (
+    "mobileworld.runtime.sentinel-r2.4-rubric-backend-extension/v1"
 )
 LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-live-rubric-generate-input/v1"
@@ -129,6 +130,16 @@ class LiveRubricOperationV1(StrEnum):
 class LiveRubricExecutionScopeV1(StrEnum):
     CPU_TEST_LOCAL = "CPU_TEST_LOCAL"
     OWNER_AUTHORIZED_LIVE = "OWNER_AUTHORIZED_LIVE"
+
+
+class LiveRubricTransportKindV1(StrEnum):
+    INJECTED_FAKE = "INJECTED_FAKE"
+    OPENAI_RESPONSES = "OPENAI_RESPONSES"
+
+
+class LiveRubricTransportAuthorityV1(StrEnum):
+    CPU_OFFLINE_FAKE = "CPU_OFFLINE_FAKE"
+    EXPLICIT_OWNER_AUTHORIZATION = "EXPLICIT_OWNER_AUTHORIZATION"
 
 
 def _require_sha256(value: object, name: str) -> str:
@@ -413,19 +424,144 @@ def bind_current_collector_image_projection(
 
 
 @dataclass(frozen=True, slots=True)
+class R24RubricBackendExtensionDescriptorV1:
+    """Versioned transport provenance layered over the immutable R2.3 v1 descriptor.
+
+    R2.3 remains a CPU/offline/injected-fake contract.  This descriptor is the
+    only place where the R2.4 bridge may describe an owner-authorized Responses
+    transport; every provider request and R2.4 call receipt binds its hash.
+    """
+
+    descriptor_id: str
+    descriptor_version: str
+    execution_scope: LiveRubricExecutionScopeV1
+    transport_kind: LiveRubricTransportKindV1
+    transport_authority: LiveRubricTransportAuthorityV1
+    r23_compatibility_descriptor_sha256: str
+    provider_config_sha256: str
+    prompt_sha256: str
+    rubric_schema_sha256: str
+    tracking_packet_schema_sha256: str
+    tracker_schema_sha256: str
+    generate_output_schema_sha256: str
+    track_output_schema_sha256: str
+    configured_model: str
+    external_network_attempted: bool
+    model_call_attempted: bool
+    local_gpu_used: bool = False
+    schema_version: str = LIVE_RUBRIC_BACKEND_EXTENSION_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if self.schema_version != LIVE_RUBRIC_BACKEND_EXTENSION_SCHEMA_VERSION:
+            raise LiveRubricError(
+                "UNKNOWN_SCHEMA_VERSION", "rubric backend extension schema differs"
+            )
+        _require_id(self.descriptor_id, "descriptor_id")
+        _require_id(self.descriptor_version, "descriptor_version")
+        if type(self.execution_scope) is not LiveRubricExecutionScopeV1:
+            raise LiveRubricError("UNTRUSTED_DESCRIPTOR", "execution scope type differs")
+        if type(self.transport_kind) is not LiveRubricTransportKindV1:
+            raise LiveRubricError("UNTRUSTED_DESCRIPTOR", "transport kind type differs")
+        if type(self.transport_authority) is not LiveRubricTransportAuthorityV1:
+            raise LiveRubricError("UNTRUSTED_DESCRIPTOR", "transport authority type differs")
+        for name in (
+            "r23_compatibility_descriptor_sha256",
+            "provider_config_sha256",
+            "prompt_sha256",
+            "rubric_schema_sha256",
+            "tracking_packet_schema_sha256",
+            "tracker_schema_sha256",
+            "generate_output_schema_sha256",
+            "track_output_schema_sha256",
+        ):
+            _require_sha256(getattr(self, name), name)
+        if _require_id(self.configured_model, "configured_model") != LIVE_RUBRIC_MODEL:
+            raise LiveRubricError(
+                "MODEL_BINDING_MISMATCH", "rubric extension model differs from the pinned model"
+            )
+        for name in (
+            "external_network_attempted",
+            "model_call_attempted",
+            "local_gpu_used",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise LiveRubricError("UNTRUSTED_DESCRIPTOR", f"{name} must be an exact bool")
+        cpu = (
+            self.execution_scope is LiveRubricExecutionScopeV1.CPU_TEST_LOCAL
+            and self.transport_kind is LiveRubricTransportKindV1.INJECTED_FAKE
+            and self.transport_authority is LiveRubricTransportAuthorityV1.CPU_OFFLINE_FAKE
+            and not self.external_network_attempted
+            and not self.model_call_attempted
+            and not self.local_gpu_used
+        )
+        live = (
+            self.execution_scope is LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE
+            and self.transport_kind is LiveRubricTransportKindV1.OPENAI_RESPONSES
+            and self.transport_authority
+            is LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION
+            and self.external_network_attempted
+            and self.model_call_attempted
+            and not self.local_gpu_used
+        )
+        if not (cpu or live):
+            raise LiveRubricError(
+                "INVALID_BACKEND_PROVENANCE",
+                "R2.4 transport provenance differs from its execution scope",
+            )
+
+    @property
+    def sha256(self) -> str:
+        return canonical_sha256(
+            cast(JsonValue, r24_rubric_backend_extension_descriptor_projection(self))
+        )
+
+
+def r24_rubric_backend_extension_descriptor_projection(
+    value: R24RubricBackendExtensionDescriptorV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not R24RubricBackendExtensionDescriptorV1:
+        raise LiveRubricError("UNTRUSTED_DESCRIPTOR", "backend extension type differs")
+    return {
+        name: cast(JsonValue, item.value if isinstance(item, StrEnum) else item)
+        for name in value.__dataclass_fields__
+        if (item := getattr(value, name)) is not None
+    }
+
+
+def snapshot_r24_rubric_backend_extension_descriptor(
+    value: R24RubricBackendExtensionDescriptorV1,
+) -> R24RubricBackendExtensionDescriptorV1:
+    if type(value) is not R24RubricBackendExtensionDescriptorV1:
+        raise LiveRubricError("UNTRUSTED_DESCRIPTOR", "backend extension type differs")
+    return R24RubricBackendExtensionDescriptorV1(
+        **{name: getattr(value, name) for name in value.__dataclass_fields__}
+    )
+
+
+def r24_rubric_backend_extension_descriptor_sha256(
+    value: R24RubricBackendExtensionDescriptorV1,
+) -> str:
+    return snapshot_r24_rubric_backend_extension_descriptor(value).sha256
+
+
+@dataclass(frozen=True, slots=True)
 class LiveRubricCallReceiptV1:
     receipt_id: str
     operation: LiveRubricOperationV1
     execution_scope: LiveRubricExecutionScopeV1
     task_run_id: str
     logical_call_id: str
-    backend_descriptor_sha256: str
+    backend_extension_descriptor_sha256: str
+    r23_compatibility_descriptor_sha256: str
+    transport_kind: LiveRubricTransportKindV1
+    transport_authority: LiveRubricTransportAuthorityV1
     prompt_sha256: str
     provider_input_schema_version: str
     provider_output_schema_sha256: str
     provider_request_sha256: str
     provider_output_sha256: str
     transport_binding_sha256: str
+    pricing_binding_sha256: str | None
     current_image_binding_sha256: str | None
     manifest_sha256: str | None
     preflight_sha256: str | None
@@ -433,6 +569,8 @@ class LiveRubricCallReceiptV1:
     stage_sha256: str | None
     attempt_authority_sha256: str | None
     attempt_receipt_sha256: str | None
+    requested_model: str | None
+    returned_model: str | None
     dispatch_count: int
     input_tokens: int | None
     output_tokens: int | None
@@ -457,7 +595,8 @@ class LiveRubricCallReceiptV1:
         _require_id(self.logical_call_id, "logical_call_id")
         _require_id(self.provider_input_schema_version, "provider_input_schema_version")
         for name in (
-            "backend_descriptor_sha256",
+            "backend_extension_descriptor_sha256",
+            "r23_compatibility_descriptor_sha256",
             "prompt_sha256",
             "provider_output_schema_sha256",
             "provider_request_sha256",
@@ -468,6 +607,7 @@ class LiveRubricCallReceiptV1:
         if self.current_image_binding_sha256 is not None:
             _require_sha256(self.current_image_binding_sha256, "current_image_binding_sha256")
         for name in (
+            "pricing_binding_sha256",
             "manifest_sha256",
             "preflight_sha256",
             "case_execution_lease_sha256",
@@ -480,7 +620,28 @@ class LiveRubricCallReceiptV1:
                 _require_sha256(value, name)
         if type(self.dispatch_count) is not int or self.dispatch_count != 1:
             raise LiveRubricError("INVALID_CALL_CENSUS", "completed rubric call dispatch differs")
+        if type(self.transport_kind) is not LiveRubricTransportKindV1:
+            raise LiveRubricError("UNTRUSTED_RECEIPT", "transport kind type differs")
+        if type(self.transport_authority) is not LiveRubricTransportAuthorityV1:
+            raise LiveRubricError("UNTRUSTED_RECEIPT", "transport authority type differs")
         usage = (self.input_tokens, self.output_tokens, self.total_tokens, self.cost_usd_micros)
+        for name, maximum in (
+            ("input_tokens", 100_000_000),
+            ("output_tokens", 100_000_000),
+            ("total_tokens", 100_000_000),
+            ("cost_usd_micros", 100_000_000_000),
+        ):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or not 0 <= value <= maximum):
+                raise LiveRubricError("INVALID_RECEIPT_ACCOUNTING", f"{name} is outside bounds")
+        if self.total_tokens is not None and (
+            self.input_tokens is None
+            or self.output_tokens is None
+            or self.total_tokens != self.input_tokens + self.output_tokens
+        ):
+            raise LiveRubricError(
+                "INVALID_RECEIPT_ACCOUNTING", "rubric token census is inconsistent"
+            )
         if self.execution_scope is LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE:
             if any(
                 getattr(self, name) is None
@@ -491,9 +652,21 @@ class LiveRubricCallReceiptV1:
                     "stage_sha256",
                     "attempt_authority_sha256",
                     "attempt_receipt_sha256",
+                    "pricing_binding_sha256",
                 )
             ) or any(value is None for value in usage):
                 raise LiveRubricError("INCOMPLETE_LIVE_RECEIPT", "live attempt proof is incomplete")
+            if (
+                self.transport_kind is not LiveRubricTransportKindV1.OPENAI_RESPONSES
+                or self.transport_authority
+                is not LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION
+                or self.requested_model != LIVE_RUBRIC_MODEL
+                or self.returned_model != self.requested_model
+            ):
+                raise LiveRubricError(
+                    "MODEL_OR_TRANSPORT_BINDING_MISMATCH",
+                    "live receipt model or transport provenance differs",
+                )
         elif any(
             getattr(self, name) is not None
             for name in (
@@ -503,9 +676,19 @@ class LiveRubricCallReceiptV1:
                 "stage_sha256",
                 "attempt_authority_sha256",
                 "attempt_receipt_sha256",
+                "pricing_binding_sha256",
             )
         ) or any(value is not None for value in usage):
             raise LiveRubricError("FALSE_LIVE_CLAIM", "CPU receipt carries live attempt proof")
+        elif (
+            self.transport_kind is not LiveRubricTransportKindV1.INJECTED_FAKE
+            or self.transport_authority is not LiveRubricTransportAuthorityV1.CPU_OFFLINE_FAKE
+            or self.requested_model is not None
+            or self.returned_model is not None
+        ):
+            raise LiveRubricError(
+                "FALSE_LIVE_CLAIM", "CPU receipt carries live transport or model provenance"
+            )
         if self.operation is LiveRubricOperationV1.TRACK:
             if self.current_image_binding_sha256 is None:
                 raise LiveRubricError(
@@ -531,13 +714,28 @@ class LiveRubricCallReceiptV1:
 def live_rubric_call_receipt_projection(value: LiveRubricCallReceiptV1) -> dict[str, JsonValue]:
     if type(value) is not LiveRubricCallReceiptV1:
         raise LiveRubricError("UNTRUSTED_RECEIPT", "receipt type differs")
+    trusted = snapshot_live_rubric_call_receipt(value)
     result: dict[str, JsonValue] = {}
-    for name in value.__dataclass_fields__:
-        item = getattr(value, name)
+    for name in trusted.__dataclass_fields__:
+        item = getattr(trusted, name)
         if item is None:
             continue
         result[name] = cast(JsonValue, item.value if isinstance(item, StrEnum) else item)
     return result
+
+
+def snapshot_live_rubric_call_receipt(
+    value: LiveRubricCallReceiptV1,
+) -> LiveRubricCallReceiptV1:
+    if type(value) is not LiveRubricCallReceiptV1:
+        raise LiveRubricError("UNTRUSTED_RECEIPT", "receipt type differs")
+    return LiveRubricCallReceiptV1(
+        **{name: getattr(value, name) for name in value.__dataclass_fields__}
+    )
+
+
+def live_rubric_call_receipt_sha256(value: LiveRubricCallReceiptV1) -> str:
+    return snapshot_live_rubric_call_receipt(value).sha256
 
 
 def rubric_backend_descriptor_projection(
@@ -656,9 +854,17 @@ class _BaseRubricProviderPortV1:
         self._call_keys: set[tuple[str, str, LiveRubricOperationV1]] = set()
 
     @property
+    def execution_scope(self) -> LiveRubricExecutionScopeV1:
+        raise NotImplementedError
+
+    @property
+    def config_projection(self) -> dict[str, JsonValue]:
+        raise NotImplementedError
+
+    @property
     def receipts(self) -> tuple[LiveRubricCallReceiptV1, ...]:
         with self._receipt_lock:
-            return tuple(self._receipts)
+            return tuple(snapshot_live_rubric_call_receipt(value) for value in self._receipts)
 
     def _reserve(self, key: tuple[str, str, LiveRubricOperationV1]) -> None:
         with self._receipt_lock:
@@ -670,7 +876,23 @@ class _BaseRubricProviderPortV1:
         if type(value) is not LiveRubricCallReceiptV1:
             raise LiveRubricError("UNTRUSTED_RECEIPT", "rubric call receipt type differs")
         with self._receipt_lock:
-            self._receipts.append(value)
+            self._receipts.append(snapshot_live_rubric_call_receipt(value))
+
+    def _attest_extension(
+        self,
+        value: R24RubricBackendExtensionDescriptorV1,
+    ) -> R24RubricBackendExtensionDescriptorV1:
+        trusted = snapshot_r24_rubric_backend_extension_descriptor(value)
+        if (
+            trusted.execution_scope is not self.execution_scope
+            or trusted.provider_config_sha256
+            != canonical_sha256(cast(JsonValue, self.config_projection))
+        ):
+            raise LiveRubricError(
+                "BACKEND_EXTENSION_BINDING_MISMATCH",
+                "backend extension differs from the provider port",
+            )
+        return trusted
 
     def context(self, *, task_run_id: str, logical_call_id: str | None) -> _RubricCallContextV1:
         return self._contexts.resolve(task_run_id=task_run_id, logical_call_id=logical_call_id)
@@ -778,13 +1000,14 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
         prompt_sha256: str,
         input_schema_version: str,
         output_schema_sha256: str,
-        backend_descriptor_sha256: str,
+        backend_extension: R24RubricBackendExtensionDescriptorV1,
         current_image_binding_sha256: str | None,
     ) -> str:
         if context.case_lease is not None:
             raise LiveRubricError("CPU_LIVE_AUTHORITY_FORBIDDEN", "CPU context carries a lease")
         key = (context.task_run_id, context.logical_call_id, operation)
         self._reserve(key)
+        extension = self._attest_extension(backend_extension)
         outputs = self._outputs[operation]
         if not outputs:
             raise LiveRubricError("FAKE_OUTPUT_EXHAUSTED", "injected fake output is absent")
@@ -794,7 +1017,7 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
             cast(
                 JsonValue,
                 {
-                    "backend_descriptor_sha256": backend_descriptor_sha256,
+                    "backend_extension_descriptor_sha256": extension.sha256,
                     "execution_scope": self.execution_scope.value,
                     "operation": operation.value,
                     "provider_request_sha256": request.request_sha256,
@@ -809,13 +1032,17 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
                 execution_scope=self.execution_scope,
                 task_run_id=context.task_run_id,
                 logical_call_id=context.logical_call_id,
-                backend_descriptor_sha256=backend_descriptor_sha256,
+                backend_extension_descriptor_sha256=extension.sha256,
+                r23_compatibility_descriptor_sha256=(extension.r23_compatibility_descriptor_sha256),
+                transport_kind=extension.transport_kind,
+                transport_authority=extension.transport_authority,
                 prompt_sha256=prompt_sha256,
                 provider_input_schema_version=input_schema_version,
                 provider_output_schema_sha256=output_schema_sha256,
                 provider_request_sha256=request.request_sha256,
                 provider_output_sha256=output_sha256,
                 transport_binding_sha256=transport_sha256,
+                pricing_binding_sha256=None,
                 current_image_binding_sha256=current_image_binding_sha256,
                 manifest_sha256=None,
                 preflight_sha256=None,
@@ -823,6 +1050,8 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
                 stage_sha256=None,
                 attempt_authority_sha256=None,
                 attempt_receipt_sha256=None,
+                requested_model=None,
+                returned_model=None,
                 dispatch_count=1,
                 input_tokens=None,
                 output_tokens=None,
@@ -986,7 +1215,7 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
         prompt_sha256: str,
         input_schema_version: str,
         output_schema_sha256: str,
-        backend_descriptor_sha256: str,
+        backend_extension: R24RubricBackendExtensionDescriptorV1,
         current_image_binding_sha256: str | None,
     ) -> str:
         if type(context.case_lease) is not CaseExecutionLeaseV1:
@@ -995,6 +1224,7 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
             raise LiveRubricError(
                 "EXECUTION_CONTROL_REQUIRED", "production context lacks the seam fence"
             )
+        extension = self._attest_extension(backend_extension)
         key = (context.task_run_id, context.logical_call_id, operation)
         self._reserve(key)
         transport_sha256 = canonical_sha256(
@@ -1002,7 +1232,7 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
                 JsonValue,
                 {
                     **self.config_projection,
-                    "backend_descriptor_sha256": backend_descriptor_sha256,
+                    "backend_extension_descriptor_sha256": extension.sha256,
                     "input_schema_version": input_schema_version,
                     "operation": operation.value,
                     "output_schema_sha256": output_schema_sha256,
@@ -1045,6 +1275,8 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
             or receipt.request_sha256 != request.request_sha256
             or receipt.transport_binding_sha256 != transport_sha256
             or receipt.response_envelope_sha256 != result.sha256
+            or result.requested_model != self._runner.openai_stage.model
+            or result.returned_model != result.requested_model
             or not receipt.passed
         ):
             raise LiveRubricError("ATTEMPT_RECEIPT_DRIFT", "attempt receipt bindings differ")
@@ -1055,13 +1287,17 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
                 execution_scope=self.execution_scope,
                 task_run_id=context.task_run_id,
                 logical_call_id=context.logical_call_id,
-                backend_descriptor_sha256=backend_descriptor_sha256,
+                backend_extension_descriptor_sha256=extension.sha256,
+                r23_compatibility_descriptor_sha256=(extension.r23_compatibility_descriptor_sha256),
+                transport_kind=extension.transport_kind,
+                transport_authority=extension.transport_authority,
                 prompt_sha256=prompt_sha256,
                 provider_input_schema_version=input_schema_version,
                 provider_output_schema_sha256=output_schema_sha256,
                 provider_request_sha256=request.request_sha256,
                 provider_output_sha256=result.output_text_sha256,
                 transport_binding_sha256=transport_sha256,
+                pricing_binding_sha256=receipt.pricing_binding_sha256,
                 current_image_binding_sha256=current_image_binding_sha256,
                 manifest_sha256=receipt.manifest_sha256,
                 preflight_sha256=receipt.preflight_sha256,
@@ -1069,6 +1305,8 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
                 stage_sha256=receipt.stage_sha256,
                 attempt_authority_sha256=receipt.authority_sha256,
                 attempt_receipt_sha256=live_attempt_receipt_sha256(receipt),
+                requested_model=result.requested_model,
+                returned_model=result.returned_model,
                 dispatch_count=receipt.dispatch_count,
                 input_tokens=receipt.input_tokens,
                 output_tokens=receipt.output_tokens,
@@ -1121,38 +1359,55 @@ class LiveOpenAIRubricBackendV1:
                 root / "mobileworld_audit_handoff/schemas/r2_3/tracker_output.v1.schema.json"
             ).read_bytes()
         ).hexdigest()
-        config_sha256 = canonical_sha256(
+        compatibility_config_sha256 = canonical_sha256(
             cast(
                 JsonValue,
                 {
+                    "admission_layer": "R23_CPU_OFFLINE_COMPATIBILITY",
                     "generate_output_schema_sha256": self._generate_schema.sha256,
-                    "model": LIVE_RUBRIC_MODEL,
-                    "provider": provider_port.config_projection,
                     "reasoning_effort": LIVE_RUBRIC_REASONING_EFFORT,
+                    "r24_extension_schema_version": (LIVE_RUBRIC_BACKEND_EXTENSION_SCHEMA_VERSION),
                     "track_output_schema_sha256": self._track_schema.sha256,
                 },
             )
         )
         live = provider_port.execution_scope is LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE
         self._descriptor = RubricBackendDescriptorV1(
-            backend_id=("r24-openai-rubric" if live else "r24-cpu-fake-rubric"),
+            backend_id="r24-r23-rubric-admission-bridge",
             backend_version=LIVE_RUBRIC_BACKEND_VERSION,
             prompt_sha256=prompt_sha256,
             rubric_schema_sha256=rubric_schema_sha256,
             tracking_packet_schema_sha256=tracking_packet_schema_sha256,
             tracker_schema_sha256=tracker_schema_sha256,
-            config_sha256=config_sha256,
-            backend_kind=(
-                RubricBackendKind.OPENAI_RESPONSES if live else RubricBackendKind.INJECTED_FAKE
+            config_sha256=compatibility_config_sha256,
+        )
+        self._extension_descriptor = R24RubricBackendExtensionDescriptorV1(
+            descriptor_id=("r24-openai-rubric" if live else "r24-cpu-fake-rubric"),
+            descriptor_version=LIVE_RUBRIC_BACKEND_VERSION,
+            execution_scope=provider_port.execution_scope,
+            transport_kind=(
+                LiveRubricTransportKindV1.OPENAI_RESPONSES
+                if live
+                else LiveRubricTransportKindV1.INJECTED_FAKE
             ),
             transport_authority=(
-                RubricTransportAuthority.EXPLICIT_OWNER_AUTHORIZATION
+                LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION
                 if live
-                else RubricTransportAuthority.CPU_OFFLINE_FAKE
+                else LiveRubricTransportAuthorityV1.CPU_OFFLINE_FAKE
             ),
+            r23_compatibility_descriptor_sha256=rubric_backend_descriptor_sha256(self._descriptor),
+            provider_config_sha256=canonical_sha256(
+                cast(JsonValue, provider_port.config_projection)
+            ),
+            prompt_sha256=prompt_sha256,
+            rubric_schema_sha256=rubric_schema_sha256,
+            tracking_packet_schema_sha256=tracking_packet_schema_sha256,
+            tracker_schema_sha256=tracker_schema_sha256,
+            generate_output_schema_sha256=self._generate_schema.sha256,
+            track_output_schema_sha256=self._track_schema.sha256,
+            configured_model=LIVE_RUBRIC_MODEL,
             external_network_attempted=live,
             model_call_attempted=live,
-            local_gpu_used=False,
         )
 
     @property
@@ -1163,8 +1418,18 @@ class LiveOpenAIRubricBackendV1:
         )
 
     @property
+    def extension_descriptor(self) -> R24RubricBackendExtensionDescriptorV1:
+        return snapshot_r24_rubric_backend_extension_descriptor(self._extension_descriptor)
+
+    @property
     def call_receipts(self) -> tuple[LiveRubricCallReceiptV1, ...]:
         return self._provider.receipts
+
+    def call_receipts_for_call(self, logical_call_id: str) -> tuple[LiveRubricCallReceiptV1, ...]:
+        _require_id(logical_call_id, "logical_call_id")
+        return tuple(
+            value for value in self._provider.receipts if value.logical_call_id == logical_call_id
+        )
 
     def bind_collector_call(
         self,
@@ -1251,7 +1516,7 @@ class LiveOpenAIRubricBackendV1:
             prompt_sha256=prompt_sha256,
             input_schema_version=input_schema_version,
             output_schema_sha256=output_schema.sha256,
-            backend_descriptor_sha256=rubric_backend_descriptor_sha256(self._descriptor),
+            backend_extension=self._extension_descriptor,
             current_image_binding_sha256=current_image_binding_sha256,
         )
         parsed = _strict_json_object(output)
@@ -1296,7 +1561,10 @@ class LiveOpenAIRubricBackendV1:
             raise LiveRubricError("TASK_START_BINDING_MISMATCH", "task-start request differs")
         context = self._provider.context(task_run_id=request.task_run_id, logical_call_id=None)
         input_value = {
-            "backend_descriptor_sha256": rubric_backend_descriptor_sha256(self._descriptor),
+            "backend_extension_descriptor_sha256": self._extension_descriptor.sha256,
+            "r23_compatibility_descriptor_sha256": (
+                self._extension_descriptor.r23_compatibility_descriptor_sha256
+            ),
             "request": task_start_request_projection(request),
             "schema_version": LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
         }
@@ -1345,7 +1613,10 @@ class LiveOpenAIRubricBackendV1:
         ):
             raise LiveRubricError("CURRENT_IMAGE_BINDING_MISMATCH", "packet image binding differs")
         input_value = {
-            "backend_descriptor_sha256": rubric_backend_descriptor_sha256(self._descriptor),
+            "backend_extension_descriptor_sha256": self._extension_descriptor.sha256,
+            "r23_compatibility_descriptor_sha256": (
+                self._extension_descriptor.r23_compatibility_descriptor_sha256
+            ),
             "current_image_binding_sha256": image.binding_sha256,
             "packet": tracking_packet_projection(packet),
             "schema_version": LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
@@ -1548,6 +1819,7 @@ def rubric_binding_from_packet(packet: RubricTrackingPacketV1):
 __all__ = [
     "BoundCollectorCurrentImageV1",
     "CpuFakeRubricProviderPortV1",
+    "LIVE_RUBRIC_BACKEND_EXTENSION_SCHEMA_VERSION",
     "LIVE_RUBRIC_BACKEND_VERSION",
     "LIVE_RUBRIC_CALL_RECEIPT_SCHEMA_VERSION",
     "LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION",
@@ -1559,11 +1831,19 @@ __all__ = [
     "LiveRubricExecutionScopeV1",
     "LiveRubricOperationV1",
     "LiveRubricSchemaSnapshotV1",
+    "LiveRubricTransportAuthorityV1",
+    "LiveRubricTransportKindV1",
     "ProductionRubricProviderPortV1",
+    "R24RubricBackendExtensionDescriptorV1",
     "bind_current_collector_image",
     "live_rubric_call_receipt_projection",
+    "live_rubric_call_receipt_sha256",
     "live_rubric_generate_schema",
     "live_rubric_track_schema",
+    "r24_rubric_backend_extension_descriptor_projection",
+    "r24_rubric_backend_extension_descriptor_sha256",
     "rubric_backend_descriptor_projection",
     "rubric_backend_descriptor_sha256",
+    "snapshot_live_rubric_call_receipt",
+    "snapshot_r24_rubric_backend_extension_descriptor",
 ]

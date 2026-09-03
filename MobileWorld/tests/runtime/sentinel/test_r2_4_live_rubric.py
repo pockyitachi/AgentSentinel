@@ -41,15 +41,21 @@ from mobile_world.runtime.sentinel.r2_4.capabilities import build_runtime_histor
 from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
 from mobile_world.runtime.sentinel.r2_4.orchestration import R24RuntimeCoordinatorV1
 from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+    LIVE_RUBRIC_MODEL,
     CpuFakeRubricProviderPortV1,
     LiveOpenAIRubricBackendV1,
     LiveRubricError,
     LiveRubricExecutionScopeV1,
     LiveRubricOperationV1,
+    LiveRubricTransportAuthorityV1,
+    LiveRubricTransportKindV1,
     ProductionRubricProviderPortV1,
     bind_current_collector_image,
+    live_rubric_call_receipt_projection,
     live_rubric_generate_schema,
     live_rubric_track_schema,
+    r24_rubric_backend_extension_descriptor_projection,
+    rubric_backend_descriptor_sha256,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -360,7 +366,7 @@ def test_production_port_rejects_arbitrary_or_history_policy_runner() -> None:
         ProductionRubricProviderPortV1(runner=cast(Any, object()))
 
 
-def test_r23_backend_provenance_accepts_only_exact_fake_or_live_pairs() -> None:
+def test_r23_backend_provenance_remains_cpu_offline_fake_only() -> None:
     base = dict(
         backend_id="rubric-backend",
         backend_version="v1",
@@ -371,35 +377,49 @@ def test_r23_backend_provenance_accepts_only_exact_fake_or_live_pairs() -> None:
         config_sha256=_sha("config"),
     )
     fake = RubricBackendDescriptorV1(**base)
-    live = RubricBackendDescriptorV1(
-        **base,
-        backend_kind=RubricBackendKind.OPENAI_RESPONSES,
-        transport_authority=RubricTransportAuthority.EXPLICIT_OWNER_AUTHORIZATION,
-        external_network_attempted=True,
-        model_call_attempted=True,
-        local_gpu_used=False,
-    )
     assert fake.backend_kind is RubricBackendKind.INJECTED_FAKE
-    assert live.backend_kind is RubricBackendKind.OPENAI_RESPONSES
-    with pytest.raises(R23ContractError, match="INVALID_BACKEND_PROVENANCE"):
+    assert tuple(item.value for item in RubricBackendKind) == ("INJECTED_FAKE",)
+    assert tuple(item.value for item in RubricTransportAuthority) == ("CPU_OFFLINE_FAKE",)
+    with pytest.raises(R23ContractError, match="INVALID_ENUM"):
         RubricBackendDescriptorV1(
             **base,
-            backend_kind=RubricBackendKind.OPENAI_RESPONSES,
-            transport_authority=RubricTransportAuthority.EXPLICIT_OWNER_AUTHORIZATION,
-            external_network_attempted=False,
+            backend_kind=cast(Any, "OPENAI_RESPONSES"),
+            transport_authority=cast(Any, "EXPLICIT_OWNER_AUTHORIZATION"),
+            external_network_attempted=True,
             model_call_attempted=True,
         )
-    with pytest.raises(R23ContractError, match="INVALID_BACKEND_PROVENANCE"):
+    with pytest.raises(R23ContractError, match="UNAUTHORIZED_RESOURCE_USE"):
         RubricBackendDescriptorV1(
             **base,
             backend_kind=RubricBackendKind.INJECTED_FAKE,
             transport_authority=RubricTransportAuthority.CPU_OFFLINE_FAKE,
             external_network_attempted=True,
-            model_call_attempted=True,
         )
 
 
-def test_r23_fake_projection_stays_stable_and_live_schema_pair_is_exact(tmp_path: Path) -> None:
+def test_r23_v1_bytes_stay_frozen_and_schemas_reject_live_provenance(
+    tmp_path: Path,
+) -> None:
+    frozen_sha256s = {
+        "MobileWorld/src/mobile_world/runtime/sentinel/r2_3/contracts.py": (
+            "faccf4ca02467f88cf5124db63a2187b3b30e69bab9acc679ebadafb9919a0a0"
+        ),
+        "MobileWorld/src/mobile_world/runtime/sentinel/r2_3/session.py": (
+            "8bd78e34570b468ead209a6ee98d6d6426a7f618a92bada592c25e8cf13c8340"
+        ),
+        "MobileWorld/src/mobile_world/runtime/sentinel/r2_3/sidecar.py": (
+            "619e8afd290e6c4e2aee1f9e99e14a604780f234a3e121b603b8fd56fb65a626"
+        ),
+        "mobileworld_audit_handoff/schemas/r2_3/rubric.v1.schema.json": (
+            "098e066db2ec24dade5f2b93a1c0d89d0736c8b0947cd157d5f25a612af50f94"
+        ),
+        "mobileworld_audit_handoff/schemas/r2_3/rubric_receipt.v1.schema.json": (
+            "7d34084a5d65b529ed091064710c256c9d999630e6d5f8249de667412a4baf19"
+        ),
+    }
+    for relative, expected in frozen_sha256s.items():
+        assert hashlib.sha256((REPO_ROOT / relative).read_bytes()).hexdigest() == expected
+
     receipt = RubricReceiptV1(
         receipt_id="rubric-receipt",
         task_run_id="task-run",
@@ -451,13 +471,6 @@ def test_r23_fake_projection_stays_stable_and_live_schema_pair_is_exact(tmp_path
         ).hexdigest()
     )
 
-    live_receipt = replace(
-        receipt,
-        backend_kind="OPENAI_RESPONSES",
-        transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
-        external_network_attempted=True,
-        model_call_attempted=True,
-    )
     receipt_schema = json.loads(
         (
             REPO_ROOT / "mobileworld_audit_handoff/schemas/r2_3/rubric_receipt.v1.schema.json"
@@ -465,12 +478,14 @@ def test_r23_fake_projection_stays_stable_and_live_schema_pair_is_exact(tmp_path
     )
     validator = Draft202012Validator(receipt_schema)
     validator.validate(fake_projection)
-    validator.validate(rubric_receipt_projection(live_receipt))
     with pytest.raises(Exception):
         validator.validate(
             {
-                **rubric_receipt_projection(live_receipt),
-                "model_call_attempted": False,
+                **fake_projection,
+                "backend_kind": "OPENAI_RESPONSES",
+                "transport_authority": "EXPLICIT_OWNER_AUTHORIZATION",
+                "external_network_attempted": True,
+                "model_call_attempted": True,
             }
         )
 
@@ -494,17 +509,136 @@ def test_r23_fake_projection_stays_stable_and_live_schema_pair_is_exact(tmp_path
         tracker_backend=backend,
     ).start()
     assert generated.rubric is not None
-    live_descriptor = replace(
-        generated.rubric.backend,
-        backend_kind=RubricBackendKind.OPENAI_RESPONSES,
-        transport_authority=RubricTransportAuthority.EXPLICIT_OWNER_AUTHORIZATION,
-        external_network_attempted=True,
-        model_call_attempted=True,
-    )
-    live_rubric = replace(generated.rubric, backend=live_descriptor)
     rubric_schema = json.loads(
         (REPO_ROOT / "mobileworld_audit_handoff/schemas/r2_3/rubric.v1.schema.json").read_text(
             encoding="utf-8"
         )
     )
-    Draft202012Validator(rubric_schema).validate(multi_path_rubric_projection(live_rubric))
+    rubric_projection = multi_path_rubric_projection(generated.rubric)
+    Draft202012Validator(rubric_schema).validate(rubric_projection)
+    live_projection = deepcopy(rubric_projection)
+    backend_projection = cast(dict[str, JsonValue], live_projection["backend"])
+    backend_projection.update(
+        {
+            "backend_kind": "OPENAI_RESPONSES",
+            "transport_authority": "EXPLICIT_OWNER_AUTHORIZATION",
+            "external_network_attempted": True,
+            "model_call_attempted": True,
+        }
+    )
+    with pytest.raises(Exception):
+        Draft202012Validator(rubric_schema).validate(live_projection)
+
+
+def test_r24_extension_descriptor_and_call_receipt_schemas_bind_live_models(
+    tmp_path: Path,
+) -> None:
+    bundle, context, history_ir = _collector_bundle(tmp_path)
+    port = CpuFakeRubricProviderPortV1(
+        generate_outputs=(_generate_output(bundle.r23_snapshot.task.exact_text),),
+        track_outputs=(),
+    )
+    backend = LiveOpenAIRubricBackendV1(provider_port=port)
+    backend.bind_collector_call(
+        bundle=bundle,
+        logical_call_id=context.logical_call_id,
+        actor_request_sha256=history_ir.raw_request_sha256,
+        deadline_monotonic_ns=time.monotonic_ns() + 10_000_000_000,
+        max_cost_usd_micros=10,
+    )
+    generated = RubricTaskSession(
+        task_run_id=bundle.r23_snapshot.task_run_id,
+        task=bundle.r23_snapshot.task,
+        builder_backend=backend,
+        tracker_backend=backend,
+    ).start()
+    assert generated.status is RubricSessionStatus.ADMITTED
+    assert backend.descriptor.backend_kind is RubricBackendKind.INJECTED_FAKE
+    assert backend.descriptor.transport_authority is RubricTransportAuthority.CPU_OFFLINE_FAKE
+    assert backend.descriptor.external_network_attempted is False
+    assert backend.descriptor.model_call_attempted is False
+
+    descriptor_schema = Draft202012Validator(
+        json.loads(
+            (
+                REPO_ROOT / "mobileworld_audit_handoff/schemas/r2_4/"
+                "rubric_backend_extension.v1.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+    )
+    cpu_descriptor = backend.extension_descriptor
+    cpu_descriptor_projection = r24_rubric_backend_extension_descriptor_projection(cpu_descriptor)
+    descriptor_schema.validate(cpu_descriptor_projection)
+    assert cpu_descriptor.r23_compatibility_descriptor_sha256 == rubric_backend_descriptor_sha256(
+        backend.descriptor
+    )
+    live_descriptor = replace(
+        cpu_descriptor,
+        descriptor_id="r24-openai-rubric",
+        execution_scope=LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE,
+        transport_kind=LiveRubricTransportKindV1.OPENAI_RESPONSES,
+        transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
+        external_network_attempted=True,
+        model_call_attempted=True,
+    )
+    descriptor_schema.validate(r24_rubric_backend_extension_descriptor_projection(live_descriptor))
+    with pytest.raises(LiveRubricError, match="MODEL_BINDING_MISMATCH"):
+        replace(live_descriptor, configured_model="another-model")
+
+    assert len(backend.call_receipts) == 1
+    cpu_receipt = backend.call_receipts[0]
+    receipt_schema = Draft202012Validator(
+        json.loads(
+            (
+                REPO_ROOT
+                / "mobileworld_audit_handoff/schemas/r2_4/rubric_call_receipt.v1.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+    )
+    receipt_schema.validate(live_rubric_call_receipt_projection(cpu_receipt))
+    assert cpu_receipt.pricing_binding_sha256 is None
+    with pytest.raises(LiveRubricError, match="FALSE_LIVE_CLAIM"):
+        replace(cpu_receipt, pricing_binding_sha256=_sha("false CPU pricing"))
+    with pytest.raises(Exception):
+        receipt_schema.validate(
+            {
+                **live_rubric_call_receipt_projection(cpu_receipt),
+                "pricing_binding_sha256": _sha("false CPU pricing"),
+            }
+        )
+    live_receipt = replace(
+        cpu_receipt,
+        receipt_id="r24-rubric-live-model-binding",
+        execution_scope=LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE,
+        backend_extension_descriptor_sha256=live_descriptor.sha256,
+        transport_kind=LiveRubricTransportKindV1.OPENAI_RESPONSES,
+        transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
+        manifest_sha256=_sha("manifest"),
+        preflight_sha256=_sha("preflight"),
+        case_execution_lease_sha256=_sha("case lease"),
+        stage_sha256=_sha("stage"),
+        attempt_authority_sha256=_sha("attempt authority"),
+        attempt_receipt_sha256=_sha("attempt receipt"),
+        pricing_binding_sha256=_sha("pricing binding"),
+        requested_model=LIVE_RUBRIC_MODEL,
+        returned_model=LIVE_RUBRIC_MODEL,
+        input_tokens=11,
+        output_tokens=7,
+        total_tokens=18,
+        cost_usd_micros=3,
+    )
+    live_projection = live_rubric_call_receipt_projection(live_receipt)
+    receipt_schema.validate(live_projection)
+    assert live_projection["requested_model"] == LIVE_RUBRIC_MODEL
+    assert live_projection["returned_model"] == LIVE_RUBRIC_MODEL
+    assert live_projection["pricing_binding_sha256"] == _sha("pricing binding")
+    with pytest.raises(LiveRubricError, match="INCOMPLETE_LIVE_RECEIPT"):
+        replace(live_receipt, pricing_binding_sha256=None)
+    without_pricing = dict(live_projection)
+    without_pricing.pop("pricing_binding_sha256")
+    with pytest.raises(Exception):
+        receipt_schema.validate(without_pricing)
+    with pytest.raises(LiveRubricError, match="MODEL_OR_TRANSPORT_BINDING_MISMATCH"):
+        replace(live_receipt, returned_model="different-model")
+    with pytest.raises(Exception):
+        receipt_schema.validate({**live_projection, "returned_model": "different-model"})

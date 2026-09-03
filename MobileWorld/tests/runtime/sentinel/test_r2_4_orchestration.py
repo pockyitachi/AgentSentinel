@@ -82,6 +82,7 @@ from mobile_world.runtime.sentinel.r2_3.session import (
 from mobile_world.runtime.sentinel.r2_4.capabilities import (
     build_runtime_history_codec_resolver,
 )
+from mobile_world.runtime.sentinel.r2_4.contracts import R24ContractError
 from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptCostStatusV1,
@@ -95,6 +96,7 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
 from mobile_world.runtime.sentinel.r2_4.live_policy import (
     OwnerAuthorizedLivePerCallPolicyV1,
     ResolvedLivePolicyCallBindingV1,
+    validate_live_rubric_cross_bindings_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.orchestration import (
     R24OrchestrationError,
@@ -111,6 +113,18 @@ from mobile_world.runtime.sentinel.r2_4.production_audit import (
     production_runtime_audit_detail_projection,
     production_runtime_audit_pre_provider_sha256,
 )
+from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+    LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
+    LIVE_RUBRIC_MODEL,
+    LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
+    LiveRubricCallReceiptV1,
+    LiveRubricExecutionScopeV1,
+    LiveRubricOperationV1,
+    LiveRubricTransportAuthorityV1,
+    LiveRubricTransportKindV1,
+    R24RubricBackendExtensionDescriptorV1,
+    live_rubric_call_receipt_sha256,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 QWEN_FIXTURE = (
@@ -121,6 +135,423 @@ QWEN_FIXTURE = (
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _complete_live_rubric_cross_binding_proof() -> tuple[
+    R24RubricBackendExtensionDescriptorV1,
+    tuple[LiveAttemptReceiptV1, ...],
+    tuple[LiveRubricCallReceiptV1, ...],
+    ResolvedLivePolicyCallBindingV1,
+]:
+    logical_call_id = "r24-cross-binding-call-1"
+    actor_request_sha256 = _sha("cross-binding-actor-request")
+    manifest_sha256 = _sha("cross-binding-manifest")
+    preflight_sha256 = _sha("cross-binding-preflight")
+    lease_sha256 = _sha("cross-binding-lease")
+    stage_sha256 = _sha("cross-binding-rubric-stage")
+    pricing_sha256 = _sha("cross-binding-pricing")
+    extension = R24RubricBackendExtensionDescriptorV1(
+        descriptor_id="r24-cross-binding-extension",
+        descriptor_version="v1",
+        execution_scope=LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE,
+        transport_kind=LiveRubricTransportKindV1.OPENAI_RESPONSES,
+        transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
+        r23_compatibility_descriptor_sha256=_sha("cross-binding-r23-descriptor"),
+        provider_config_sha256=_sha("cross-binding-provider-config"),
+        prompt_sha256=_sha("cross-binding-prompts"),
+        rubric_schema_sha256=_sha("cross-binding-rubric-schema"),
+        tracking_packet_schema_sha256=_sha("cross-binding-packet-schema"),
+        tracker_schema_sha256=_sha("cross-binding-tracker-schema"),
+        generate_output_schema_sha256=_sha("cross-binding-generate-schema"),
+        track_output_schema_sha256=_sha("cross-binding-track-schema"),
+        configured_model=LIVE_RUBRIC_MODEL,
+        external_network_attempted=True,
+        model_call_attempted=True,
+    )
+    attempts = tuple(
+        LiveAttemptReceiptV1(
+            attempt_id=f"r24-cross-binding-attempt-{index}",
+            role=LiveAttemptRoleV1.RUBRIC,
+            authority_sha256=_sha(f"cross-binding-authority-{index}"),
+            manifest_sha256=manifest_sha256,
+            preflight_sha256=preflight_sha256,
+            case_execution_lease_sha256=lease_sha256,
+            stage_sha256=stage_sha256,
+            case_id="r24-cross-binding-case",
+            logical_call_id=logical_call_id,
+            actor_request_sha256=actor_request_sha256,
+            request_sha256=_sha(f"cross-binding-request-{index}"),
+            transport_binding_sha256=_sha(f"cross-binding-transport-{index}"),
+            pricing_binding_sha256=pricing_sha256,
+            execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
+            status=LiveAttemptStatusV1.COMPLETED,
+            dispatch_count=1,
+            response_envelope_sha256=_sha(f"cross-binding-envelope-{index}"),
+            requested_model=LIVE_RUBRIC_MODEL,
+            returned_model=LIVE_RUBRIC_MODEL,
+            input_tokens=2 + index,
+            cached_input_tokens=0,
+            output_tokens=1,
+            total_tokens=3 + index,
+            cost_status=LiveAttemptCostStatusV1.EXACT,
+            cost_usd_micros=index,
+            cancellation_requested=False,
+            termination=LiveAttemptTerminationV1.NONE,
+            worker_pid=20_000 + index,
+            worker_exit_code=0,
+            worker_reaped=True,
+            late_output_detected=False,
+            duration_ns=index,
+            failure_code=None,
+        )
+        for index in (1, 2)
+    )
+    attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
+    operations = (LiveRubricOperationV1.GENERATE, LiveRubricOperationV1.TRACK)
+    receipts = tuple(
+        LiveRubricCallReceiptV1(
+            receipt_id=f"r24-cross-binding-receipt-{index}",
+            operation=operation,
+            execution_scope=extension.execution_scope,
+            task_run_id="r24-cross-binding-task-run",
+            logical_call_id=logical_call_id,
+            backend_extension_descriptor_sha256=extension.sha256,
+            r23_compatibility_descriptor_sha256=(extension.r23_compatibility_descriptor_sha256),
+            transport_kind=extension.transport_kind,
+            transport_authority=extension.transport_authority,
+            prompt_sha256=_sha(f"cross-binding-prompt-{index}"),
+            provider_input_schema_version=(
+                LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION
+                if operation is LiveRubricOperationV1.GENERATE
+                else LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION
+            ),
+            provider_output_schema_sha256=(
+                extension.generate_output_schema_sha256
+                if operation is LiveRubricOperationV1.GENERATE
+                else extension.track_output_schema_sha256
+            ),
+            provider_request_sha256=attempt.request_sha256,
+            provider_output_sha256=_sha(f"cross-binding-output-{index}"),
+            transport_binding_sha256=attempt.transport_binding_sha256,
+            pricing_binding_sha256=attempt.pricing_binding_sha256,
+            current_image_binding_sha256=(
+                None
+                if operation is LiveRubricOperationV1.GENERATE
+                else _sha("cross-binding-current-image")
+            ),
+            manifest_sha256=attempt.manifest_sha256,
+            preflight_sha256=attempt.preflight_sha256,
+            case_execution_lease_sha256=attempt.case_execution_lease_sha256,
+            stage_sha256=attempt.stage_sha256,
+            attempt_authority_sha256=attempt.authority_sha256,
+            attempt_receipt_sha256=attempt_hash,
+            requested_model=extension.configured_model,
+            returned_model=extension.configured_model,
+            dispatch_count=attempt.dispatch_count,
+            input_tokens=attempt.input_tokens,
+            output_tokens=attempt.output_tokens,
+            total_tokens=attempt.total_tokens,
+            cost_usd_micros=attempt.cost_usd_micros,
+        )
+        for index, (operation, attempt, attempt_hash) in enumerate(
+            zip(operations, attempts, attempt_hashes, strict=True),
+            start=1,
+        )
+    )
+    binding = ResolvedLivePolicyCallBindingV1(
+        logical_call_id=logical_call_id,
+        actor_call_index=1,
+        actor_request_sha256=actor_request_sha256,
+        policy_id="r24-cross-binding-policy",
+        execution_authority_sha256=manifest_sha256,
+        source_transport_descriptor_sha256=_sha("cross-binding-history-descriptor"),
+        source_transport_binding_sha256=None,
+        case_execution_lease_sha256=lease_sha256,
+        preflight_report_sha256=preflight_sha256,
+        factory_binding_sha256=_sha("cross-binding-factory"),
+        pricing_binding_sha256=pricing_sha256,
+        rubric_backend_extension_descriptor_sha256=extension.sha256,
+        rubric_attempt_receipt_sha256s=attempt_hashes,
+        rubric_call_receipt_sha256s=tuple(
+            live_rubric_call_receipt_sha256(item) for item in receipts
+        ),
+        history_policy_attempt_receipt_sha256=None,
+        output_sha256=None,
+        openai_calls=2,
+        cost_usd_micros=3,
+    )
+    return extension, attempts, receipts, binding
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "attempt_logical_call_id",
+        "attempt_actor_request",
+        "attempt_role",
+        "attempt_status",
+        "attempt_requested_model",
+        "attempt_returned_model",
+        "receipt_logical_call_id",
+        "receipt_manifest",
+        "receipt_preflight",
+        "receipt_case_lease",
+        "receipt_stage",
+        "receipt_attempt_authority",
+        "receipt_attempt_hash",
+        "receipt_provider_request",
+        "receipt_transport_binding",
+        "receipt_pricing_binding",
+        "receipt_dispatch_count",
+        "receipt_input_tokens",
+        "receipt_output_tokens",
+        "receipt_total_tokens",
+        "receipt_cost",
+        "receipt_extension_hash",
+        "receipt_r23_hash",
+        "receipt_scope",
+        "receipt_transport_kind",
+        "receipt_transport_authority",
+        "receipt_requested_model",
+        "receipt_returned_model",
+        "receipt_input_schema",
+        "receipt_output_schema",
+        "receipt_operation",
+        "receipt_current_image",
+        "extension_configured_model",
+        "binding_logical_call_id",
+        "binding_actor_request",
+        "binding_case_lease",
+        "binding_preflight",
+        "binding_pricing",
+        "binding_extension_hash",
+        "binding_attempt_order",
+        "binding_receipt_order",
+        "binding_census",
+        "binding_cost",
+    ),
+)
+def test_live_rubric_cross_binding_rejects_every_field_drift(drift: str) -> None:
+    extension, attempts, receipts, binding = _complete_live_rubric_cross_binding_proof()
+    logical_call_id = binding.logical_call_id
+    actor_request_sha256 = binding.actor_request_sha256
+    validate_live_rubric_cross_bindings_v1(
+        logical_call_id=logical_call_id,
+        actor_request_sha256=actor_request_sha256,
+        attempts=attempts,
+        rubric_call_receipts=receipts,
+        rubric_backend_extension=extension,
+        binding=binding,
+        actor_call_index=1,
+        expect_history_policy=False,
+        allow_incomplete=False,
+    )
+
+    def replace_attempt(index: int = 0, **changes: object) -> None:
+        nonlocal attempts
+        values = list(attempts)
+        values[index] = replace(values[index], **changes)
+        attempts = tuple(values)
+
+    def replace_receipt(index: int = 0, **changes: object) -> None:
+        nonlocal receipts
+        values = list(receipts)
+        values[index] = replace(values[index], **changes)
+        receipts = tuple(values)
+
+    def corrupt_attempt(field: str, value: object, *, index: int = 0) -> None:
+        nonlocal attempts
+        values = list(attempts)
+        item = replace(values[index])
+        object.__setattr__(item, field, value)
+        values[index] = item
+        attempts = tuple(values)
+
+    def corrupt_receipt(field: str, value: object, *, index: int = 0) -> None:
+        nonlocal receipts
+        values = list(receipts)
+        item = replace(values[index])
+        object.__setattr__(item, field, value)
+        values[index] = item
+        receipts = tuple(values)
+
+    changed_sha256 = _sha(f"cross-binding-drift:{drift}")
+    if drift == "attempt_logical_call_id":
+        replace_attempt(logical_call_id="r24-cross-binding-other-call")
+    elif drift == "attempt_actor_request":
+        replace_attempt(actor_request_sha256=changed_sha256)
+    elif drift == "attempt_role":
+        replace_attempt(role=LiveAttemptRoleV1.HISTORY_POLICY)
+    elif drift == "attempt_status":
+        corrupt_attempt("status", LiveAttemptStatusV1.FAILED)
+    elif drift == "attempt_requested_model":
+        corrupt_attempt("requested_model", "different-model")
+    elif drift == "attempt_returned_model":
+        corrupt_attempt("returned_model", "different-model")
+    elif drift == "receipt_logical_call_id":
+        replace_receipt(logical_call_id="r24-cross-binding-other-call")
+    elif drift == "receipt_manifest":
+        replace_receipt(manifest_sha256=changed_sha256)
+    elif drift == "receipt_preflight":
+        replace_receipt(preflight_sha256=changed_sha256)
+    elif drift == "receipt_case_lease":
+        replace_receipt(case_execution_lease_sha256=changed_sha256)
+    elif drift == "receipt_stage":
+        replace_receipt(stage_sha256=changed_sha256)
+    elif drift == "receipt_attempt_authority":
+        replace_receipt(attempt_authority_sha256=changed_sha256)
+    elif drift == "receipt_attempt_hash":
+        replace_receipt(attempt_receipt_sha256=changed_sha256)
+    elif drift == "receipt_provider_request":
+        replace_receipt(provider_request_sha256=changed_sha256)
+    elif drift == "receipt_transport_binding":
+        replace_receipt(transport_binding_sha256=changed_sha256)
+    elif drift == "receipt_pricing_binding":
+        replace_receipt(pricing_binding_sha256=changed_sha256)
+    elif drift == "receipt_dispatch_count":
+        corrupt_receipt("dispatch_count", 0)
+    elif drift == "receipt_input_tokens":
+        replace_receipt(input_tokens=10, total_tokens=11)
+    elif drift == "receipt_output_tokens":
+        replace_receipt(output_tokens=10, total_tokens=13)
+    elif drift == "receipt_total_tokens":
+        corrupt_receipt("total_tokens", 99)
+    elif drift == "receipt_cost":
+        replace_receipt(cost_usd_micros=99)
+    elif drift == "receipt_extension_hash":
+        replace_receipt(backend_extension_descriptor_sha256=changed_sha256)
+    elif drift == "receipt_r23_hash":
+        replace_receipt(r23_compatibility_descriptor_sha256=changed_sha256)
+    elif drift == "receipt_scope":
+        corrupt_receipt("execution_scope", LiveRubricExecutionScopeV1.CPU_TEST_LOCAL)
+    elif drift == "receipt_transport_kind":
+        corrupt_receipt("transport_kind", LiveRubricTransportKindV1.INJECTED_FAKE)
+    elif drift == "receipt_transport_authority":
+        corrupt_receipt("transport_authority", LiveRubricTransportAuthorityV1.CPU_OFFLINE_FAKE)
+    elif drift == "receipt_requested_model":
+        corrupt_receipt("requested_model", "different-model")
+    elif drift == "receipt_returned_model":
+        corrupt_receipt("returned_model", "different-model")
+    elif drift == "receipt_input_schema":
+        replace_receipt(provider_input_schema_version="r24-drift-input-v1")
+    elif drift == "receipt_output_schema":
+        replace_receipt(provider_output_schema_sha256=changed_sha256)
+    elif drift == "receipt_operation":
+        replace_receipt(
+            operation=LiveRubricOperationV1.TRACK,
+            provider_input_schema_version=LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
+            provider_output_schema_sha256=extension.track_output_schema_sha256,
+            current_image_binding_sha256=_sha("cross-binding-drift-image"),
+        )
+    elif drift == "receipt_current_image":
+        corrupt_receipt("current_image_binding_sha256", None, index=1)
+    elif drift == "extension_configured_model":
+        extension = replace(extension)
+        object.__setattr__(extension, "configured_model", "different-model")
+    elif drift == "binding_logical_call_id":
+        binding = replace(binding, logical_call_id="r24-cross-binding-other-call")
+    elif drift == "binding_actor_request":
+        binding = replace(binding, actor_request_sha256=changed_sha256)
+    elif drift == "binding_case_lease":
+        binding = replace(binding, case_execution_lease_sha256=changed_sha256)
+    elif drift == "binding_preflight":
+        binding = replace(binding, preflight_report_sha256=changed_sha256)
+    elif drift == "binding_pricing":
+        binding = replace(binding, pricing_binding_sha256=changed_sha256)
+    elif drift == "binding_extension_hash":
+        binding = replace(binding, rubric_backend_extension_descriptor_sha256=changed_sha256)
+    elif drift == "binding_attempt_order":
+        binding = replace(
+            binding,
+            rubric_attempt_receipt_sha256s=tuple(reversed(binding.rubric_attempt_receipt_sha256s)),
+        )
+    elif drift == "binding_receipt_order":
+        binding = replace(
+            binding,
+            rubric_call_receipt_sha256s=tuple(reversed(binding.rubric_call_receipt_sha256s)),
+        )
+    elif drift == "binding_census":
+        object.__setattr__(binding, "openai_calls", 3)
+    elif drift == "binding_cost":
+        binding = replace(binding, cost_usd_micros=99)
+    else:
+        raise AssertionError(f"unknown drift: {drift}")
+
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=logical_call_id,
+            actor_request_sha256=actor_request_sha256,
+            attempts=attempts,
+            rubric_call_receipts=receipts,
+            rubric_backend_extension=extension,
+            binding=binding,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "receipt_order",
+        "missing_first_receipt",
+        "history_before_rubric",
+        "unmatched_rubric_followed_by_history",
+        "partial_with_completed_binding",
+    ),
+)
+def test_live_rubric_cross_binding_rejects_nonprefix_sequences(drift: str) -> None:
+    extension, attempts, receipts, binding = _complete_live_rubric_cross_binding_proof()
+    history_attempt = replace(
+        attempts[-1],
+        attempt_id="r24-cross-binding-history-attempt",
+        role=LiveAttemptRoleV1.HISTORY_POLICY,
+        authority_sha256=_sha("cross-binding-history-authority"),
+        request_sha256=_sha("cross-binding-history-request"),
+        transport_binding_sha256=_sha("cross-binding-history-transport"),
+        response_envelope_sha256=_sha("cross-binding-history-envelope"),
+    )
+    if drift == "receipt_order":
+        receipts = tuple(reversed(receipts))
+        selected_binding = None
+        selected_attempts = attempts
+        expect_history = False
+    elif drift == "missing_first_receipt":
+        receipts = (receipts[1],)
+        selected_binding = None
+        selected_attempts = attempts
+        expect_history = False
+    elif drift == "history_before_rubric":
+        receipts = ()
+        selected_binding = None
+        selected_attempts = (history_attempt, attempts[0])
+        expect_history = True
+    elif drift == "unmatched_rubric_followed_by_history":
+        receipts = (receipts[0],)
+        selected_binding = None
+        selected_attempts = (*attempts, history_attempt)
+        expect_history = True
+    elif drift == "partial_with_completed_binding":
+        receipts = (receipts[0],)
+        selected_binding = binding
+        selected_attempts = attempts
+        expect_history = False
+    else:
+        raise AssertionError(f"unknown drift: {drift}")
+
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=selected_attempts,
+            rubric_call_receipts=receipts,
+            rubric_backend_extension=extension,
+            binding=selected_binding,
+            actor_call_index=1,
+            expect_history_policy=expect_history,
+            allow_incomplete=True,
+        )
 
 
 @dataclass(slots=True)
@@ -566,6 +997,8 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 status=LiveAttemptStatusV1.COMPLETED,
                 dispatch_count=1,
                 response_envelope_sha256=_sha(f"rubric-response-{index}"),
+                requested_model=LIVE_RUBRIC_MODEL,
+                returned_model=LIVE_RUBRIC_MODEL,
                 input_tokens=2,
                 cached_input_tokens=0,
                 output_tokens=1,
@@ -585,20 +1018,92 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
             for index in (1, 2)
         )
         attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
+        rubric_backend_extension = R24RubricBackendExtensionDescriptorV1(
+            descriptor_id="r24-no-history-rubric-extension",
+            descriptor_version="v1",
+            execution_scope=LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE,
+            transport_kind=LiveRubricTransportKindV1.OPENAI_RESPONSES,
+            transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
+            r23_compatibility_descriptor_sha256=_sha("r23-compatibility"),
+            provider_config_sha256=_sha("rubric-provider-config"),
+            prompt_sha256=_sha("rubric-extension-prompt"),
+            rubric_schema_sha256=_sha("rubric-schema"),
+            tracking_packet_schema_sha256=_sha("tracking-packet-schema"),
+            tracker_schema_sha256=_sha("tracker-schema"),
+            generate_output_schema_sha256=_sha("rubric-generate-schema"),
+            track_output_schema_sha256=_sha("rubric-track-schema"),
+            configured_model=LIVE_RUBRIC_MODEL,
+            external_network_attempted=True,
+            model_call_attempted=True,
+        )
+        rubric_call_receipts = tuple(
+            LiveRubricCallReceiptV1(
+                receipt_id=f"r24-rubric-call-{index}",
+                operation=(
+                    LiveRubricOperationV1.GENERATE if index == 1 else LiveRubricOperationV1.TRACK
+                ),
+                execution_scope=LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE,
+                task_run_id=runtime.task.task_run_id,
+                logical_call_id=runtime.context.logical_call_id,
+                backend_extension_descriptor_sha256=rubric_backend_extension.sha256,
+                r23_compatibility_descriptor_sha256=(
+                    rubric_backend_extension.r23_compatibility_descriptor_sha256
+                ),
+                transport_kind=LiveRubricTransportKindV1.OPENAI_RESPONSES,
+                transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
+                prompt_sha256=_sha(f"rubric-prompt-{index}"),
+                provider_input_schema_version=(
+                    LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION
+                    if index == 1
+                    else LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION
+                ),
+                provider_output_schema_sha256=(
+                    rubric_backend_extension.generate_output_schema_sha256
+                    if index == 1
+                    else rubric_backend_extension.track_output_schema_sha256
+                ),
+                provider_request_sha256=attempt.request_sha256,
+                provider_output_sha256=_sha(f"rubric-output-{index}"),
+                transport_binding_sha256=attempt.transport_binding_sha256,
+                pricing_binding_sha256=attempt.pricing_binding_sha256,
+                current_image_binding_sha256=(None if index == 1 else _sha("rubric-current-image")),
+                manifest_sha256=attempt.manifest_sha256,
+                preflight_sha256=attempt.preflight_sha256,
+                case_execution_lease_sha256=attempt.case_execution_lease_sha256,
+                stage_sha256=attempt.stage_sha256,
+                attempt_authority_sha256=attempt.authority_sha256,
+                attempt_receipt_sha256=attempt_hash,
+                requested_model=LIVE_RUBRIC_MODEL,
+                returned_model=LIVE_RUBRIC_MODEL,
+                dispatch_count=1,
+                input_tokens=cast(int, attempt.input_tokens),
+                output_tokens=cast(int, attempt.output_tokens),
+                total_tokens=cast(int, attempt.total_tokens),
+                cost_usd_micros=cast(int, attempt.cost_usd_micros),
+            )
+            for index, (attempt, attempt_hash) in enumerate(
+                zip(attempts, attempt_hashes, strict=True), start=1
+            )
+        )
+        rubric_call_hashes = tuple(
+            live_rubric_call_receipt_sha256(item) for item in rubric_call_receipts
+        )
         policy_id = "r24-no-history-audit-live-policy"
         binding = ResolvedLivePolicyCallBindingV1(
             logical_call_id=runtime.context.logical_call_id,
             actor_call_index=1,
             actor_request_sha256=raw_hash,
             policy_id=policy_id,
-            execution_authority_sha256=_sha("execution-authority"),
+            execution_authority_sha256=cast(str, common["manifest_sha256"]),
             source_transport_descriptor_sha256=_sha("history-descriptor"),
             source_transport_binding_sha256=None,
             case_execution_lease_sha256=cast(str, common["case_execution_lease_sha256"]),
             preflight_report_sha256=cast(str, common["preflight_sha256"]),
             factory_binding_sha256=_sha("factory-binding"),
             pricing_binding_sha256=cast(str, common["pricing_binding_sha256"]),
+            rubric_backend_extension_descriptor_sha256=(rubric_backend_extension.sha256),
             rubric_attempt_receipt_sha256s=attempt_hashes,
+            rubric_call_receipt_sha256s=rubric_call_hashes,
             history_policy_attempt_receipt_sha256=None,
             output_sha256=None,
             openai_calls=2,
@@ -651,6 +1156,20 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 if logical_call_id == runtime.context.logical_call_id
                 else pytest.fail("unexpected logical call")
             ),
+        )
+        monkeypatch.setattr(
+            OwnerAuthorizedLivePerCallPolicyV1,
+            "rubric_call_receipts_for_call",
+            lambda _self, logical_call_id: (
+                rubric_call_receipts
+                if logical_call_id == runtime.context.logical_call_id
+                else pytest.fail("unexpected logical call")
+            ),
+        )
+        monkeypatch.setattr(
+            OwnerAuthorizedLivePerCallPolicyV1,
+            "rubric_backend_extension_descriptor",
+            lambda _self: rubric_backend_extension,
         )
         monkeypatch.setattr(
             OwnerAuthorizedLivePerCallPolicyV1,
@@ -778,6 +1297,15 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
         "RUBRIC",
         "RUBRIC",
     ]
+    assert [item["requested_model"] for item in stage["r2_4_rubric_call_receipts"]] == [
+        LIVE_RUBRIC_MODEL,
+        LIVE_RUBRIC_MODEL,
+    ]
+    assert [item["returned_model"] for item in stage["r2_4_rubric_call_receipts"]] == [
+        LIVE_RUBRIC_MODEL,
+        LIVE_RUBRIC_MODEL,
+    ]
+    assert stage["r2_4_rubric_backend_extension"]["configured_model"] == LIVE_RUBRIC_MODEL
 
 
 def test_new_logical_call_cannot_reuse_one_collector_observation(tmp_path: Path) -> None:

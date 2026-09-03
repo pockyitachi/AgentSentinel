@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
-from typing import Final, cast
+from typing import Any, Final, cast
 
 from mobile_world.runtime.sentinel.r2_4.live_run import OpenAIResponsesStageV1, OpenAIRoleV1
 from mobile_world.runtime.sentinel.r2_4.production_preflight import (
@@ -31,6 +31,7 @@ from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     CaseExecutionScopeV1,
     ProductionPostPreflightFactoryV1,
     case_execution_lease_sha256,
+    openai_stage_sha256,
 )
 
 LIVE_ATTEMPT_AUTHORITY_SCHEMA_VERSION = (
@@ -45,6 +46,7 @@ HISTORY_POLICY_REQUEST_SCHEMA_VERSION = OPENAI_REQUEST_SCHEMA_VERSION
 LIVE_ATTEMPT_PRICING_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-live-pricing/v1"
 
 _ID: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+_SAFE_MODEL_ID: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}")
 _SHA256: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
 _FAILURE_CODE: Final[re.Pattern[str]] = re.compile(r"[A-Z][A-Z0-9_]{0,95}")
 _CPU_INPUT_TOKENS: Final[int] = 7
@@ -53,6 +55,22 @@ _CPU_COST_USD_MICROS: Final[int] = 1
 _MAX_DURATION_NS: Final[int] = 7 * 24 * 60 * 60 * 1_000_000_000
 _MAX_PROVIDER_REQUEST_BYTES: Final[int] = 8 * 1024 * 1024
 _REQUEST_SEAL: Final[object] = object()
+_RESPONSES_REQUEST_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "input",
+        "instructions",
+        "max_output_tokens",
+        "model",
+        "parallel_tool_calls",
+        "reasoning",
+        "store",
+        "stream",
+        "text",
+        "tool_choice",
+        "tools",
+        "truncation",
+    }
+)
 
 
 class LiveAttemptError(RuntimeError):
@@ -213,6 +231,227 @@ def snapshot_canonical_history_policy_request(
         schema_version=value.schema_version,
         _seal=_REQUEST_SEAL,
     )
+
+
+def _snapshot_openai_stage(value: OpenAIResponsesStageV1) -> OpenAIResponsesStageV1:
+    if type(value) is not OpenAIResponsesStageV1:
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "OpenAI stage type differs")
+    try:
+        return OpenAIResponsesStageV1(
+            role=value.role,
+            model=value.model,
+            endpoint=value.endpoint,
+            transport_kind=value.transport_kind,
+            transport_authority=value.transport_authority,
+            openai_sdk_version=value.openai_sdk_version,
+            sdk_max_retries=value.sdk_max_retries,
+            external_network_on_call=value.external_network_on_call,
+            model_on_call=value.model_on_call,
+            max_output_tokens=value.max_output_tokens,
+            timeout_ms=value.timeout_ms,
+            max_attempts=value.max_attempts,
+            store=value.store,
+        )
+    except Exception as exc:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "OpenAI stage validation failed"
+        ) from exc
+
+
+def _require_exact_object_fields(
+    value: object,
+    fields: frozenset[str],
+    *,
+    label: str,
+) -> dict[str, object]:
+    if type(value) is not dict or set(value) != fields:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", f"{label} fields differ from the sealed request"
+        )
+    return cast(dict[str, object], value)
+
+
+def _require_input_content(
+    request: dict[str, object],
+    *,
+    image_required: bool,
+) -> None:
+    input_value = request.get("input")
+    if type(input_value) is not list or len(input_value) != 1:
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider input envelope differs")
+    message = _require_exact_object_fields(
+        input_value[0], frozenset({"role", "content"}), label="provider input message"
+    )
+    content = message["content"]
+    expected_count = 2 if image_required else 1
+    if (
+        message["role"] != "user"
+        or type(message["role"]) is not str
+        or type(content) is not list
+        or len(content) != expected_count
+    ):
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider input content differs")
+    text_part = _require_exact_object_fields(
+        content[0], frozenset({"type", "text"}), label="provider input text"
+    )
+    if (
+        text_part["type"] != "input_text"
+        or type(text_part["type"]) is not str
+        or type(text_part["text"]) is not str
+        or not text_part["text"]
+    ):
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider input text differs")
+    if not image_required:
+        return
+    image_part = _require_exact_object_fields(
+        content[1],
+        frozenset({"detail", "image_url", "type"}),
+        label="provider input image",
+    )
+    if (
+        image_part["type"] != "input_image"
+        or type(image_part["type"]) is not str
+        or image_part["detail"] != "high"
+        or type(image_part["detail"]) is not str
+        or type(image_part["image_url"]) is not str
+        or not image_part["image_url"].startswith("data:image/")
+    ):
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider input image differs")
+
+
+def _validate_sealed_provider_request(
+    request_bytes: bytes,
+    *,
+    stage: OpenAIResponsesStageV1,
+    role: LiveAttemptRoleV1,
+) -> dict[str, object]:
+    """Rebuild and validate the exact role/stage request before any provider dispatch."""
+
+    trusted_stage = _snapshot_openai_stage(stage)
+    if type(role) is not LiveAttemptRoleV1 or role is LiveAttemptRoleV1.ACTOR:
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider role differs")
+    expected_stage_role = (
+        OpenAIRoleV1.RUBRIC if role is LiveAttemptRoleV1.RUBRIC else OpenAIRoleV1.HISTORY_POLICY
+    )
+    if trusted_stage.role is not expected_stage_role:
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider stage role differs")
+    if (
+        type(request_bytes) is not bytes
+        or not 2 <= len(request_bytes) <= _MAX_PROVIDER_REQUEST_BYTES
+    ):
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider request bytes differ")
+    try:
+        decoded = json.loads(request_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as exc:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "provider request JSON is invalid"
+        ) from exc
+    request = _require_exact_object_fields(
+        decoded, _RESPONSES_REQUEST_FIELDS, label="provider request"
+    )
+    try:
+        if _canonical_bytes(request) != request_bytes:
+            raise LiveAttemptError(
+                "PROVIDER_REQUEST_STAGE_MISMATCH", "provider request is not canonical"
+            )
+        if (
+            type(request["model"]) is not str
+            or request["model"] != trusted_stage.model
+            or type(request["max_output_tokens"]) is not int
+            or request["max_output_tokens"] != trusted_stage.max_output_tokens
+            or type(request["store"]) is not bool
+            or request["store"] is not trusted_stage.store
+            or request["store"] is not False
+            or type(request["stream"]) is not bool
+            or request["stream"] is not False
+            or type(request["parallel_tool_calls"]) is not bool
+            or request["parallel_tool_calls"] is not False
+            or request["tools"] != []
+            or type(request["tools"]) is not list
+            or request["tool_choice"] != "none"
+            or type(request["tool_choice"]) is not str
+            or request["truncation"] != "disabled"
+            or type(request["truncation"]) is not str
+        ):
+            raise LiveAttemptError(
+                "PROVIDER_REQUEST_STAGE_MISMATCH", "provider request config differs"
+            )
+
+        if role is LiveAttemptRoleV1.HISTORY_POLICY:
+            from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+                GPT56_OUTPUT_SCHEMA_NAME,
+                GPT56_POLICY_INSTRUCTIONS,
+                GPT56_REASONING_EFFORT,
+                ProposalSchemaSnapshotV1,
+            )
+
+            expected_instructions = GPT56_POLICY_INSTRUCTIONS
+            expected_reasoning_effort = GPT56_REASONING_EFFORT
+            expected_schema_name = GPT56_OUTPUT_SCHEMA_NAME
+            expected_schema = ProposalSchemaSnapshotV1.from_checked_in().as_dict()
+            image_required = True
+        else:
+            from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+                _GENERATE_INSTRUCTIONS,
+                _TRACK_INSTRUCTIONS,
+                LIVE_RUBRIC_REASONING_EFFORT,
+                live_rubric_generate_schema,
+                live_rubric_track_schema,
+            )
+
+            instructions = request["instructions"]
+            if instructions == _GENERATE_INSTRUCTIONS and type(instructions) is str:
+                schema_snapshot = live_rubric_generate_schema()
+                image_required = False
+            elif instructions == _TRACK_INSTRUCTIONS and type(instructions) is str:
+                schema_snapshot = live_rubric_track_schema()
+                image_required = True
+            else:
+                raise LiveAttemptError(
+                    "PROVIDER_REQUEST_STAGE_MISMATCH", "rubric instructions differ"
+                )
+            expected_instructions = instructions
+            expected_reasoning_effort = LIVE_RUBRIC_REASONING_EFFORT
+            expected_schema_name = schema_snapshot.name
+            expected_schema = schema_snapshot.as_dict()
+
+        reasoning = _require_exact_object_fields(
+            request["reasoning"], frozenset({"effort"}), label="provider reasoning"
+        )
+        text = _require_exact_object_fields(
+            request["text"], frozenset({"format", "verbosity"}), label="provider text"
+        )
+        output_format = _require_exact_object_fields(
+            text["format"],
+            frozenset({"name", "schema", "strict", "type"}),
+            label="provider output format",
+        )
+        if (
+            type(request["instructions"]) is not str
+            or request["instructions"] != expected_instructions
+            or reasoning != {"effort": expected_reasoning_effort}
+            or text["verbosity"] != "low"
+            or type(text["verbosity"]) is not str
+            or output_format["type"] != "json_schema"
+            or type(output_format["type"]) is not str
+            or output_format["name"] != expected_schema_name
+            or type(output_format["name"]) is not str
+            or type(output_format["strict"]) is not bool
+            or output_format["strict"] is not True
+            or output_format["schema"] != expected_schema
+            or type(output_format["schema"]) is not dict
+        ):
+            raise LiveAttemptError(
+                "PROVIDER_REQUEST_STAGE_MISMATCH", "provider structured output differs"
+            )
+        _require_input_content(request, image_required=image_required)
+    except LiveAttemptError:
+        raise
+    except Exception as exc:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "sealed provider request validation failed"
+        ) from exc
+    return request
 
 
 CanonicalOpenAIRequestV1 = CanonicalHistoryPolicyRequestV1
@@ -447,6 +686,8 @@ class LiveAttemptReceiptV1:
     late_output_detected: bool
     duration_ns: int
     failure_code: str | None
+    requested_model: str | None = None
+    returned_model: str | None = None
     schema_version: str = LIVE_ATTEMPT_RECEIPT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -510,6 +751,16 @@ class LiveAttemptReceiptV1:
             type(self.failure_code) is not str or _FAILURE_CODE.fullmatch(self.failure_code) is None
         ):
             raise LiveAttemptError("INVALID_FAILURE_CODE", "failure_code is invalid")
+        for model, label in (
+            (self.requested_model, "requested_model"),
+            (self.returned_model, "returned_model"),
+        ):
+            if model is not None and (
+                type(model) is not str or _SAFE_MODEL_ID.fullmatch(model) is None
+            ):
+                raise LiveAttemptError(
+                    "INVALID_MODEL_PROVENANCE", f"{label} is not a bounded safe model ID"
+                )
         self._validate_state()
 
     def _validate_state(self) -> None:
@@ -525,8 +776,81 @@ class LiveAttemptReceiptV1:
             and self.cost_status is LiveAttemptCostStatusV1.EXACT
             and self.cost_usd_micros is not None
         )
+        model_values = (self.requested_model, self.returned_model)
+        if self.execution_kind is LiveAttemptExecutionKindV1.CPU_FIXED_SUBPROCESS:
+            if any(value is not None for value in model_values):
+                raise LiveAttemptError(
+                    "INVALID_MODEL_PROVENANCE", "CPU attempts cannot claim provider model IDs"
+                )
+        elif self.status is LiveAttemptStatusV1.COMPLETED:
+            if self.requested_model != "gpt-5.6-sol" or self.returned_model != self.requested_model:
+                raise LiveAttemptError(
+                    "INVALID_COMPLETED_RECEIPT",
+                    "completed production attempt model provenance differs",
+                )
+        elif (
+            self.status is LiveAttemptStatusV1.FAILED
+            and self.failure_code == "PROVIDER_RETURNED_MODEL_MISMATCH"
+        ):
+            if (
+                self.requested_model != "gpt-5.6-sol"
+                or self.returned_model is None
+                or self.returned_model == self.requested_model
+                or self.dispatch_count != 1
+                or self.cost_status is not LiveAttemptCostStatusV1.UNKNOWN
+                or self.cost_usd_micros is not None
+                or self.cancellation_requested
+                or self.termination is not LiveAttemptTerminationV1.NONE
+                or not self.worker_reaped
+                or self.worker_exit_code != 0
+                or self.late_output_detected
+                or self.response_envelope_sha256 is not None
+                or any(value is not None for value in tokens)
+            ):
+                raise LiveAttemptError(
+                    "INVALID_MODEL_PROVENANCE", "provider model mismatch proof is incomplete"
+                )
+        elif (
+            self.status is LiveAttemptStatusV1.FAILED
+            and self.failure_code == "PROVIDER_RETURNED_MODEL_INVALID"
+        ):
+            if (
+                self.requested_model != "gpt-5.6-sol"
+                or self.returned_model is not None
+                or self.dispatch_count != 1
+                or self.cost_status is not LiveAttemptCostStatusV1.UNKNOWN
+                or self.cost_usd_micros is not None
+                or self.cancellation_requested
+                or self.termination is not LiveAttemptTerminationV1.NONE
+                or not self.worker_reaped
+                or self.worker_exit_code != 0
+                or self.late_output_detected
+                or self.response_envelope_sha256 is not None
+                or any(value is not None for value in tokens)
+            ):
+                raise LiveAttemptError(
+                    "INVALID_MODEL_PROVENANCE", "invalid provider model proof is inconsistent"
+                )
+        elif any(value is not None for value in model_values):
+            raise LiveAttemptError(
+                "INVALID_MODEL_PROVENANCE", "attempt state cannot carry provider model IDs"
+            )
         if self.worker_reaped != (self.worker_exit_code is not None):
             raise LiveAttemptError("INVALID_TERMINATION_PROOF", "reap and exit code disagree")
+        if (self.termination is LiveAttemptTerminationV1.UNCONFIRMED) != (
+            self.status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+        ):
+            raise LiveAttemptError(
+                "INVALID_TERMINATION_PROOF", "unconfirmed termination status differs"
+            )
+        if (
+            self.status is LiveAttemptStatusV1.FAILED
+            and self.worker_pid is not None
+            and not self.worker_reaped
+        ):
+            raise LiveAttemptError(
+                "INVALID_TERMINATION_PROOF", "failed worker lacks confirmed termination"
+            )
         if self.total_tokens is not None and (
             self.input_tokens is None
             or self.output_tokens is None
@@ -671,6 +995,8 @@ def snapshot_live_attempt_receipt(value: LiveAttemptReceiptV1) -> LiveAttemptRec
         late_output_detected=value.late_output_detected,
         duration_ns=value.duration_ns,
         failure_code=value.failure_code,
+        requested_model=value.requested_model,
+        returned_model=value.returned_model,
         schema_version=value.schema_version,
     )
 
@@ -699,7 +1025,9 @@ def live_attempt_receipt_projection(value: LiveAttemptReceiptV1) -> dict[str, ob
         "preflight_sha256": trusted.preflight_sha256,
         "pricing_binding_sha256": trusted.pricing_binding_sha256,
         "request_sha256": trusted.request_sha256,
+        "requested_model": trusted.requested_model,
         "response_envelope_sha256": trusted.response_envelope_sha256,
+        "returned_model": trusted.returned_model,
         "role": trusted.role.value,
         "schema_version": trusted.schema_version,
         "stage_sha256": trusted.stage_sha256,
@@ -1118,22 +1446,29 @@ class CpuFixedLiveAttemptHandleV1:
             messages = self._drain()
             self._observe_dispatch(messages)
             dispatch_count = self.dispatch_count
+            termination_unconfirmed = not stop.worker_reaped
             return self._publish(
                 self._make_receipt(
-                    status=LiveAttemptStatusV1.FAILED,
+                    status=(
+                        LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+                        if termination_unconfirmed
+                        else LiveAttemptStatusV1.FAILED
+                    ),
                     dispatch_count=dispatch_count,
                     cost_status=(
                         LiveAttemptCostStatusV1.EXACT
-                        if dispatch_count == 0
+                        if dispatch_count == 0 and not termination_unconfirmed
                         else LiveAttemptCostStatusV1.UNKNOWN
                     ),
-                    cost_usd_micros=0 if dispatch_count == 0 else None,
-                    cancellation_requested=False,
+                    cost_usd_micros=(
+                        0 if dispatch_count == 0 and not termination_unconfirmed else None
+                    ),
+                    cancellation_requested=termination_unconfirmed,
                     stop=stop,
                     late_output_detected=any(
                         len(message) > 0 and message[0] == "COMPLETED" for message in messages
                     ),
-                    failure_code=code,
+                    failure_code="TERMINATION_UNCONFIRMED" if termination_unconfirmed else code,
                 )
             )
 
@@ -1203,13 +1538,21 @@ class CpuFixedLiveAttemptHandleV1:
                         stop = self._stop_worker(cooperative=False)
                         return self._publish(
                             self._make_receipt(
-                                status=LiveAttemptStatusV1.FAILED,
+                                status=(
+                                    LiveAttemptStatusV1.FAILED
+                                    if stop.worker_reaped
+                                    else LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+                                ),
                                 dispatch_count=1,
                                 cost_status=LiveAttemptCostStatusV1.UNKNOWN,
                                 cost_usd_micros=None,
-                                cancellation_requested=False,
+                                cancellation_requested=not stop.worker_reaped,
                                 stop=stop,
-                                failure_code="CPU_WORKER_DID_NOT_EXIT",
+                                failure_code=(
+                                    "CPU_WORKER_DID_NOT_EXIT"
+                                    if stop.worker_reaped
+                                    else "TERMINATION_UNCONFIRMED"
+                                ),
                             )
                         )
                     stop = _StopResult(
@@ -1356,6 +1699,7 @@ def _production_openai_attempt_worker(
     case_lease: CaseExecutionLeaseV1,
     request_bytes: bytes,
     authority_sha256: str,
+    expected_stage_sha256: str,
     role_value: str,
 ) -> None:
     """Own the secret, SDK client, and one provider call inside the child."""
@@ -1367,12 +1711,25 @@ def _production_openai_attempt_worker(
         connection.send(("READY", authority_sha256))
         if connection.recv() != ("DISPATCH", authority_sha256):
             return
-        secret_lease, api_key = factory._acquire_openai_secret_for_child_process(case_lease)
         role = OpenAIRoleV1(role_value)
         stage = factory.openai_stage(role)
-        request_kwargs = json.loads(request_bytes)
-        if type(request_kwargs) is not dict:
-            raise TypeError("provider request root differs")
+        if factory.openai_stage_sha256(role) != _require_sha256(
+            expected_stage_sha256, "expected_stage_sha256"
+        ):
+            raise LiveAttemptError(
+                "PROVIDER_REQUEST_STAGE_MISMATCH", "child OpenAI stage binding differs"
+            )
+        attempt_role = (
+            LiveAttemptRoleV1.RUBRIC
+            if role is OpenAIRoleV1.RUBRIC
+            else LiveAttemptRoleV1.HISTORY_POLICY
+        )
+        request_kwargs = _validate_sealed_provider_request(
+            request_bytes,
+            stage=stage,
+            role=attempt_role,
+        )
+        secret_lease, api_key = factory._acquire_openai_secret_for_child_process(case_lease)
 
         from openai import DefaultHttpxClient, OpenAI, Timeout
         from openai.types.responses.response_usage import InputTokensDetails, ResponseUsage
@@ -1395,7 +1752,18 @@ def _production_openai_attempt_worker(
         # before entering the SDK.  Secret/config/request/client failures that
         # happen above this point are exact zero-dispatch failures.
         connection.send(("DISPATCHED", authority_sha256))
-        raw = client.responses.create(**request_kwargs, timeout=timeout_seconds)
+        raw = cast(Any, client.responses.create)(**request_kwargs, timeout=timeout_seconds)
+        returned_model = getattr(raw, "model", None)
+        if type(returned_model) is not str or _SAFE_MODEL_ID.fullmatch(returned_model) is None:
+            # Never serialize an unbounded, non-string, or otherwise unsafe
+            # provider-controlled value across the process boundary.
+            connection.send(("PROVIDER_RETURNED_MODEL_INVALID", authority_sha256))
+            return
+        if returned_model != stage.model:
+            # The requested model is deliberately omitted: the parent derives
+            # it only from its own private, authority-bound stage snapshot.
+            connection.send(("PROVIDER_RETURNED_MODEL_MISMATCH", authority_sha256, returned_model))
+            return
         envelope = _project_openai_response(raw, requested_model=stage.model)
         usage = getattr(raw, "usage", None)
         if type(usage) is not ResponseUsage or type(usage.input_tokens_details) is not (
@@ -1410,9 +1778,14 @@ def _production_openai_attempt_worker(
         ):
             raise ValueError("provider cached-token usage differs")
         connection.send(("COMPLETED", authority_sha256, envelope, cached_input_tokens))
-    except BaseException:
+    except BaseException as exc:
+        failure_code = (
+            "PROVIDER_REQUEST_STAGE_MISMATCH"
+            if isinstance(exc, LiveAttemptError) and exc.code == "PROVIDER_REQUEST_STAGE_MISMATCH"
+            else "PROVIDER_CHILD_FAILED"
+        )
         try:
-            connection.send(("FAILED", authority_sha256, "PROVIDER_CHILD_FAILED"))
+            connection.send(("FAILED", authority_sha256, failure_code))
         except (BrokenPipeError, EOFError, OSError):
             pass
     finally:
@@ -1503,6 +1876,8 @@ class ProductionOpenAIAttemptCallV1:
         started_ns: int,
         cancel_grace_seconds: float,
         execution_kind: LiveAttemptExecutionKindV1,
+        request: CanonicalHistoryPolicyRequestV1 | None = None,
+        stage: OpenAIResponsesStageV1 | None = None,
     ) -> None:
         self._authority = snapshot_live_attempt_authority(authority)
         self._authority_sha256 = live_attempt_authority_sha256(self._authority)
@@ -1515,6 +1890,36 @@ class ProductionOpenAIAttemptCallV1:
         if type(execution_kind) is not LiveAttemptExecutionKindV1:
             raise LiveAttemptError("UNTRUSTED_EXECUTION_KIND", "execution kind differs")
         self._execution_kind = execution_kind
+        self._request: CanonicalHistoryPolicyRequestV1 | None
+        self._stage: OpenAIResponsesStageV1 | None
+        if execution_kind is LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS:
+            if (
+                type(request) is not CanonicalHistoryPolicyRequestV1
+                or type(stage) is not OpenAIResponsesStageV1
+            ):
+                raise LiveAttemptError(
+                    "PROVIDER_REQUEST_STAGE_MISMATCH",
+                    "production call lacks its sealed request and stage",
+                )
+            self._request = snapshot_canonical_history_policy_request(request)
+            self._stage = _snapshot_openai_stage(stage)
+            if (
+                self._request.request_sha256 != self._authority.request_sha256
+                or openai_stage_sha256(self._stage) != self._authority.stage_sha256
+                or self._stage.max_output_tokens != self._authority.max_output_tokens
+            ):
+                raise LiveAttemptError(
+                    "PROVIDER_REQUEST_STAGE_MISMATCH",
+                    "production call request or stage authority differs",
+                )
+        else:
+            if request is not None or stage is not None:
+                raise LiveAttemptError(
+                    "PROVIDER_REQUEST_STAGE_MISMATCH",
+                    "CPU call cannot retain a production request or stage",
+                )
+            self._request = None
+            self._stage = None
         self._dispatch_count = 0
         self._dispatch_command_sent = False
         self._execute_started = False
@@ -1625,6 +2030,8 @@ class ProductionOpenAIAttemptCallV1:
         total_tokens: int | None = None,
         late_output_detected: bool = False,
         failure_code: str | None = None,
+        requested_model: str | None = None,
+        returned_model: str | None = None,
     ) -> LiveAttemptReceiptV1:
         authority = self._authority
         return LiveAttemptReceiptV1(
@@ -1659,6 +2066,8 @@ class ProductionOpenAIAttemptCallV1:
             late_output_detected=late_output_detected,
             duration_ns=min(_MAX_DURATION_NS, max(0, time.monotonic_ns() - self._started_ns)),
             failure_code=failure_code,
+            requested_model=requested_model,
+            returned_model=returned_model,
         )
 
     def _publish(self, receipt: LiveAttemptReceiptV1) -> LiveAttemptReceiptV1:
@@ -1681,22 +2090,119 @@ class ProductionOpenAIAttemptCallV1:
             messages = self._drain()
             self._observe_dispatch(messages)
             dispatch_count = self.dispatch_count
+            termination_unconfirmed = not stop.worker_reaped
             return self._publish(
                 self._make_receipt(
-                    status=LiveAttemptStatusV1.FAILED,
+                    status=(
+                        LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+                        if termination_unconfirmed
+                        else LiveAttemptStatusV1.FAILED
+                    ),
                     dispatch_count=dispatch_count,
                     stop=stop,
                     cost_status=(
                         LiveAttemptCostStatusV1.EXACT
-                        if dispatch_count == 0
+                        if dispatch_count == 0 and not termination_unconfirmed
                         else LiveAttemptCostStatusV1.UNKNOWN
                     ),
-                    cost_usd_micros=0 if dispatch_count == 0 else None,
-                    cancellation_requested=False,
+                    cost_usd_micros=(
+                        0 if dispatch_count == 0 and not termination_unconfirmed else None
+                    ),
+                    cancellation_requested=termination_unconfirmed,
                     late_output_detected=any(
                         message and message[0] == "COMPLETED" for message in messages
                     ),
-                    failure_code=code,
+                    failure_code="TERMINATION_UNCONFIRMED" if termination_unconfirmed else code,
+                )
+            )
+
+    def _provider_model_failure(
+        self,
+        *,
+        failure_code: str,
+        returned_model: str | None,
+    ) -> LiveAttemptReceiptV1:
+        """Reap a model-provenance failure and bind only parent-trusted request data."""
+
+        stage = self._stage
+        if type(stage) is not OpenAIResponsesStageV1:
+            raise LiveAttemptError(
+                "PROVIDER_CHILD_PROTOCOL_VIOLATION", "production stage snapshot is absent"
+            )
+        if failure_code == "PROVIDER_RETURNED_MODEL_MISMATCH":
+            if (
+                type(returned_model) is not str
+                or _SAFE_MODEL_ID.fullmatch(returned_model) is None
+                or returned_model == stage.model
+            ):
+                raise LiveAttemptError(
+                    "PROVIDER_CHILD_PROTOCOL_VIOLATION", "model mismatch IPC is malformed"
+                )
+        elif failure_code == "PROVIDER_RETURNED_MODEL_INVALID":
+            if returned_model is not None:
+                raise LiveAttemptError(
+                    "PROVIDER_CHILD_PROTOCOL_VIOLATION", "invalid-model IPC exposed a value"
+                )
+        else:
+            raise LiveAttemptError(
+                "PROVIDER_CHILD_PROTOCOL_VIOLATION", "model failure IPC code is unknown"
+            )
+
+        with self._finalize_lock:
+            terminal = self.terminal_receipt
+            if terminal is not None:
+                return terminal
+            self._process.join(self._cancel_grace_seconds)
+            if self._process.is_alive():
+                stop = self._stop_worker(cooperative=False)
+                terminal_code = (
+                    "PROVIDER_CHILD_DID_NOT_EXIT"
+                    if stop.worker_reaped
+                    else "TERMINATION_UNCONFIRMED"
+                )
+                return self._publish(
+                    self._make_receipt(
+                        status=(
+                            LiveAttemptStatusV1.FAILED
+                            if stop.worker_reaped
+                            else LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+                        ),
+                        dispatch_count=1,
+                        stop=stop,
+                        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+                        cost_usd_micros=None,
+                        cancellation_requested=not stop.worker_reaped,
+                        failure_code=terminal_code,
+                    )
+                )
+            stop = _StopResult(
+                LiveAttemptTerminationV1.NONE,
+                True,
+                self._process.exitcode,
+            )
+            if stop.worker_exit_code != 0:
+                return self._publish(
+                    self._make_receipt(
+                        status=LiveAttemptStatusV1.FAILED,
+                        dispatch_count=1,
+                        stop=stop,
+                        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+                        cost_usd_micros=None,
+                        cancellation_requested=False,
+                        failure_code="PROVIDER_CHILD_FAILED",
+                    )
+                )
+            return self._publish(
+                self._make_receipt(
+                    status=LiveAttemptStatusV1.FAILED,
+                    dispatch_count=1,
+                    stop=stop,
+                    cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+                    cost_usd_micros=None,
+                    cancellation_requested=False,
+                    failure_code=failure_code,
+                    requested_model=stage.model,
+                    returned_model=returned_model,
                 )
             )
 
@@ -1756,9 +2262,47 @@ class ProductionOpenAIAttemptCallV1:
                 raise LiveAttemptError("DUPLICATE_EXECUTION", "attempt was called twice")
             self._execute_started = True
             cancelled = self._cancel_requested.is_set()
-            if not cancelled:
-                self._dispatch_command_sent = True
         if cancelled or time.monotonic_ns() >= self._authority.deadline_monotonic_ns:
+            self.cancel_and_join()
+            raise LiveAttemptError("LIVE_ATTEMPT_CANCELLED", "attempt was cancelled")
+        if self._execution_kind is LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS:
+            request = self._request
+            stage = self._stage
+            try:
+                if (
+                    type(request) is not CanonicalHistoryPolicyRequestV1
+                    or type(stage) is not OpenAIResponsesStageV1
+                ):
+                    raise LiveAttemptError(
+                        "PROVIDER_REQUEST_STAGE_MISMATCH", "sealed provider request is absent"
+                    )
+                trusted_request = snapshot_canonical_history_policy_request(request)
+                if (
+                    trusted_request.request_sha256 != self._authority.request_sha256
+                    or openai_stage_sha256(_snapshot_openai_stage(stage))
+                    != self._authority.stage_sha256
+                ):
+                    raise LiveAttemptError(
+                        "PROVIDER_REQUEST_STAGE_MISMATCH", "sealed request authority drifted"
+                    )
+                _validate_sealed_provider_request(
+                    trusted_request.canonical_bytes,
+                    stage=stage,
+                    role=self._authority.role,
+                )
+            except LiveAttemptError as exc:
+                self._failed("PROVIDER_REQUEST_STAGE_MISMATCH")
+                raise LiveAttemptError(
+                    "PROVIDER_REQUEST_STAGE_MISMATCH",
+                    "provider request differs from its sealed stage",
+                ) from exc
+        with self._state_lock:
+            if self._cancel_requested.is_set():
+                cancelled = True
+            else:
+                cancelled = False
+                self._dispatch_command_sent = True
+        if cancelled:
             self.cancel_and_join()
             raise LiveAttemptError("LIVE_ATTEMPT_CANCELLED", "attempt was cancelled")
         if not self._send(("DISPATCH", self._authority_sha256)):
@@ -1784,14 +2328,58 @@ class ProductionOpenAIAttemptCallV1:
             if message == ("DISPATCHED", self._authority_sha256):
                 self._observe_dispatch((message,))
                 continue
+            if message and message[0] in {
+                "PROVIDER_RETURNED_MODEL_INVALID",
+                "PROVIDER_RETURNED_MODEL_MISMATCH",
+            }:
+                # Only the returned safe ID may cross from the child.  The
+                # requested ID always comes from this parent's sealed stage.
+                self._observe_dispatch((("DISPATCHED", self._authority_sha256),))
+                try:
+                    if message == (
+                        "PROVIDER_RETURNED_MODEL_INVALID",
+                        self._authority_sha256,
+                    ):
+                        failure_code = "PROVIDER_RETURNED_MODEL_INVALID"
+                        returned_model: str | None = None
+                    elif (
+                        len(message) == 3
+                        and message[0] == "PROVIDER_RETURNED_MODEL_MISMATCH"
+                        and message[1] == self._authority_sha256
+                    ):
+                        failure_code = "PROVIDER_RETURNED_MODEL_MISMATCH"
+                        returned_model = cast(str, message[2])
+                    else:
+                        raise LiveAttemptError(
+                            "PROVIDER_CHILD_PROTOCOL_VIOLATION",
+                            "provider model IPC differs",
+                        )
+                    receipt = self._provider_model_failure(
+                        failure_code=failure_code,
+                        returned_model=returned_model,
+                    )
+                except LiveAttemptError as exc:
+                    if self.terminal_receipt is None:
+                        self._failed("PROVIDER_CHILD_PROTOCOL_VIOLATION")
+                    raise LiveAttemptError(
+                        "PROVIDER_CHILD_PROTOCOL_VIOLATION", "provider model IPC differs"
+                    ) from exc
+                terminal_code = receipt.failure_code
+                if terminal_code is None:
+                    raise LiveAttemptError(
+                        "PROVIDER_CHILD_PROTOCOL_VIOLATION",
+                        "provider model failure receipt lacks a code",
+                    )
+                raise LiveAttemptError(terminal_code, "provider returned model differs")
             if (
                 len(message) == 3
                 and message[0] == "FAILED"
                 and message[1] == self._authority_sha256
-                and message[2] == "PROVIDER_CHILD_FAILED"
+                and message[2] in {"PROVIDER_CHILD_FAILED", "PROVIDER_REQUEST_STAGE_MISMATCH"}
             ):
-                self._failed("PROVIDER_CHILD_FAILED")
-                raise LiveAttemptError("PROVIDER_CHILD_FAILED", "provider child failed")
+                failure_code = cast(str, message[2])
+                self._failed(failure_code)
+                raise LiveAttemptError(failure_code, "provider child failed")
             if (
                 len(message) == 4
                 and message[0] == "COMPLETED"
@@ -1816,6 +2404,13 @@ class ProductionOpenAIAttemptCallV1:
                     raise LiveAttemptError(
                         "PROVIDER_CHILD_RESPONSE_INVALID", "child response differs"
                     ) from exc
+                completion_stage = self._stage
+                if type(completion_stage) is not OpenAIResponsesStageV1:
+                    self._failed("PROVIDER_CHILD_PROTOCOL_VIOLATION")
+                    raise LiveAttemptError(
+                        "PROVIDER_CHILD_PROTOCOL_VIOLATION",
+                        "completed provider result lacks its sealed stage",
+                    )
                 with self._finalize_lock:
                     terminal = self.terminal_receipt
                     if terminal is not None:
@@ -1823,20 +2418,27 @@ class ProductionOpenAIAttemptCallV1:
                     self._process.join(self._cancel_grace_seconds)
                     if self._process.is_alive():
                         stop = self._stop_worker(cooperative=False)
+                        failure_code = (
+                            "PROVIDER_CHILD_DID_NOT_EXIT"
+                            if stop.worker_reaped
+                            else "TERMINATION_UNCONFIRMED"
+                        )
                         self._publish(
                             self._make_receipt(
-                                status=LiveAttemptStatusV1.FAILED,
+                                status=(
+                                    LiveAttemptStatusV1.FAILED
+                                    if stop.worker_reaped
+                                    else LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+                                ),
                                 dispatch_count=1,
                                 stop=stop,
                                 cost_status=LiveAttemptCostStatusV1.UNKNOWN,
                                 cost_usd_micros=None,
-                                cancellation_requested=False,
-                                failure_code="PROVIDER_CHILD_DID_NOT_EXIT",
+                                cancellation_requested=not stop.worker_reaped,
+                                failure_code=failure_code,
                             )
                         )
-                        raise LiveAttemptError(
-                            "PROVIDER_CHILD_DID_NOT_EXIT", "child remained alive"
-                        )
+                        raise LiveAttemptError(failure_code, "child remained alive")
                     stop = _StopResult(
                         LiveAttemptTerminationV1.NONE,
                         True,
@@ -1905,6 +2507,8 @@ class ProductionOpenAIAttemptCallV1:
                             cached_input_tokens=cached_input_tokens,
                             output_tokens=envelope.output_tokens,
                             total_tokens=envelope.total_tokens,
+                            requested_model=completion_stage.model,
+                            returned_model=envelope.returned_model,
                         )
                     )
                     return _detach_envelope(envelope)
@@ -2114,6 +2718,7 @@ class ProductionOpenAIAttemptRunnerV1:
                     lease,
                     trusted_request.canonical_bytes,
                     live_attempt_authority_sha256(authority),
+                    authority.stage_sha256,
                     self._role.value,
                 ),
                 name="mobileworld-r24-openai-attempt",
@@ -2176,6 +2781,8 @@ class ProductionOpenAIAttemptRunnerV1:
             started_ns=started_ns,
             cancel_grace_seconds=self._cancel_grace_seconds,
             execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
+            request=trusted_request,
+            stage=self._stage,
         )
         ready_deadline_ns = min(
             authority.deadline_monotonic_ns,

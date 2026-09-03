@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/rubric_call_receipt.v1.schema.json",
+  "title": "R2.4 Rubric Provider Call Receipt v1",
+  "description": "Hash-only R2.4 rubric transport receipt. Owner-authorized live receipts bind both requested and returned model identity; CPU receipts cannot carry live proof.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_id", "operation", "execution_scope", "task_run_id", "logical_call_id",
+    "backend_extension_descriptor_sha256", "r23_compatibility_descriptor_sha256",
+    "transport_kind", "transport_authority", "prompt_sha256",
+    "provider_input_schema_version", "provider_output_schema_sha256",
+    "provider_request_sha256", "provider_output_sha256", "transport_binding_sha256",
+    "dispatch_count", "raw_task_or_image_persisted", "provider_output_persisted",
+    "actor_history_included", "history_ir_included", "action_or_tool_authority",
+    "schema_version"
+  ],
+  "properties": {
+    "receipt_id": {"$ref": "#/$defs/safeId"},
+    "operation": {"enum": ["GENERATE", "TRACK"]},
+    "execution_scope": {"enum": ["CPU_TEST_LOCAL", "OWNER_AUTHORIZED_LIVE"]},
+    "task_run_id": {"$ref": "#/$defs/safeId"},
+    "logical_call_id": {"$ref": "#/$defs/safeId"},
+    "backend_extension_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+    "r23_compatibility_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+    "transport_kind": {"enum": ["INJECTED_FAKE", "OPENAI_RESPONSES"]},
+    "transport_authority": {"enum": ["CPU_OFFLINE_FAKE", "EXPLICIT_OWNER_AUTHORIZATION"]},
+    "prompt_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_input_schema_version": {"$ref": "#/$defs/safeId"},
+    "provider_output_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_request_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_output_sha256": {"$ref": "#/$defs/sha256"},
+    "transport_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "pricing_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "current_image_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "preflight_sha256": {"$ref": "#/$defs/sha256"},
+    "case_execution_lease_sha256": {"$ref": "#/$defs/sha256"},
+    "stage_sha256": {"$ref": "#/$defs/sha256"},
+    "attempt_authority_sha256": {"$ref": "#/$defs/sha256"},
+    "attempt_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "requested_model": {"const": "gpt-5.6-sol"},
+    "returned_model": {"const": "gpt-5.6-sol"},
+    "dispatch_count": {"const": 1},
+    "input_tokens": {"$ref": "#/$defs/tokenCount"},
+    "output_tokens": {"$ref": "#/$defs/tokenCount"},
+    "total_tokens": {"$ref": "#/$defs/tokenCount"},
+    "cost_usd_micros": {"$ref": "#/$defs/costCount"},
+    "raw_task_or_image_persisted": {"const": false},
+    "provider_output_persisted": {"const": false},
+    "actor_history_included": {"const": false},
+    "history_ir_included": {"const": false},
+    "action_or_tool_authority": {"const": false},
+    "schema_version": {"const": "mobileworld.runtime.sentinel-r2.4-live-rubric-call-receipt/v1"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"operation": {"const": "TRACK"}}, "required": ["operation"]},
+      "then": {"required": ["current_image_binding_sha256"]},
+      "else": {"not": {"required": ["current_image_binding_sha256"]}}
+    },
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "execution_scope": {"const": "CPU_TEST_LOCAL"},
+            "transport_kind": {"const": "INJECTED_FAKE"},
+            "transport_authority": {"const": "CPU_OFFLINE_FAKE"}
+          },
+          "not": {
+            "anyOf": [
+              {"required": ["manifest_sha256"]},
+              {"required": ["preflight_sha256"]},
+              {"required": ["case_execution_lease_sha256"]},
+              {"required": ["stage_sha256"]},
+              {"required": ["attempt_authority_sha256"]},
+              {"required": ["attempt_receipt_sha256"]},
+              {"required": ["pricing_binding_sha256"]},
+              {"required": ["requested_model"]},
+              {"required": ["returned_model"]},
+              {"required": ["input_tokens"]},
+              {"required": ["output_tokens"]},
+              {"required": ["total_tokens"]},
+              {"required": ["cost_usd_micros"]}
+            ]
+          }
+        },
+        {
+          "required": [
+            "manifest_sha256", "preflight_sha256", "case_execution_lease_sha256",
+            "stage_sha256", "attempt_authority_sha256", "attempt_receipt_sha256",
+            "pricing_binding_sha256", "requested_model", "returned_model",
+            "input_tokens", "output_tokens",
+            "total_tokens", "cost_usd_micros"
+          ],
+          "properties": {
+            "execution_scope": {"const": "OWNER_AUTHORIZED_LIVE"},
+            "transport_kind": {"const": "OPENAI_RESPONSES"},
+            "transport_authority": {"const": "EXPLICIT_OWNER_AUTHORIZATION"}
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+    "tokenCount": {"type": "integer", "minimum": 0, "maximum": 100000000},
+    "costCount": {"type": "integer", "minimum": 0, "maximum": 100000000000}
+  }
+}
