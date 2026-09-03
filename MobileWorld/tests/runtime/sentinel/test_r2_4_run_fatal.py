@@ -12,6 +12,11 @@ from typing import Any, cast
 import pytest
 
 from mobile_world.offline.causal_replay.contracts import JsonValue
+from mobile_world.runtime.client import (
+    AndroidEnvClient,
+    CleanupTaskTeardownResultV1,
+    CleanupTaskTeardownStatusV1,
+)
 from mobile_world.runtime.sentinel.r2_4 import (
     production_driver as production_driver_module,
 )
@@ -80,6 +85,10 @@ class _CleanupEnvironment:
         self.scope_deadlines: list[int] = []
         self.teardown_calls = 0
 
+    @property
+    def is_initialized(self) -> bool:
+        return True
+
     @contextmanager
     def request_deadline_scope(self, deadline_monotonic_ns: int) -> Iterator[None]:
         self.scope_deadlines.append(deadline_monotonic_ns)
@@ -87,11 +96,15 @@ class _CleanupEnvironment:
             raise ValueError("deadline scope rejected")
         yield
 
-    def tear_down_task(self, _: str, *, dispatch_started: object = None) -> object:
+    def tear_down_task_if_initialized(self, _: str, *, dispatch_started: object = None) -> object:
         assert callable(dispatch_started)
         dispatch_started()
         self.teardown_calls += 1
-        return production_driver_module.Response(status="success", message="closed")
+        return CleanupTaskTeardownResultV1(
+            status=CleanupTaskTeardownStatusV1.SUCCEEDED,
+            message="closed",
+            request_dispatched=True,
+        )
 
     def close(self) -> None:
         self.closed = True
@@ -101,7 +114,7 @@ def _cleanup_port(
     invocation: production_driver_module._SmokeInvocationV1,
     *,
     latch: object,
-    environment: _CleanupEnvironment | None,
+    environment: AndroidEnvClient | _CleanupEnvironment | None,
 ) -> tuple[object, list[tuple[object, object]]]:
     resource_calls: list[tuple[object, object]] = []
     port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
@@ -380,6 +393,102 @@ def test_cleanup_scope_failure_after_resource_reattest_does_not_claim_teardown_a
     assert environment.closed is True
     assert len(end_task_calls) == 1
     assert end_task_calls[0]["teardown_attempted"] is False
+
+
+def test_init_timeout_cleanup_is_no_io_and_archives_typed_recovery_outcome(
+    tmp_path: Path,
+) -> None:
+    urls: list[str] = []
+
+    class _Session:
+        closed = False
+
+        def post(self, url: str, **_: object) -> object:
+            urls.append(url.removeprefix("http://fixture.invalid"))
+            if url.endswith("/init"):
+                raise TimeoutError("fixture init timeout")
+            raise AssertionError("cleanup must not issue HTTP after unconfirmed init")
+
+        def close(self) -> None:
+            self.closed = True
+
+    session = _Session()
+    environment = object.__new__(AndroidEnvClient)
+    environment._initialized = False
+    environment._request_deadline_monotonic_ns = None
+    environment._session = cast(Any, session)
+    environment.base_url = "http://fixture.invalid"
+    environment.device = "emulator-fixture"
+    environment._current_task_type = None
+    with pytest.raises(TimeoutError, match="fixture init timeout"):
+        environment.reset(False)
+
+    now = time.monotonic_ns()
+    invocation = _cleanup_invocation(
+        execution_deadline_ns=now - 1,
+        cleanup_deadline_ns=now + 8_000_000_000,
+    )
+    port, resource_calls = _cleanup_port(
+        invocation,
+        latch=build_production_run_fatal_latch_v1(),
+        environment=environment,
+    )
+    state = port._units[port._unit_id(invocation)]
+    end_task_calls: list[dict[str, object]] = []
+    lifecycle_calls: list[str] = []
+    final_path = tmp_path / "init-timeout-collector-final.json"
+    final_path.write_text("{}", encoding="utf-8")
+    state.task_binding = cast(
+        Any,
+        SimpleNamespace(
+            capture=SimpleNamespace(
+                capture_complete=True,
+                end_task=lambda **kwargs: end_task_calls.append(kwargs),
+            ),
+            metadata=SimpleNamespace(task_run_id="init-timeout-task-run"),
+        ),
+    )
+    state.lifecycle = cast(
+        Any,
+        SimpleNamespace(
+            finish_task_attempt=lambda **_: lifecycle_calls.append("finish"),
+            finalize=lambda **_: lifecycle_calls.append("finalize") or final_path,
+        ),
+    )
+
+    with pytest.raises(production_driver_module.ProductionDriverError) as raised:
+        port.cleanup_unit(invocation)
+
+    assert raised.value.code == "TASK_TEARDOWN_NOT_INITIALIZED_NO_IO"
+    assert urls == ["/init"]
+    assert resource_calls == []
+    assert session.closed is True
+    assert lifecycle_calls == ["finish", "finalize"]
+    assert len(end_task_calls) == 1
+    assert end_task_calls[0]["teardown_attempted"] is False
+    teardown_result = end_task_calls[0]["teardown_result"]
+    assert type(teardown_result) is CleanupTaskTeardownResultV1
+    assert teardown_result.status is CleanupTaskTeardownStatusV1.NOT_INITIALIZED_NO_IO
+    assert teardown_result.request_dispatched is False
+
+    evidence = cast(
+        dict[str, JsonValue],
+        port.failure_evidence_for_unit(
+            invocation,
+            failure_phase="CLEANUP",
+            failure_code=raised.value.code,
+        ),
+    )
+    outcome = cast(dict[str, JsonValue], evidence["cleanup_recovery_outcome"])
+    assert outcome == {
+        "initialization_permitted": False,
+        "message_sha256": outcome["message_sha256"],
+        "outcome": "NOT_INITIALIZED_NO_IO",
+        "request_dispatched": False,
+        "teardown_attempted": False,
+    }
+    assert len(cast(str, outcome["message_sha256"])) == 64
+    assert len(cast(str, evidence["cleanup_recovery_outcome_sha256"])) == 64
 
 
 def test_expired_cleanup_blocks_external_teardown_but_closes_and_archives_typed_evidence(

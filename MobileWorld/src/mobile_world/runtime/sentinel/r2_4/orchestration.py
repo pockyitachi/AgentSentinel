@@ -502,7 +502,25 @@ class R24RuntimeCoordinatorV1:
         self._sessions: dict[str, tuple[str, RubricTaskSession]] = {}
         self._calls: dict[str, _CachedCall] = {}
         self._stimulus_calls: dict[tuple[str, str], str] = {}
+        self._stimulus_sha256_by_call: dict[str, str] = {}
+        self._tracking_packet_sha256_by_call: dict[str, str] = {}
         self._collector_bundle_calls = 0
+
+    def stimulus_sha256_for_call(self, logical_call_id: str) -> str | None:
+        """Return the Coordinator-owned Collector root even after rubric failure."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise R24OrchestrationError("INVALID_RUNTIME_ID", "logical call ID is invalid")
+        with self._lock:
+            return self._stimulus_sha256_by_call.get(logical_call_id)
+
+    def tracking_packet_sha256_for_call(self, logical_call_id: str) -> str | None:
+        """Return the packet root fixed before tracker backend dispatch."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise R24OrchestrationError("INVALID_RUNTIME_ID", "logical call ID is invalid")
+        with self._lock:
+            return self._tracking_packet_sha256_by_call.get(logical_call_id)
 
     @staticmethod
     def _call_input_sha256(
@@ -794,6 +812,7 @@ class R24RuntimeCoordinatorV1:
                         "one Collector observation cannot advance two logical calls",
                     )
                 self._stimulus_calls[stimulus_key] = context.logical_call_id
+                self._stimulus_sha256_by_call[context.logical_call_id] = stimulus_sha256
                 session = self._session_for(stimulus.task_run_id, stimulus.task)
             except R24OrchestrationError as exc:
                 self._calls[context.logical_call_id] = _CachedCall(
@@ -884,6 +903,7 @@ class R24RuntimeCoordinatorV1:
                     snapshot=_snapshot_rubric_evidence(stimulus),
                 )
                 packet_hash = tracking_packet_sha256(packet)
+                self._tracking_packet_sha256_by_call[context.logical_call_id] = packet_hash
                 result = _snapshot_session_result(session.track(packet))
             except R23ContractError:
                 # Ask the session to turn a construction rejection into its
@@ -1101,6 +1121,7 @@ class R24RuntimeCoordinatorV1:
                         "one Collector observation cannot advance two logical calls",
                     )
                 self._stimulus_calls[stimulus_key] = context.logical_call_id
+                self._stimulus_sha256_by_call[context.logical_call_id] = stimulus_sha256
                 session = self._session_for(stimulus.task_run_id, stimulus.task)
             except R24OrchestrationError as exc:
                 self._calls[context.logical_call_id] = _CachedCall(
@@ -1193,6 +1214,7 @@ class R24RuntimeCoordinatorV1:
                     snapshot=_snapshot_rubric_evidence(stimulus),
                 )
                 packet_hash = tracking_packet_sha256(packet)
+                self._tracking_packet_sha256_by_call[context.logical_call_id] = packet_hash
                 result = _snapshot_session_result(session.track(packet))
             except R23ContractError:
                 result = _snapshot_session_result(

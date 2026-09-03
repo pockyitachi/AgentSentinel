@@ -2698,6 +2698,17 @@ class ProductionOpenAIAttemptRunnerV1:
     def attest_case_execution_lease(self, case_lease: CaseExecutionLeaseV1) -> CaseExecutionLeaseV1:
         return self._factory.validate_case_execution_lease(case_lease)
 
+    def terminal_receipt_for_attempt(self, attempt_id: str) -> LiveAttemptReceiptV1 | None:
+        """Return a detached terminal emitted while ``begin`` was in progress.
+
+        A child that cannot be proven reaped during START/READY admission can
+        make ``begin`` raise before it returns a callable attempt.  The request
+        owner still needs the sink-confirmed terminal in order to retain the
+        exact request proof and trip the run-fatal audit path.
+        """
+
+        return self._sink.receipt_for(attempt_id)
+
     def begin(
         self,
         *,

@@ -144,6 +144,55 @@ def _audit_commit_failure_recovery(
     *, action_executed: bool
 ) -> production_audit_module.ProductionRuntimeAuditCommitFailureReceiptV1:
     digest = "1" * 64
+    restricted: dict[str, Any] = {
+        "kind": "OFF_NO_SEMANTIC_WORK",
+        "raw_request_sha256": digest,
+    }
+    pre_provider = production_audit_module.ProductionRuntimeAuditPreProviderV1(
+        logical_call_id="commit-fault-logical-call-1",
+        host_id="mobileworld.qwen3vl.actor",
+        status=production_audit_module.ProductionRuntimeAuditPreProviderStatusV1.OFF,
+        outcome=production_audit_module.ProductionRuntimeAuditPreProviderOutcomeV1.OFF,
+        configured_mode=production_audit_module.SentinelMode.OFF,
+        effective_mode=production_audit_module.SentinelMode.OFF,
+        fallback_reason=None,
+        fallback_check=None,
+        raw_request_sha256=digest,
+        extraction_sha256=None,
+        history_ir_sha256=None,
+        codec_overlay_sha256=None,
+        vertical_output_sha256=None,
+        coordinated_record_sha256=None,
+        rubric_result_sha256=None,
+        path_relevance_output_sha256=None,
+        render_result_sha256=None,
+        candidate_request_sha256=digest,
+        exact_diff_sha256="9" * 64,
+        validator_result_sha256="0" * 64,
+        final_request_sha256=digest,
+        live_call_binding_sha256=None,
+        live_attempt_receipt_sha256s=(),
+        live_attempt_receipt_root_sha256=None,
+        case_execution_lease_sha256=None,
+        preflight_report_sha256=None,
+        factory_binding_sha256=None,
+        execution_authority_sha256=None,
+        source_transport_binding_sha256=None,
+        pricing_binding_sha256=None,
+        live_openai_calls=0,
+        live_cost_usd_micros=0,
+        live_cost_exact=True,
+        restricted_stage_projection=cast(Any, restricted),
+        restricted_stage_projection_sha256=canonical_sha256(cast(Any, restricted)),
+        evidence_snapshot_ns=0,
+        history_extract_ns=0,
+        rubric_ns=0,
+        policy_ns=0,
+        render_ns=0,
+        validator_ns=0,
+        pre_provider_total_ns=0,
+        _seal=production_audit_module._PRE_PROVIDER_SEAL,
+    )
     request_locator: dict[str, Any] = {
         "run_id": "run-commit-fault",
         "task_run_id": "task-commit-fault",
@@ -206,7 +255,9 @@ def _audit_commit_failure_recovery(
         provider_request_sha256=digest,
         provider_response_sha256="6" * 64,
         exact_diff_sha256="9" * 64,
-        pre_provider_sha256="a" * 64,
+        pre_provider_sha256=(
+            production_audit_module.production_runtime_audit_pre_provider_sha256(pre_provider)
+        ),
         pre_provider_status=production_audit_module.ProductionRuntimeAuditPreProviderStatusV1.OFF,
         pre_provider_outcome=production_audit_module.ProductionRuntimeAuditPreProviderOutcomeV1.OFF,
         fallback_reason=None,
@@ -240,6 +291,7 @@ def _audit_commit_failure_recovery(
         attempted_terminal_receipt_sha256=(
             production_audit_module.production_runtime_audit_receipt_sha256(terminal)
         ),
+        pre_provider=pre_provider,
         actor_provider_attempts=(attempt,),
         parsed_action=cast(Any, parsed_action),
         _seal=production_audit_module._COMMIT_FAILURE_RECEIPT_SEAL,
@@ -1547,6 +1599,8 @@ def test_terminal_commit_fault_is_bound_into_current_unit_journal(
     assert receipt["recovery_required"] is True
     assert len(receipt["actor_provider_attempts"]) == 1
     attempted = cast(dict[str, Any], receipt["attempted_terminal_receipt"])
+    pre_provider = cast(dict[str, Any], receipt["pre_provider"])
+    assert canonical_sha256(cast(Any, pre_provider)) == attempted["pre_provider_sha256"]
     assert attempted["provider_attempt_count"] == 1
     assert attempted["live_cost_usd_micros"] == 0
     assert attempted["action_executed"] is action_executed

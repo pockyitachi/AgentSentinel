@@ -60,7 +60,11 @@ from mobile_world.runtime.audit.lifecycle import (
     TaskAuditBinding,
     bootstrap_audit_run,
 )
-from mobile_world.runtime.client import AndroidEnvClient
+from mobile_world.runtime.client import (
+    AndroidEnvClient,
+    CleanupTaskTeardownResultV1,
+    CleanupTaskTeardownStatusV1,
+)
 from mobile_world.runtime.sentinel import (
     NoOpSentinelPolicy,
     PromptSentinel,
@@ -167,7 +171,6 @@ from mobile_world.runtime.utils.models import (
     WAIT,
     JSONAction,
     Observation,
-    Response,
 )
 
 PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION: Final[str] = (
@@ -4873,6 +4876,7 @@ class _ProductionUnitStateV1:
     decision_journal: list[ActorDecisionEvidenceV1] = field(default_factory=list)
     terminal_audit_journal: list[dict[str, JsonValue]] = field(default_factory=list)
     terminal_audit_sha256s: set[str] = field(default_factory=set)
+    cleanup_recovery_outcome: dict[str, JsonValue] | None = None
 
 
 def _pil_png_bytes(image: object) -> bytes:
@@ -5477,10 +5481,22 @@ class _ProductionFixedExecutionPortV1:
         decisions = [_decision_projection(item) for item in state.decision_journal]
         terminals = [dict(item) for item in state.terminal_audit_journal]
         fatal_state = self._run_fatal_latch.state
+        cleanup_recovery_outcome = (
+            None if state.cleanup_recovery_outcome is None else dict(state.cleanup_recovery_outcome)
+        )
         raw = canonical_json_bytes(
             cast(
                 JsonValue,
                 {
+                    "cleanup_recovery_outcome": cleanup_recovery_outcome,
+                    "cleanup_recovery_outcome_sha256": (
+                        None
+                        if cleanup_recovery_outcome is None
+                        else _hash_projection(
+                            "production-unit-cleanup-recovery-outcome",
+                            cast(JsonValue, cleanup_recovery_outcome),
+                        )
+                    ),
                     "completed_decisions": decisions,
                     "completed_decisions_sha256": _hash_projection(
                         "production-unit-decision-journal", cast(JsonValue, decisions)
@@ -6302,41 +6318,94 @@ class _ProductionFixedExecutionPortV1:
         teardown_attempted = False
         if state.environment is not None and not cleanup_deadline_expired:
             try:
-                self._require_resource_dispatch(
-                    state.host,
-                    ProductionDispatchKindV1.CLEANUP,
-                    deadline_ns=state.cleanup_deadline_monotonic_ns,
-                )
+                initialization_confirmed = state.environment.is_initialized
+                if type(initialization_confirmed) is not bool:
+                    raise ProductionDriverError(
+                        "TASK_TEARDOWN_STATE_INVALID",
+                        "environment initialization state is not an exact bool",
+                    )
+                if initialization_confirmed:
+                    self._require_resource_dispatch(
+                        state.host,
+                        ProductionDispatchKindV1.CLEANUP,
+                        deadline_ns=state.cleanup_deadline_monotonic_ns,
+                    )
 
                 def mark_teardown_dispatched() -> None:
                     nonlocal teardown_attempted
                     teardown_attempted = True
 
                 with state.environment.request_deadline_scope(state.cleanup_deadline_monotonic_ns):
-                    teardown_result = state.environment.tear_down_task(
+                    teardown_result = state.environment.tear_down_task_if_initialized(
                         state.task_name,
                         dispatch_started=mark_teardown_dispatched,
                     )
-                if type(teardown_result) is not Response or teardown_result.status != "success":
+                if type(teardown_result) is not CleanupTaskTeardownResultV1:
+                    cleanup_dispatch_failure_code = "TASK_TEARDOWN_RESULT_INVALID"
+                    failures.append(cleanup_dispatch_failure_code)
+                elif (
+                    type(cast(object, teardown_result.status)) is not CleanupTaskTeardownStatusV1
+                    or type(cast(object, teardown_result.message)) is not str
+                    or type(cast(object, teardown_result.request_dispatched)) is not bool
+                    or teardown_result.request_dispatched != teardown_attempted
+                ):
+                    cleanup_dispatch_failure_code = "TASK_TEARDOWN_RESULT_INVALID"
+                    failures.append(cleanup_dispatch_failure_code)
+                elif teardown_result.status is CleanupTaskTeardownStatusV1.NOT_INITIALIZED_NO_IO:
+                    state.cleanup_recovery_outcome = {
+                        "initialization_permitted": False,
+                        "message_sha256": hashlib.sha256(
+                            teardown_result.message.encode("utf-8")
+                        ).hexdigest(),
+                        "outcome": teardown_result.status.value,
+                        "request_dispatched": teardown_result.request_dispatched,
+                        "teardown_attempted": teardown_attempted,
+                    }
+                    cleanup_dispatch_failure_code = "TASK_TEARDOWN_NOT_INITIALIZED_NO_IO"
+                    failures.append(cleanup_dispatch_failure_code)
+                elif teardown_result.status is not CleanupTaskTeardownStatusV1.SUCCEEDED:
+                    state.cleanup_recovery_outcome = {
+                        "initialization_permitted": False,
+                        "message_sha256": hashlib.sha256(
+                            teardown_result.message.encode("utf-8")
+                        ).hexdigest(),
+                        "outcome": teardown_result.status.value,
+                        "request_dispatched": teardown_result.request_dispatched,
+                        "teardown_attempted": teardown_attempted,
+                    }
                     if time.monotonic_ns() >= state.cleanup_deadline_monotonic_ns:
                         cleanup_dispatch_failure_code = "CLEANUP_DEADLINE_EXCEEDED"
                         failures.append(cleanup_dispatch_failure_code)
                     else:
                         failures.append("TASK_TEARDOWN_REJECTED")
                 else:
-                    teardown_result_sha256 = _hash_projection(
-                        "production-task-teardown-result",
-                        cast(
-                            JsonValue,
-                            {
-                                "message_sha256": hashlib.sha256(
-                                    teardown_result.message.encode("utf-8")
-                                ).hexdigest(),
-                                "status": teardown_result.status,
-                                "task_name": state.task_name,
-                            },
-                        ),
-                    )
+                    state.cleanup_recovery_outcome = {
+                        "initialization_permitted": False,
+                        "message_sha256": hashlib.sha256(
+                            teardown_result.message.encode("utf-8")
+                        ).hexdigest(),
+                        "outcome": teardown_result.status.value,
+                        "request_dispatched": teardown_result.request_dispatched,
+                        "teardown_attempted": teardown_attempted,
+                    }
+                    if not teardown_attempted or not teardown_result.request_dispatched:
+                        cleanup_dispatch_failure_code = "TASK_TEARDOWN_RESULT_INVALID"
+                        failures.append(cleanup_dispatch_failure_code)
+                    else:
+                        teardown_result_sha256 = _hash_projection(
+                            "production-task-teardown-result",
+                            cast(
+                                JsonValue,
+                                {
+                                    "message_sha256": hashlib.sha256(
+                                        teardown_result.message.encode("utf-8")
+                                    ).hexdigest(),
+                                    "request_dispatched": teardown_result.request_dispatched,
+                                    "status": teardown_result.status.value,
+                                    "task_name": state.task_name,
+                                },
+                            ),
+                        )
             except Exception as exc:
                 cleanup_dispatch_failure_code = (
                     "CLEANUP_DEADLINE_EXCEEDED"

@@ -7,6 +7,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -30,7 +31,13 @@ from mobile_world.runtime.sentinel import (
     SentinelHostConfig,
     SentinelMode,
 )
-from mobile_world.runtime.sentinel.contracts import SentinelCallRole, SentinelContext
+from mobile_world.runtime.sentinel.contracts import (
+    SentinelCallRole,
+    SentinelContext,
+    SentinelReceipt,
+    SentinelResult,
+    SentinelValidationStatus,
+)
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
     GPT56_REQUESTED_MODEL,
     GPT56PolicyError,
@@ -71,6 +78,7 @@ from mobile_world.runtime.sentinel.r2_3.contracts import (
     TrackerProposalStatus,
     path_relevance_output_sha256,
     rubric_tracking_state_sha256,
+    task_start_request_projection,
     tracking_packet_projection,
     tracking_packet_sha256,
 )
@@ -79,6 +87,8 @@ from mobile_world.runtime.sentinel.r2_3.session import (
     RubricSessionStatus,
     RubricTaskSession,
 )
+from mobile_world.runtime.sentinel.r2_4 import production_audit as production_audit_module
+from mobile_world.runtime.sentinel.r2_4 import rubric_live as rubric_live_module
 from mobile_world.runtime.sentinel.r2_4.capabilities import (
     build_runtime_history_codec_resolver,
 )
@@ -88,12 +98,15 @@ from mobile_world.runtime.sentinel.r2_4.evidence import (
     rubric_evidence_snapshot_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    CanonicalHistoryPolicyRequestV1,
     LiveAttemptCostStatusV1,
     LiveAttemptExecutionKindV1,
     LiveAttemptReceiptV1,
     LiveAttemptRoleV1,
     LiveAttemptStatusV1,
     LiveAttemptTerminationV1,
+    ProductionOpenAIAttemptRunnerV1,
+    live_attempt_receipt_projection,
     live_attempt_receipt_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.live_policy import (
@@ -120,8 +133,10 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
     LIVE_RUBRIC_MODEL,
     LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
+    LiveRubricAttemptRequestAnchorV1,
     LiveRubricCallReceiptV1,
     LiveRubricCallTrustAnchorV1,
+    LiveRubricError,
     LiveRubricExecutionScopeV1,
     LiveRubricOperationV1,
     LiveRubricTransportAuthorityV1,
@@ -129,9 +144,15 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     R24RubricBackendExtensionDescriptorV1,
     bind_current_collector_image,
     bind_current_collector_image_projection,
+    build_live_rubric_provider_request_v1,
+    live_rubric_attempt_request_proof_projection,
     live_rubric_call_receipt_sha256,
+    live_rubric_generate_schema,
     live_rubric_operation_prompt_sha256,
     live_rubric_prompt_bundle_sha256,
+    live_rubric_track_schema,
+    rubric_backend_descriptor_sha256,
+    validate_live_rubric_request_proof_projection_v1,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -143,6 +164,88 @@ QWEN_FIXTURE = (
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _checked_in_r23_schema_hash(filename: str) -> str:
+    return hashlib.sha256(
+        (REPO_ROOT / "mobileworld_audit_handoff/schemas/r2_3" / filename).read_bytes()
+    ).hexdigest()
+
+
+def _live_rubric_request_material(
+    *,
+    stimulus: Any,
+    current_image: Any,
+    logical_call_id: str,
+    packet: RubricTrackingPacketV1,
+    descriptor_id: str,
+) -> tuple[
+    R24RubricBackendExtensionDescriptorV1,
+    tuple[dict[str, JsonValue], dict[str, JsonValue]],
+    tuple[CanonicalHistoryPolicyRequestV1, CanonicalHistoryPolicyRequestV1],
+]:
+    descriptor = RubricBackendDescriptorV1(
+        backend_id=f"{descriptor_id}-r23",
+        backend_version="r2.4-v1",
+        prompt_sha256=live_rubric_prompt_bundle_sha256(),
+        rubric_schema_sha256=_checked_in_r23_schema_hash("rubric.v1.schema.json"),
+        tracking_packet_schema_sha256=_checked_in_r23_schema_hash("tracking_packet.v1.schema.json"),
+        tracker_schema_sha256=_checked_in_r23_schema_hash("tracker_output.v1.schema.json"),
+        config_sha256=_sha(f"{descriptor_id}-r23-config"),
+    )
+    extension = R24RubricBackendExtensionDescriptorV1(
+        descriptor_id=descriptor_id,
+        descriptor_version="v1",
+        execution_scope=LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE,
+        transport_kind=LiveRubricTransportKindV1.OPENAI_RESPONSES,
+        transport_authority=LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION,
+        r23_compatibility_descriptor_sha256=rubric_backend_descriptor_sha256(descriptor),
+        provider_config_sha256=_sha(f"{descriptor_id}-provider-config"),
+        prompt_sha256=descriptor.prompt_sha256,
+        rubric_schema_sha256=descriptor.rubric_schema_sha256,
+        tracking_packet_schema_sha256=descriptor.tracking_packet_schema_sha256,
+        tracker_schema_sha256=descriptor.tracker_schema_sha256,
+        generate_output_schema_sha256=live_rubric_generate_schema().sha256,
+        track_output_schema_sha256=live_rubric_track_schema().sha256,
+        configured_model=LIVE_RUBRIC_MODEL,
+        external_network_attempted=True,
+        model_call_attempted=True,
+    )
+    task_start = TaskStartRubricRequestV1(
+        request_id=f"{descriptor_id}-task-start",
+        task_run_id=stimulus.task_run_id,
+        task=stimulus.task,
+        backend=descriptor,
+    )
+    common: dict[str, JsonValue] = {
+        "backend_extension_descriptor_sha256": extension.sha256,
+        "r23_compatibility_descriptor_sha256": extension.r23_compatibility_descriptor_sha256,
+    }
+    generate_input: dict[str, JsonValue] = {
+        **common,
+        "schema_version": LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
+        "request": cast(JsonValue, task_start_request_projection(task_start)),
+    }
+    track_input: dict[str, JsonValue] = {
+        **common,
+        "schema_version": LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
+        "current_image_binding_sha256": current_image.binding_sha256,
+        "packet": cast(JsonValue, tracking_packet_projection(packet)),
+    }
+    inputs = (generate_input, track_input)
+    requests = (
+        build_live_rubric_provider_request_v1(
+            operation=LiveRubricOperationV1.GENERATE,
+            provider_input=generate_input,
+            current_image_data_url=None,
+        ),
+        build_live_rubric_provider_request_v1(
+            operation=LiveRubricOperationV1.TRACK,
+            provider_input=track_input,
+            current_image_data_url=current_image.data_url,
+        ),
+    )
+    return extension, inputs, requests
 
 
 def _complete_live_rubric_cross_binding_proof(
@@ -162,11 +265,21 @@ def _complete_live_rubric_cross_binding_proof(
     stage_sha256 = _sha("cross-binding-rubric-stage")
     pricing_sha256 = _sha("cross-binding-pricing")
     runtime = _runtime_case(tmp_path)
+    cross_context = SentinelContext(
+        logical_call_id=logical_call_id,
+        host_id=runtime.context.host_id,
+    )
+    sessions = _harness()
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=CollectorEvidenceFactoryV1(),
+        session_factory=sessions,
+    )
     try:
         with bind_audit_context(runtime.audit_context):
+            coordinator(cast(JsonValue, runtime.request), cross_context, runtime.history_ir)
             bundle = CollectorEvidenceFactoryV1().bundle_for_call(
                 request=cast(JsonValue, runtime.request),
-                context=runtime.context,
+                context=cross_context,
                 history_ir=runtime.history_ir,
             )
     finally:
@@ -175,23 +288,12 @@ def _complete_live_rubric_cross_binding_proof(
         bundle,
         logical_call_id=logical_call_id,
     )
-    extension = R24RubricBackendExtensionDescriptorV1(
+    extension, provider_inputs, provider_requests = _live_rubric_request_material(
+        stimulus=bundle.r23_snapshot,
+        current_image=current_image,
+        logical_call_id=logical_call_id,
+        packet=sessions.trackers[0].packets[0],
         descriptor_id="r24-cross-binding-extension",
-        descriptor_version="v1",
-        execution_scope=LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE,
-        transport_kind=LiveRubricTransportKindV1.OPENAI_RESPONSES,
-        transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
-        r23_compatibility_descriptor_sha256=_sha("cross-binding-r23-descriptor"),
-        provider_config_sha256=_sha("cross-binding-provider-config"),
-        prompt_sha256=live_rubric_prompt_bundle_sha256(),
-        rubric_schema_sha256=_sha("cross-binding-rubric-schema"),
-        tracking_packet_schema_sha256=_sha("cross-binding-packet-schema"),
-        tracker_schema_sha256=_sha("cross-binding-tracker-schema"),
-        generate_output_schema_sha256=_sha("cross-binding-generate-schema"),
-        track_output_schema_sha256=_sha("cross-binding-track-schema"),
-        configured_model=LIVE_RUBRIC_MODEL,
-        external_network_attempted=True,
-        model_call_attempted=True,
     )
     operations = (LiveRubricOperationV1.GENERATE, LiveRubricOperationV1.TRACK)
     envelopes = tuple(
@@ -220,7 +322,7 @@ def _complete_live_rubric_cross_binding_proof(
             case_id="r24-cross-binding-case",
             logical_call_id=logical_call_id,
             actor_request_sha256=actor_request_sha256,
-            request_sha256=_sha(f"cross-binding-request-{index}"),
+            request_sha256=provider_request.request_sha256,
             transport_binding_sha256=_sha(f"cross-binding-transport-{index}"),
             pricing_binding_sha256=pricing_sha256,
             execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
@@ -244,7 +346,9 @@ def _complete_live_rubric_cross_binding_proof(
             duration_ns=index,
             failure_code=None,
         )
-        for index, envelope in enumerate(envelopes, start=1)
+        for index, (envelope, provider_request) in enumerate(
+            zip(envelopes, provider_requests, strict=True), start=1
+        )
     )
     attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
     receipts = tuple(
@@ -298,15 +402,23 @@ def _complete_live_rubric_cross_binding_proof(
         )
     )
     anchors = tuple(
-        LiveRubricCallTrustAnchorV1(
+        rubric_live_module._build_live_rubric_call_trust_anchor(
             operation=operation,
             task_run_id=bundle.r23_snapshot.task_run_id,
             logical_call_id=logical_call_id,
             collector_stimulus=bundle.r23_snapshot,
             current_image=(None if operation is LiveRubricOperationV1.GENERATE else current_image),
+            provider_input=provider_input,
+            provider_request=provider_request,
             response_envelope=envelope,
         )
-        for operation, envelope in zip(operations, envelopes, strict=True)
+        for operation, envelope, provider_input, provider_request in zip(
+            operations,
+            envelopes,
+            provider_inputs,
+            provider_requests,
+            strict=True,
+        )
     )
     binding = ResolvedLivePolicyCallBindingV1(
         logical_call_id=logical_call_id,
@@ -331,6 +443,40 @@ def _complete_live_rubric_cross_binding_proof(
         cost_usd_micros=3,
     )
     return extension, attempts, receipts, anchors, binding
+
+
+def _anchored_tracking_packet_sha256(
+    anchors: tuple[LiveRubricCallTrustAnchorV1, ...],
+) -> str:
+    track = tuple(item for item in anchors if item.operation is LiveRubricOperationV1.TRACK)
+    assert len(track) == 1
+    packet = track[0].provider_input["packet"]
+    assert type(packet) is dict
+    return canonical_sha256(cast(JsonValue, packet))
+
+
+def _attempt_request_anchors(
+    attempts: tuple[LiveAttemptReceiptV1, ...],
+    call_anchors: tuple[LiveRubricCallTrustAnchorV1, ...],
+) -> tuple[LiveRubricAttemptRequestAnchorV1, ...]:
+    rubric_attempts = tuple(value for value in attempts if value.role is LiveAttemptRoleV1.RUBRIC)
+    return tuple(
+        rubric_live_module._build_live_rubric_attempt_request_anchor(
+            operation=call_anchor.operation,
+            task_run_id=call_anchor.task_run_id,
+            logical_call_id=call_anchor.logical_call_id,
+            attempt_id=attempt.attempt_id,
+            attempt_order=index,
+            collector_stimulus=call_anchor.collector_stimulus,
+            current_image=call_anchor.current_image,
+            provider_input=call_anchor.provider_input,
+            provider_request=call_anchor.provider_request,
+        )
+        for index, (attempt, call_anchor) in enumerate(
+            zip(rubric_attempts, call_anchors, strict=False),
+            start=1,
+        )
+    )
 
 
 @pytest.mark.parametrize(
@@ -395,9 +541,11 @@ def test_live_rubric_cross_binding_rejects_every_field_drift(
         logical_call_id=logical_call_id,
         actor_request_sha256=actor_request_sha256,
         attempts=attempts,
+        rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
         rubric_call_receipts=receipts,
         rubric_call_trust_anchors=anchors,
         expected_collector_stimulus_sha256=collector_stimulus_sha256,
+        expected_tracking_packet_sha256=_anchored_tracking_packet_sha256(anchors),
         rubric_backend_extension=extension,
         binding=binding,
         actor_call_index=1,
@@ -540,14 +688,1197 @@ def test_live_rubric_cross_binding_rejects_every_field_drift(
             logical_call_id=logical_call_id,
             actor_request_sha256=actor_request_sha256,
             attempts=attempts,
+            rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
             rubric_call_receipts=receipts,
             rubric_call_trust_anchors=anchors,
             expected_collector_stimulus_sha256=collector_stimulus_sha256,
+            expected_tracking_packet_sha256=_anchored_tracking_packet_sha256(anchors),
             rubric_backend_extension=extension,
             binding=binding,
             actor_call_index=1,
             expect_history_policy=False,
             allow_incomplete=False,
+        )
+
+
+@pytest.mark.parametrize("proof_path", ("success", "no_history", "generic_fallback"))
+def test_live_rubric_anchor_rejects_joint_request_hash_and_root_rewrite(
+    proof_path: str,
+    tmp_path: Path,
+) -> None:
+    """Rehashing attempt/call/binding roots cannot replace the dispatched request."""
+
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
+    expect_history_policy = proof_path == "success"
+    if expect_history_policy:
+        history_attempt = replace(
+            attempts[-1],
+            attempt_id="r24-joint-rewrite-history-attempt",
+            role=LiveAttemptRoleV1.HISTORY_POLICY,
+            authority_sha256=_sha("joint-rewrite-history-authority"),
+            request_sha256=_sha("joint-rewrite-history-request"),
+            transport_binding_sha256=_sha("joint-rewrite-history-transport"),
+            response_envelope_sha256=_sha("joint-rewrite-history-envelope"),
+            cost_usd_micros=4,
+        )
+        attempts = (*attempts, history_attempt)
+        binding = replace(
+            binding,
+            source_transport_binding_sha256=history_attempt.transport_binding_sha256,
+            history_policy_attempt_receipt_sha256=live_attempt_receipt_sha256(history_attempt),
+            output_sha256=_sha("joint-rewrite-history-output"),
+            openai_calls=3,
+            cost_usd_micros=7,
+        )
+
+    changed_request_sha256 = _sha(f"joint-rewrite:{proof_path}")
+    changed_attempt = replace(attempts[0], request_sha256=changed_request_sha256)
+    attempts = (changed_attempt, *attempts[1:])
+    changed_receipt = replace(
+        receipts[0],
+        provider_request_sha256=changed_request_sha256,
+        attempt_receipt_sha256=live_attempt_receipt_sha256(changed_attempt),
+    )
+    receipts = (changed_receipt, *receipts[1:])
+    selected_binding: ResolvedLivePolicyCallBindingV1 | None = (
+        None
+        if proof_path == "generic_fallback"
+        else replace(
+            binding,
+            rubric_attempt_receipt_sha256s=tuple(
+                live_attempt_receipt_sha256(item)
+                for item in attempts
+                if item.role is LiveAttemptRoleV1.RUBRIC
+            ),
+            rubric_call_receipt_sha256s=tuple(
+                live_rubric_call_receipt_sha256(item) for item in receipts
+            ),
+        )
+    )
+
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=attempts,
+            rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
+            rubric_call_receipts=receipts,
+            rubric_call_trust_anchors=anchors,
+            expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                anchors[0].collector_stimulus
+            ),
+            expected_tracking_packet_sha256=_anchored_tracking_packet_sha256(anchors),
+            rubric_backend_extension=extension,
+            binding=selected_binding,
+            actor_call_index=1,
+            expect_history_policy=expect_history_policy,
+            allow_incomplete=proof_path == "generic_fallback",
+        )
+
+
+def test_live_rubric_anchor_binds_complete_coordinator_tracking_packet(tmp_path: Path) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
+    expected_tracking_packet_sha256 = _anchored_tracking_packet_sha256(anchors)
+    changed_input = deepcopy(anchors[1].provider_input)
+    packet = cast(dict[str, JsonValue], changed_input["packet"])
+    prior_state = cast(dict[str, JsonValue], packet["prior_state"])
+    prior_state["state_id"] = "rewritten-prior-state"
+    changed_request = build_live_rubric_provider_request_v1(
+        operation=LiveRubricOperationV1.TRACK,
+        provider_input=changed_input,
+        current_image_data_url=cast(Any, anchors[1].current_image).data_url,
+    )
+    changed_anchor = rubric_live_module._build_live_rubric_call_trust_anchor(
+        operation=anchors[1].operation,
+        task_run_id=anchors[1].task_run_id,
+        logical_call_id=anchors[1].logical_call_id,
+        collector_stimulus=anchors[1].collector_stimulus,
+        current_image=anchors[1].current_image,
+        provider_input=changed_input,
+        provider_request=changed_request,
+        response_envelope=anchors[1].response_envelope,
+    )
+    anchors = (anchors[0], changed_anchor)
+    changed_attempt = replace(attempts[1], request_sha256=changed_request.request_sha256)
+    attempts = (attempts[0], changed_attempt)
+    changed_receipt = replace(
+        receipts[1],
+        provider_request_sha256=changed_request.request_sha256,
+        attempt_receipt_sha256=live_attempt_receipt_sha256(changed_attempt),
+    )
+    receipts = (receipts[0], changed_receipt)
+    binding = replace(
+        binding,
+        rubric_attempt_receipt_sha256s=tuple(
+            live_attempt_receipt_sha256(item) for item in attempts
+        ),
+        rubric_call_receipt_sha256s=tuple(
+            live_rubric_call_receipt_sha256(item) for item in receipts
+        ),
+    )
+
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=attempts,
+            rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
+            rubric_call_receipts=receipts,
+            rubric_call_trust_anchors=anchors,
+            expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                anchors[0].collector_stimulus
+            ),
+            expected_tracking_packet_sha256=expected_tracking_packet_sha256,
+            rubric_backend_extension=extension,
+            binding=binding,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=False,
+        )
+
+
+def test_durable_live_rubric_request_proof_is_independently_reconstructable(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    attempt_anchors = _attempt_request_anchors(attempts, anchors)
+    proofs = tuple(
+        live_rubric_attempt_request_proof_projection(
+            anchor,
+            attempt_receipt=attempt,
+            backend_extension=extension,
+        )
+        for anchor, attempt in zip(attempt_anchors, attempts, strict=True)
+    )
+    for index, (proof, attempt) in enumerate(zip(proofs, attempts, strict=True), start=1):
+        validate_live_rubric_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            attempt_receipt=attempt,
+            expected_attempt_order=index,
+        )
+        request = cast(dict[str, JsonValue], proof["provider_request"])
+        assert request["model"] == LIVE_RUBRIC_MODEL
+        assert request["store"] is False
+        assert request["stream"] is False
+        assert request["max_output_tokens"] == 8192
+    assert proofs[0]["tracking_packet_sha256"] is None
+    assert proofs[1]["tracking_packet_sha256"] == _anchored_tracking_packet_sha256(anchors)
+
+
+def test_live_rubric_request_anchor_cannot_be_publicly_fabricated(tmp_path: Path) -> None:
+    _, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    trusted = anchors[0]
+    with pytest.raises(LiveRubricError, match="UNTRUSTED_REQUEST_ANCHOR"):
+        LiveRubricCallTrustAnchorV1(
+            operation=trusted.operation,
+            task_run_id=trusted.task_run_id,
+            logical_call_id=trusted.logical_call_id,
+            collector_stimulus=trusted.collector_stimulus,
+            current_image=trusted.current_image,
+            provider_input=trusted.provider_input,
+            provider_request=trusted.provider_request,
+            response_envelope=trusted.response_envelope,
+        )
+    trusted_attempt = _attempt_request_anchors(attempts, anchors)[0]
+    with pytest.raises(LiveRubricError, match="UNTRUSTED_REQUEST_ANCHOR"):
+        LiveRubricAttemptRequestAnchorV1(
+            operation=trusted_attempt.operation,
+            task_run_id=trusted_attempt.task_run_id,
+            logical_call_id=trusted_attempt.logical_call_id,
+            attempt_id=trusted_attempt.attempt_id,
+            attempt_order=trusted_attempt.attempt_order,
+            collector_stimulus=trusted_attempt.collector_stimulus,
+            current_image=trusted_attempt.current_image,
+            provider_input=trusted_attempt.provider_input,
+            provider_request=trusted_attempt.provider_request,
+        )
+
+
+def test_durable_live_rubric_request_proof_uses_type_sensitive_task_binding(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    proof = live_rubric_attempt_request_proof_projection(
+        _attempt_request_anchors(attempts, anchors)[0],
+        attempt_receipt=attempts[0],
+        backend_extension=extension,
+    )
+    stimulus = cast(dict[str, JsonValue], proof["collector_stimulus"])
+    stimulus_task = cast(dict[str, JsonValue], stimulus["task"])
+    stimulus_task["source_event_seq"] = 1
+    proof["collector_stimulus_sha256"] = canonical_sha256(cast(JsonValue, stimulus))
+    provider_input = cast(dict[str, JsonValue], proof["provider_input"])
+    request = cast(dict[str, JsonValue], provider_input["request"])
+    provider_task = cast(dict[str, JsonValue], request["task"])
+    provider_task["source_event_seq"] = True
+    proof["provider_input_sha256"] = canonical_sha256(cast(JsonValue, provider_input))
+    provider_request = build_live_rubric_provider_request_v1(
+        operation=LiveRubricOperationV1.GENERATE,
+        provider_input=provider_input,
+        current_image_data_url=None,
+    )
+    proof["provider_request"] = cast(JsonValue, json.loads(provider_request.canonical_bytes))
+    proof["provider_request_sha256"] = provider_request.request_sha256
+    proof["provider_request_byte_count"] = provider_request.byte_count
+
+    with pytest.raises(LiveRubricError, match="PROVIDER_INPUT_BINDING_MISMATCH"):
+        rubric_live_module._validate_provider_input_stimulus_projection(
+            operation=LiveRubricOperationV1.GENERATE,
+            provider_input=provider_input,
+            stimulus=stimulus,
+            logical_call_id=anchors[0].logical_call_id,
+        )
+    with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
+        validate_live_rubric_request_proof_projection_v1(cast(JsonValue, proof))
+
+
+def test_durable_live_rubric_request_proof_rejects_boolean_byte_count(tmp_path: Path) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    proof = live_rubric_attempt_request_proof_projection(
+        _attempt_request_anchors(attempts, anchors)[0],
+        attempt_receipt=attempts[0],
+        backend_extension=extension,
+    )
+    proof["provider_request_byte_count"] = True
+    with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
+        validate_live_rubric_request_proof_projection_v1(cast(JsonValue, proof))
+
+
+def test_durable_live_rubric_request_proof_parser_is_not_limited_to_provider_output() -> None:
+    # The restricted audit sink is 256 MiB.  A proof can exceed the 8 MiB
+    # provider-output cap because it contains both semantic and request preimages.
+    oversized_for_output: JsonValue = {"padding": "x" * (8 * 1024 * 1024 + 1)}
+    with pytest.raises(LiveRubricError) as rejected:
+        validate_live_rubric_request_proof_projection_v1(oversized_for_output)
+    assert "byte count is outside bounds" not in str(rejected.value)
+
+
+def test_incomplete_fallback_keeps_generate_proof_when_track_attempt_fails(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
+    failed_track = replace(
+        attempts[1],
+        status=LiveAttemptStatusV1.FAILED,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+        cost_usd_micros=None,
+        failure_code="INJECTED_TRACK_PROVIDER_FAILURE",
+    )
+    incomplete_attempts = (attempts[0], failed_track)
+    attempt_anchors = _attempt_request_anchors(incomplete_attempts, anchors)
+    expected_tracking_packet_sha256 = _anchored_tracking_packet_sha256(anchors)
+
+    validate_live_rubric_cross_bindings_v1(
+        logical_call_id=binding.logical_call_id,
+        actor_request_sha256=binding.actor_request_sha256,
+        attempts=incomplete_attempts,
+        rubric_attempt_request_anchors=attempt_anchors,
+        rubric_call_receipts=(receipts[0],),
+        rubric_call_trust_anchors=(anchors[0],),
+        expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+            anchors[0].collector_stimulus
+        ),
+        expected_tracking_packet_sha256=expected_tracking_packet_sha256,
+        rubric_backend_extension=extension,
+        binding=None,
+        actor_call_index=1,
+        expect_history_policy=False,
+        allow_incomplete=True,
+    )
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=incomplete_attempts,
+            rubric_attempt_request_anchors=(attempt_anchors[0],),
+            rubric_call_receipts=(receipts[0],),
+            rubric_call_trust_anchors=(anchors[0],),
+            expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                anchors[0].collector_stimulus
+            ),
+            expected_tracking_packet_sha256=expected_tracking_packet_sha256,
+            rubric_backend_extension=extension,
+            binding=None,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=True,
+        )
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=(attempts[0],),
+            rubric_attempt_request_anchors=attempt_anchors,
+            rubric_call_receipts=(receipts[0],),
+            rubric_call_trust_anchors=(anchors[0],),
+            expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                anchors[0].collector_stimulus
+            ),
+            expected_tracking_packet_sha256=expected_tracking_packet_sha256,
+            rubric_backend_extension=extension,
+            binding=None,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=True,
+        )
+    request_proofs = production_audit_module._rubric_request_proof_detail_projection(
+        attempt_anchors,
+        incomplete_attempts,
+        extension,
+        expected_tracking_packet_sha256,
+    )
+    assert len(request_proofs) == 2
+    assert cast(dict[str, JsonValue], request_proofs[0])["operation"] == "GENERATE"
+    assert cast(dict[str, JsonValue], request_proofs[1])["operation"] == "TRACK"
+    assert cast(dict[str, JsonValue], request_proofs[1])["attempt_status"] == "FAILED"
+    assert len((receipts[0],)) == 1
+    assert live_attempt_receipt_projection(failed_track)["status"] == "FAILED"
+    for index, (proof, attempt) in enumerate(
+        zip(request_proofs, incomplete_attempts, strict=True), start=1
+    ):
+        validate_live_rubric_request_proof_projection_v1(
+            proof,
+            attempt_receipt=attempt,
+            expected_attempt_order=index,
+        )
+
+    tampered_attempts = (
+        attempts[0],
+        replace(failed_track, request_sha256=_sha("tampered-failed-track-request")),
+    )
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=tampered_attempts,
+            rubric_attempt_request_anchors=attempt_anchors,
+            rubric_call_receipts=(receipts[0],),
+            rubric_call_trust_anchors=(anchors[0],),
+            expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                anchors[0].collector_stimulus
+            ),
+            expected_tracking_packet_sha256=expected_tracking_packet_sha256,
+            rubric_backend_extension=extension,
+            binding=None,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=True,
+        )
+
+
+def test_incomplete_fallback_rejects_completed_attempt_without_call_proof(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, binding = _complete_live_rubric_cross_binding_proof(tmp_path)
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=(attempts[0],),
+            rubric_attempt_request_anchors=_attempt_request_anchors((attempts[0],), (anchors[0],)),
+            rubric_call_receipts=(),
+            rubric_call_trust_anchors=(),
+            expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                anchors[0].collector_stimulus
+            ),
+            expected_tracking_packet_sha256=None,
+            rubric_backend_extension=extension,
+            binding=None,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=True,
+        )
+
+
+def _patch_incomplete_audit_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    attempts: tuple[LiveAttemptReceiptV1, ...],
+    request_anchors: tuple[LiveRubricAttemptRequestAnchorV1, ...],
+    call_receipts: tuple[LiveRubricCallReceiptV1, ...],
+    call_anchors: tuple[LiveRubricCallTrustAnchorV1, ...],
+    extension: R24RubricBackendExtensionDescriptorV1,
+    collector_root: str,
+    packet_root: str | None,
+) -> OwnerAuthorizedLivePerCallPolicyV1:
+    policy = object.__new__(OwnerAuthorizedLivePerCallPolicyV1)
+    policy._policy_id = "r24-failed-track-audit-policy"
+    policy._authority = cast(
+        Any,
+        SimpleNamespace(manifest_sha256=attempts[0].manifest_sha256),
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "attempt_receipts_for_call",
+        lambda _self, _logical_call_id: attempts,
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "rubric_attempt_request_anchors_for_call",
+        lambda _self, _logical_call_id: request_anchors,
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "rubric_call_receipts_for_call",
+        lambda _self, _logical_call_id: call_receipts,
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "rubric_call_trust_anchors_for_call",
+        lambda _self, _logical_call_id: call_anchors,
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "rubric_backend_extension_descriptor",
+        lambda _self: extension,
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "rubric_collector_stimulus_sha256_for_call",
+        lambda _self, _logical_call_id: collector_root,
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "rubric_tracking_packet_sha256_for_call",
+        lambda _self, _logical_call_id: packet_root,
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "actor_call_index_for_call",
+        lambda _self, _logical_call_id: 1,
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "failure_for_call",
+        lambda _self, _logical_call_id: "RUBRIC_TRACK_ERROR",
+    )
+
+    def no_binding(_self: object, _logical_call_id: str) -> object:
+        raise R24ContractError(
+            "PER_CALL_BINDING_UNAVAILABLE", "injected failed call has no binding"
+        )
+
+    monkeypatch.setattr(OwnerAuthorizedLivePerCallPolicyV1, "call_binding", no_binding)
+    return policy
+
+
+def test_generic_fallback_audit_retains_failed_track_attempt_request_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
+    raw: JsonValue = {"model": "cpu-actor", "messages": []}
+    raw_bytes = canonical_json_bytes(raw)
+    raw_sha256 = canonical_sha256(raw)
+    completed_generate = replace(attempts[0], actor_request_sha256=raw_sha256)
+    failed_track = replace(
+        attempts[1],
+        actor_request_sha256=raw_sha256,
+        status=LiveAttemptStatusV1.FAILED,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+        cost_usd_micros=None,
+        failure_code="INJECTED_TRACK_PROVIDER_FAILURE",
+    )
+    incomplete_attempts = (completed_generate, failed_track)
+    completed_call = replace(
+        receipts[0],
+        attempt_receipt_sha256=live_attempt_receipt_sha256(completed_generate),
+    )
+    attempt_anchors = _attempt_request_anchors(incomplete_attempts, anchors)
+    collector_root = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
+    packet_root = _anchored_tracking_packet_sha256(anchors)
+    policy = _patch_incomplete_audit_policy(
+        monkeypatch,
+        attempts=incomplete_attempts,
+        request_anchors=attempt_anchors,
+        call_receipts=(completed_call,),
+        call_anchors=(anchors[0],),
+        extension=extension,
+        collector_root=collector_root,
+        packet_root=packet_root,
+    )
+    result = SentinelResult(
+        receipt=SentinelReceipt(
+            logical_call_id=binding.logical_call_id,
+            host_id="mobileworld.qwen3vl.actor",
+            call_role=SentinelCallRole.ACTOR,
+            configured_mode=SentinelMode.ACTIVE,
+            effective_mode=SentinelMode.OFF,
+            bypass_reason=None,
+            global_kill_switch_active=False,
+            history_codec_id="mobileworld.g1.history-codec.qwen-flat-progress",
+            history_codec_contract_version="v1",
+            policy_id=policy.policy_id,
+            policy_output_sha256=_sha("failed-policy-output"),
+            raw_request_sha256=raw_sha256,
+            candidate_request_sha256=raw_sha256,
+            final_request_sha256=raw_sha256,
+            exact_diff_sha256=canonical_sha256({"diffs": [], "list_insertions": []}),
+            decision_kinds=(),
+            policy_evaluated=True,
+            would_edit=False,
+            edit_applied=False,
+            fallback_reason=SentinelFallbackReason.POLICY_EXCEPTION,
+            validation_status=SentinelValidationStatus.FALLBACK_ORIGINAL,
+            validation_checks=("POLICY_EXCEPTION",),
+            latency_ns=1,
+        ),
+        _raw_request_json=raw_bytes,
+        _candidate_request_json=raw_bytes,
+        _final_request_json=raw_bytes,
+    )
+    sink = MemoryProductionRuntimeAuditSinkV1()
+    audit = ProductionRuntimeAuditV1(policy=policy, sink=sink)
+    audit.begin_fallback_pre_provider(
+        logical_call_id=binding.logical_call_id,
+        host_id="mobileworld.qwen3vl.actor",
+        raw_request=raw,
+        result=result,
+        fallback_check="r2_4_failed_track_request_proof",
+        pre_provider_total_ns=1,
+    )
+    pending = audit._pending[binding.logical_call_id]
+    stage = cast(dict[str, JsonValue], pending.pre_provider.restricted_stage_projection)
+    persisted_attempts = cast(list[dict[str, JsonValue]], stage["live_attempt_receipts"])
+    persisted_calls = cast(list[dict[str, JsonValue]], stage["r2_4_rubric_call_receipts"])
+    persisted_proofs = cast(list[JsonValue], stage["r2_4_rubric_request_proofs"])
+    assert len(persisted_attempts) == 2
+    assert persisted_attempts[1]["status"] == "FAILED"
+    assert len(persisted_calls) == 1
+    assert len(persisted_proofs) == 2
+    for index, (proof, attempt) in enumerate(
+        zip(persisted_proofs, persisted_attempts, strict=True), start=1
+    ):
+        validate_live_rubric_request_proof_projection_v1(
+            proof,
+            attempt_receipt=attempt,
+            expected_attempt_order=index,
+        )
+    invalid_receipt = deepcopy(persisted_attempts[1])
+    invalid_receipt["worker_reaped"] = False
+    invalid_proof = cast(dict[str, JsonValue], deepcopy(persisted_proofs[1]))
+    invalid_proof["attempt_receipt_sha256"] = canonical_sha256(cast(JsonValue, invalid_receipt))
+    with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
+        validate_live_rubric_request_proof_projection_v1(
+            cast(JsonValue, invalid_proof),
+            attempt_receipt=invalid_receipt,
+            expected_attempt_order=2,
+        )
+    pending.transaction.abort()
+
+
+def test_begin_tu_fallback_commits_request_proof_before_run_fatal_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
+    raw: JsonValue = {"model": "cpu-actor", "messages": []}
+    raw_bytes = canonical_json_bytes(raw)
+    raw_sha256 = canonical_sha256(raw)
+    tu_generate = replace(
+        attempts[0],
+        actor_request_sha256=raw_sha256,
+        status=LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+        dispatch_count=0,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+        cost_usd_micros=None,
+        cancellation_requested=True,
+        termination=LiveAttemptTerminationV1.UNCONFIRMED,
+        worker_exit_code=None,
+        worker_reaped=False,
+        failure_code="TERMINATION_UNCONFIRMED",
+    )
+    incomplete_attempts = (tu_generate,)
+    request_anchors = _attempt_request_anchors(
+        incomplete_attempts,
+        (anchors[0],),
+    )
+    policy = _patch_incomplete_audit_policy(
+        monkeypatch,
+        attempts=incomplete_attempts,
+        request_anchors=request_anchors,
+        call_receipts=(),
+        call_anchors=(),
+        extension=extension,
+        collector_root=rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus),
+        packet_root=None,
+    )
+    result = SentinelResult(
+        receipt=SentinelReceipt(
+            logical_call_id=binding.logical_call_id,
+            host_id="mobileworld.qwen3vl.actor",
+            call_role=SentinelCallRole.ACTOR,
+            configured_mode=SentinelMode.ACTIVE,
+            effective_mode=SentinelMode.OFF,
+            bypass_reason=None,
+            global_kill_switch_active=False,
+            history_codec_id="mobileworld.g1.history-codec.qwen-flat-progress",
+            history_codec_contract_version="v1",
+            policy_id=policy.policy_id,
+            policy_output_sha256=_sha("tu-policy-output"),
+            raw_request_sha256=raw_sha256,
+            candidate_request_sha256=raw_sha256,
+            final_request_sha256=raw_sha256,
+            exact_diff_sha256=canonical_sha256({"diffs": [], "list_insertions": []}),
+            decision_kinds=(),
+            policy_evaluated=True,
+            would_edit=False,
+            edit_applied=False,
+            fallback_reason=SentinelFallbackReason.POLICY_EXCEPTION,
+            validation_status=SentinelValidationStatus.FALLBACK_ORIGINAL,
+            validation_checks=("POLICY_EXCEPTION",),
+            latency_ns=1,
+        ),
+        _raw_request_json=raw_bytes,
+        _candidate_request_json=raw_bytes,
+        _final_request_json=raw_bytes,
+    )
+    sink = MemoryProductionRuntimeAuditSinkV1()
+    audit = ProductionRuntimeAuditV1(policy=policy, sink=sink)
+
+    with pytest.raises(
+        production_audit_module.ProductionRuntimeAuditError,
+        match="RUN_FATAL_TERMINATION_UNCONFIRMED",
+    ):
+        audit.begin_fallback_pre_provider(
+            logical_call_id=binding.logical_call_id,
+            host_id="mobileworld.qwen3vl.actor",
+            raw_request=raw,
+            result=result,
+            fallback_check="r2_4_tu_request_proof",
+            pre_provider_total_ns=1,
+        )
+
+    assert binding.logical_call_id not in audit._pending
+    fatal = audit.run_fatal_latch.state
+    assert fatal is not None
+    assert fatal.attempt_receipt_sha256 == live_attempt_receipt_sha256(tu_generate)
+    terminal = audit.latest_failure_receipt
+    assert terminal is not None
+    assert terminal.provider_attempt_count == 0
+    assert terminal.live_openai_calls == 0
+    (failure_detail,) = sink.failure_details
+    failure = cast(dict[str, JsonValue], failure_detail)
+    assert failure["actor_provider_attempts"] == []
+    pre = cast(dict[str, JsonValue], failure["pre_provider"])
+    stage = cast(dict[str, JsonValue], pre["restricted_stage_projection"])
+    persisted_attempts = cast(list[dict[str, JsonValue]], stage["live_attempt_receipts"])
+    persisted_proofs = cast(list[JsonValue], stage["r2_4_rubric_request_proofs"])
+    assert len(persisted_attempts) == len(persisted_proofs) == 1
+    assert persisted_attempts[0]["status"] == "TERMINATION_UNCONFIRMED"
+    assert persisted_attempts[0]["dispatch_count"] == 0
+    for index, (proof, attempt) in enumerate(
+        zip(persisted_proofs, persisted_attempts, strict=True), start=1
+    ):
+        validate_live_rubric_request_proof_projection_v1(
+            proof,
+            attempt_receipt=attempt,
+            expected_attempt_order=index,
+        )
+    with pytest.raises(
+        production_audit_module.ProductionRuntimeAuditError,
+        match="RUN_FATAL_TERMINATION_UNCONFIRMED",
+    ):
+        audit.bind_actor_sdk_arguments(
+            logical_call_id=binding.logical_call_id,
+            result=result,
+            sdk_arguments=raw,
+            collector_request_locator={},
+            stream=False,
+        )
+
+
+def test_production_port_registers_sink_confirmed_begin_tu_request_anchor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    source = anchors[0]
+    tu = replace(
+        attempts[0],
+        status=LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+        dispatch_count=0,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+        cost_usd_micros=None,
+        cancellation_requested=True,
+        termination=LiveAttemptTerminationV1.UNCONFIRMED,
+        worker_exit_code=None,
+        worker_reaped=False,
+        failure_code="TERMINATION_UNCONFIRMED",
+    )
+    runner = object.__new__(ProductionOpenAIAttemptRunnerV1)
+    runner._sink = cast(
+        Any,
+        SimpleNamespace(receipt_for=lambda attempt_id: tu if attempt_id == tu.attempt_id else None),
+    )
+    runner._factory = cast(
+        Any,
+        SimpleNamespace(
+            manifest_sha256=tu.manifest_sha256,
+            preflight_report_sha256=tu.preflight_sha256,
+            openai_stage_sha256=lambda _role: tu.stage_sha256,
+        ),
+    )
+    runner._stage = cast(Any, SimpleNamespace(role="RUBRIC"))
+    runner._pricing_sha256 = tu.pricing_binding_sha256
+    port = object.__new__(rubric_live_module.ProductionRubricProviderPortV1)
+    rubric_live_module._BaseRubricProviderPortV1.__init__(port)
+    port._runner = runner
+    current_image = anchors[1].current_image
+    assert current_image is not None
+    context = rubric_live_module._RubricCallContextV1(
+        logical_call_id=tu.logical_call_id,
+        task_run_id=source.task_run_id,
+        actor_request_sha256=tu.actor_request_sha256,
+        deadline_monotonic_ns=1,
+        max_cost_usd_micros=1,
+        stimulus=source.collector_stimulus,
+        image=current_image,
+        case_lease=cast(Any, object()),
+        execution_control=cast(
+            Any,
+            SimpleNamespace(
+                run_transport=lambda call: call(),
+                publish_receipt=lambda publish: publish(),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        rubric_live_module,
+        "case_execution_lease_sha256",
+        lambda _lease: tu.case_execution_lease_sha256,
+    )
+
+    assert port._register_begin_termination_unconfirmed_request_anchor(
+        operation=LiveRubricOperationV1.GENERATE,
+        context=context,
+        attempt_id=tu.attempt_id,
+        transport_binding_sha256=tu.transport_binding_sha256,
+        provider_input=source.provider_input,
+        provider_request=source.provider_request,
+    )
+    (request_anchor,) = port.attempt_request_anchors
+    assert request_anchor.attempt_id == tu.attempt_id
+    assert request_anchor.attempt_order == 1
+    assert request_anchor.provider_request.request_sha256 == tu.request_sha256
+
+
+def test_begin_tu_commit_fault_recovery_retains_independent_request_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extension, attempts, _, anchors, binding = _complete_live_rubric_cross_binding_proof(tmp_path)
+    raw: JsonValue = {"model": "cpu-actor", "messages": []}
+    raw_bytes = canonical_json_bytes(raw)
+    raw_sha256 = canonical_sha256(raw)
+    tu_generate = replace(
+        attempts[0],
+        actor_request_sha256=raw_sha256,
+        status=LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+        dispatch_count=0,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+        cost_usd_micros=None,
+        cancellation_requested=True,
+        termination=LiveAttemptTerminationV1.UNCONFIRMED,
+        worker_exit_code=None,
+        worker_reaped=False,
+        failure_code="TERMINATION_UNCONFIRMED",
+    )
+    policy = _patch_incomplete_audit_policy(
+        monkeypatch,
+        attempts=(tu_generate,),
+        request_anchors=_attempt_request_anchors((tu_generate,), (anchors[0],)),
+        call_receipts=(),
+        call_anchors=(),
+        extension=extension,
+        collector_root=rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus),
+        packet_root=None,
+    )
+    result = SentinelResult(
+        receipt=SentinelReceipt(
+            logical_call_id=binding.logical_call_id,
+            host_id="mobileworld.qwen3vl.actor",
+            call_role=SentinelCallRole.ACTOR,
+            configured_mode=SentinelMode.ACTIVE,
+            effective_mode=SentinelMode.OFF,
+            bypass_reason=None,
+            global_kill_switch_active=False,
+            history_codec_id="mobileworld.g1.history-codec.qwen-flat-progress",
+            history_codec_contract_version="v1",
+            policy_id=policy.policy_id,
+            policy_output_sha256=_sha("tu-commit-fault-policy-output"),
+            raw_request_sha256=raw_sha256,
+            candidate_request_sha256=raw_sha256,
+            final_request_sha256=raw_sha256,
+            exact_diff_sha256=canonical_sha256({"diffs": [], "list_insertions": []}),
+            decision_kinds=(),
+            policy_evaluated=True,
+            would_edit=False,
+            edit_applied=False,
+            fallback_reason=SentinelFallbackReason.POLICY_EXCEPTION,
+            validation_status=SentinelValidationStatus.FALLBACK_ORIGINAL,
+            validation_checks=("POLICY_EXCEPTION",),
+            latency_ns=1,
+        ),
+        _raw_request_json=raw_bytes,
+        _candidate_request_json=raw_bytes,
+        _final_request_json=raw_bytes,
+    )
+    attempted_failures: list[JsonValue] = []
+    aborts: list[bool] = []
+
+    def begin_fault(pre: object) -> object:
+        trusted = cast(production_audit_module.ProductionRuntimeAuditPreProviderV1, pre)
+
+        def commit_failure(detail: JsonValue) -> None:
+            attempted_failures.append(deepcopy(detail))
+            raise OSError("injected TU failed-terminal commit fault")
+
+        return SimpleNamespace(
+            logical_call_id=trusted.logical_call_id,
+            pre_provider_sha256=production_runtime_audit_pre_provider_sha256(trusted),
+            commit=lambda _detail: pytest.fail("TU must publish a failure terminal"),
+            commit_failure=commit_failure,
+            abort=lambda: aborts.append(True),
+        )
+
+    sink = cast(Any, SimpleNamespace(begin=begin_fault))
+    audit = ProductionRuntimeAuditV1(policy=policy, sink=sink)
+
+    with pytest.raises(
+        production_audit_module.ProductionRuntimeAuditError,
+        match="AUDIT_TERMINAL_COMMIT_FAILED",
+    ):
+        audit.begin_fallback_pre_provider(
+            logical_call_id=binding.logical_call_id,
+            host_id="mobileworld.qwen3vl.actor",
+            raw_request=raw,
+            result=result,
+            fallback_check="r2_4_begin_tu_commit_fault_request_proof",
+            pre_provider_total_ns=1,
+        )
+
+    assert audit.run_fatal_latch.state is not None
+    assert audit.latest_failure_receipt is None
+    recovery = audit.latest_commit_failure_receipt
+    assert recovery is not None
+    recovery_projection = (
+        production_audit_module.production_runtime_audit_commit_failure_receipt_projection(recovery)
+    )
+    attempted_terminal = cast(
+        dict[str, JsonValue], recovery_projection["attempted_terminal_receipt"]
+    )
+    assert attempted_terminal["provider_attempt_count"] == 0
+    assert attempted_terminal["live_openai_calls"] == 0
+    pre = cast(dict[str, JsonValue], recovery_projection["pre_provider"])
+    assert canonical_sha256(cast(JsonValue, pre)) == attempted_terminal["pre_provider_sha256"]
+    stage = cast(dict[str, JsonValue], pre["restricted_stage_projection"])
+    persisted_attempts = cast(list[dict[str, JsonValue]], stage["live_attempt_receipts"])
+    persisted_proofs = cast(list[JsonValue], stage["r2_4_rubric_request_proofs"])
+    assert len(persisted_attempts) == len(persisted_proofs) == 1
+    validate_live_rubric_request_proof_projection_v1(
+        persisted_proofs[0],
+        attempt_receipt=persisted_attempts[0],
+        expected_attempt_order=1,
+    )
+    assert len(attempted_failures) == 1
+    assert aborts == [True]
+    with pytest.raises(
+        production_audit_module.ProductionRuntimeAuditError,
+        match="RUN_FATAL_TERMINATION_UNCONFIRMED",
+    ):
+        audit.bind_actor_sdk_arguments(
+            logical_call_id=binding.logical_call_id,
+            result=result,
+            sdk_arguments=raw,
+            collector_request_locator={},
+            stream=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("status", "dispatch_count"),
+    (
+        (LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH, 0),
+        (LiveAttemptStatusV1.CANCELLED_POST_DISPATCH, 1),
+        (LiveAttemptStatusV1.TERMINATION_UNCONFIRMED, 1),
+    ),
+)
+def test_incomplete_track_attempt_request_proof_covers_cancellation_and_tu(
+    tmp_path: Path,
+    status: LiveAttemptStatusV1,
+    dispatch_count: int,
+) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
+    termination = (
+        LiveAttemptTerminationV1.UNCONFIRMED
+        if status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+        else LiveAttemptTerminationV1.KILL
+    )
+    track = replace(
+        attempts[1],
+        status=status,
+        dispatch_count=dispatch_count,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=(
+            LiveAttemptCostStatusV1.EXACT
+            if status is LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH
+            else LiveAttemptCostStatusV1.UNKNOWN
+        ),
+        cost_usd_micros=(0 if status is LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH else None),
+        cancellation_requested=True,
+        termination=termination,
+        worker_exit_code=(None if status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED else -9),
+        worker_reaped=status is not LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+        failure_code=(
+            "TERMINATION_UNCONFIRMED"
+            if status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+            else None
+        ),
+    )
+    incomplete_attempts = (attempts[0], track)
+    attempt_anchors = _attempt_request_anchors(incomplete_attempts, anchors)
+    packet_sha256 = _anchored_tracking_packet_sha256(anchors)
+    validate_live_rubric_cross_bindings_v1(
+        logical_call_id=binding.logical_call_id,
+        actor_request_sha256=binding.actor_request_sha256,
+        attempts=incomplete_attempts,
+        rubric_attempt_request_anchors=attempt_anchors,
+        rubric_call_receipts=(receipts[0],),
+        rubric_call_trust_anchors=(anchors[0],),
+        expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+            anchors[0].collector_stimulus
+        ),
+        expected_tracking_packet_sha256=packet_sha256,
+        rubric_backend_extension=extension,
+        binding=None,
+        actor_call_index=1,
+        expect_history_policy=False,
+        allow_incomplete=True,
+    )
+    proofs = production_audit_module._rubric_request_proof_detail_projection(
+        attempt_anchors,
+        incomplete_attempts,
+        extension,
+        packet_sha256,
+    )
+    assert len(proofs) == 2
+    assert cast(dict[str, JsonValue], proofs[1])["attempt_status"] == status.value
+    assert cast(dict[str, JsonValue], proofs[1])["attempt_dispatch_count"] == dispatch_count
+    if status in {
+        LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH,
+        LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+    }:
+        with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+            validate_live_rubric_cross_bindings_v1(
+                logical_call_id=binding.logical_call_id,
+                actor_request_sha256=binding.actor_request_sha256,
+                attempts=incomplete_attempts,
+                rubric_attempt_request_anchors=(attempt_anchors[0],),
+                rubric_call_receipts=(receipts[0],),
+                rubric_call_trust_anchors=(anchors[0],),
+                expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                    anchors[0].collector_stimulus
+                ),
+                expected_tracking_packet_sha256=packet_sha256,
+                rubric_backend_extension=extension,
+                binding=None,
+                actor_call_index=1,
+                expect_history_policy=False,
+                allow_incomplete=True,
+            )
+        with pytest.raises(
+            production_audit_module.ProductionRuntimeAuditError,
+            match="request-proof census differs",
+        ):
+            production_audit_module._rubric_request_proof_detail_projection(
+                (attempt_anchors[0],),
+                incomplete_attempts,
+                extension,
+                packet_sha256,
+            )
+    if status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED:
+        pre_dispatch_tu_attempts = (attempts[0], replace(track, dispatch_count=0))
+        with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+            validate_live_rubric_cross_bindings_v1(
+                logical_call_id=binding.logical_call_id,
+                actor_request_sha256=binding.actor_request_sha256,
+                attempts=pre_dispatch_tu_attempts,
+                rubric_attempt_request_anchors=(attempt_anchors[0],),
+                rubric_call_receipts=(receipts[0],),
+                rubric_call_trust_anchors=(anchors[0],),
+                expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                    anchors[0].collector_stimulus
+                ),
+                expected_tracking_packet_sha256=packet_sha256,
+                rubric_backend_extension=extension,
+                binding=None,
+                actor_call_index=1,
+                expect_history_policy=False,
+                allow_incomplete=True,
+            )
+
+
+def test_begin_failure_before_callable_is_the_only_unanchored_attempt_boundary(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, binding = _complete_live_rubric_cross_binding_proof(tmp_path)
+    begin_failure = replace(
+        attempts[0],
+        status=LiveAttemptStatusV1.FAILED,
+        dispatch_count=0,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.EXACT,
+        cost_usd_micros=0,
+        cancellation_requested=False,
+        termination=LiveAttemptTerminationV1.NONE,
+        worker_pid=None,
+        worker_exit_code=None,
+        worker_reaped=False,
+        failure_code="ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
+    )
+    validate_live_rubric_cross_bindings_v1(
+        logical_call_id=binding.logical_call_id,
+        actor_request_sha256=binding.actor_request_sha256,
+        attempts=(begin_failure,),
+        rubric_attempt_request_anchors=(),
+        rubric_call_receipts=(),
+        rubric_call_trust_anchors=(),
+        expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+            anchors[0].collector_stimulus
+        ),
+        expected_tracking_packet_sha256=None,
+        rubric_backend_extension=extension,
+        binding=None,
+        actor_call_index=1,
+        expect_history_policy=False,
+        allow_incomplete=True,
+    )
+    assert (
+        production_audit_module._rubric_request_proof_detail_projection(
+            (),
+            (begin_failure,),
+            extension,
+            None,
+        )
+        == []
+    )
+
+
+def test_failed_generate_attempt_request_hash_rewrite_is_rejected(tmp_path: Path) -> None:
+    extension, attempts, _, anchors, binding = _complete_live_rubric_cross_binding_proof(tmp_path)
+    failed_generate = replace(
+        attempts[0],
+        status=LiveAttemptStatusV1.FAILED,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+        cost_usd_micros=None,
+        failure_code="INJECTED_GENERATE_PROVIDER_FAILURE",
+    )
+    attempt_anchors = _attempt_request_anchors((failed_generate,), (anchors[0],))
+    validate_live_rubric_cross_bindings_v1(
+        logical_call_id=binding.logical_call_id,
+        actor_request_sha256=binding.actor_request_sha256,
+        attempts=(failed_generate,),
+        rubric_attempt_request_anchors=attempt_anchors,
+        rubric_call_receipts=(),
+        rubric_call_trust_anchors=(),
+        expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+            anchors[0].collector_stimulus
+        ),
+        expected_tracking_packet_sha256=None,
+        rubric_backend_extension=extension,
+        binding=None,
+        actor_call_index=1,
+        expect_history_policy=False,
+        allow_incomplete=True,
+    )
+    tampered = replace(
+        failed_generate,
+        request_sha256=_sha("tampered-failed-generate-request"),
+    )
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=(tampered,),
+            rubric_attempt_request_anchors=attempt_anchors,
+            rubric_call_receipts=(),
+            rubric_call_trust_anchors=(),
+            expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                anchors[0].collector_stimulus
+            ),
+            expected_tracking_packet_sha256=None,
+            rubric_backend_extension=extension,
+            binding=None,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=True,
         )
 
 
@@ -565,6 +1896,7 @@ def test_live_rubric_trust_anchors_reject_rehashed_receipt_graphs(
         tmp_path
     )
     collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
+    tracking_packet_root = _anchored_tracking_packet_sha256(anchors)
     expect_history_policy = proof_path == "success"
     allow_incomplete = proof_path == "generic_fallback"
     if expect_history_policy:
@@ -592,9 +1924,11 @@ def test_live_rubric_trust_anchors_reject_rehashed_receipt_graphs(
         logical_call_id=binding.logical_call_id,
         actor_request_sha256=binding.actor_request_sha256,
         attempts=attempts,
+        rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
         rubric_call_receipts=receipts,
         rubric_call_trust_anchors=anchors,
         expected_collector_stimulus_sha256=collector_stimulus_sha256,
+        expected_tracking_packet_sha256=_anchored_tracking_packet_sha256(anchors),
         rubric_backend_extension=extension,
         binding=selected_binding,
         actor_call_index=1,
@@ -622,9 +1956,11 @@ def test_live_rubric_trust_anchors_reject_rehashed_receipt_graphs(
             logical_call_id=binding.logical_call_id,
             actor_request_sha256=binding.actor_request_sha256,
             attempts=attempts,
+            rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
             rubric_call_receipts=receipts,
             rubric_call_trust_anchors=anchors,
             expected_collector_stimulus_sha256=collector_stimulus_sha256,
+            expected_tracking_packet_sha256=tracking_packet_root,
             rubric_backend_extension=extension,
             binding=selected_binding,
             actor_call_index=1,
@@ -654,9 +1990,11 @@ def test_live_rubric_fixed_prompt_rejects_rehashed_extension_graph(tmp_path: Pat
             logical_call_id=binding.logical_call_id,
             actor_request_sha256=binding.actor_request_sha256,
             attempts=attempts,
+            rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
             rubric_call_receipts=receipts,
             rubric_call_trust_anchors=anchors,
             expected_collector_stimulus_sha256=collector_stimulus_sha256,
+            expected_tracking_packet_sha256=_anchored_tracking_packet_sha256(anchors),
             rubric_backend_extension=extension,
             binding=binding,
             actor_call_index=1,
@@ -702,9 +2040,11 @@ def test_live_rubric_collector_root_rejects_rehashed_self_consistent_context(
             logical_call_id=binding.logical_call_id,
             actor_request_sha256=binding.actor_request_sha256,
             attempts=attempts,
+            rubric_attempt_request_anchors=_attempt_request_anchors(attempts, alternate_anchors),
             rubric_call_receipts=receipts,
             rubric_call_trust_anchors=alternate_anchors,
             expected_collector_stimulus_sha256=collector_stimulus_sha256,
+            expected_tracking_packet_sha256=_anchored_tracking_packet_sha256(anchors),
             rubric_backend_extension=extension,
             binding=binding,
             actor_call_index=1,
@@ -731,6 +2071,7 @@ def test_live_rubric_cross_binding_rejects_nonprefix_sequences(
         tmp_path
     )
     collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
+    tracking_packet_root = _anchored_tracking_packet_sha256(anchors)
     history_attempt = replace(
         attempts[-1],
         attempt_id="r24-cross-binding-history-attempt",
@@ -778,9 +2119,11 @@ def test_live_rubric_cross_binding_rejects_nonprefix_sequences(
             logical_call_id=binding.logical_call_id,
             actor_request_sha256=binding.actor_request_sha256,
             attempts=selected_attempts,
+            rubric_attempt_request_anchors=_attempt_request_anchors(selected_attempts, anchors),
             rubric_call_receipts=receipts,
             rubric_call_trust_anchors=anchors,
             expected_collector_stimulus_sha256=collector_stimulus_sha256,
+            expected_tracking_packet_sha256=tracking_packet_root,
             rubric_backend_extension=extension,
             binding=selected_binding,
             actor_call_index=1,
@@ -1222,6 +2565,17 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
             logical_call_id=runtime.context.logical_call_id,
         )
         operations = (LiveRubricOperationV1.GENERATE, LiveRubricOperationV1.TRACK)
+        (
+            rubric_backend_extension,
+            provider_inputs,
+            provider_requests,
+        ) = _live_rubric_request_material(
+            stimulus=rubric_only.r23_snapshot,
+            current_image=current_image,
+            logical_call_id=runtime.context.logical_call_id,
+            packet=sessions.trackers[0].packets[0],
+            descriptor_id="r24-no-history-rubric-extension",
+        )
         envelopes = tuple(
             ResponsesEnvelopeV1(
                 response_id=f"no-history-rubric-response-{index}",
@@ -1253,7 +2607,7 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 attempt_id=f"no-history-rubric-{index}",
                 role=LiveAttemptRoleV1.RUBRIC,
                 authority_sha256=_sha(f"rubric-authority-{index}"),
-                request_sha256=_sha(f"rubric-request-{index}"),
+                request_sha256=provider_request.request_sha256,
                 execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
                 status=LiveAttemptStatusV1.COMPLETED,
                 dispatch_count=1,
@@ -1276,27 +2630,11 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 failure_code=None,
                 **common,
             )
-            for index, envelope in enumerate(envelopes, start=1)
+            for index, (envelope, provider_request) in enumerate(
+                zip(envelopes, provider_requests, strict=True), start=1
+            )
         )
         attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
-        rubric_backend_extension = R24RubricBackendExtensionDescriptorV1(
-            descriptor_id="r24-no-history-rubric-extension",
-            descriptor_version="v1",
-            execution_scope=LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE,
-            transport_kind=LiveRubricTransportKindV1.OPENAI_RESPONSES,
-            transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
-            r23_compatibility_descriptor_sha256=_sha("r23-compatibility"),
-            provider_config_sha256=_sha("rubric-provider-config"),
-            prompt_sha256=live_rubric_prompt_bundle_sha256(),
-            rubric_schema_sha256=_sha("rubric-schema"),
-            tracking_packet_schema_sha256=_sha("tracking-packet-schema"),
-            tracker_schema_sha256=_sha("tracker-schema"),
-            generate_output_schema_sha256=_sha("rubric-generate-schema"),
-            track_output_schema_sha256=_sha("rubric-track-schema"),
-            configured_model=LIVE_RUBRIC_MODEL,
-            external_network_attempted=True,
-            model_call_attempted=True,
-        )
         rubric_call_receipts = tuple(
             LiveRubricCallReceiptV1(
                 receipt_id=f"r24-rubric-call-{index}",
@@ -1351,7 +2689,7 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
             )
         )
         rubric_call_trust_anchors = tuple(
-            LiveRubricCallTrustAnchorV1(
+            rubric_live_module._build_live_rubric_call_trust_anchor(
                 operation=operation,
                 task_run_id=runtime.task.task_run_id,
                 logical_call_id=runtime.context.logical_call_id,
@@ -1359,9 +2697,20 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 current_image=(
                     None if operation is LiveRubricOperationV1.GENERATE else current_image
                 ),
+                provider_input=provider_input,
+                provider_request=provider_request,
                 response_envelope=envelope,
             )
-            for operation, envelope in zip(operations, envelopes, strict=True)
+            for operation, envelope, provider_input, provider_request in zip(
+                operations,
+                envelopes,
+                provider_inputs,
+                provider_requests,
+                strict=True,
+            )
+        )
+        rubric_attempt_request_anchors = _attempt_request_anchors(
+            attempts, rubric_call_trust_anchors
         )
         rubric_call_hashes = tuple(
             live_rubric_call_receipt_sha256(item) for item in rubric_call_receipts
@@ -1449,6 +2798,15 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
             "rubric_call_trust_anchors_for_call",
             lambda _self, logical_call_id: (
                 rubric_call_trust_anchors
+                if logical_call_id == runtime.context.logical_call_id
+                else pytest.fail("unexpected logical call")
+            ),
+        )
+        monkeypatch.setattr(
+            OwnerAuthorizedLivePerCallPolicyV1,
+            "rubric_attempt_request_anchors_for_call",
+            lambda _self, logical_call_id: (
+                rubric_attempt_request_anchors
                 if logical_call_id == runtime.context.logical_call_id
                 else pytest.fail("unexpected logical call")
             ),
@@ -1592,6 +2950,22 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
         LIVE_RUBRIC_MODEL,
         LIVE_RUBRIC_MODEL,
     ]
+    request_proofs = cast(list[JsonValue], stage["r2_4_rubric_request_proofs"])
+    assert len(request_proofs) == 2
+    attempt_projections = cast(list[dict[str, JsonValue]], stage["live_attempt_receipts"])
+    for index, (request_proof, attempt_projection) in enumerate(
+        zip(request_proofs, attempt_projections, strict=True), start=1
+    ):
+        validate_live_rubric_request_proof_projection_v1(
+            request_proof,
+            attempt_receipt=attempt_projection,
+            expected_attempt_order=index,
+        )
+    assert cast(dict[str, JsonValue], request_proofs[0])["tracking_packet_sha256"] is None
+    assert (
+        cast(dict[str, JsonValue], request_proofs[1])["tracking_packet_sha256"]
+        == coordinated.tracking_packet_sha256
+    )
     assert stage["r2_4_rubric_backend_extension"]["configured_model"] == LIVE_RUBRIC_MODEL
 
 

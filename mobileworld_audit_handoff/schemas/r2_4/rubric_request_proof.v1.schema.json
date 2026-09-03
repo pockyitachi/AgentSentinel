@@ -1,0 +1,609 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/rubric_request_proof.v1.schema.json",
+  "title": "R2.4 Owner-Only Live Rubric Request Proof v1",
+  "description": "Restricted durable preimage proof for one admitted owner-authorized live rubric attempt. This artifact binds the ordered terminal attempt receipt to the exact task, Collector stimulus, current image when tracking, provider input, and sealed OpenAI Responses request; it must never enter ordinary logs or the public hash-only receipt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operation",
+    "task_run_id",
+    "logical_call_id",
+    "attempt_id",
+    "attempt_order",
+    "attempt_role",
+    "attempt_status",
+    "attempt_dispatch_count",
+    "attempt_receipt_sha256",
+    "backend_extension_descriptor_sha256",
+    "r23_compatibility_descriptor_sha256",
+    "collector_stimulus",
+    "collector_stimulus_sha256",
+    "tracking_packet_sha256",
+    "current_image",
+    "provider_input",
+    "provider_input_sha256",
+    "provider_request",
+    "provider_request_sha256",
+    "provider_request_byte_count"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.runtime.sentinel-r2.4-live-rubric-request-proof/v1"
+    },
+    "operation": {"enum": ["GENERATE", "TRACK"]},
+    "task_run_id": {"$ref": "#/$defs/runtimeId"},
+    "logical_call_id": {"$ref": "#/$defs/runtimeId"},
+    "attempt_id": {"$ref": "#/$defs/runtimeId"},
+    "attempt_order": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2
+    },
+    "attempt_role": {"const": "RUBRIC"},
+    "attempt_status": {
+      "enum": [
+        "COMPLETED",
+        "CANCELLED_PRE_DISPATCH",
+        "CANCELLED_POST_DISPATCH",
+        "TERMINATION_UNCONFIRMED",
+        "FAILED"
+      ]
+    },
+    "attempt_dispatch_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "attempt_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "backend_extension_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+    "r23_compatibility_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+    "collector_stimulus": {"$ref": "#/$defs/collectorStimulus"},
+    "collector_stimulus_sha256": {"$ref": "#/$defs/sha256"},
+    "tracking_packet_sha256": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/sha256"}
+      ]
+    },
+    "current_image": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/currentImage"}
+      ]
+    },
+    "provider_input": {
+      "oneOf": [
+        {"$ref": "#/$defs/generateProviderInput"},
+        {"$ref": "#/$defs/trackProviderInput"}
+      ]
+    },
+    "provider_input_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_request": {"$ref": "#/$defs/providerRequest"},
+    "provider_request_sha256": {"$ref": "#/$defs/sha256"},
+    "provider_request_byte_count": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 8388608
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"operation": {"const": "GENERATE"}},
+        "required": ["operation"]
+      },
+      "then": {
+        "properties": {
+          "current_image": {"type": "null"},
+          "tracking_packet_sha256": {"type": "null"},
+          "provider_input": {"$ref": "#/$defs/generateProviderInput"},
+          "provider_request": {
+            "allOf": [
+              {"$ref": "#/$defs/providerRequest"},
+              {
+                "properties": {
+                  "instructions": {"const": "You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. Preserve instruction-bound requirement text byte-for-byte and provide exact Unicode character and UTF-8 byte offsets. Include every hard requirement, constraint, and terminal requirement; model legitimate alternatives explicitly and include exactly one OTHER_UNKNOWN path. Do not infer factual truth, inspect history, recommend actions, emit coordinates/tools, or add requirements. Return only JSON matching the supplied schema."},
+                  "input": {"$ref": "#/$defs/generateInputMessages"},
+                  "text": {"$ref": "#/$defs/generateTextConfiguration"}
+                }
+              }
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "current_image": {"$ref": "#/$defs/currentImage"},
+          "tracking_packet_sha256": {"$ref": "#/$defs/sha256"},
+          "provider_input": {"$ref": "#/$defs/trackProviderInput"},
+          "provider_request": {
+            "allOf": [
+              {"$ref": "#/$defs/providerRequest"},
+              {
+                "properties": {
+                  "instructions": {"const": "You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Cite exact evidence IDs and payload hashes. On ambiguity, conflict, or insufficiency use unknown; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."},
+                  "input": {"$ref": "#/$defs/trackInputMessages"},
+                  "text": {"$ref": "#/$defs/trackTextConfiguration"}
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "attempt_status": {
+            "enum": ["COMPLETED", "CANCELLED_POST_DISPATCH"]
+          }
+        },
+        "required": ["attempt_status"]
+      },
+      "then": {
+        "properties": {"attempt_dispatch_count": {"const": 1}}
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "attempt_status": {"const": "CANCELLED_PRE_DISPATCH"}
+        },
+        "required": ["attempt_status"]
+      },
+      "then": {
+        "properties": {"attempt_dispatch_count": {"const": 0}}
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runtimeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "collectorStimulus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "task_run_id",
+        "step_id",
+        "cutoff",
+        "task",
+        "current_observation",
+        "evidence_index"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "mobileworld.runtime.sentinel-r2.4-rubric-stimulus/v1"
+        },
+        "task_run_id": {"$ref": "#/$defs/runtimeId"},
+        "step_id": {"$ref": "#/$defs/runtimeId"},
+        "cutoff": {
+          "$ref": "https://agentsentinel.local/schemas/r2_3/tracking_packet.v1.schema.json#/$defs/cutoff"
+        },
+        "task": {
+          "$ref": "https://agentsentinel.local/schemas/r2_3/tracking_packet.v1.schema.json#/$defs/task"
+        },
+        "current_observation": {
+          "$ref": "https://agentsentinel.local/schemas/r2_3/tracking_packet.v1.schema.json#/$defs/currentObservation"
+        },
+        "evidence_index": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "items": {
+            "$ref": "https://agentsentinel.local/schemas/r2_3/tracking_packet.v1.schema.json#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "backendDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backend_id",
+        "backend_version",
+        "prompt_sha256",
+        "rubric_schema_sha256",
+        "tracking_packet_schema_sha256",
+        "tracker_schema_sha256",
+        "config_sha256",
+        "backend_kind",
+        "transport_authority",
+        "external_network_attempted",
+        "model_call_attempted",
+        "local_gpu_used"
+      ],
+      "properties": {
+        "backend_id": {"$ref": "#/$defs/runtimeId"},
+        "backend_version": {"$ref": "#/$defs/runtimeId"},
+        "prompt_sha256": {"$ref": "#/$defs/sha256"},
+        "rubric_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "tracking_packet_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "tracker_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "config_sha256": {"$ref": "#/$defs/sha256"},
+        "backend_kind": {"const": "INJECTED_FAKE"},
+        "transport_authority": {"const": "CPU_OFFLINE_FAKE"},
+        "external_network_attempted": {"const": false},
+        "model_call_attempted": {"const": false},
+        "local_gpu_used": {"const": false}
+      }
+    },
+    "generateProviderInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backend_extension_descriptor_sha256",
+        "r23_compatibility_descriptor_sha256",
+        "request",
+        "schema_version"
+      ],
+      "properties": {
+        "backend_extension_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+        "r23_compatibility_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["request_id", "task_run_id", "task", "backend"],
+          "properties": {
+            "request_id": {"$ref": "#/$defs/runtimeId"},
+            "task_run_id": {"$ref": "#/$defs/runtimeId"},
+            "task": {
+              "$ref": "https://agentsentinel.local/schemas/r2_3/tracking_packet.v1.schema.json#/$defs/task"
+            },
+            "backend": {"$ref": "#/$defs/backendDescriptor"}
+          }
+        },
+        "schema_version": {
+          "const": "mobileworld.runtime.sentinel-r2.4-live-rubric-generate-input/v1"
+        }
+      }
+    },
+    "trackProviderInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backend_extension_descriptor_sha256",
+        "r23_compatibility_descriptor_sha256",
+        "current_image_binding_sha256",
+        "packet",
+        "schema_version"
+      ],
+      "properties": {
+        "backend_extension_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+        "r23_compatibility_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+        "current_image_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "packet": {
+          "$ref": "https://agentsentinel.local/schemas/r2_3/tracking_packet.v1.schema.json"
+        },
+        "schema_version": {
+          "const": "mobileworld.runtime.sentinel-r2.4-live-rubric-track-input/v1"
+        }
+      }
+    },
+    "currentImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_run_id",
+        "logical_call_id",
+        "source_event_id",
+        "source_event_seq",
+        "evidence_id",
+        "content_sha256",
+        "media_type",
+        "width",
+        "height",
+        "data_url",
+        "stimulus_sha256",
+        "binding_sha256"
+      ],
+      "properties": {
+        "task_run_id": {"$ref": "#/$defs/runtimeId"},
+        "logical_call_id": {"$ref": "#/$defs/runtimeId"},
+        "source_event_id": {"$ref": "#/$defs/runtimeId"},
+        "source_event_seq": {"type": "integer", "minimum": 1},
+        "evidence_id": {"$ref": "#/$defs/runtimeId"},
+        "content_sha256": {"$ref": "#/$defs/sha256"},
+        "media_type": {"enum": ["image/png", "image/jpeg", "image/webp"]},
+        "width": {"type": "integer", "minimum": 1, "maximum": 32768},
+        "height": {"type": "integer", "minimum": 1, "maximum": 32768},
+        "data_url": {
+          "type": "string",
+          "minLength": 25,
+          "maxLength": 60000000,
+          "pattern": "^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/]*={0,2}$"
+        },
+        "stimulus_sha256": {"$ref": "#/$defs/sha256"},
+        "binding_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "inputText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": {
+        "type": {"const": "input_text"},
+        "text": {"type": "string", "minLength": 2, "maxLength": 8388608}
+      }
+    },
+    "inputImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "image_url", "detail"],
+      "properties": {
+        "type": {"const": "input_image"},
+        "image_url": {
+          "type": "string",
+          "minLength": 25,
+          "maxLength": 60000000,
+          "pattern": "^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/]*={0,2}$"
+        },
+        "detail": {"const": "high"}
+      }
+    },
+    "generateInputMessages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "content"],
+          "properties": {
+            "role": {"const": "user"},
+            "content": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "prefixItems": [{"$ref": "#/$defs/inputText"}],
+              "items": false
+            }
+          }
+        }
+      ],
+      "items": false
+    },
+    "trackInputMessages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "content"],
+          "properties": {
+            "role": {"const": "user"},
+            "content": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "prefixItems": [
+                {"$ref": "#/$defs/inputText"},
+                {"$ref": "#/$defs/inputImage"}
+              ],
+              "items": false
+            }
+          }
+        }
+      ],
+      "items": false
+    },
+    "generateTextConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "verbosity"],
+      "properties": {
+        "format": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "name", "strict", "schema"],
+          "properties": {
+            "type": {"const": "json_schema"},
+            "name": {"const": "r24_live_rubric_generate_v1"},
+            "strict": {"const": true},
+            "schema": {
+              "const": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://agentsentinel.local/schemas/r2_4/rubric_generate_output.v1.schema.json",
+                "title": "R2.4 Live Rubric Generate Output v1",
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["instruction_spans", "milestones", "gates", "common_root", "paths"],
+                "properties": {
+                  "instruction_spans": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/instructionSpan"}},
+                  "milestones": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/milestone"}},
+                  "gates": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/gate"}},
+                  "common_root": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/graphRef"}]},
+                  "paths": {"type": "array", "minItems": 2, "maxItems": 128, "items": {"$ref": "#/$defs/path"}}
+                },
+                "$defs": {
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "semanticId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+                  "instructionSpan": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["span_id", "role", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "exact_text", "span_sha256"],
+                    "properties": {
+                      "span_id": {"$ref": "#/$defs/semanticId"},
+                      "role": {"enum": ["HARD_REQUIREMENT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
+                      "char_start": {"type": "integer", "minimum": 0},
+                      "char_end": {"type": "integer", "minimum": 1},
+                      "utf8_byte_start": {"type": "integer", "minimum": 0},
+                      "utf8_byte_end": {"type": "integer", "minimum": 1},
+                      "exact_text": {"type": "string", "minLength": 1, "maxLength": 32768},
+                      "span_sha256": {"$ref": "#/$defs/sha256"}
+                    }
+                  },
+                  "milestone": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["milestone_id", "kind", "predicate_kind", "state_description", "description_sha256", "instruction_span_id"],
+                    "properties": {
+                      "milestone_id": {"$ref": "#/$defs/semanticId"},
+                      "kind": {"enum": ["HARD_REQUIREMENT", "DERIVED_CHECKPOINT", "OPTIONAL_CHECKPOINT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
+                      "predicate_kind": {"enum": ["INSTRUCTION_REQUIREMENT", "GUI_STATE", "COMPLETED_TRANSITION", "USER_VISIBLE_RESULT", "DERIVED_STATE", "UNKNOWN"]},
+                      "state_description": {"type": "string", "minLength": 1, "maxLength": 2048},
+                      "description_sha256": {"$ref": "#/$defs/sha256"},
+                      "instruction_span_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/semanticId"}]}
+                    }
+                  },
+                  "graphRef": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["ref_kind", "ref_id"],
+                    "properties": {
+                      "ref_kind": {"enum": ["MILESTONE", "GATE"]},
+                      "ref_id": {"$ref": "#/$defs/semanticId"}
+                    }
+                  },
+                  "gate": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["gate_id", "operator", "children"],
+                    "properties": {
+                      "gate_id": {"$ref": "#/$defs/semanticId"},
+                      "operator": {"enum": ["AND", "OR"]},
+                      "children": {"type": "array", "minItems": 2, "maxItems": 128, "items": {"$ref": "#/$defs/graphRef"}}
+                    }
+                  },
+                  "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["path_id", "kind", "root"],
+                    "properties": {
+                      "path_id": {"$ref": "#/$defs/semanticId"},
+                      "kind": {"enum": ["LEGAL_ALTERNATIVE", "OTHER_UNKNOWN"]},
+                      "root": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/graphRef"}]}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "verbosity": {"const": "low"}
+      }
+    },
+    "trackTextConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "verbosity"],
+      "properties": {
+        "format": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "name", "strict", "schema"],
+          "properties": {
+            "type": {"const": "json_schema"},
+            "name": {"const": "r24_live_rubric_track_v1"},
+            "strict": {"const": true},
+            "schema": {
+              "const": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://agentsentinel.local/schemas/r2_4/rubric_track_output.v1.schema.json",
+                "title": "R2.4 Live Rubric Track Output v1",
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["proposal_status", "milestone_states"],
+                "properties": {
+                  "proposal_status": {"enum": ["COMPLETE", "ABSTAIN"]},
+                  "milestone_states": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/milestoneState"}}
+                },
+                "$defs": {
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "semanticId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+                  "evidenceRef": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["evidence_id", "payload_sha256", "relation"],
+                    "properties": {
+                      "evidence_id": {"$ref": "#/$defs/semanticId"},
+                      "payload_sha256": {"$ref": "#/$defs/sha256"},
+                      "relation": {"enum": ["SUPPORTS_STATE", "REFUTES_STATE", "OBSERVES_PROGRESS"]}
+                    }
+                  },
+                  "milestoneState": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["milestone_id", "state", "evidence_refs", "reason_code"],
+                    "properties": {
+                      "milestone_id": {"$ref": "#/$defs/semanticId"},
+                      "state": {"enum": ["pending", "in_progress", "satisfied", "violated", "unknown"]},
+                      "evidence_refs": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/evidenceRef"}},
+                      "reason_code": {"enum": ["NOT_STARTED", "CURRENT_GUI_SUPPORT", "COMPLETED_TRANSITION_SUPPORT", "CURRENT_GUI_REFUTATION", "COMPLETED_TRANSITION_REFUTATION", "PROGRESS_OBSERVED", "PRESERVE_PRIOR_STATE", "AMBIGUOUS_GUI", "INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"]}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "verbosity": {"const": "low"}
+      }
+    },
+    "providerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "instructions",
+        "input",
+        "reasoning",
+        "text",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "store",
+        "stream",
+        "truncation",
+        "max_output_tokens"
+      ],
+      "properties": {
+        "model": {"const": "gpt-5.6-sol"},
+        "instructions": {
+          "enum": [
+            "You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. Preserve instruction-bound requirement text byte-for-byte and provide exact Unicode character and UTF-8 byte offsets. Include every hard requirement, constraint, and terminal requirement; model legitimate alternatives explicitly and include exactly one OTHER_UNKNOWN path. Do not infer factual truth, inspect history, recommend actions, emit coordinates/tools, or add requirements. Return only JSON matching the supplied schema.",
+            "You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Cite exact evidence IDs and payload hashes. On ambiguity, conflict, or insufficiency use unknown; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."
+          ]
+        },
+        "input": {
+          "oneOf": [
+            {"$ref": "#/$defs/generateInputMessages"},
+            {"$ref": "#/$defs/trackInputMessages"}
+          ]
+        },
+        "reasoning": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["effort"],
+          "properties": {"effort": {"const": "low"}}
+        },
+        "text": {
+          "oneOf": [
+            {"$ref": "#/$defs/generateTextConfiguration"},
+            {"$ref": "#/$defs/trackTextConfiguration"}
+          ]
+        },
+        "tools": {"type": "array", "maxItems": 0},
+        "tool_choice": {"const": "none"},
+        "parallel_tool_calls": {"const": false},
+        "store": {"const": false},
+        "stream": {"const": false},
+        "truncation": {"const": "disabled"},
+        "max_output_tokens": {"const": 8192}
+      }
+    }
+  }
+}

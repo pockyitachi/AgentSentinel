@@ -18,7 +18,12 @@ from PIL import Image
 
 from mobile_world.core import server
 from mobile_world.runtime import controller as controller_module
-from mobile_world.runtime.client import TASK_INITIALIZATION_TIMEOUT_SECONDS, AndroidEnvClient
+from mobile_world.runtime.client import (
+    TASK_INITIALIZATION_TIMEOUT_SECONDS,
+    AndroidEnvClient,
+    CleanupTaskTeardownResultV1,
+    CleanupTaskTeardownStatusV1,
+)
 from mobile_world.runtime.controller import (
     SNAPSHOT_STABILITY_SECONDS,
     SNAPSHOT_STABILITY_TIMEOUT_SECONDS,
@@ -1136,3 +1141,46 @@ def test_android_teardown_marks_dispatch_only_at_session_boundary() -> None:
 
     assert result.status == "success"
     assert events == ["dispatch-started", "session-post"]
+
+
+def test_android_cleanup_teardown_after_init_timeout_is_typed_no_io() -> None:
+    urls: list[str] = []
+    dispatch_events: list[str] = []
+
+    class _Session:
+        closed = False
+
+        def post(self, url: str, **_: object) -> object:
+            urls.append(url.removeprefix("http://fixture.invalid"))
+            if url.endswith("/init"):
+                raise TimeoutError("fixture init timeout")
+            raise AssertionError("cleanup must not issue HTTP after unconfirmed init")
+
+        def close(self) -> None:
+            self.closed = True
+
+    session = _Session()
+    client = object.__new__(AndroidEnvClient)
+    client._initialized = False
+    client._request_deadline_monotonic_ns = None
+    client._session = cast(Any, session)
+    client.base_url = "http://fixture.invalid"
+    client.device = "emulator-fixture"
+    client._current_task_type = None
+
+    with pytest.raises(TimeoutError, match="fixture init timeout"):
+        client.reset(False)
+
+    result = client.tear_down_task_if_initialized(
+        "FixtureTask",
+        dispatch_started=lambda: dispatch_events.append("dispatch-started"),
+    )
+    client.close()
+
+    assert type(result) is CleanupTaskTeardownResultV1
+    assert result.status is CleanupTaskTeardownStatusV1.NOT_INITIALIZED_NO_IO
+    assert result.request_dispatched is False
+    assert client._initialized is False
+    assert urls == ["/init"]
+    assert dispatch_events == []
+    assert session.closed is True

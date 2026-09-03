@@ -4,8 +4,10 @@ This module is deliberately separate from :mod:`audit_detail`.  The latter is
 an accepted CPU/fake evidence contract and must not be widened to attest live
 provider or MobileWorld execution.  Its owner-only detail retains trusted raw,
 History-IR, policy/rubric, render/diff, validator and parsed-action projections.
-Actual SDK request/response bytes are referenced through their existing
-Collector event/blob locators, so provider content is not duplicated here.
+Actor SDK request and provider-response bytes are referenced through their
+existing Collector event/blob locators.  Each rubric attempt additionally
+retains its exact canonical request preimage here because that response-
+independent proof is required to audit failed or cancelled dispatches.
 Credentials, environment variables, parser input, and provider reasoning are
 never copied into the hash-only terminal section.
 
@@ -23,7 +25,7 @@ import os
 import re
 import secrets
 import stat
-from dataclasses import InitVar, dataclass
+from dataclasses import InitVar, dataclass, fields
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
@@ -108,13 +110,17 @@ from mobile_world.runtime.sentinel.r2_4.renderer import (
     vertical_text_diff_projection,
 )
 from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+    LiveRubricAttemptRequestAnchorV1,
     LiveRubricCallReceiptV1,
     LiveRubricCallTrustAnchorV1,
+    LiveRubricError,
     LiveRubricExecutionScopeV1,
     R24RubricBackendExtensionDescriptorV1,
+    live_rubric_attempt_request_proof_projection,
     live_rubric_call_receipt_projection,
     live_rubric_call_receipt_sha256,
     r24_rubric_backend_extension_descriptor_projection,
+    snapshot_live_rubric_attempt_request_anchor,
     snapshot_live_rubric_call_receipt,
     snapshot_r24_rubric_backend_extension_descriptor,
 )
@@ -138,6 +144,13 @@ PRODUCTION_RUNTIME_AUDIT_FAILURE_SCHEMA_VERSION = (
 )
 PRODUCTION_RUNTIME_AUDIT_FAILURE_RECEIPT_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-production-audit-failure-receipt/v1"
+)
+_BEGIN_FAILURE_CODES_WITHOUT_REQUEST_ANCHOR = frozenset(
+    {
+        "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
+        "PROVIDER_CHILD_START_FAILED",
+        "PROVIDER_CHILD_READY_FAILED",
+    }
 )
 PRODUCTION_RUNTIME_AUDIT_COMMIT_FAILURE_RECEIPT_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-production-audit-commit-failure-receipt/v1"
@@ -324,6 +337,92 @@ def _rubric_result_detail_projection(value: RubricSessionResultV1) -> dict[str, 
             None if value.relevance is None else path_relevance_output_projection(value.relevance)
         ),
     }
+
+
+def _rubric_request_proof_detail_projection(
+    anchors: tuple[LiveRubricAttemptRequestAnchorV1, ...],
+    attempts: tuple[LiveAttemptReceiptV1, ...],
+    extension: R24RubricBackendExtensionDescriptorV1 | None,
+    expected_tracking_packet_sha256: str | None,
+) -> list[JsonValue]:
+    """Persist independently verifiable request preimages only in restricted detail."""
+
+    trusted_attempts = tuple(snapshot_live_attempt_receipt(value) for value in attempts)
+    rubric_attempts = tuple(
+        value for value in trusted_attempts if value.role is LiveAttemptRoleV1.RUBRIC
+    )
+    if not anchors:
+        if any(_rubric_attempt_requires_request_anchor(value) for value in rubric_attempts):
+            raise ProductionRuntimeAuditError(
+                "RUBRIC_CROSS_BINDING_MISMATCH",
+                "begin-success rubric attempt has no durable request proof",
+            )
+        return []
+    if extension is None:
+        raise ProductionRuntimeAuditError(
+            "RUBRIC_CROSS_BINDING_MISMATCH",
+            "rubric request proofs have no backend extension",
+        )
+    try:
+        trusted_anchors = tuple(
+            snapshot_live_rubric_attempt_request_anchor(value) for value in anchors
+        )
+        if (
+            len(trusted_anchors) > len(rubric_attempts)
+            or tuple(value.attempt_order for value in trusted_anchors)
+            != tuple(range(1, len(trusted_anchors) + 1))
+            or any(
+                _rubric_attempt_requires_request_anchor(attempt)
+                for attempt in rubric_attempts[len(trusted_anchors) :]
+            )
+        ):
+            raise ProductionRuntimeAuditError(
+                "RUBRIC_CROSS_BINDING_MISMATCH",
+                "durable rubric request-proof census differs from attempts",
+            )
+        proofs = [
+            cast(
+                JsonValue,
+                live_rubric_attempt_request_proof_projection(
+                    anchor,
+                    attempt_receipt=attempt,
+                    backend_extension=extension,
+                ),
+            )
+            for anchor, attempt in zip(
+                trusted_anchors,
+                rubric_attempts[: len(trusted_anchors)],
+                strict=True,
+            )
+        ]
+        tracking_roots = tuple(
+            cast(dict[str, JsonValue], proof)["tracking_packet_sha256"]
+            for proof in proofs
+            if cast(dict[str, JsonValue], proof)["operation"] == "TRACK"
+        )
+        if len(tracking_roots) > 1 or any(
+            root != expected_tracking_packet_sha256 for root in tracking_roots
+        ):
+            raise ProductionRuntimeAuditError(
+                "RUBRIC_CROSS_BINDING_MISMATCH",
+                "durable rubric proof differs from the coordinated tracking packet",
+            )
+        return proofs
+    except LiveRubricError as exc:
+        raise ProductionRuntimeAuditError(
+            "RUBRIC_CROSS_BINDING_MISMATCH",
+            "rubric request proof cannot be projected",
+        ) from exc
+
+
+def _rubric_attempt_requires_request_anchor(value: LiveAttemptReceiptV1) -> bool:
+    """Distinguish a returned callable from failures inside ``runner.begin``."""
+
+    if value.dispatch_count != 0:
+        return True
+    if value.status is LiveAttemptStatusV1.FAILED:
+        return value.failure_code not in _BEGIN_FAILURE_CODES_WITHOUT_REQUEST_ANCHOR
+    return True
 
 
 def _collector_artifact_locator_projection(
@@ -779,6 +878,19 @@ def production_runtime_audit_pre_provider_sha256(
 ) -> str:
     return canonical_sha256(
         cast(JsonValue, production_runtime_audit_pre_provider_projection(value))
+    )
+
+
+def _snapshot_production_runtime_audit_pre_provider(
+    value: ProductionRuntimeAuditPreProviderV1,
+) -> ProductionRuntimeAuditPreProviderV1:
+    """Rebuild one sealed pre-provider value and detach its restricted detail."""
+
+    if type(value) is not ProductionRuntimeAuditPreProviderV1:
+        raise ProductionRuntimeAuditError("UNTRUSTED_TYPE", "pre-provider type differs")
+    return ProductionRuntimeAuditPreProviderV1(
+        **{item.name: getattr(value, item.name) for item in fields(value)},
+        _seal=_PRE_PROVIDER_SEAL,
     )
 
 
@@ -1369,7 +1481,9 @@ class ProductionRuntimeAuditCommitFailureReceiptV1:
     failed receipt maps.  Its compact preimage retains the actor-attempt
     locators, exact action, live-call census, and terminal hashes so the outer
     stage failure journal can durably publish what happened without claiming
-    that the production-audit sink committed it.
+    that the production-audit sink committed it.  The sealed pre-provider
+    projection is retained too, so request proofs survive an unknown terminal
+    commit outcome after the external sink removes its temporary admission.
     """
 
     logical_call_id: str
@@ -1381,6 +1495,7 @@ class ProductionRuntimeAuditCommitFailureReceiptV1:
         ProductionRuntimeAuditReceiptV1 | ProductionRuntimeAuditFailureReceiptV1
     )
     attempted_terminal_receipt_sha256: str
+    pre_provider: ProductionRuntimeAuditPreProviderV1
     actor_provider_attempts: tuple[ProductionActorProviderAttemptV1, ...]
     parsed_action: JsonValue | None
     schema_version: str = PRODUCTION_RUNTIME_AUDIT_COMMIT_FAILURE_RECEIPT_SCHEMA_VERSION
@@ -1411,6 +1526,7 @@ class ProductionRuntimeAuditCommitFailureReceiptV1:
             self.attempted_terminal_receipt_sha256,
             "attempted_terminal_receipt_sha256",
         )
+        trusted_pre_provider = _snapshot_production_runtime_audit_pre_provider(self.pre_provider)
         terminal = self.attempted_terminal_receipt
         if self.terminal_kind is ProductionRuntimeAuditTerminalKindV1.ACTION_EXECUTION:
             if type(terminal) is not ProductionRuntimeAuditReceiptV1:
@@ -1442,10 +1558,14 @@ class ProductionRuntimeAuditCommitFailureReceiptV1:
         if (
             terminal.logical_call_id != self.logical_call_id
             or terminal_hash != self.attempted_terminal_receipt_sha256
+            or trusted_pre_provider.logical_call_id != self.logical_call_id
+            or production_runtime_audit_pre_provider_sha256(trusted_pre_provider)
+            != terminal.pre_provider_sha256
         ):
             raise ProductionRuntimeAuditError(
                 "TRACE_BINDING_MISMATCH", "recoverable terminal receipt differs"
             )
+        object.__setattr__(self, "pre_provider", trusted_pre_provider)
         if type(self.actor_provider_attempts) is not tuple or any(
             type(item) is not ProductionActorProviderAttemptV1
             for item in self.actor_provider_attempts
@@ -1512,6 +1632,10 @@ def production_runtime_audit_commit_failure_receipt_projection(
         "logical_call_id": value.logical_call_id,
         "parsed_action": (
             None if value.parsed_action is None else _canonical_snapshot(value.parsed_action)
+        ),
+        "pre_provider": cast(
+            JsonValue,
+            production_runtime_audit_pre_provider_projection(value.pre_provider),
         ),
         "publication_status": value.publication_status.value,
         "recovery_required": True,
@@ -2130,6 +2254,9 @@ class ProductionRuntimeAuditV1:
         attempts = self._policy.attempt_receipts_for_call(logical_call_id)
         rubric_call_receipts = self._policy.rubric_call_receipts_for_call(logical_call_id)
         rubric_call_trust_anchors = self._policy.rubric_call_trust_anchors_for_call(logical_call_id)
+        rubric_attempt_request_anchors = self._policy.rubric_attempt_request_anchors_for_call(
+            logical_call_id
+        )
         rubric_backend_extension = self._policy.rubric_backend_extension_descriptor()
         coordinated = self._policy.coordinated_record_for_call(logical_call_id)
         self._validate_live_bindings(
@@ -2138,6 +2265,7 @@ class ProductionRuntimeAuditV1:
             policy_output=policy_output,
             binding=binding,
             attempts=attempts,
+            rubric_attempt_request_anchors=rubric_attempt_request_anchors,
             rubric_call_receipts=rubric_call_receipts,
             rubric_call_trust_anchors=rubric_call_trust_anchors,
             rubric_backend_extension=rubric_backend_extension,
@@ -2201,6 +2329,12 @@ class ProductionRuntimeAuditV1:
                 cast(JsonValue, live_rubric_call_receipt_projection(item))
                 for item in rubric_call_receipts
             ],
+            "r2_4_rubric_request_proofs": _rubric_request_proof_detail_projection(
+                rubric_attempt_request_anchors,
+                attempts,
+                rubric_backend_extension,
+                coordinated.tracking_packet_sha256,
+            ),
             "r2_4_rubric_backend_extension": (
                 r24_rubric_backend_extension_descriptor_projection(rubric_backend_extension)
             ),
@@ -2540,8 +2674,10 @@ class ProductionRuntimeAuditV1:
         attempts: tuple[LiveAttemptReceiptV1, ...] = ()
         rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...] = ()
         rubric_call_trust_anchors: tuple[LiveRubricCallTrustAnchorV1, ...] = ()
+        rubric_attempt_request_anchors: tuple[LiveRubricAttemptRequestAnchorV1, ...] = ()
         rubric_backend_extension: R24RubricBackendExtensionDescriptorV1 | None = None
         expected_collector_stimulus_sha256: str | None = None
+        expected_tracking_packet_sha256: str | None = None
         actor_call_index: int | None = None
         policy_failure_code: str | None = None
         try:
@@ -2555,6 +2691,11 @@ class ProductionRuntimeAuditV1:
             attempts = ()
         else:
             try:
+                # Trip the one-way latch immediately, but do not call
+                # ``require_clear`` yet.  The TU request proof must first be
+                # cross-validated, admitted, and published in a failure (or
+                # commit-recovery) terminal before this method rejects actor
+                # dispatch below.
                 self._run_fatal_latch.observe_attempts(
                     logical_call_id=logical_call_id,
                     attempts=attempts,
@@ -2569,11 +2710,17 @@ class ProductionRuntimeAuditV1:
                 rubric_call_trust_anchors = self._policy.rubric_call_trust_anchors_for_call(
                     logical_call_id
                 )
+                rubric_attempt_request_anchors = (
+                    self._policy.rubric_attempt_request_anchors_for_call(logical_call_id)
+                )
                 rubric_backend_extension = snapshot_r24_rubric_backend_extension_descriptor(
                     self._policy.rubric_backend_extension_descriptor()
                 )
                 expected_collector_stimulus_sha256 = (
                     self._policy.rubric_collector_stimulus_sha256_for_call(logical_call_id)
+                )
+                expected_tracking_packet_sha256 = (
+                    self._policy.rubric_tracking_packet_sha256_for_call(logical_call_id)
                 )
                 actor_call_index = self._policy.actor_call_index_for_call(logical_call_id)
                 policy_failure_code = self._policy.failure_for_call(logical_call_id)
@@ -2585,8 +2732,10 @@ class ProductionRuntimeAuditV1:
                     ) from exc
                 rubric_call_receipts = ()
                 rubric_call_trust_anchors = ()
+                rubric_attempt_request_anchors = ()
                 rubric_backend_extension = None
                 expected_collector_stimulus_sha256 = None
+                expected_tracking_packet_sha256 = None
                 actor_call_index = None
                 policy_failure_code = None
         live_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
@@ -2601,9 +2750,11 @@ class ProductionRuntimeAuditV1:
                 logical_call_id=logical_call_id,
                 actor_request_sha256=raw_hash,
                 attempts=attempts,
+                rubric_attempt_request_anchors=rubric_attempt_request_anchors,
                 rubric_call_receipts=rubric_call_receipts,
                 rubric_call_trust_anchors=rubric_call_trust_anchors,
                 expected_collector_stimulus_sha256=(expected_collector_stimulus_sha256),
+                expected_tracking_packet_sha256=expected_tracking_packet_sha256,
                 rubric_backend_extension=rubric_backend_extension,
                 binding=binding,
                 actor_call_index=(
@@ -2663,6 +2814,12 @@ class ProductionRuntimeAuditV1:
                 cast(JsonValue, live_rubric_call_receipt_projection(item))
                 for item in rubric_call_receipts
             ],
+            "r2_4_rubric_request_proofs": _rubric_request_proof_detail_projection(
+                rubric_attempt_request_anchors,
+                attempts,
+                rubric_backend_extension,
+                expected_tracking_packet_sha256,
+            ),
             "r2_4_rubric_backend_extension": (
                 None
                 if rubric_backend_extension is None
@@ -2762,6 +2919,21 @@ class ProductionRuntimeAuditV1:
                 )
             replaced.transaction.abort()
         self._admit_pre_provider(pre, sentinel_receipt_sha256=receipt_hash)
+        try:
+            self._observe_and_require_run_not_fatal(
+                logical_call_id,
+                known_attempts=attempts,
+            )
+        except ProductionRuntimeAuditError as exc:
+            # The actor/provider gate stays closed.  First publish the admitted
+            # request preimages as a zero-actor-attempt failed terminal so an
+            # unreaped rubric worker cannot erase its owner-only proof.
+            self.finalize_actor_failure(
+                logical_call_id=logical_call_id,
+                failure_phase="SENTINEL_POLICY",
+                failure_code=exc.code,
+            )
+            raise
 
     def begin_no_history_pre_provider(
         self,
@@ -2849,6 +3021,9 @@ class ProductionRuntimeAuditV1:
             for item in self._policy.rubric_call_receipts_for_call(logical_call_id)
         )
         rubric_call_trust_anchors = self._policy.rubric_call_trust_anchors_for_call(logical_call_id)
+        rubric_attempt_request_anchors = self._policy.rubric_attempt_request_anchors_for_call(
+            logical_call_id
+        )
         rubric_backend_extension = snapshot_r24_rubric_backend_extension_descriptor(
             self._policy.rubric_backend_extension_descriptor()
         )
@@ -2858,9 +3033,11 @@ class ProductionRuntimeAuditV1:
                 logical_call_id=logical_call_id,
                 actor_request_sha256=raw_hash,
                 attempts=attempts,
+                rubric_attempt_request_anchors=rubric_attempt_request_anchors,
                 rubric_call_receipts=rubric_call_receipts,
                 rubric_call_trust_anchors=rubric_call_trust_anchors,
                 expected_collector_stimulus_sha256=(coordinated.history_free_stimulus_sha256),
+                expected_tracking_packet_sha256=coordinated.tracking_packet_sha256,
                 rubric_backend_extension=rubric_backend_extension,
                 binding=binding,
                 actor_call_index=binding.actor_call_index,
@@ -2969,6 +3146,12 @@ class ProductionRuntimeAuditV1:
                 cast(JsonValue, live_rubric_call_receipt_projection(item))
                 for item in rubric_call_receipts
             ],
+            "r2_4_rubric_request_proofs": _rubric_request_proof_detail_projection(
+                rubric_attempt_request_anchors,
+                attempts,
+                rubric_backend_extension,
+                coordinated.tracking_packet_sha256,
+            ),
             "r2_4_rubric_backend_extension": (
                 r24_rubric_backend_extension_descriptor_projection(rubric_backend_extension)
             ),
@@ -3097,6 +3280,7 @@ class ProductionRuntimeAuditV1:
         policy_output: RuntimeVerticalPolicyOutputV1,
         binding: ResolvedLivePolicyCallBindingV1,
         attempts: tuple[LiveAttemptReceiptV1, ...],
+        rubric_attempt_request_anchors: tuple[LiveRubricAttemptRequestAnchorV1, ...],
         rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...],
         rubric_call_trust_anchors: tuple[LiveRubricCallTrustAnchorV1, ...],
         rubric_backend_extension: R24RubricBackendExtensionDescriptorV1,
@@ -3112,9 +3296,11 @@ class ProductionRuntimeAuditV1:
                 logical_call_id=logical_call_id,
                 actor_request_sha256=raw_request_sha256,
                 attempts=attempts,
+                rubric_attempt_request_anchors=rubric_attempt_request_anchors,
                 rubric_call_receipts=rubric_call_receipts,
                 rubric_call_trust_anchors=rubric_call_trust_anchors,
                 expected_collector_stimulus_sha256=(coordinated.history_free_stimulus_sha256),
+                expected_tracking_packet_sha256=coordinated.tracking_packet_sha256,
                 rubric_backend_extension=rubric_backend_extension,
                 binding=binding,
                 actor_call_index=binding.actor_call_index,
@@ -3577,6 +3763,7 @@ class ProductionRuntimeAuditV1:
                 failure_code="AUDIT_TERMINAL_COMMIT_FAILED",
                 attempted_terminal_receipt=receipt,
                 attempted_terminal_receipt_sha256=production_runtime_audit_receipt_sha256(receipt),
+                pre_provider=pending.pre_provider,
                 actor_provider_attempts=attempts,
                 parsed_action=copy_json(action),
                 _seal=_COMMIT_FAILURE_RECEIPT_SEAL,
@@ -3706,6 +3893,7 @@ class ProductionRuntimeAuditV1:
                 attempted_terminal_receipt_sha256=(
                     production_runtime_audit_failure_receipt_sha256(receipt)
                 ),
+                pre_provider=pending.pre_provider,
                 actor_provider_attempts=attempts,
                 parsed_action=None,
                 _seal=_COMMIT_FAILURE_RECEIPT_SEAL,

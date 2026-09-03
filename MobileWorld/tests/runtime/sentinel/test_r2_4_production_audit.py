@@ -15,7 +15,7 @@ from httpx import MockTransport, Request, Response
 from openai import DefaultHttpxClient, OpenAI
 
 from mobile_world.agents.base import BaseAgent
-from mobile_world.offline.causal_replay.contracts import JsonValue
+from mobile_world.offline.causal_replay.contracts import JsonValue, canonical_sha256
 from mobile_world.runtime.audit.context import AuditContext, bind_audit_context
 from mobile_world.runtime.audit.recorder import RunRecorder
 from mobile_world.runtime.audit.runner_capture import RunnerTaskCapture
@@ -336,6 +336,8 @@ def test_terminal_commit_fault_retains_recoverable_actor_action_and_cost_preimag
     )
     projection = production_runtime_audit_commit_failure_receipt_projection(recovery)
     terminal = cast(dict[str, JsonValue], projection["attempted_terminal_receipt"])
+    pre_provider = cast(dict[str, JsonValue], projection["pre_provider"])
+    assert canonical_sha256(cast(JsonValue, pre_provider)) == terminal["pre_provider_sha256"]
     assert terminal["action_executed"] is action_executed
     assert (terminal["executed_action_sha256"] is not None) is action_executed
     assert terminal["provider_attempt_count"] == 1
@@ -386,6 +388,8 @@ def test_failed_actor_terminal_commit_fault_retains_negative_receipt(tmp_path: P
     assert recovery.terminal_kind is ProductionRuntimeAuditTerminalKindV1.ACTOR_FAILURE
     projection = production_runtime_audit_commit_failure_receipt_projection(recovery)
     terminal = cast(dict[str, JsonValue], projection["attempted_terminal_receipt"])
+    pre_provider = cast(dict[str, JsonValue], projection["pre_provider"])
+    assert canonical_sha256(cast(JsonValue, pre_provider)) == terminal["pre_provider_sha256"]
     assert terminal["failure_code"] == "ACTOR_CASE_DEADLINE_ELAPSED"
     assert terminal["provider_attempt_count"] == 0
     assert projection["actor_provider_attempts"] == []
@@ -705,6 +709,10 @@ def test_qwen_and_mai_unsupported_shape_fallback_reaches_actor_provider(
     assert detail.pre_provider.raw_request_sha256 == detail.pre_provider.final_request_sha256
     assert detail.pre_provider.live_openai_calls == 0
     assert detail.pre_provider.live_cost_exact
+    projection = production_runtime_audit_detail_projection(detail)
+    pre_provider = cast(dict[str, JsonValue], projection["pre_provider"])
+    restricted = cast(dict[str, JsonValue], pre_provider["restricted_stage_projection"])
+    assert restricted["r2_4_rubric_request_proofs"] == []
 
 
 def test_production_no_history_untrusted_rubric_record_fails_closed_once(

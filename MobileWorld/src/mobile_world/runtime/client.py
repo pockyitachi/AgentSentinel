@@ -5,6 +5,8 @@ import os
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
+from enum import StrEnum
 from io import BytesIO
 
 import backoff
@@ -34,6 +36,23 @@ DEFAULT_MAX_STEP = 15
 # HTTP budget above that bounded infrastructure path so the client cannot retry
 # while the original request still owns the lifecycle.
 TASK_INITIALIZATION_TIMEOUT_SECONDS = 600
+
+
+class CleanupTaskTeardownStatusV1(StrEnum):
+    """Closed outcomes for cleanup teardown that is forbidden to initialize."""
+
+    SUCCEEDED = "SUCCEEDED"
+    NOT_INITIALIZED_NO_IO = "NOT_INITIALIZED_NO_IO"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class CleanupTaskTeardownResultV1:
+    """Typed result from the cleanup-only, no-initialization teardown path."""
+
+    status: CleanupTaskTeardownStatusV1
+    message: str
+    request_dispatched: bool
 
 
 def _safe_audit_hook(hook, *args, **kwargs) -> None:
@@ -103,6 +122,12 @@ class AndroidEnvClient:
             yield
         finally:
             self._request_deadline_monotonic_ns = prior
+
+    @property
+    def is_initialized(self) -> bool:
+        """Return the local initialization confirmation without performing I/O."""
+
+        return self._initialized is True
 
     def _ensure_initialized(self):
         """Ensure the device is initialized."""
@@ -376,13 +401,46 @@ class AndroidEnvClient:
         """Tears down the task in the environment."""
         self._ensure_initialized()
 
+        result = self.tear_down_task_if_initialized(
+            task_type,
+            dispatch_started=dispatch_started,
+        )
+        return Response(
+            status=(
+                "success" if result.status is CleanupTaskTeardownStatusV1.SUCCEEDED else "error"
+            ),
+            message=result.message,
+        )
+
+    def tear_down_task_if_initialized(
+        self,
+        task_type: str,
+        *,
+        dispatch_started: Callable[[], None] | None = None,
+    ) -> CleanupTaskTeardownResultV1:
+        """Tear down only an already initialized client; never call ``/init``.
+
+        This is the production cleanup boundary.  An unknown initialization
+        outcome is preserved as ``NOT_INITIALIZED_NO_IO`` so recovery cannot
+        borrow cleanup authority to create a new environment session.
+        """
+
+        if dispatch_started is not None and not callable(dispatch_started):
+            raise TypeError("dispatch_started must be callable")
+        if self._initialized is not True:
+            return CleanupTaskTeardownResultV1(
+                status=CleanupTaskTeardownStatusV1.NOT_INITIALIZED_NO_IO,
+                message="Task teardown skipped because environment initialization is unconfirmed",
+                request_dispatched=False,
+            )
+
+        request_dispatched = False
         try:
             tear_down_data = {"task_name": task_type, "req_device": self.device}
             timeout = self._request_timeout()
             if dispatch_started is not None:
-                if not callable(dispatch_started):
-                    raise TypeError("dispatch_started must be callable")
                 dispatch_started()
+            request_dispatched = True
             response = self._session.post(
                 f"{self.base_url}/task/tear_down",
                 json=tear_down_data,
@@ -391,12 +449,17 @@ class AndroidEnvClient:
             response.raise_for_status()
 
             self._current_task_type = None
-            return Response(status="success", message=f"Task {task_type} torn down")
+            return CleanupTaskTeardownResultV1(
+                status=CleanupTaskTeardownStatusV1.SUCCEEDED,
+                message=f"Task {task_type} torn down",
+                request_dispatched=True,
+            )
         except Exception as e:
             logger.error(f"Failed to tear down task {task_type}: {e}")
-            return Response(
-                status="error",
+            return CleanupTaskTeardownResultV1(
+                status=CleanupTaskTeardownStatusV1.FAILED,
                 message=f"Failed to tear down task {task_type}: {str(e)}",
+                request_dispatched=request_dispatched,
             )
 
     def get_task_score(self, task_type: str) -> tuple[float, str]:

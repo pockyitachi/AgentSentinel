@@ -39,7 +39,10 @@ from mobile_world.runtime.sentinel.r2_3.sidecar import (
 )
 from mobile_world.runtime.sentinel.r2_4.capabilities import build_runtime_history_codec_resolver
 from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
-from mobile_world.runtime.sentinel.r2_4.orchestration import R24RuntimeCoordinatorV1
+from mobile_world.runtime.sentinel.r2_4.orchestration import (
+    R24OrchestrationError,
+    R24RuntimeCoordinatorV1,
+)
 from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LIVE_RUBRIC_MODEL,
     CpuFakeRubricProviderPortV1,
@@ -359,6 +362,55 @@ def test_runtime_coordinator_binds_live_backend_before_generate_and_track(
     ]
     record = coordinator.record_for(context.logical_call_id)
     assert record is not None and record.rubric_result.status is RubricSessionStatus.ADMITTED
+    assert (
+        coordinator.stimulus_sha256_for_call(context.logical_call_id)
+        == record.history_free_stimulus_sha256
+    )
+    assert (
+        coordinator.tracking_packet_sha256_for_call(context.logical_call_id)
+        == record.tracking_packet_sha256
+    )
+
+
+def test_runtime_coordinator_retains_pre_dispatch_roots_when_tracking_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, context, history_ir = _collector_bundle(tmp_path)
+    port = CpuFakeRubricProviderPortV1(
+        generate_outputs=(_generate_output(bundle.r23_snapshot.task.exact_text),),
+        track_outputs=(_track_output(bundle),),
+    )
+    backend = LiveOpenAIRubricBackendV1(provider_port=port)
+
+    def fail_track(_packet: object) -> object:
+        raise RuntimeError("injected post-packet tracking failure")
+
+    monkeypatch.setattr(backend, "track", fail_track)
+    collector = CollectorEvidenceFactoryV1()
+    collector.bundle_for_call = cast(Any, lambda **_kwargs: bundle)
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=collector,
+        session_factory=lambda task_run_id, task: RubricTaskSession(
+            task_run_id=task_run_id,
+            task=task,
+            builder_backend=backend,
+            tracker_backend=backend,
+        ),
+        rubric_call_observer=backend,
+    )
+
+    with pytest.raises(R24OrchestrationError, match="RUBRIC_TRACK_FALLBACK"):
+        coordinator(cast(JsonValue, {}), context, history_ir)
+
+    record = coordinator.record_for(context.logical_call_id)
+    assert record is not None
+    assert coordinator.stimulus_sha256_for_call(context.logical_call_id) == (
+        record.history_free_stimulus_sha256
+    )
+    assert coordinator.tracking_packet_sha256_for_call(context.logical_call_id) == (
+        record.tracking_packet_sha256
+    )
 
 
 def test_production_port_rejects_arbitrary_or_history_policy_runner() -> None:
