@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import multiprocessing
 import os
 import re
@@ -45,6 +46,21 @@ OPENAI_REQUEST_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-openai-provid
 HISTORY_POLICY_REQUEST_SCHEMA_VERSION = OPENAI_REQUEST_SCHEMA_VERSION
 LIVE_ATTEMPT_PRICING_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-live-pricing/v1"
 
+# The sealed production runner may first allow one cooperative wait, then waits
+# the same grace after TERM, and finally waits at least the KILL-reap interval
+# before it may emit TERMINATION_UNCONFIRMED.  Cleanup reservation code imports
+# the computed worst-case bound; these timings must not drift as independent
+# literals across the attempt and driver layers.
+PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1: Final[int] = 1_000
+PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1: Final[int] = 5_000
+PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1: Final[int] = (
+    2 * PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1
+    + max(
+        PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1,
+        PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1,
+    )
+) * 1_000_000
+
 _ID: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _SAFE_MODEL_ID: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}")
 _SHA256: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
@@ -71,6 +87,20 @@ _RESPONSES_REQUEST_FIELDS: Final[frozenset[str]] = frozenset(
         "truncation",
     }
 )
+_PROVIDER_SDK_LOGGER_NAMES: Final[tuple[str, ...]] = (
+    "openai",
+    "openai._base_client",
+    "openai._legacy_response",
+    "openai._response",
+    "openai.lib.parsing",
+    "httpx",
+    "httpcore.connection",
+    "httpcore.http11",
+    "httpcore.http2",
+    "httpcore.proxy",
+    "httpcore.socks",
+)
+_ENV_VALUE_ABSENT: Final[object] = object()
 
 
 class LiveAttemptError(RuntimeError):
@@ -79,6 +109,19 @@ class LiveAttemptError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def production_attempt_termination_upper_bound_ns_v1(
+    cancel_grace_ms: int = PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1,
+) -> int:
+    """Return the sealed cooperative-plus-TERM-plus-KILL observation bound."""
+
+    _require_int(cancel_grace_ms, "cancel_grace_ms", 1, 30_000)
+    if cancel_grace_ms == PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1:
+        return PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+    cancel_grace_ns = cancel_grace_ms * 1_000_000
+    kill_reap_ns = PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1 * 1_000_000
+    return 2 * cancel_grace_ns + max(kill_reap_ns, cancel_grace_ns)
 
 
 class LiveAttemptRoleV1(StrEnum):
@@ -166,6 +209,37 @@ def _canonical_bytes(value: object) -> bytes:
         ).encode("utf-8")
     except (TypeError, ValueError, RecursionError) as exc:
         raise LiveAttemptError("CANONICALIZATION_FAILED", "provider request is invalid") from exc
+
+
+def _disable_provider_sdk_logging_for_child() -> tuple[
+    object,
+    tuple[tuple[logging.Logger, bool, int], ...],
+]:
+    """Lock down env-driven SDK/http logging in the dedicated live child."""
+
+    openai_log: object = os.environ.pop("OPENAI_LOG", _ENV_VALUE_ABSENT)
+    logger_states: list[tuple[logging.Logger, bool, int]] = []
+    for logger_name in _PROVIDER_SDK_LOGGER_NAMES:
+        sdk_logger = logging.getLogger(logger_name)
+        logger_states.append((sdk_logger, sdk_logger.disabled, sdk_logger.level))
+        sdk_logger.disabled = True
+        sdk_logger.setLevel(logging.CRITICAL + 1)
+    return openai_log, tuple(logger_states)
+
+
+def _restore_provider_sdk_logging_after_child(
+    state: tuple[object, tuple[tuple[logging.Logger, bool, int], ...]],
+) -> None:
+    """Restore state for direct CPU invocation; spawned children exit anyway."""
+
+    openai_log, logger_states = state
+    for sdk_logger, disabled, level in logger_states:
+        sdk_logger.disabled = disabled
+        sdk_logger.setLevel(level)
+    if openai_log is _ENV_VALUE_ABSENT:
+        os.environ.pop("OPENAI_LOG", None)
+    else:
+        os.environ["OPENAI_LOG"] = cast(str, openai_log)
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,8 +512,8 @@ def _validate_sealed_provider_request(
             or type(output_format["name"]) is not str
             or type(output_format["strict"]) is not bool
             or output_format["strict"] is not True
-            or output_format["schema"] != expected_schema
             or type(output_format["schema"]) is not dict
+            or _canonical_bytes(output_format["schema"]) != _canonical_bytes(expected_schema)
         ):
             raise LiveAttemptError(
                 "PROVIDER_REQUEST_STAGE_MISMATCH", "provider structured output differs"
@@ -1704,6 +1778,7 @@ def _production_openai_attempt_worker(
 ) -> None:
     """Own the secret, SDK client, and one provider call inside the child."""
 
+    sdk_logging_state = _disable_provider_sdk_logging_for_child()
     secret_lease = None
     client = None
     http_client = None
@@ -1802,6 +1877,7 @@ def _production_openai_attempt_worker(
         if secret_lease is not None:
             secret_lease.close()
         connection.close()
+        _restore_provider_sdk_logging_after_child(sdk_logging_state)
 
 
 def live_attempt_cost_usd_micros(
@@ -2009,7 +2085,12 @@ class ProductionOpenAIAttemptCallV1:
         if not process.is_alive():
             return _StopResult(LiveAttemptTerminationV1.TERM, True, process.exitcode)
         process.kill()
-        process.join(max(5.0, self._cancel_grace_seconds))
+        process.join(
+            max(
+                PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1 / 1_000,
+                self._cancel_grace_seconds,
+            )
+        )
         if not process.is_alive():
             return _StopResult(LiveAttemptTerminationV1.KILL, True, process.exitcode)
         return _StopResult(LiveAttemptTerminationV1.UNCONFIRMED, False, None)
@@ -2528,7 +2609,7 @@ class ProductionOpenAIAttemptRunnerV1:
         pricing: LiveAttemptPricingV1,
         confirmed_pricing_sha256: str,
         startup_timeout_ms: int = 5_000,
-        cancel_grace_ms: int = 1_000,
+        cancel_grace_ms: int = PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1,
     ) -> None:
         if type(factory) is not ProductionPostPreflightFactoryV1:
             raise LiveAttemptError("UNTRUSTED_PRODUCTION_FACTORY", "factory type differs")
@@ -2905,6 +2986,9 @@ __all__ = [
     "CanonicalOpenAIRequestV1",
     "HISTORY_POLICY_REQUEST_SCHEMA_VERSION",
     "OPENAI_REQUEST_SCHEMA_VERSION",
+    "PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1",
+    "PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1",
+    "PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1",
     "LIVE_ATTEMPT_AUTHORITY_SCHEMA_VERSION",
     "LIVE_ATTEMPT_RECEIPT_ROOT_SCHEMA_VERSION",
     "LIVE_ATTEMPT_RECEIPT_SCHEMA_VERSION",
@@ -2933,6 +3017,7 @@ __all__ = [
     "live_attempt_receipt_root_sha256",
     "live_attempt_receipt_sha256",
     "production_live_attempt_runner_available_v1",
+    "production_attempt_termination_upper_bound_ns_v1",
     "build_canonical_history_policy_request",
     "build_canonical_openai_request",
     "snapshot_canonical_openai_request",

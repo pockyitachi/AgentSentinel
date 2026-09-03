@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import threading
 import time
 from dataclasses import replace
 from typing import Any, cast
 
+import httpx
 import pytest
 
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1,
+    PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1,
+    PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1,
     CpuFixedAttemptScriptV1,
     CpuFixedCancellableAttemptRunnerV1,
     CpuFixedLiveAttemptHandleV1,
@@ -34,6 +40,7 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     live_attempt_receipt_projection,
     live_attempt_receipt_root_sha256,
     live_attempt_receipt_sha256,
+    production_attempt_termination_upper_bound_ns_v1,
     production_live_attempt_runner_available_v1,
     snapshot_live_attempt_authority,
     snapshot_live_attempt_receipt,
@@ -48,6 +55,19 @@ from mobile_world.runtime.sentinel.seam import _PolicyExecutionFence
 
 def _digest(label: str) -> str:
     return hashlib.sha256(label.encode()).hexdigest()
+
+
+def test_production_termination_bound_matches_sealed_term_and_kill_waits() -> None:
+    expected_ns = (
+        2 * PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1
+        + max(
+            PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1,
+            PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1,
+        )
+    ) * 1_000_000
+    assert production_attempt_termination_upper_bound_ns_v1() == expected_ns
+    assert PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1 == expected_ns
+    assert expected_ns == 7_000_000_000
 
 
 def _authority(
@@ -205,6 +225,21 @@ def _rubric_request_kwargs(*, track: bool) -> dict[str, object]:
         "truncation": "disabled",
         "max_output_tokens": 8192,
     }
+
+
+def _replace_first_integer_one_with_boolean_true(value: object) -> bool:
+    if type(value) is dict:
+        for key, child in value.items():
+            if key == "minItems" and type(child) is int and child == 1:
+                value[key] = True
+                return True
+            if _replace_first_integer_one_with_boolean_true(child):
+                return True
+    elif type(value) is list:
+        for child in value:
+            if _replace_first_integer_one_with_boolean_true(child):
+                return True
+    return False
 
 
 class _MemoryConnection:
@@ -593,6 +628,32 @@ def test_role_specific_sealed_requests_accept_only_exact_stage_config_and_schema
         assert validated["max_output_tokens"] == _stage(role).max_output_tokens
 
 
+def test_sealed_schema_comparison_distinguishes_json_integer_from_boolean() -> None:
+    from mobile_world.runtime.sentinel.r2_4 import live_attempt as live_attempt_module
+
+    expected = _history_policy_request_kwargs()
+    drifted = cast(dict[str, object], json.loads(json.dumps(expected)))
+    drifted_text = cast(dict[str, object], drifted["text"])
+    drifted_format = cast(dict[str, object], drifted_text["format"])
+    drifted_schema = cast(dict[str, object], drifted_format["schema"])
+    expected_text = cast(dict[str, object], expected["text"])
+    expected_format = cast(dict[str, object], expected_text["format"])
+    expected_schema = cast(dict[str, object], expected_format["schema"])
+
+    assert _replace_first_integer_one_with_boolean_true(drifted_schema)
+    assert drifted_schema == expected_schema  # Python deliberately conflates 1 and True.
+    assert json.dumps(drifted_schema, sort_keys=True) != json.dumps(expected_schema, sort_keys=True)
+
+    request = build_canonical_history_policy_request(drifted)
+    with pytest.raises(LiveAttemptError) as raised:
+        live_attempt_module._validate_sealed_provider_request(
+            request.canonical_bytes,
+            stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
+            role=LiveAttemptRoleV1.HISTORY_POLICY,
+        )
+    assert raised.value.code == "PROVIDER_REQUEST_STAGE_MISMATCH"
+
+
 def test_parent_rejects_request_drift_before_child_command_with_exact_zero_dispatch() -> None:
     base = _history_policy_request_kwargs()
     drifts: list[dict[str, object]] = []
@@ -610,6 +671,12 @@ def test_parent_rejects_request_drift_before_child_command_with_exact_zero_dispa
     output_schema = cast(dict[str, object], output_format["schema"])
     output_schema["title"] = "caller-drift"
     drifts.append(schema_drift)
+    schema_type_confusion = cast(dict[str, object], json.loads(json.dumps(base)))
+    type_confusion_text = cast(dict[str, object], schema_type_confusion["text"])
+    type_confusion_format = cast(dict[str, object], type_confusion_text["format"])
+    type_confusion_schema = cast(dict[str, object], type_confusion_format["schema"])
+    assert _replace_first_integer_one_with_boolean_true(type_confusion_schema)
+    drifts.append(schema_type_confusion)
     envelope_drift = cast(dict[str, object], json.loads(json.dumps(base)))
     input_value = cast(list[object], envelope_drift["input"])
     input_message = cast(dict[str, object], input_value[0])
@@ -678,6 +745,97 @@ def test_child_revalidates_before_secret_read_or_provider_dispatch() -> None:
         ("READY", authority_sha256),
         ("FAILED", authority_sha256, "PROVIDER_REQUEST_STAGE_MISMATCH"),
     ]
+    assert connection.closed
+
+
+def test_child_disables_env_driven_sdk_logs_before_client_and_request(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import openai
+
+    from mobile_world.runtime.sentinel.r2_4 import live_attempt as live_attempt_module
+
+    stage = _stage(LiveAttemptRoleV1.HISTORY_POLICY)
+    authority_sha256 = _digest("child-sdk-log-suppression")
+    connection = _MemoryConnection(("DISPATCH", authority_sha256))
+    secret_token = "SYNTHETIC_CHILD_API_KEY_TOKEN_R24"
+    task_token = "SYNTHETIC_CHILD_TASK_EVIDENCE_TOKEN_R24"
+    image_token = "SYNTHETIC_CHILD_IMAGE_TOKEN_R24"
+    observed_request_bodies: list[bytes] = []
+
+    class _SecretLease:
+        def close(self) -> None:
+            return None
+
+    class _Factory:
+        def openai_stage(self, role: OpenAIRoleV1) -> OpenAIResponsesStageV1:
+            assert role is OpenAIRoleV1.HISTORY_POLICY
+            return stage
+
+        def openai_stage_sha256(self, role: OpenAIRoleV1) -> str:
+            assert role is OpenAIRoleV1.HISTORY_POLICY
+            return openai_stage_sha256(stage)
+
+        def _acquire_openai_secret_for_child_process(self, lease: object) -> tuple[object, str]:
+            del lease
+            assert "OPENAI_LOG" not in os.environ
+            return _SecretLease(), secret_token
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        observed_request_bodies.append(request.content)
+        logging.getLogger("httpcore.connection").debug(
+            "request headers and body: %s %s", dict(request.headers), request.content
+        )
+        return httpx.Response(
+            500,
+            request=request,
+            json={"error": {"message": "cpu fake failure", "type": "cpu_fake"}},
+        )
+
+    def http_client_factory(**kwargs: object) -> httpx.Client:
+        del kwargs
+        assert "OPENAI_LOG" not in os.environ
+        return httpx.Client(transport=httpx.MockTransport(respond))
+
+    monkeypatch.setattr(openai, "DefaultHttpxClient", http_client_factory)
+    monkeypatch.setenv("OPENAI_LOG", "debug")
+    request_kwargs = _history_policy_request_kwargs()
+    input_value = cast(list[dict[str, object]], request_kwargs["input"])
+    content = cast(list[dict[str, object]], input_value[0]["content"])
+    content[0]["text"] = task_token
+    content[1]["image_url"] = f"data:image/png;base64,{image_token}"
+    request = build_canonical_history_policy_request(request_kwargs)
+
+    caplog.clear()
+    with (
+        caplog.at_level(logging.DEBUG, logger="openai._base_client"),
+        caplog.at_level(logging.DEBUG, logger="httpcore.connection"),
+    ):
+        live_attempt_module._production_openai_attempt_worker(
+            cast(Any, connection),
+            cast(Any, _Factory()),
+            cast(Any, object()),
+            request.canonical_bytes,
+            authority_sha256,
+            openai_stage_sha256(stage),
+            LiveAttemptRoleV1.HISTORY_POLICY.value,
+        )
+        logging.getLogger("openai._base_client").debug("NONPRODUCTION_CHILD_LOG_CANARY")
+
+    assert os.environ["OPENAI_LOG"] == "debug"
+    assert len(observed_request_bodies) == 1
+    assert task_token.encode() in observed_request_bodies[0]
+    assert image_token.encode() in observed_request_bodies[0]
+    assert connection.sent == [
+        ("READY", authority_sha256),
+        ("DISPATCHED", authority_sha256),
+        ("FAILED", authority_sha256, "PROVIDER_CHILD_FAILED"),
+    ]
+    assert "NONPRODUCTION_CHILD_LOG_CANARY" in caplog.text
+    assert task_token not in caplog.text
+    assert image_token not in caplog.text
+    assert secret_token not in caplog.text
     assert connection.closed
 
 

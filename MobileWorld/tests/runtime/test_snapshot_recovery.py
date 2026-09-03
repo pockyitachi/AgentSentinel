@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException
@@ -1085,3 +1085,54 @@ def test_failed_restart_does_not_arm_health_cooldown(
     assert second.status_code == 200
     assert restart_count == 2
     assert server._last_restart_success is not None
+
+
+def test_android_client_request_deadline_scope_restores_after_exception() -> None:
+    client = object.__new__(AndroidEnvClient)
+    original_deadline = time.monotonic_ns() + 1_000_000_000
+    cleanup_deadline = original_deadline + 1_000_000_000
+    client._request_deadline_monotonic_ns = original_deadline
+
+    with pytest.raises(RuntimeError, match="probe"):
+        with client.request_deadline_scope(cleanup_deadline):
+            assert client._request_deadline_monotonic_ns == cleanup_deadline
+            raise RuntimeError("probe")
+
+    assert client._request_deadline_monotonic_ns == original_deadline
+
+    with pytest.raises(ValueError, match="future monotonic"):
+        with client.request_deadline_scope(1):
+            raise AssertionError("expired deadline scope must not open")
+    assert client._request_deadline_monotonic_ns == original_deadline
+
+
+def test_android_teardown_marks_dispatch_only_at_session_boundary() -> None:
+    events: list[str] = []
+
+    class _Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+    class _Session:
+        @staticmethod
+        def post(*_: object, **kwargs: object) -> _Response:
+            assert events == ["dispatch-started"]
+            assert cast(float, kwargs["timeout"]) > 0
+            events.append("session-post")
+            return _Response()
+
+    client = object.__new__(AndroidEnvClient)
+    client._initialized = True
+    client._request_deadline_monotonic_ns = time.monotonic_ns() + 1_000_000_000
+    client._session = cast(Any, _Session())
+    client.base_url = "http://127.0.0.1:6800"
+    client.device = "emulator-5554"
+    client._current_task_type = "task"
+
+    result = client.tear_down_task(
+        "task", dispatch_started=lambda: events.append("dispatch-started")
+    )
+
+    assert result.status == "success"
+    assert events == ["dispatch-started", "session-post"]

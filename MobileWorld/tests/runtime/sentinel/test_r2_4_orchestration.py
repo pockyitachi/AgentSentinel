@@ -83,7 +83,10 @@ from mobile_world.runtime.sentinel.r2_4.capabilities import (
     build_runtime_history_codec_resolver,
 )
 from mobile_world.runtime.sentinel.r2_4.contracts import R24ContractError
-from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
+from mobile_world.runtime.sentinel.r2_4.evidence import (
+    CollectorEvidenceFactoryV1,
+    rubric_evidence_snapshot_sha256,
+)
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptCostStatusV1,
     LiveAttemptExecutionKindV1,
@@ -118,12 +121,17 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LIVE_RUBRIC_MODEL,
     LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
     LiveRubricCallReceiptV1,
+    LiveRubricCallTrustAnchorV1,
     LiveRubricExecutionScopeV1,
     LiveRubricOperationV1,
     LiveRubricTransportAuthorityV1,
     LiveRubricTransportKindV1,
     R24RubricBackendExtensionDescriptorV1,
+    bind_current_collector_image,
+    bind_current_collector_image_projection,
     live_rubric_call_receipt_sha256,
+    live_rubric_operation_prompt_sha256,
+    live_rubric_prompt_bundle_sha256,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -137,10 +145,13 @@ def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _complete_live_rubric_cross_binding_proof() -> tuple[
+def _complete_live_rubric_cross_binding_proof(
+    tmp_path: Path,
+) -> tuple[
     R24RubricBackendExtensionDescriptorV1,
     tuple[LiveAttemptReceiptV1, ...],
     tuple[LiveRubricCallReceiptV1, ...],
+    tuple[LiveRubricCallTrustAnchorV1, ...],
     ResolvedLivePolicyCallBindingV1,
 ]:
     logical_call_id = "r24-cross-binding-call-1"
@@ -150,6 +161,20 @@ def _complete_live_rubric_cross_binding_proof() -> tuple[
     lease_sha256 = _sha("cross-binding-lease")
     stage_sha256 = _sha("cross-binding-rubric-stage")
     pricing_sha256 = _sha("cross-binding-pricing")
+    runtime = _runtime_case(tmp_path)
+    try:
+        with bind_audit_context(runtime.audit_context):
+            bundle = CollectorEvidenceFactoryV1().bundle_for_call(
+                request=cast(JsonValue, runtime.request),
+                context=runtime.context,
+                history_ir=runtime.history_ir,
+            )
+    finally:
+        runtime.run.close()
+    current_image = bind_current_collector_image(
+        bundle,
+        logical_call_id=logical_call_id,
+    )
     extension = R24RubricBackendExtensionDescriptorV1(
         descriptor_id="r24-cross-binding-extension",
         descriptor_version="v1",
@@ -158,7 +183,7 @@ def _complete_live_rubric_cross_binding_proof() -> tuple[
         transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
         r23_compatibility_descriptor_sha256=_sha("cross-binding-r23-descriptor"),
         provider_config_sha256=_sha("cross-binding-provider-config"),
-        prompt_sha256=_sha("cross-binding-prompts"),
+        prompt_sha256=live_rubric_prompt_bundle_sha256(),
         rubric_schema_sha256=_sha("cross-binding-rubric-schema"),
         tracking_packet_schema_sha256=_sha("cross-binding-packet-schema"),
         tracker_schema_sha256=_sha("cross-binding-tracker-schema"),
@@ -167,6 +192,21 @@ def _complete_live_rubric_cross_binding_proof() -> tuple[
         configured_model=LIVE_RUBRIC_MODEL,
         external_network_attempted=True,
         model_call_attempted=True,
+    )
+    operations = (LiveRubricOperationV1.GENERATE, LiveRubricOperationV1.TRACK)
+    envelopes = tuple(
+        ResponsesEnvelopeV1(
+            response_id=f"r24-cross-binding-response-{index}",
+            requested_model=LIVE_RUBRIC_MODEL,
+            returned_model=LIVE_RUBRIC_MODEL,
+            status="completed",
+            service_tier="default",
+            output_text=json.dumps({"operation": operation.value, "index": index}),
+            input_tokens=2 + index,
+            output_tokens=1,
+            total_tokens=3 + index,
+        )
+        for index, operation in enumerate(operations, start=1)
     )
     attempts = tuple(
         LiveAttemptReceiptV1(
@@ -186,7 +226,7 @@ def _complete_live_rubric_cross_binding_proof() -> tuple[
             execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
             status=LiveAttemptStatusV1.COMPLETED,
             dispatch_count=1,
-            response_envelope_sha256=_sha(f"cross-binding-envelope-{index}"),
+            response_envelope_sha256=envelope.sha256,
             requested_model=LIVE_RUBRIC_MODEL,
             returned_model=LIVE_RUBRIC_MODEL,
             input_tokens=2 + index,
@@ -204,22 +244,21 @@ def _complete_live_rubric_cross_binding_proof() -> tuple[
             duration_ns=index,
             failure_code=None,
         )
-        for index in (1, 2)
+        for index, envelope in enumerate(envelopes, start=1)
     )
     attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
-    operations = (LiveRubricOperationV1.GENERATE, LiveRubricOperationV1.TRACK)
     receipts = tuple(
         LiveRubricCallReceiptV1(
             receipt_id=f"r24-cross-binding-receipt-{index}",
             operation=operation,
             execution_scope=extension.execution_scope,
-            task_run_id="r24-cross-binding-task-run",
+            task_run_id=bundle.r23_snapshot.task_run_id,
             logical_call_id=logical_call_id,
             backend_extension_descriptor_sha256=extension.sha256,
             r23_compatibility_descriptor_sha256=(extension.r23_compatibility_descriptor_sha256),
             transport_kind=extension.transport_kind,
             transport_authority=extension.transport_authority,
-            prompt_sha256=_sha(f"cross-binding-prompt-{index}"),
+            prompt_sha256=live_rubric_operation_prompt_sha256(operation),
             provider_input_schema_version=(
                 LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION
                 if operation is LiveRubricOperationV1.GENERATE
@@ -231,13 +270,13 @@ def _complete_live_rubric_cross_binding_proof() -> tuple[
                 else extension.track_output_schema_sha256
             ),
             provider_request_sha256=attempt.request_sha256,
-            provider_output_sha256=_sha(f"cross-binding-output-{index}"),
+            provider_output_sha256=envelope.output_text_sha256,
             transport_binding_sha256=attempt.transport_binding_sha256,
             pricing_binding_sha256=attempt.pricing_binding_sha256,
             current_image_binding_sha256=(
                 None
                 if operation is LiveRubricOperationV1.GENERATE
-                else _sha("cross-binding-current-image")
+                else current_image.binding_sha256
             ),
             manifest_sha256=attempt.manifest_sha256,
             preflight_sha256=attempt.preflight_sha256,
@@ -253,10 +292,21 @@ def _complete_live_rubric_cross_binding_proof() -> tuple[
             total_tokens=attempt.total_tokens,
             cost_usd_micros=attempt.cost_usd_micros,
         )
-        for index, (operation, attempt, attempt_hash) in enumerate(
-            zip(operations, attempts, attempt_hashes, strict=True),
+        for index, (operation, attempt, attempt_hash, envelope) in enumerate(
+            zip(operations, attempts, attempt_hashes, envelopes, strict=True),
             start=1,
         )
+    )
+    anchors = tuple(
+        LiveRubricCallTrustAnchorV1(
+            operation=operation,
+            task_run_id=bundle.r23_snapshot.task_run_id,
+            logical_call_id=logical_call_id,
+            collector_stimulus=bundle.r23_snapshot,
+            current_image=(None if operation is LiveRubricOperationV1.GENERATE else current_image),
+            response_envelope=envelope,
+        )
+        for operation, envelope in zip(operations, envelopes, strict=True)
     )
     binding = ResolvedLivePolicyCallBindingV1(
         logical_call_id=logical_call_id,
@@ -280,7 +330,7 @@ def _complete_live_rubric_cross_binding_proof() -> tuple[
         openai_calls=2,
         cost_usd_micros=3,
     )
-    return extension, attempts, receipts, binding
+    return extension, attempts, receipts, anchors, binding
 
 
 @pytest.mark.parametrize(
@@ -331,15 +381,23 @@ def _complete_live_rubric_cross_binding_proof() -> tuple[
         "binding_cost",
     ),
 )
-def test_live_rubric_cross_binding_rejects_every_field_drift(drift: str) -> None:
-    extension, attempts, receipts, binding = _complete_live_rubric_cross_binding_proof()
+def test_live_rubric_cross_binding_rejects_every_field_drift(
+    drift: str,
+    tmp_path: Path,
+) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
     logical_call_id = binding.logical_call_id
     actor_request_sha256 = binding.actor_request_sha256
+    collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
     validate_live_rubric_cross_bindings_v1(
         logical_call_id=logical_call_id,
         actor_request_sha256=actor_request_sha256,
         attempts=attempts,
         rubric_call_receipts=receipts,
+        rubric_call_trust_anchors=anchors,
+        expected_collector_stimulus_sha256=collector_stimulus_sha256,
         rubric_backend_extension=extension,
         binding=binding,
         actor_call_index=1,
@@ -483,6 +541,170 @@ def test_live_rubric_cross_binding_rejects_every_field_drift(drift: str) -> None
             actor_request_sha256=actor_request_sha256,
             attempts=attempts,
             rubric_call_receipts=receipts,
+            rubric_call_trust_anchors=anchors,
+            expected_collector_stimulus_sha256=collector_stimulus_sha256,
+            rubric_backend_extension=extension,
+            binding=binding,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=False,
+        )
+
+
+@pytest.mark.parametrize("proof_path", ("success", "no_history", "generic_fallback"))
+@pytest.mark.parametrize(
+    "tampered_anchor_field",
+    ("prompt_sha256", "current_image_binding_sha256", "provider_output_sha256"),
+)
+def test_live_rubric_trust_anchors_reject_rehashed_receipt_graphs(
+    proof_path: str,
+    tampered_anchor_field: str,
+    tmp_path: Path,
+) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
+    collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
+    expect_history_policy = proof_path == "success"
+    allow_incomplete = proof_path == "generic_fallback"
+    if expect_history_policy:
+        history_attempt = replace(
+            attempts[-1],
+            attempt_id="r24-cross-binding-history-attempt",
+            role=LiveAttemptRoleV1.HISTORY_POLICY,
+            authority_sha256=_sha("cross-binding-history-authority"),
+            request_sha256=_sha("cross-binding-history-request"),
+            transport_binding_sha256=_sha("cross-binding-history-transport"),
+            response_envelope_sha256=_sha("cross-binding-history-envelope"),
+            cost_usd_micros=4,
+        )
+        attempts = (*attempts, history_attempt)
+        binding = replace(
+            binding,
+            source_transport_binding_sha256=history_attempt.transport_binding_sha256,
+            history_policy_attempt_receipt_sha256=live_attempt_receipt_sha256(history_attempt),
+            output_sha256=_sha("cross-binding-live-output"),
+            openai_calls=3,
+            cost_usd_micros=7,
+        )
+    selected_binding = None if allow_incomplete else binding
+    validate_live_rubric_cross_bindings_v1(
+        logical_call_id=binding.logical_call_id,
+        actor_request_sha256=binding.actor_request_sha256,
+        attempts=attempts,
+        rubric_call_receipts=receipts,
+        rubric_call_trust_anchors=anchors,
+        expected_collector_stimulus_sha256=collector_stimulus_sha256,
+        rubric_backend_extension=extension,
+        binding=selected_binding,
+        actor_call_index=1,
+        expect_history_policy=expect_history_policy,
+        allow_incomplete=allow_incomplete,
+    )
+
+    values = list(receipts)
+    index = 1 if tampered_anchor_field == "current_image_binding_sha256" else 0
+    values[index] = replace(
+        values[index],
+        **{tampered_anchor_field: _sha(f"tampered:{proof_path}:{tampered_anchor_field}")},
+    )
+    receipts = tuple(values)
+    if selected_binding is not None:
+        selected_binding = replace(
+            selected_binding,
+            rubric_call_receipt_sha256s=tuple(
+                live_rubric_call_receipt_sha256(item) for item in receipts
+            ),
+        )
+
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=attempts,
+            rubric_call_receipts=receipts,
+            rubric_call_trust_anchors=anchors,
+            expected_collector_stimulus_sha256=collector_stimulus_sha256,
+            rubric_backend_extension=extension,
+            binding=selected_binding,
+            actor_call_index=1,
+            expect_history_policy=expect_history_policy,
+            allow_incomplete=allow_incomplete,
+        )
+
+
+def test_live_rubric_fixed_prompt_rejects_rehashed_extension_graph(tmp_path: Path) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
+    collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
+    extension = replace(extension, prompt_sha256=_sha("tampered prompt bundle"))
+    receipts = tuple(
+        replace(item, backend_extension_descriptor_sha256=extension.sha256) for item in receipts
+    )
+    binding = replace(
+        binding,
+        rubric_backend_extension_descriptor_sha256=extension.sha256,
+        rubric_call_receipt_sha256s=tuple(
+            live_rubric_call_receipt_sha256(item) for item in receipts
+        ),
+    )
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=attempts,
+            rubric_call_receipts=receipts,
+            rubric_call_trust_anchors=anchors,
+            expected_collector_stimulus_sha256=collector_stimulus_sha256,
+            rubric_backend_extension=extension,
+            binding=binding,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=False,
+        )
+
+
+def test_live_rubric_collector_root_rejects_rehashed_self_consistent_context(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path / "authority"
+    )
+    collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
+    _, _, _, alternate_anchors, _ = _complete_live_rubric_cross_binding_proof(
+        tmp_path / "alternate"
+    )
+    alternate_task_run_id = alternate_anchors[0].task_run_id
+    alternate_image = alternate_anchors[1].current_image
+    assert alternate_image is not None
+    receipts = tuple(
+        replace(
+            item,
+            task_run_id=alternate_task_run_id,
+            current_image_binding_sha256=(
+                None
+                if item.operation is LiveRubricOperationV1.GENERATE
+                else alternate_image.binding_sha256
+            ),
+        )
+        for item in receipts
+    )
+    binding = replace(
+        binding,
+        rubric_call_receipt_sha256s=tuple(
+            live_rubric_call_receipt_sha256(item) for item in receipts
+        ),
+    )
+
+    with pytest.raises(R24ContractError, match="RUBRIC_CROSS_BINDING_MISMATCH"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=attempts,
+            rubric_call_receipts=receipts,
+            rubric_call_trust_anchors=alternate_anchors,
+            expected_collector_stimulus_sha256=collector_stimulus_sha256,
             rubric_backend_extension=extension,
             binding=binding,
             actor_call_index=1,
@@ -501,8 +723,14 @@ def test_live_rubric_cross_binding_rejects_every_field_drift(drift: str) -> None
         "partial_with_completed_binding",
     ),
 )
-def test_live_rubric_cross_binding_rejects_nonprefix_sequences(drift: str) -> None:
-    extension, attempts, receipts, binding = _complete_live_rubric_cross_binding_proof()
+def test_live_rubric_cross_binding_rejects_nonprefix_sequences(
+    drift: str,
+    tmp_path: Path,
+) -> None:
+    extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
+        tmp_path
+    )
+    collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
     history_attempt = replace(
         attempts[-1],
         attempt_id="r24-cross-binding-history-attempt",
@@ -514,26 +742,31 @@ def test_live_rubric_cross_binding_rejects_nonprefix_sequences(drift: str) -> No
     )
     if drift == "receipt_order":
         receipts = tuple(reversed(receipts))
+        anchors = tuple(reversed(anchors))
         selected_binding = None
         selected_attempts = attempts
         expect_history = False
     elif drift == "missing_first_receipt":
         receipts = (receipts[1],)
+        anchors = (anchors[1],)
         selected_binding = None
         selected_attempts = attempts
         expect_history = False
     elif drift == "history_before_rubric":
         receipts = ()
+        anchors = ()
         selected_binding = None
         selected_attempts = (history_attempt, attempts[0])
         expect_history = True
     elif drift == "unmatched_rubric_followed_by_history":
         receipts = (receipts[0],)
+        anchors = (anchors[0],)
         selected_binding = None
         selected_attempts = (*attempts, history_attempt)
         expect_history = True
     elif drift == "partial_with_completed_binding":
         receipts = (receipts[0],)
+        anchors = (anchors[0],)
         selected_binding = binding
         selected_attempts = attempts
         expect_history = False
@@ -546,6 +779,8 @@ def test_live_rubric_cross_binding_rejects_nonprefix_sequences(drift: str) -> No
             actor_request_sha256=binding.actor_request_sha256,
             attempts=selected_attempts,
             rubric_call_receipts=receipts,
+            rubric_call_trust_anchors=anchors,
+            expected_collector_stimulus_sha256=collector_stimulus_sha256,
             rubric_backend_extension=extension,
             binding=selected_binding,
             actor_call_index=1,
@@ -975,6 +1210,32 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
             coordinated = coordinator.prepare_no_history(
                 cast(JsonValue, no_history), runtime.context
             )
+            rubric_only = CollectorEvidenceFactoryV1().rubric_only_bundle_for_no_history_call(
+                request=cast(JsonValue, no_history),
+                context=runtime.context,
+            )
+
+        current_image = bind_current_collector_image_projection(
+            stimulus=rubric_only.r23_snapshot,
+            current_image_data_url=rubric_only.current_image_data_url,
+            current_image_sha256=rubric_only.current_image_sha256,
+            logical_call_id=runtime.context.logical_call_id,
+        )
+        operations = (LiveRubricOperationV1.GENERATE, LiveRubricOperationV1.TRACK)
+        envelopes = tuple(
+            ResponsesEnvelopeV1(
+                response_id=f"no-history-rubric-response-{index}",
+                requested_model=LIVE_RUBRIC_MODEL,
+                returned_model=LIVE_RUBRIC_MODEL,
+                status="completed",
+                service_tier="default",
+                output_text=json.dumps({"operation": operation.value, "index": index}),
+                input_tokens=2,
+                output_tokens=1,
+                total_tokens=3,
+            )
+            for index, operation in enumerate(operations, start=1)
+        )
 
         common = {
             "manifest_sha256": _sha("manifest"),
@@ -996,7 +1257,7 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
                 status=LiveAttemptStatusV1.COMPLETED,
                 dispatch_count=1,
-                response_envelope_sha256=_sha(f"rubric-response-{index}"),
+                response_envelope_sha256=envelope.sha256,
                 requested_model=LIVE_RUBRIC_MODEL,
                 returned_model=LIVE_RUBRIC_MODEL,
                 input_tokens=2,
@@ -1015,7 +1276,7 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 failure_code=None,
                 **common,
             )
-            for index in (1, 2)
+            for index, envelope in enumerate(envelopes, start=1)
         )
         attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
         rubric_backend_extension = R24RubricBackendExtensionDescriptorV1(
@@ -1026,7 +1287,7 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
             transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
             r23_compatibility_descriptor_sha256=_sha("r23-compatibility"),
             provider_config_sha256=_sha("rubric-provider-config"),
-            prompt_sha256=_sha("rubric-extension-prompt"),
+            prompt_sha256=live_rubric_prompt_bundle_sha256(),
             rubric_schema_sha256=_sha("rubric-schema"),
             tracking_packet_schema_sha256=_sha("tracking-packet-schema"),
             tracker_schema_sha256=_sha("tracker-schema"),
@@ -1051,7 +1312,7 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 ),
                 transport_kind=LiveRubricTransportKindV1.OPENAI_RESPONSES,
                 transport_authority=(LiveRubricTransportAuthorityV1.EXPLICIT_OWNER_AUTHORIZATION),
-                prompt_sha256=_sha(f"rubric-prompt-{index}"),
+                prompt_sha256=live_rubric_operation_prompt_sha256(operation),
                 provider_input_schema_version=(
                     LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION
                     if index == 1
@@ -1063,10 +1324,14 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                     else rubric_backend_extension.track_output_schema_sha256
                 ),
                 provider_request_sha256=attempt.request_sha256,
-                provider_output_sha256=_sha(f"rubric-output-{index}"),
+                provider_output_sha256=envelope.output_text_sha256,
                 transport_binding_sha256=attempt.transport_binding_sha256,
                 pricing_binding_sha256=attempt.pricing_binding_sha256,
-                current_image_binding_sha256=(None if index == 1 else _sha("rubric-current-image")),
+                current_image_binding_sha256=(
+                    None
+                    if operation is LiveRubricOperationV1.GENERATE
+                    else current_image.binding_sha256
+                ),
                 manifest_sha256=attempt.manifest_sha256,
                 preflight_sha256=attempt.preflight_sha256,
                 case_execution_lease_sha256=attempt.case_execution_lease_sha256,
@@ -1081,9 +1346,22 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 total_tokens=cast(int, attempt.total_tokens),
                 cost_usd_micros=cast(int, attempt.cost_usd_micros),
             )
-            for index, (attempt, attempt_hash) in enumerate(
-                zip(attempts, attempt_hashes, strict=True), start=1
+            for index, (operation, attempt, attempt_hash, envelope) in enumerate(
+                zip(operations, attempts, attempt_hashes, envelopes, strict=True), start=1
             )
+        )
+        rubric_call_trust_anchors = tuple(
+            LiveRubricCallTrustAnchorV1(
+                operation=operation,
+                task_run_id=runtime.task.task_run_id,
+                logical_call_id=runtime.context.logical_call_id,
+                collector_stimulus=rubric_only.r23_snapshot,
+                current_image=(
+                    None if operation is LiveRubricOperationV1.GENERATE else current_image
+                ),
+                response_envelope=envelope,
+            )
+            for operation, envelope in zip(operations, envelopes, strict=True)
         )
         rubric_call_hashes = tuple(
             live_rubric_call_receipt_sha256(item) for item in rubric_call_receipts
@@ -1162,6 +1440,15 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
             "rubric_call_receipts_for_call",
             lambda _self, logical_call_id: (
                 rubric_call_receipts
+                if logical_call_id == runtime.context.logical_call_id
+                else pytest.fail("unexpected logical call")
+            ),
+        )
+        monkeypatch.setattr(
+            OwnerAuthorizedLivePerCallPolicyV1,
+            "rubric_call_trust_anchors_for_call",
+            lambda _self, logical_call_id: (
+                rubric_call_trust_anchors
                 if logical_call_id == runtime.context.logical_call_id
                 else pytest.fail("unexpected logical call")
             ),

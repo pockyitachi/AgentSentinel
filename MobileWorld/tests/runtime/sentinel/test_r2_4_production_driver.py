@@ -60,6 +60,9 @@ from mobile_world.runtime.sentinel.r2_4.production_driver import (
     production_runtime_config_sha256,
     smoke_stage_evidence_sha256,
 )
+from mobile_world.runtime.sentinel.r2_4.run_fatal import (
+    build_production_run_fatal_latch_v1,
+)
 from mobile_world.runtime.sentinel.r2_5.pilot import (
     FROZEN_PILOT_SCHEMA_VERSION,
     FrozenPilotManifestV1,
@@ -653,9 +656,22 @@ def _runtime_config(tmp_path: Path) -> ProductionRuntimeConfigV1:
         backend_environment_file_byte_count=123,
         backend_environment_file_mtime_ns=1_234_567_890,
         startup_timeout_seconds=60,
-        shutdown_grace_seconds=5,
+        shutdown_grace_seconds=8,
         health_poll_interval_ms=25,
     )
+
+
+def test_runtime_config_rejects_grace_without_post_termination_teardown_budget(
+    tmp_path: Path,
+) -> None:
+    accepted = _runtime_config(tmp_path)
+    termination_bound_ns = (
+        production_driver_module._PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+    )
+    assert accepted.shutdown_grace_seconds * 1_000_000_000 - termination_bound_ns == (1_000_000_000)
+    with pytest.raises(ProductionDriverError) as raised:
+        replace(accepted, shutdown_grace_seconds=1)
+    assert raised.value.code == "INSUFFICIENT_SHUTDOWN_GRACE"
 
 
 def test_resource_lifecycle_uses_only_fixed_argv_loopback_health_and_owned_cleanup(
@@ -1200,6 +1216,36 @@ def test_post_dispatch_unknown_cost_cannot_enter_successful_decision() -> None:
     assert raised.value.code == "LIVE_COST_ACCOUNTING_UNKNOWN"
 
 
+def test_unit_deadlines_reserve_hash_bound_cleanup_grace_before_dispatch() -> None:
+    started_ns = time.monotonic_ns()
+    owner_deadline_ns = started_ns + 30_000_000_000
+
+    execution_deadline_ns, cleanup_deadline_ns = production_driver_module._freeze_unit_deadlines(
+        unit_started_ns=started_ns,
+        unit_timeout_seconds=20,
+        authority_deadline_monotonic_ns=owner_deadline_ns,
+        shutdown_grace_seconds=8,
+        attempt_termination_upper_bound_ns=(
+            production_driver_module._PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+        ),
+    )
+
+    assert cleanup_deadline_ns <= owner_deadline_ns
+    assert cleanup_deadline_ns - execution_deadline_ns == 8_000_000_000
+
+    with pytest.raises(ProductionDriverError) as raised:
+        production_driver_module._freeze_unit_deadlines(
+            unit_started_ns=started_ns,
+            unit_timeout_seconds=20,
+            authority_deadline_monotonic_ns=started_ns + 8_000_000_000,
+            shutdown_grace_seconds=8,
+            attempt_termination_upper_bound_ns=(
+                production_driver_module._PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+            ),
+        )
+    assert raised.value.code == "INSUFFICIENT_CLEANUP_WINDOW"
+
+
 @pytest.mark.parametrize(
     ("roles", "fallback_reason", "fallback_check", "action_executed"),
     (
@@ -1259,16 +1305,21 @@ def test_generic_semantic_fallback_is_journaled_then_typed_stage_fails(
         fallback_check=fallback_check,
         action_executed=action_executed,
     )
+    deadline_ns = time.monotonic_ns() + 1_000_000_000
     state = production_driver_module._ProductionUnitStateV1(
         unit_id=f"fallback:{len(roles)}",
         host=PilotHostV1.QWEN3_VL,
         task_name="generic-fallback-task",
-        deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+        deadline_monotonic_ns=deadline_ns,
+        cleanup_deadline_monotonic_ns=deadline_ns,
+        authority_deadline_monotonic_ns=deadline_ns,
+        attempt_termination_upper_bound_ns=0,
         environment=None,
         observation=None,
         policy=cast(Any, _Policy()),
     )
     port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
     object.__setattr__(
         port,
         "_factory",
@@ -1340,11 +1391,15 @@ def test_production_port_exports_append_only_terminal_and_decision_journals(
 
     first = receipt("journal-logical-one", "one")
     second = receipt("journal-logical-two", "two")
+    deadline_ns = time.monotonic_ns() + 1_000_000_000
     state = production_driver_module._ProductionUnitStateV1(
         unit_id="smoke:QWEN3_VL:OFF",
         host=PilotHostV1.QWEN3_VL,
         task_name="task-smoke-qwen3_vl",
-        deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+        deadline_monotonic_ns=deadline_ns,
+        cleanup_deadline_monotonic_ns=deadline_ns,
+        authority_deadline_monotonic_ns=deadline_ns,
+        attempt_termination_upper_bound_ns=0,
         environment=None,
         observation=None,
         policy=None,
@@ -1359,6 +1414,7 @@ def test_production_port_exports_append_only_terminal_and_decision_journals(
     )
     port_type = production_driver_module._ProductionFixedExecutionPortV1
     port = object.__new__(port_type)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
     object.__setattr__(port, "_lock", threading.RLock())
     object.__setattr__(port, "_units", {state.unit_id: state})
     object.__setattr__(port, "_unit_journals", {})
@@ -1383,6 +1439,9 @@ def test_production_port_exports_append_only_terminal_and_decision_journals(
         actor_resource_sha256="e" * 64,
         history_policy_stage_sha256="f" * 64,
         deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+        cleanup_deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+        authority_deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+        attempt_termination_upper_bound_ns=0,
     )
     port._unit_journals[state.unit_id] = port._unit_journal_snapshot(state)
     port._units.clear()
@@ -1445,11 +1504,15 @@ def test_terminal_commit_fault_is_bound_into_current_unit_journal(
             "injected CPU-only audit commit fault",
         )
 
+    deadline_ns = time.monotonic_ns() + 1_000_000_000
     state = production_driver_module._ProductionUnitStateV1(
         unit_id=unit_id,
         host=host,
         task_name="commit-fault-task",
-        deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+        deadline_monotonic_ns=deadline_ns,
+        cleanup_deadline_monotonic_ns=deadline_ns,
+        authority_deadline_monotonic_ns=deadline_ns,
+        attempt_termination_upper_bound_ns=0,
         environment=None,
         observation=None,
         agent=cast(
@@ -1462,6 +1525,7 @@ def test_terminal_commit_fault_is_bound_into_current_unit_journal(
         runtime_audit=cast(Any, audit),
     )
     port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
     action = production_driver_module.JSONAction(action_type=production_driver_module.WAIT)
 
     with pytest.raises(production_audit_module.ProductionRuntimeAuditError) as raised:

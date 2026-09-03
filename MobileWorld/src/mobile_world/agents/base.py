@@ -2,9 +2,12 @@
 Base agent interface for mobile automation.
 """
 
+import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, cast
 
 from loguru import logger
@@ -13,6 +16,63 @@ from openai import OpenAI
 from mobile_world.runtime.utils.models import JSONAction
 
 _AUDIT_VALUE_UNSET = object()
+
+_STRICT_PROVIDER_SDK_LOGGING_ACTIVE: ContextVar[bool] = ContextVar(
+    "mobileworld_strict_provider_sdk_logging_active",
+    default=False,
+)
+_PROVIDER_SDK_LOG_FILTER_LOCK = threading.Lock()
+_PROVIDER_SDK_LOGGER_NAMES = (
+    "openai",
+    "openai._base_client",
+    "openai._legacy_response",
+    "openai._response",
+    "openai.lib.parsing",
+    "httpx",
+    "httpcore.connection",
+    "httpcore.http11",
+    "httpcore.http2",
+    "httpcore.proxy",
+    "httpcore.socks",
+)
+
+
+class _StrictProviderSDKLogFilter(logging.Filter):
+    """Drop provider SDK records only inside one strict actor call context."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        del record
+        return not _STRICT_PROVIDER_SDK_LOGGING_ACTIVE.get()
+
+
+_STRICT_PROVIDER_SDK_LOG_FILTER = _StrictProviderSDKLogFilter()
+
+
+def _install_strict_provider_sdk_log_filter() -> None:
+    """Install one dormant context-local filter on the pinned SDK loggers."""
+
+    with _PROVIDER_SDK_LOG_FILTER_LOCK:
+        for logger_name in _PROVIDER_SDK_LOGGER_NAMES:
+            sdk_logger = logging.getLogger(logger_name)
+            if not any(
+                candidate is _STRICT_PROVIDER_SDK_LOG_FILTER for candidate in sdk_logger.filters
+            ):
+                sdk_logger.addFilter(_STRICT_PROVIDER_SDK_LOG_FILTER)
+
+
+@contextmanager
+def _strict_provider_sdk_logging_scope(*, active: bool) -> Any:
+    """Suppress request-bearing SDK logs without changing non-strict logging."""
+
+    if not active:
+        yield
+        return
+    _install_strict_provider_sdk_log_filter()
+    token = _STRICT_PROVIDER_SDK_LOGGING_ACTIVE.set(True)
+    try:
+        yield
+    finally:
+        _STRICT_PROVIDER_SDK_LOGGING_ACTIVE.reset(token)
 
 
 class BaseAgent(ABC):
@@ -78,12 +138,16 @@ class BaseAgent(ABC):
 
     def build_openai_client(self, base_url: str, api_key: str) -> None:
         """Build the OpenAI client."""
-        self.openai_client = OpenAI(
-            base_url=base_url,
-            api_key=api_key if api_key else "empty",
-            timeout=120.0,
-        )
-        logger.debug(f"built the OpenAI client with base_url={base_url}")
+        with _strict_provider_sdk_logging_scope(active=self._production_safe_logging_active()):
+            self.openai_client = OpenAI(
+                base_url=base_url,
+                api_key=api_key if api_key else "empty",
+                timeout=120.0,
+            )
+        if self._production_safe_logging_active():
+            logger.debug("Built production actor OpenAI client")
+        else:
+            logger.debug(f"built the OpenAI client with base_url={base_url}")
 
     def _production_logical_call(self) -> Any | None:
         """Return only the ambient strict production call, never a caller flag."""
@@ -212,14 +276,17 @@ class BaseAgent(ABC):
                 self._bind_prompt_sentinel_actor_sdk_arguments(
                     sdk_arguments, stream=True, audit_attempt=audit_attempt
                 )
-                dispatch_client = self._production_dispatch_client()
-                dispatch_started = True
-                response = dispatch_client.chat.completions.create(
-                    model=provider_model,
-                    messages=cast(Any, provider_messages),
-                    **provider_kwargs,
-                    stream=True,
-                )
+                with _strict_provider_sdk_logging_scope(
+                    active=self._production_safe_logging_active()
+                ):
+                    dispatch_client = self._production_dispatch_client()
+                    dispatch_started = True
+                    response = dispatch_client.chat.completions.create(
+                        model=provider_model,
+                        messages=cast(Any, provider_messages),
+                        **provider_kwargs,
+                        stream=True,
+                    )
                 self._require_production_response_model(response, provider_model)
             except Exception as error:
                 self._record_model_audit_failure(
@@ -326,13 +393,16 @@ class BaseAgent(ABC):
                 self._bind_prompt_sentinel_actor_sdk_arguments(
                     sdk_arguments, stream=False, audit_attempt=audit_attempt
                 )
-                dispatch_client = self._production_dispatch_client()
-                dispatch_started = True
-                response = dispatch_client.chat.completions.create(
-                    model=provider_model,
-                    messages=cast(Any, provider_messages),
-                    **provider_kwargs,
-                )
+                with _strict_provider_sdk_logging_scope(
+                    active=self._production_safe_logging_active()
+                ):
+                    dispatch_client = self._production_dispatch_client()
+                    dispatch_started = True
+                    response = dispatch_client.chat.completions.create(
+                        model=provider_model,
+                        messages=cast(Any, provider_messages),
+                        **provider_kwargs,
+                    )
                 provider_returned = True
                 self._require_production_response_model(response, provider_model)
 

@@ -54,6 +54,7 @@ from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
     TransportDescriptorV1,
     build_owner_authorized_openai_responses_transport,
     openai_responses_transport_binding_sha256,
+    responses_envelope_hash_projection,
     transport_descriptor_sha256,
 )
 from mobile_world.runtime.sentinel.r2_2.metrics import R22PolicyMetrics
@@ -75,7 +76,10 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     snapshot_vertical_output,
     vertical_output_sha256,
 )
-from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
+from mobile_world.runtime.sentinel.r2_4.evidence import (
+    CollectorEvidenceFactoryV1,
+    rubric_evidence_snapshot_sha256,
+)
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptPricingV1,
     LiveAttemptReceiptV1,
@@ -111,14 +115,20 @@ from mobile_world.runtime.sentinel.r2_4.production_preflight import (
 from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
     LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
+    BoundCollectorCurrentImageV1,
     LiveOpenAIRubricBackendV1,
     LiveRubricCallReceiptV1,
+    LiveRubricCallTrustAnchorV1,
     LiveRubricExecutionScopeV1,
     LiveRubricOperationV1,
     ProductionRubricProviderPortV1,
     R24RubricBackendExtensionDescriptorV1,
+    bind_current_collector_image_projection,
     live_rubric_call_receipt_sha256,
+    live_rubric_operation_prompt_sha256,
+    live_rubric_prompt_bundle_sha256,
     snapshot_live_rubric_call_receipt,
+    snapshot_live_rubric_call_trust_anchor,
     snapshot_r24_rubric_backend_extension_descriptor,
 )
 from mobile_world.runtime.sentinel.r2_5.pilot import PilotArmV1, PilotHostV1
@@ -1053,6 +1063,8 @@ def validate_live_rubric_cross_bindings_v1(
     actor_request_sha256: str,
     attempts: tuple[LiveAttemptReceiptV1, ...],
     rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...],
+    rubric_call_trust_anchors: tuple[LiveRubricCallTrustAnchorV1, ...],
+    expected_collector_stimulus_sha256: str | None,
     rubric_backend_extension: R24RubricBackendExtensionDescriptorV1 | None,
     binding: ResolvedLivePolicyCallBindingV1 | None,
     actor_call_index: int | None,
@@ -1069,6 +1081,11 @@ def validate_live_rubric_cross_bindings_v1(
 
     _require_id(logical_call_id, "logical_call_id")
     _require_sha256(actor_request_sha256, "actor_request_sha256")
+    if expected_collector_stimulus_sha256 is not None:
+        _require_sha256(
+            expected_collector_stimulus_sha256,
+            "expected_collector_stimulus_sha256",
+        )
     if type(allow_incomplete) is not bool:
         raise R24ContractError(
             "RUBRIC_CROSS_BINDING_MISMATCH", "incomplete-proof flag is untrusted"
@@ -1081,7 +1098,11 @@ def validate_live_rubric_cross_bindings_v1(
         raise R24ContractError(
             "RUBRIC_CROSS_BINDING_MISMATCH", "history-policy expectation is untrusted"
         )
-    if type(attempts) is not tuple or type(rubric_call_receipts) is not tuple:
+    if (
+        type(attempts) is not tuple
+        or type(rubric_call_receipts) is not tuple
+        or type(rubric_call_trust_anchors) is not tuple
+    ):
         raise R24ContractError(
             "RUBRIC_CROSS_BINDING_MISMATCH", "rubric proof collections are not tuples"
         )
@@ -1091,11 +1112,18 @@ def validate_live_rubric_cross_bindings_v1(
         raise R24ContractError(
             "RUBRIC_CROSS_BINDING_MISMATCH", "rubric proof values have untrusted types"
         )
+    if any(type(item) is not LiveRubricCallTrustAnchorV1 for item in rubric_call_trust_anchors):
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH", "rubric trust anchors have untrusted types"
+        )
 
     try:
         trusted_attempts = tuple(snapshot_live_attempt_receipt(item) for item in attempts)
         trusted_rubric_calls = tuple(
             snapshot_live_rubric_call_receipt(item) for item in rubric_call_receipts
+        )
+        trusted_rubric_anchors = tuple(
+            snapshot_live_rubric_call_trust_anchor(item) for item in rubric_call_trust_anchors
         )
         trusted_extension = (
             None
@@ -1130,6 +1158,8 @@ def validate_live_rubric_cross_bindings_v1(
         if (
             trusted_attempts
             or trusted_rubric_calls
+            or trusted_rubric_anchors
+            or expected_collector_stimulus_sha256 is not None
             or trusted_binding is not None
             or actor_call_index is not None
         ):
@@ -1147,6 +1177,16 @@ def validate_live_rubric_cross_bindings_v1(
             "RUBRIC_CROSS_BINDING_MISMATCH",
             "production rubric proof has a non-live extension scope",
         )
+    if trusted_extension.prompt_sha256 != live_rubric_prompt_bundle_sha256():
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH",
+            "rubric extension does not bind the module-owned prompt bytes",
+        )
+    if trusted_rubric_anchors and expected_collector_stimulus_sha256 is None:
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH",
+            "rubric trust anchors lack their coordinator-owned Collector root",
+        )
 
     rubric_attempts = tuple(
         item for item in trusted_attempts if item.role is LiveAttemptRoleV1.RUBRIC
@@ -1160,8 +1200,10 @@ def validate_live_rubric_cross_bindings_v1(
         raise R24ContractError(
             "RUBRIC_CROSS_BINDING_MISMATCH", "actor call index differs from the binding"
         )
-    if len(trusted_rubric_calls) > len(rubric_attempts) or (
-        proof_complete and len(trusted_rubric_calls) != len(rubric_attempts)
+    if (
+        len(trusted_rubric_anchors) != len(trusted_rubric_calls)
+        or len(trusted_rubric_calls) > len(rubric_attempts)
+        or (proof_complete and len(trusted_rubric_calls) != len(rubric_attempts))
     ):
         raise R24ContractError(
             "RUBRIC_CROSS_BINDING_MISMATCH", "rubric call/attempt census differs"
@@ -1201,9 +1243,10 @@ def validate_live_rubric_cross_bindings_v1(
                 "an unmatched rubric attempt is followed by another attempt",
             )
 
-    for rubric_call, attempt in zip(
+    for rubric_call, attempt, trust_anchor in zip(
         trusted_rubric_calls,
         rubric_attempts[: len(trusted_rubric_calls)],
+        trusted_rubric_anchors,
         strict=True,
     ):
         generate = rubric_call.operation is LiveRubricOperationV1.GENERATE
@@ -1217,6 +1260,38 @@ def validate_live_rubric_cross_bindings_v1(
             if generate
             else trusted_extension.track_output_schema_sha256
         )
+        expected_prompt_sha256 = live_rubric_operation_prompt_sha256(rubric_call.operation)
+        envelope = trust_anchor.response_envelope
+        response_envelope_sha256 = canonical_sha256(
+            cast(JsonValue, responses_envelope_hash_projection(envelope))
+        )
+        stimulus_sha256 = rubric_evidence_snapshot_sha256(trust_anchor.collector_stimulus)
+        image = trust_anchor.current_image
+        image_binding_sha256: str | None = None
+        if not generate:
+            if type(image) is not BoundCollectorCurrentImageV1:
+                raise R24ContractError(
+                    "RUBRIC_CROSS_BINDING_MISMATCH",
+                    "tracking trust anchor omitted the current image",
+                )
+            try:
+                rebound_image = bind_current_collector_image_projection(
+                    stimulus=trust_anchor.collector_stimulus,
+                    current_image_data_url=image.data_url,
+                    current_image_sha256=image.content_sha256,
+                    logical_call_id=logical_call_id,
+                )
+            except Exception as exc:
+                raise R24ContractError(
+                    "RUBRIC_CROSS_BINDING_MISMATCH",
+                    "tracking image does not bind to the exact Collector context",
+                ) from exc
+            if rebound_image != image or image.stimulus_sha256 != stimulus_sha256:
+                raise R24ContractError(
+                    "RUBRIC_CROSS_BINDING_MISMATCH",
+                    "tracking image differs from its recomputed Collector binding",
+                )
+            image_binding_sha256 = rebound_image.binding_sha256
         if (
             attempt.role is not LiveAttemptRoleV1.RUBRIC
             or attempt.status is not LiveAttemptStatusV1.COMPLETED
@@ -1233,7 +1308,21 @@ def validate_live_rubric_cross_bindings_v1(
             or rubric_call.returned_model != attempt.returned_model
             or rubric_call.provider_input_schema_version != expected_input_schema
             or rubric_call.provider_output_schema_sha256 != expected_output_schema
-            or (rubric_call.current_image_binding_sha256 is None) != generate
+            or rubric_call.prompt_sha256 != expected_prompt_sha256
+            or trust_anchor.operation is not rubric_call.operation
+            or trust_anchor.task_run_id != rubric_call.task_run_id
+            or trust_anchor.logical_call_id != logical_call_id
+            or stimulus_sha256 != expected_collector_stimulus_sha256
+            or (image is None) != generate
+            or rubric_call.current_image_binding_sha256 != image_binding_sha256
+            or envelope.sha256 != response_envelope_sha256
+            or attempt.response_envelope_sha256 != response_envelope_sha256
+            or rubric_call.provider_output_sha256 != envelope.output_text_sha256
+            or rubric_call.requested_model != envelope.requested_model
+            or rubric_call.returned_model != envelope.returned_model
+            or rubric_call.input_tokens != envelope.input_tokens
+            or rubric_call.output_tokens != envelope.output_tokens
+            or rubric_call.total_tokens != envelope.total_tokens
             or rubric_call.manifest_sha256 != attempt.manifest_sha256
             or rubric_call.preflight_sha256 != attempt.preflight_sha256
             or rubric_call.case_execution_lease_sha256 != attempt.case_execution_lease_sha256
@@ -2026,6 +2115,66 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 for value in backend.call_receipts_for_call(logical_call_id)
             )
 
+    def rubric_call_trust_anchors_for_call(
+        self,
+        logical_call_id: str,
+    ) -> tuple[LiveRubricCallTrustAnchorV1, ...]:
+        """Return exact ephemeral Collector/Responses preimages for validation."""
+
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            if logical_call_id not in self._call_inputs:
+                raise R24ContractError(
+                    "PER_CALL_ATTEMPTS_UNAVAILABLE", "logical call was never registered"
+                )
+            backend = getattr(self, "_rubric_backend", None)
+            if type(backend) is not LiveOpenAIRubricBackendV1:
+                raise R24ContractError(
+                    "RUBRIC_TRUST_ANCHORS_UNAVAILABLE",
+                    "live rubric backend is unavailable",
+                )
+            return tuple(
+                snapshot_live_rubric_call_trust_anchor(value)
+                for value in backend.call_trust_anchors_for_call(logical_call_id)
+            )
+
+    def rubric_collector_stimulus_sha256_for_call(
+        self,
+        logical_call_id: str,
+    ) -> str | None:
+        """Resolve the independent Coordinator-owned Collector root for a call.
+
+        A failed attempt can occur before the Coordinator has a record.  That
+        is allowed only while no completed rubric call/trust anchor exists;
+        otherwise proof publication fails closed rather than falling back to a
+        self-attested anchor hash.
+        """
+
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            if logical_call_id not in self._call_inputs:
+                raise R24ContractError(
+                    "PER_CALL_ATTEMPTS_UNAVAILABLE", "logical call was never registered"
+                )
+            record = self._coordinator.record_for(logical_call_id)
+            if record is not None:
+                return _require_sha256(
+                    record.history_free_stimulus_sha256,
+                    "history_free_stimulus_sha256",
+                )
+            backend = getattr(self, "_rubric_backend", None)
+            anchors = (
+                ()
+                if type(backend) is not LiveOpenAIRubricBackendV1
+                else backend.call_trust_anchors_for_call(logical_call_id)
+            )
+            if anchors:
+                raise R24ContractError(
+                    "RUBRIC_COLLECTOR_ROOT_UNAVAILABLE",
+                    "completed rubric call lacks its Coordinator Collector root",
+                )
+            return None
+
     def rubric_backend_extension_descriptor(
         self,
     ) -> R24RubricBackendExtensionDescriptorV1:
@@ -2197,6 +2346,9 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 rubric_call_receipts = self._rubric_backend.call_receipts_for_call(
                     context.logical_call_id
                 )
+                rubric_call_trust_anchors = self._rubric_backend.call_trust_anchors_for_call(
+                    context.logical_call_id
+                )
                 rubric_extension = self._rubric_backend.extension_descriptor
                 exact_cost_usd_micros = sum(cast(int, value.cost_usd_micros) for value in receipts)
                 binding = ResolvedLivePolicyCallBindingV1(
@@ -2226,6 +2378,8 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     actor_request_sha256=actor_request_sha256,
                     attempts=receipts,
                     rubric_call_receipts=rubric_call_receipts,
+                    rubric_call_trust_anchors=rubric_call_trust_anchors,
+                    expected_collector_stimulus_sha256=(record.history_free_stimulus_sha256),
                     rubric_backend_extension=rubric_extension,
                     binding=binding,
                     actor_call_index=actor_call_index,
@@ -2409,6 +2563,9 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 rubric_call_receipts = self._rubric_backend.call_receipts_for_call(
                     context.logical_call_id
                 )
+                rubric_call_trust_anchors = self._rubric_backend.call_trust_anchors_for_call(
+                    context.logical_call_id
+                )
                 rubric_extension = self._rubric_backend.extension_descriptor
                 exact_cost_usd_micros = sum(cast(int, value.cost_usd_micros) for value in receipts)
                 transport_binding_sha256 = adapter.source_transport_binding_sha256
@@ -2441,6 +2598,10 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     actor_request_sha256=actor_request_sha256,
                     attempts=receipts,
                     rubric_call_receipts=rubric_call_receipts,
+                    rubric_call_trust_anchors=rubric_call_trust_anchors,
+                    expected_collector_stimulus_sha256=(
+                        coordinated_record.history_free_stimulus_sha256
+                    ),
                     rubric_backend_extension=rubric_extension,
                     binding=binding,
                     actor_call_index=actor_call_index,

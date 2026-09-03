@@ -20,6 +20,7 @@ import io
 import json
 import re
 import threading
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -30,7 +31,10 @@ from PIL import Image
 
 from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_2.contracts import PolicyExecutionControlV1
-from mobile_world.runtime.sentinel.r2_2.gpt56_policy import ResponsesEnvelopeV1
+from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+    ResponsesEnvelopeV1,
+    responses_envelope_hash_projection,
+)
 from mobile_world.runtime.sentinel.r2_3.contracts import (
     GateOperator,
     GateV1,
@@ -112,6 +116,37 @@ _MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 _GENERATE_INSTRUCTIONS = """You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. Preserve instruction-bound requirement text byte-for-byte and provide exact Unicode character and UTF-8 byte offsets. Include every hard requirement, constraint, and terminal requirement; model legitimate alternatives explicitly and include exactly one OTHER_UNKNOWN path. Do not infer factual truth, inspect history, recommend actions, emit coordinates/tools, or add requirements. Return only JSON matching the supplied schema."""
 
 _TRACK_INSTRUCTIONS = """You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Cite exact evidence IDs and payload hashes. On ambiguity, conflict, or insufficiency use unknown; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."""
+
+
+def live_rubric_operation_prompt_sha256(operation: LiveRubricOperationV1) -> str:
+    """Hash the module-owned prompt bytes for one exact rubric operation."""
+
+    if type(operation) is not LiveRubricOperationV1:
+        raise LiveRubricError("UNTRUSTED_OPERATION", "rubric operation type differs")
+    prompt = (
+        _GENERATE_INSTRUCTIONS
+        if operation is LiveRubricOperationV1.GENERATE
+        else _TRACK_INSTRUCTIONS
+    )
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+def live_rubric_prompt_bundle_sha256() -> str:
+    """Bind both fixed operation prompts into the compatibility descriptor."""
+
+    return canonical_sha256(
+        cast(
+            JsonValue,
+            {
+                "generate_instructions_sha256": live_rubric_operation_prompt_sha256(
+                    LiveRubricOperationV1.GENERATE
+                ),
+                "track_instructions_sha256": live_rubric_operation_prompt_sha256(
+                    LiveRubricOperationV1.TRACK
+                ),
+            },
+        )
+    )
 
 
 class LiveRubricError(RuntimeError):
@@ -420,6 +455,140 @@ def bind_current_collector_image_projection(
         height=projection.height,
         data_url=current_image_data_url,
         stimulus_sha256=rubric_evidence_snapshot_sha256(stimulus),
+    )
+
+
+def _snapshot_rubric_stimulus(
+    value: RubricEvidenceSnapshotV1,
+) -> RubricEvidenceSnapshotV1:
+    if type(value) is not RubricEvidenceSnapshotV1:
+        raise LiveRubricError("UNTRUSTED_COLLECTOR_STIMULUS", "rubric stimulus type differs")
+    try:
+        trusted = deepcopy(value)
+        if type(trusted) is not RubricEvidenceSnapshotV1 or rubric_evidence_snapshot_sha256(
+            trusted
+        ) != rubric_evidence_snapshot_sha256(value):
+            raise TypeError("stimulus detach changed identity")
+    except Exception as exc:
+        raise LiveRubricError(
+            "UNTRUSTED_COLLECTOR_STIMULUS", "rubric stimulus could not be detached"
+        ) from exc
+    return trusted
+
+
+def _snapshot_bound_current_image(
+    value: BoundCollectorCurrentImageV1,
+) -> BoundCollectorCurrentImageV1:
+    if type(value) is not BoundCollectorCurrentImageV1:
+        raise LiveRubricError("UNTRUSTED_IMAGE", "current image type differs")
+    return BoundCollectorCurrentImageV1(
+        task_run_id=value.task_run_id,
+        logical_call_id=value.logical_call_id,
+        source_event_id=value.source_event_id,
+        source_event_seq=value.source_event_seq,
+        evidence_id=value.evidence_id,
+        content_sha256=value.content_sha256,
+        media_type=value.media_type,
+        width=value.width,
+        height=value.height,
+        data_url=value.data_url,
+        stimulus_sha256=value.stimulus_sha256,
+    )
+
+
+def _snapshot_responses_envelope(value: ResponsesEnvelopeV1) -> ResponsesEnvelopeV1:
+    if type(value) is not ResponsesEnvelopeV1:
+        raise LiveRubricError("UNTRUSTED_RESPONSE_ENVELOPE", "response envelope type differs")
+    try:
+        return ResponsesEnvelopeV1(
+            response_id=value.response_id,
+            requested_model=value.requested_model,
+            returned_model=value.returned_model,
+            status=value.status,
+            service_tier=value.service_tier,
+            output_text=value.output_text,
+            input_tokens=value.input_tokens,
+            output_tokens=value.output_tokens,
+            total_tokens=value.total_tokens,
+            schema_version=value.schema_version,
+        )
+    except (TypeError, ValueError) as exc:
+        raise LiveRubricError(
+            "UNTRUSTED_RESPONSE_ENVELOPE", "response envelope could not be detached"
+        ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class LiveRubricCallTrustAnchorV1:
+    """Ephemeral preimage proof for one completed live rubric provider call.
+
+    These values remain in memory and are never part of the persisted audit
+    projection.  The cross-binding validator uses the exact Collector
+    stimulus/current-image preimage and exact admitted Responses envelope to
+    recompute receipt hashes instead of trusting caller-supplied hash copies.
+    """
+
+    operation: LiveRubricOperationV1
+    task_run_id: str
+    logical_call_id: str
+    collector_stimulus: RubricEvidenceSnapshotV1 = field(repr=False)
+    current_image: BoundCollectorCurrentImageV1 | None = field(repr=False)
+    response_envelope: ResponsesEnvelopeV1 = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.operation) is not LiveRubricOperationV1:
+            raise LiveRubricError("UNTRUSTED_OPERATION", "rubric operation type differs")
+        _require_id(self.task_run_id, "task_run_id")
+        _require_id(self.logical_call_id, "logical_call_id")
+        stimulus = _snapshot_rubric_stimulus(self.collector_stimulus)
+        envelope = _snapshot_responses_envelope(self.response_envelope)
+        if stimulus.task_run_id != self.task_run_id:
+            raise LiveRubricError(
+                "COLLECTOR_CONTEXT_DRIFT", "rubric stimulus belongs to another task"
+            )
+        if self.operation is LiveRubricOperationV1.GENERATE:
+            if self.current_image is not None:
+                raise LiveRubricError(
+                    "GENERATION_IMAGE_LEAK", "generation trust anchor cannot carry an image"
+                )
+        else:
+            if type(self.current_image) is not BoundCollectorCurrentImageV1:
+                raise LiveRubricError(
+                    "MISSING_CURRENT_IMAGE", "tracking trust anchor needs its current image"
+                )
+            image = _snapshot_bound_current_image(self.current_image)
+            rebound = bind_current_collector_image_projection(
+                stimulus=stimulus,
+                current_image_data_url=image.data_url,
+                current_image_sha256=image.content_sha256,
+                logical_call_id=self.logical_call_id,
+            )
+            if rebound != image:
+                raise LiveRubricError(
+                    "CURRENT_IMAGE_BINDING_MISMATCH",
+                    "tracking image differs from the exact Collector stimulus",
+                )
+        # Materialize both hashes while exact preimages are still in scope.
+        rubric_evidence_snapshot_sha256(stimulus)
+        canonical_sha256(cast(JsonValue, responses_envelope_hash_projection(envelope)))
+
+
+def snapshot_live_rubric_call_trust_anchor(
+    value: LiveRubricCallTrustAnchorV1,
+) -> LiveRubricCallTrustAnchorV1:
+    if type(value) is not LiveRubricCallTrustAnchorV1:
+        raise LiveRubricError("UNTRUSTED_TRUST_ANCHOR", "rubric trust anchor type differs")
+    return LiveRubricCallTrustAnchorV1(
+        operation=value.operation,
+        task_run_id=value.task_run_id,
+        logical_call_id=value.logical_call_id,
+        collector_stimulus=_snapshot_rubric_stimulus(value.collector_stimulus),
+        current_image=(
+            None
+            if value.current_image is None
+            else _snapshot_bound_current_image(value.current_image)
+        ),
+        response_envelope=_snapshot_responses_envelope(value.response_envelope),
     )
 
 
@@ -770,6 +939,7 @@ class _RubricCallContextV1:
     actor_request_sha256: str
     deadline_monotonic_ns: int
     max_cost_usd_micros: int
+    stimulus: RubricEvidenceSnapshotV1
     image: BoundCollectorCurrentImageV1
     case_lease: CaseExecutionLeaseV1 | None
     execution_control: PolicyExecutionControlV1 | None
@@ -787,9 +957,12 @@ class _RubricCallContextV1:
             raise LiveRubricError("INVALID_COST_BOUND", "rubric cost bound is invalid")
         if type(self.image) is not BoundCollectorCurrentImageV1:
             raise LiveRubricError("UNTRUSTED_IMAGE", "current image type differs")
+        stimulus = _snapshot_rubric_stimulus(self.stimulus)
         if (
             self.image.logical_call_id != self.logical_call_id
             or self.image.task_run_id != self.task_run_id
+            or stimulus.task_run_id != self.task_run_id
+            or self.image.stimulus_sha256 != rubric_evidence_snapshot_sha256(stimulus)
         ):
             raise LiveRubricError("IMAGE_CONTEXT_DRIFT", "image belongs to another call")
 
@@ -850,6 +1023,7 @@ class _BaseRubricProviderPortV1:
     def __init__(self) -> None:
         self._contexts = _RubricContextStoreV1()
         self._receipts: list[LiveRubricCallReceiptV1] = []
+        self._trust_anchors: list[LiveRubricCallTrustAnchorV1] = []
         self._receipt_lock = threading.Lock()
         self._call_keys: set[tuple[str, str, LiveRubricOperationV1]] = set()
 
@@ -866,17 +1040,50 @@ class _BaseRubricProviderPortV1:
         with self._receipt_lock:
             return tuple(snapshot_live_rubric_call_receipt(value) for value in self._receipts)
 
+    @property
+    def trust_anchors(self) -> tuple[LiveRubricCallTrustAnchorV1, ...]:
+        with self._receipt_lock:
+            return tuple(
+                snapshot_live_rubric_call_trust_anchor(value) for value in self._trust_anchors
+            )
+
     def _reserve(self, key: tuple[str, str, LiveRubricOperationV1]) -> None:
         with self._receipt_lock:
             if key in self._call_keys:
                 raise LiveRubricError("DUPLICATE_PROVIDER_CALL", "rubric provider call repeated")
             self._call_keys.add(key)
 
-    def _publish(self, value: LiveRubricCallReceiptV1) -> None:
+    def _publish(
+        self,
+        value: LiveRubricCallReceiptV1,
+        *,
+        trust_anchor: LiveRubricCallTrustAnchorV1 | None = None,
+    ) -> None:
         if type(value) is not LiveRubricCallReceiptV1:
             raise LiveRubricError("UNTRUSTED_RECEIPT", "rubric call receipt type differs")
+        trusted_receipt = snapshot_live_rubric_call_receipt(value)
+        trusted_anchor = (
+            None if trust_anchor is None else snapshot_live_rubric_call_trust_anchor(trust_anchor)
+        )
+        if (trusted_anchor is None) != (
+            trusted_receipt.execution_scope is LiveRubricExecutionScopeV1.CPU_TEST_LOCAL
+        ):
+            raise LiveRubricError(
+                "TRUST_ANCHOR_CENSUS_MISMATCH",
+                "only a completed live rubric call may publish a trust anchor",
+            )
+        if trusted_anchor is not None and (
+            trusted_anchor.operation is not trusted_receipt.operation
+            or trusted_anchor.task_run_id != trusted_receipt.task_run_id
+            or trusted_anchor.logical_call_id != trusted_receipt.logical_call_id
+        ):
+            raise LiveRubricError(
+                "TRUST_ANCHOR_BINDING_MISMATCH", "rubric receipt and trust anchor differ"
+            )
         with self._receipt_lock:
-            self._receipts.append(snapshot_live_rubric_call_receipt(value))
+            self._receipts.append(trusted_receipt)
+            if trusted_anchor is not None:
+                self._trust_anchors.append(trusted_anchor)
 
     def _attest_extension(
         self,
@@ -957,6 +1164,7 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
                 actor_request_sha256=actor_request_sha256,
                 deadline_monotonic_ns=deadline_monotonic_ns,
                 max_cost_usd_micros=max_cost_usd_micros,
+                stimulus=_snapshot_rubric_stimulus(bundle.r23_snapshot),
                 image=image,
                 case_lease=None,
                 execution_control=None,
@@ -985,6 +1193,7 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
                 actor_request_sha256=actor_request_sha256,
                 deadline_monotonic_ns=(1 << 63) - 1,
                 max_cost_usd_micros=0,
+                stimulus=_snapshot_rubric_stimulus(stimulus),
                 image=image,
                 case_lease=None,
                 execution_control=None,
@@ -1200,6 +1409,7 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
                 actor_request_sha256=authority.actor_request_sha256,
                 deadline_monotonic_ns=authority.deadline_monotonic_ns,
                 max_cost_usd_micros=authority.max_cost_usd_micros,
+                stimulus=_snapshot_rubric_stimulus(stimulus),
                 image=image,
                 case_lease=authority.case_lease,
                 execution_control=authority.execution_control,
@@ -1280,39 +1490,50 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
             or not receipt.passed
         ):
             raise LiveRubricError("ATTEMPT_RECEIPT_DRIFT", "attempt receipt bindings differ")
+        call_receipt = LiveRubricCallReceiptV1(
+            receipt_id=f"r24-rubric-live-{hashlib.sha256((attempt_id + receipt.authority_sha256).encode()).hexdigest()[:32]}",
+            operation=operation,
+            execution_scope=self.execution_scope,
+            task_run_id=context.task_run_id,
+            logical_call_id=context.logical_call_id,
+            backend_extension_descriptor_sha256=extension.sha256,
+            r23_compatibility_descriptor_sha256=(extension.r23_compatibility_descriptor_sha256),
+            transport_kind=extension.transport_kind,
+            transport_authority=extension.transport_authority,
+            prompt_sha256=prompt_sha256,
+            provider_input_schema_version=input_schema_version,
+            provider_output_schema_sha256=output_schema_sha256,
+            provider_request_sha256=request.request_sha256,
+            provider_output_sha256=result.output_text_sha256,
+            transport_binding_sha256=transport_sha256,
+            pricing_binding_sha256=receipt.pricing_binding_sha256,
+            current_image_binding_sha256=current_image_binding_sha256,
+            manifest_sha256=receipt.manifest_sha256,
+            preflight_sha256=receipt.preflight_sha256,
+            case_execution_lease_sha256=receipt.case_execution_lease_sha256,
+            stage_sha256=receipt.stage_sha256,
+            attempt_authority_sha256=receipt.authority_sha256,
+            attempt_receipt_sha256=live_attempt_receipt_sha256(receipt),
+            requested_model=result.requested_model,
+            returned_model=result.returned_model,
+            dispatch_count=receipt.dispatch_count,
+            input_tokens=receipt.input_tokens,
+            output_tokens=receipt.output_tokens,
+            total_tokens=receipt.total_tokens,
+            cost_usd_micros=receipt.cost_usd_micros,
+        )
         self._publish(
-            LiveRubricCallReceiptV1(
-                receipt_id=f"r24-rubric-live-{hashlib.sha256((attempt_id + receipt.authority_sha256).encode()).hexdigest()[:32]}",
+            call_receipt,
+            trust_anchor=LiveRubricCallTrustAnchorV1(
                 operation=operation,
-                execution_scope=self.execution_scope,
                 task_run_id=context.task_run_id,
                 logical_call_id=context.logical_call_id,
-                backend_extension_descriptor_sha256=extension.sha256,
-                r23_compatibility_descriptor_sha256=(extension.r23_compatibility_descriptor_sha256),
-                transport_kind=extension.transport_kind,
-                transport_authority=extension.transport_authority,
-                prompt_sha256=prompt_sha256,
-                provider_input_schema_version=input_schema_version,
-                provider_output_schema_sha256=output_schema_sha256,
-                provider_request_sha256=request.request_sha256,
-                provider_output_sha256=result.output_text_sha256,
-                transport_binding_sha256=transport_sha256,
-                pricing_binding_sha256=receipt.pricing_binding_sha256,
-                current_image_binding_sha256=current_image_binding_sha256,
-                manifest_sha256=receipt.manifest_sha256,
-                preflight_sha256=receipt.preflight_sha256,
-                case_execution_lease_sha256=receipt.case_execution_lease_sha256,
-                stage_sha256=receipt.stage_sha256,
-                attempt_authority_sha256=receipt.authority_sha256,
-                attempt_receipt_sha256=live_attempt_receipt_sha256(receipt),
-                requested_model=result.requested_model,
-                returned_model=result.returned_model,
-                dispatch_count=receipt.dispatch_count,
-                input_tokens=receipt.input_tokens,
-                output_tokens=receipt.output_tokens,
-                total_tokens=receipt.total_tokens,
-                cost_usd_micros=receipt.cost_usd_micros,
-            )
+                collector_stimulus=context.stimulus,
+                current_image=(
+                    None if operation is LiveRubricOperationV1.GENERATE else context.image
+                ),
+                response_envelope=result,
+            ),
         )
         return result.output_text
 
@@ -1332,19 +1553,7 @@ class LiveOpenAIRubricBackendV1:
         self._provider = provider_port
         self._generate_schema = live_rubric_generate_schema()
         self._track_schema = live_rubric_track_schema()
-        prompt_sha256 = canonical_sha256(
-            cast(
-                JsonValue,
-                {
-                    "generate_instructions_sha256": hashlib.sha256(
-                        _GENERATE_INSTRUCTIONS.encode("utf-8")
-                    ).hexdigest(),
-                    "track_instructions_sha256": hashlib.sha256(
-                        _TRACK_INSTRUCTIONS.encode("utf-8")
-                    ).hexdigest(),
-                },
-            )
-        )
+        prompt_sha256 = live_rubric_prompt_bundle_sha256()
         root = Path(__file__).resolve().parents[6]
         rubric_schema_sha256 = hashlib.sha256(
             (root / "mobileworld_audit_handoff/schemas/r2_3/rubric.v1.schema.json").read_bytes()
@@ -1431,6 +1640,19 @@ class LiveOpenAIRubricBackendV1:
             value for value in self._provider.receipts if value.logical_call_id == logical_call_id
         )
 
+    def call_trust_anchors_for_call(
+        self,
+        logical_call_id: str,
+    ) -> tuple[LiveRubricCallTrustAnchorV1, ...]:
+        """Return detached ephemeral preimages for completed live rubric calls."""
+
+        _require_id(logical_call_id, "logical_call_id")
+        return tuple(
+            value
+            for value in self._provider.trust_anchors
+            if value.logical_call_id == logical_call_id
+        )
+
     def bind_collector_call(
         self,
         *,
@@ -1509,6 +1731,10 @@ class LiveOpenAIRubricBackendV1:
     ) -> dict[str, JsonValue]:
         request = build_canonical_history_policy_request(request_kwargs)
         prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        if prompt_sha256 != live_rubric_operation_prompt_sha256(operation):
+            raise LiveRubricError(
+                "PROMPT_BINDING_MISMATCH", "rubric prompt differs from module-owned bytes"
+            )
         output = self._provider.invoke(
             operation=operation,
             context=context,
@@ -1827,6 +2053,7 @@ __all__ = [
     "LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION",
     "LiveOpenAIRubricBackendV1",
     "LiveRubricCallReceiptV1",
+    "LiveRubricCallTrustAnchorV1",
     "LiveRubricError",
     "LiveRubricExecutionScopeV1",
     "LiveRubricOperationV1",
@@ -1838,11 +2065,14 @@ __all__ = [
     "bind_current_collector_image",
     "live_rubric_call_receipt_projection",
     "live_rubric_call_receipt_sha256",
+    "live_rubric_operation_prompt_sha256",
+    "live_rubric_prompt_bundle_sha256",
     "live_rubric_generate_schema",
     "live_rubric_track_schema",
     "r24_rubric_backend_extension_descriptor_projection",
     "r24_rubric_backend_extension_descriptor_sha256",
     "rubric_backend_descriptor_projection",
+    "snapshot_live_rubric_call_trust_anchor",
     "rubric_backend_descriptor_sha256",
     "snapshot_live_rubric_call_receipt",
     "snapshot_r24_rubric_backend_extension_descriptor",

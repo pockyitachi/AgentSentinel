@@ -109,6 +109,7 @@ from mobile_world.runtime.sentinel.r2_4.renderer import (
 )
 from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LiveRubricCallReceiptV1,
+    LiveRubricCallTrustAnchorV1,
     LiveRubricExecutionScopeV1,
     R24RubricBackendExtensionDescriptorV1,
     live_rubric_call_receipt_projection,
@@ -116,6 +117,11 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     r24_rubric_backend_extension_descriptor_projection,
     snapshot_live_rubric_call_receipt,
     snapshot_r24_rubric_backend_extension_descriptor,
+)
+from mobile_world.runtime.sentinel.r2_4.run_fatal import (
+    ProductionRunFatalError,
+    ProductionRunFatalLatchV1,
+    build_production_run_fatal_latch_v1,
 )
 
 PRODUCTION_RUNTIME_AUDIT_PRE_PROVIDER_SCHEMA_VERSION = (
@@ -1972,13 +1978,19 @@ class ProductionRuntimeAuditV1:
         *,
         policy: OwnerAuthorizedLivePerCallPolicyV1 | None,
         sink: ProductionRuntimeAuditSinkV1,
+        run_fatal_latch: ProductionRunFatalLatchV1 | None = None,
     ) -> None:
         if policy is not None and type(policy) is not OwnerAuthorizedLivePerCallPolicyV1:
             raise TypeError("production audit policy must be an exact per-call live policy or None")
         if not isinstance(sink, ProductionRuntimeAuditSinkV1):
             raise TypeError("production audit sink does not implement its protocol")
+        if run_fatal_latch is not None and type(run_fatal_latch) is not ProductionRunFatalLatchV1:
+            raise TypeError("production audit run-fatal latch type differs")
         self._policy = policy
         self._sink_begin = sink.begin
+        self._run_fatal_latch = (
+            build_production_run_fatal_latch_v1() if run_fatal_latch is None else run_fatal_latch
+        )
         self._pending: dict[str, _PendingProductionAudit] = {}
         self._completed: dict[str, ProductionRuntimeAuditReceiptV1] = {}
         self._failures: dict[str, ProductionRuntimeAuditFailureReceiptV1] = {}
@@ -2016,6 +2028,32 @@ class ProductionRuntimeAuditV1:
     @property
     def strict_provider_audit(self) -> bool:
         return True
+
+    @property
+    def run_fatal_latch(self) -> ProductionRunFatalLatchV1:
+        return self._run_fatal_latch
+
+    def _observe_and_require_run_not_fatal(
+        self,
+        logical_call_id: str,
+        *,
+        known_attempts: tuple[LiveAttemptReceiptV1, ...] | None = None,
+    ) -> None:
+        attempts = known_attempts
+        if attempts is None and self._policy is not None:
+            try:
+                attempts = self._policy.attempt_receipts_for_call(logical_call_id)
+            except R24ContractError:
+                attempts = ()
+        try:
+            if attempts is not None:
+                self._run_fatal_latch.observe_attempts(
+                    logical_call_id=logical_call_id,
+                    attempts=attempts,
+                )
+            self._run_fatal_latch.require_clear()
+        except ProductionRunFatalError as exc:
+            raise ProductionRuntimeAuditError(exc.code, str(exc)) from exc
 
     def begin_pre_provider(
         self,
@@ -2091,6 +2129,7 @@ class ProductionRuntimeAuditV1:
         binding = self._policy.call_binding(logical_call_id)
         attempts = self._policy.attempt_receipts_for_call(logical_call_id)
         rubric_call_receipts = self._policy.rubric_call_receipts_for_call(logical_call_id)
+        rubric_call_trust_anchors = self._policy.rubric_call_trust_anchors_for_call(logical_call_id)
         rubric_backend_extension = self._policy.rubric_backend_extension_descriptor()
         coordinated = self._policy.coordinated_record_for_call(logical_call_id)
         self._validate_live_bindings(
@@ -2100,6 +2139,7 @@ class ProductionRuntimeAuditV1:
             binding=binding,
             attempts=attempts,
             rubric_call_receipts=rubric_call_receipts,
+            rubric_call_trust_anchors=rubric_call_trust_anchors,
             rubric_backend_extension=rubric_backend_extension,
             coordinated=coordinated,
         )
@@ -2499,7 +2539,9 @@ class ProductionRuntimeAuditV1:
 
         attempts: tuple[LiveAttemptReceiptV1, ...] = ()
         rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...] = ()
+        rubric_call_trust_anchors: tuple[LiveRubricCallTrustAnchorV1, ...] = ()
         rubric_backend_extension: R24RubricBackendExtensionDescriptorV1 | None = None
+        expected_collector_stimulus_sha256: str | None = None
         actor_call_index: int | None = None
         policy_failure_code: str | None = None
         try:
@@ -2513,12 +2555,25 @@ class ProductionRuntimeAuditV1:
             attempts = ()
         else:
             try:
+                self._run_fatal_latch.observe_attempts(
+                    logical_call_id=logical_call_id,
+                    attempts=attempts,
+                )
+            except ProductionRunFatalError as exc:
+                raise ProductionRuntimeAuditError(exc.code, str(exc)) from exc
+            try:
                 rubric_call_receipts = tuple(
                     snapshot_live_rubric_call_receipt(item)
                     for item in self._policy.rubric_call_receipts_for_call(logical_call_id)
                 )
+                rubric_call_trust_anchors = self._policy.rubric_call_trust_anchors_for_call(
+                    logical_call_id
+                )
                 rubric_backend_extension = snapshot_r24_rubric_backend_extension_descriptor(
                     self._policy.rubric_backend_extension_descriptor()
+                )
+                expected_collector_stimulus_sha256 = (
+                    self._policy.rubric_collector_stimulus_sha256_for_call(logical_call_id)
                 )
                 actor_call_index = self._policy.actor_call_index_for_call(logical_call_id)
                 policy_failure_code = self._policy.failure_for_call(logical_call_id)
@@ -2529,7 +2584,9 @@ class ProductionRuntimeAuditV1:
                         "registered fallback call lost its rubric proof",
                     ) from exc
                 rubric_call_receipts = ()
+                rubric_call_trust_anchors = ()
                 rubric_backend_extension = None
+                expected_collector_stimulus_sha256 = None
                 actor_call_index = None
                 policy_failure_code = None
         live_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
@@ -2545,6 +2602,8 @@ class ProductionRuntimeAuditV1:
                 actor_request_sha256=raw_hash,
                 attempts=attempts,
                 rubric_call_receipts=rubric_call_receipts,
+                rubric_call_trust_anchors=rubric_call_trust_anchors,
+                expected_collector_stimulus_sha256=(expected_collector_stimulus_sha256),
                 rubric_backend_extension=rubric_backend_extension,
                 binding=binding,
                 actor_call_index=(
@@ -2789,6 +2848,7 @@ class ProductionRuntimeAuditV1:
             snapshot_live_rubric_call_receipt(item)
             for item in self._policy.rubric_call_receipts_for_call(logical_call_id)
         )
+        rubric_call_trust_anchors = self._policy.rubric_call_trust_anchors_for_call(logical_call_id)
         rubric_backend_extension = snapshot_r24_rubric_backend_extension_descriptor(
             self._policy.rubric_backend_extension_descriptor()
         )
@@ -2799,6 +2859,8 @@ class ProductionRuntimeAuditV1:
                 actor_request_sha256=raw_hash,
                 attempts=attempts,
                 rubric_call_receipts=rubric_call_receipts,
+                rubric_call_trust_anchors=rubric_call_trust_anchors,
+                expected_collector_stimulus_sha256=(coordinated.history_free_stimulus_sha256),
                 rubric_backend_extension=rubric_backend_extension,
                 binding=binding,
                 actor_call_index=binding.actor_call_index,
@@ -3036,6 +3098,7 @@ class ProductionRuntimeAuditV1:
         binding: ResolvedLivePolicyCallBindingV1,
         attempts: tuple[LiveAttemptReceiptV1, ...],
         rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...],
+        rubric_call_trust_anchors: tuple[LiveRubricCallTrustAnchorV1, ...],
         rubric_backend_extension: R24RubricBackendExtensionDescriptorV1,
         coordinated: R24CoordinatedCallRecordV1,
     ) -> None:
@@ -3050,6 +3113,8 @@ class ProductionRuntimeAuditV1:
                 actor_request_sha256=raw_request_sha256,
                 attempts=attempts,
                 rubric_call_receipts=rubric_call_receipts,
+                rubric_call_trust_anchors=rubric_call_trust_anchors,
+                expected_collector_stimulus_sha256=(coordinated.history_free_stimulus_sha256),
                 rubric_backend_extension=rubric_backend_extension,
                 binding=binding,
                 actor_call_index=binding.actor_call_index,
@@ -3143,6 +3208,8 @@ class ProductionRuntimeAuditV1:
     ) -> str:
         """Bind the exact kwargs immediately before ``create`` is invoked."""
 
+        _require_id(logical_call_id, "logical_call_id")
+        self._observe_and_require_run_not_fatal(logical_call_id)
         if type(stream) is not bool:
             raise ProductionRuntimeAuditError("UNTRUSTED_TYPE", "stream flag is invalid")
         if stream:

@@ -3,6 +3,8 @@ import copy
 import math
 import os
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from io import BytesIO
 
 import backoff
@@ -88,6 +90,19 @@ class AndroidEnvClient:
         if remaining <= 0:
             raise TimeoutError("MobileWorld case request deadline elapsed")
         return remaining if ceiling_seconds is None else min(float(ceiling_seconds), remaining)
+
+    @contextmanager
+    def request_deadline_scope(self, deadline_monotonic_ns: int) -> Iterator[None]:
+        """Temporarily narrow/extend this unit client to an already-authorized deadline."""
+
+        if type(deadline_monotonic_ns) is not int or deadline_monotonic_ns <= time.monotonic_ns():
+            raise ValueError("request deadline must be a future monotonic timestamp")
+        prior = self._request_deadline_monotonic_ns
+        self._request_deadline_monotonic_ns = deadline_monotonic_ns
+        try:
+            yield
+        finally:
+            self._request_deadline_monotonic_ns = prior
 
     def _ensure_initialized(self):
         """Ensure the device is initialized."""
@@ -352,16 +367,26 @@ class AndroidEnvClient:
             logger.error(f"Failed to initialize task {task_name}: {e}")
             raise RuntimeError(f"Failed to initialize task {task_name}: {e}")
 
-    def tear_down_task(self, task_type: str) -> Response:
+    def tear_down_task(
+        self,
+        task_type: str,
+        *,
+        dispatch_started: Callable[[], None] | None = None,
+    ) -> Response:
         """Tears down the task in the environment."""
         self._ensure_initialized()
 
         try:
             tear_down_data = {"task_name": task_type, "req_device": self.device}
+            timeout = self._request_timeout()
+            if dispatch_started is not None:
+                if not callable(dispatch_started):
+                    raise TypeError("dispatch_started must be callable")
+                dispatch_started()
             response = self._session.post(
                 f"{self.base_url}/task/tear_down",
                 json=tear_down_data,
-                timeout=self._request_timeout(),
+                timeout=timeout,
             )
             response.raise_for_status()
 

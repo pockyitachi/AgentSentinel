@@ -74,6 +74,7 @@ from mobile_world.runtime.sentinel import (
 from mobile_world.runtime.sentinel.r2_4.capabilities import build_runtime_history_codec_resolver
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes, canonical_sha256
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1,
     LiveAttemptPricingV1,
     LiveAttemptRoleV1,
     live_attempt_pricing_sha256,
@@ -125,6 +126,12 @@ from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     ProductionPostPreflightFactoryV1,
     case_execution_lease_sha256,
 )
+from mobile_world.runtime.sentinel.r2_4.run_fatal import (
+    ProductionRunFatalError,
+    build_production_run_fatal_latch_v1,
+    production_run_fatal_state_projection,
+    production_run_fatal_state_sha256,
+)
 from mobile_world.runtime.sentinel.r2_5.pilot import (
     FrozenPilotManifestV1,
     PilotArmV1,
@@ -175,6 +182,9 @@ _PRODUCTION_INSTALLATION_SEAL: Final[object] = object()
 _VLLM_MAX_MODEL_LEN: Final[int] = 32_768
 _VLLM_MAX_BATCHED_TOKENS: Final[int] = 8_192
 _MOBILEWORLD_BACKEND_IMAGE: Final[str] = "mobile_world:reset"
+_PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1: Final[int] = (
+    PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+)
 _MOBILEWORLD_BACKEND_CONTAINER_PORT: Final[int] = 6_800
 _DOCKER_EXECUTABLE: Final[str] = "/usr/bin/docker"
 _NVIDIA_SMI_EXECUTABLE: Final[str] = "/usr/bin/nvidia-smi"
@@ -641,6 +651,14 @@ class ProductionRuntimeConfigV1:
                 raise ProductionDriverError(
                     "INVALID_RESOURCE_CONFIG", f"{name} is outside its hard bound"
                 )
+        if (
+            self.shutdown_grace_seconds * 1_000_000_000
+            <= _PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+        ):
+            raise ProductionDriverError(
+                "INSUFFICIENT_SHUTDOWN_GRACE",
+                "shutdown grace must exceed the sealed attempt termination bound",
+            )
 
 
 def production_runtime_config_projection(
@@ -4124,6 +4142,9 @@ class _SmokeInvocationV1:
     actor_resource_sha256: str
     history_policy_stage_sha256: str
     deadline_monotonic_ns: int
+    cleanup_deadline_monotonic_ns: int
+    authority_deadline_monotonic_ns: int
+    attempt_termination_upper_bound_ns: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -4136,6 +4157,9 @@ class _PilotInvocationV1:
     actor_resource_sha256: str
     history_policy_stage_sha256: str
     deadline_monotonic_ns: int
+    cleanup_deadline_monotonic_ns: int
+    authority_deadline_monotonic_ns: int
+    attempt_termination_upper_bound_ns: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -4160,6 +4184,82 @@ class _PilotPortResultV1:
 @dataclass(frozen=True, slots=True)
 class _CleanupResultV1:
     cleanup_receipt_sha256: str
+
+
+def _deadline_projection(
+    *,
+    execution_deadline: int,
+    cleanup_deadline: int,
+    authority_deadline: int,
+    attempt_termination_upper_bound_ns: int,
+) -> dict[str, JsonValue]:
+    grace_ns = cleanup_deadline - execution_deadline
+    teardown_budget_ns = grace_ns - attempt_termination_upper_bound_ns
+    projection: dict[str, JsonValue] = {
+        "attempt_termination_upper_bound_ns": attempt_termination_upper_bound_ns,
+        "authority_deadline_monotonic_ns": authority_deadline,
+        "cleanup_deadline_monotonic_ns": cleanup_deadline,
+        "cleanup_grace_ns": grace_ns,
+        "cleanup_within_owner_authority": cleanup_deadline <= authority_deadline,
+        "execution_deadline_monotonic_ns": execution_deadline,
+        "teardown_budget_ns": teardown_budget_ns,
+        "teardown_budget_positive": teardown_budget_ns > 0,
+    }
+    projection["deadline_binding_sha256"] = _hash_projection(
+        "production-unit-deadline-binding", cast(JsonValue, projection)
+    )
+    return projection
+
+
+def _unit_deadline_projection(
+    invocation: _SmokeInvocationV1 | _PilotInvocationV1,
+) -> dict[str, JsonValue]:
+    return _deadline_projection(
+        execution_deadline=invocation.deadline_monotonic_ns,
+        cleanup_deadline=invocation.cleanup_deadline_monotonic_ns,
+        authority_deadline=invocation.authority_deadline_monotonic_ns,
+        attempt_termination_upper_bound_ns=(invocation.attempt_termination_upper_bound_ns),
+    )
+
+
+def _freeze_unit_deadlines(
+    *,
+    unit_started_ns: int,
+    unit_timeout_seconds: int,
+    authority_deadline_monotonic_ns: int,
+    shutdown_grace_seconds: int,
+    attempt_termination_upper_bound_ns: int,
+) -> tuple[int, int]:
+    if (
+        type(unit_started_ns) is not int
+        or type(unit_timeout_seconds) is not int
+        or unit_timeout_seconds <= 0
+        or type(authority_deadline_monotonic_ns) is not int
+        or type(shutdown_grace_seconds) is not int
+        or not 0 <= shutdown_grace_seconds <= 60
+        or type(attempt_termination_upper_bound_ns) is not int
+        or attempt_termination_upper_bound_ns < 0
+    ):
+        raise ProductionDriverError("INVALID_DEADLINE_BINDING", "unit deadline input differs")
+    cleanup_deadline = min(
+        authority_deadline_monotonic_ns,
+        unit_started_ns + unit_timeout_seconds * 1_000_000_000,
+    )
+    execution_deadline = cleanup_deadline - shutdown_grace_seconds * 1_000_000_000
+    if (
+        shutdown_grace_seconds > 0
+        and shutdown_grace_seconds * 1_000_000_000 <= attempt_termination_upper_bound_ns
+    ):
+        raise ProductionDriverError(
+            "INSUFFICIENT_SHUTDOWN_GRACE",
+            "cleanup grace leaves no teardown budget after attempt termination",
+        )
+    if execution_deadline <= unit_started_ns:
+        raise ProductionDriverError(
+            "INSUFFICIENT_CLEANUP_WINDOW",
+            "owner/unit authority cannot reserve the configured cleanup grace",
+        )
+    return execution_deadline, cleanup_deadline
 
 
 def _exception_code(error: BaseException | None, default: str) -> str:
@@ -4221,6 +4321,7 @@ def _smoke_current_unit_projection(
         "port_result": port_projection,
         "sequence_index": invocation.sequence_index,
         "task_id": invocation.case.task_id,
+        "unit_deadline": cast(JsonValue, _unit_deadline_projection(invocation)),
     }
     projection["canonical_evidence_sha256"] = _hash_projection(
         "smoke-current-unit-failure-journal", cast(JsonValue, projection)
@@ -4276,6 +4377,7 @@ def _pilot_current_unit_projection(
         "sequence_index": invocation.sequence_index,
         "sentinel_mode": invocation.cell.sentinel_mode,
         "task_id": invocation.cell.task_id,
+        "unit_deadline": cast(JsonValue, _unit_deadline_projection(invocation)),
     }
     projection["canonical_evidence_sha256"] = _hash_projection(
         "pilot-current-unit-failure-journal", cast(JsonValue, projection)
@@ -4412,6 +4514,14 @@ class _CpuFixedExecutionPortV1:
     def _record(self, event: str) -> None:
         with self._lock:
             self._events.append(event)
+
+    @property
+    def shutdown_grace_seconds(self) -> int:
+        return 0
+
+    @property
+    def attempt_termination_upper_bound_ns(self) -> int:
+        return 0
 
     @staticmethod
     def _unit_id(invocation: _SmokeInvocationV1 | _PilotInvocationV1) -> str:
@@ -4717,6 +4827,7 @@ class _CpuFixedExecutionPortV1:
                 cast(
                     JsonValue,
                     {
+                        "deadline_binding": cast(JsonValue, _unit_deadline_projection(invocation)),
                         "manifest_sha256": invocation.manifest_sha256,
                         "unit_id": unit_id,
                     },
@@ -4743,6 +4854,9 @@ class _ProductionUnitStateV1:
     host: PilotHostV1
     task_name: str
     deadline_monotonic_ns: int
+    cleanup_deadline_monotonic_ns: int
+    authority_deadline_monotonic_ns: int
+    attempt_termination_upper_bound_ns: int
     environment: AndroidEnvClient | None
     observation: Observation | None
     task_input: PilotResetTaskInitInputV1 | None = None
@@ -4786,6 +4900,7 @@ class _ProductionFixedExecutionPortV1:
         "_pricing",
         "_resource_lifecycle",
         "_resources",
+        "_run_fatal_latch",
         "_sentinel_receipt_sink",
         "_unit_journals",
         "_units",
@@ -4826,6 +4941,7 @@ class _ProductionFixedExecutionPortV1:
         self._audit_sink = audit_sink
         self._budget_ledger = budget_ledger
         self._resource_lifecycle = resource_lifecycle
+        self._run_fatal_latch = build_production_run_fatal_latch_v1()
         self._manifest = manifest
         _attest_openai_sdk_version(manifest.openai_stages)
         self._resources = {item.host: item for item in manifest.actor_resources}
@@ -4847,6 +4963,42 @@ class _ProductionFixedExecutionPortV1:
             raise ProductionDriverError("CASE_DEADLINE_EXCEEDED", "case wall deadline elapsed")
         return deadline_ns
 
+    @property
+    def shutdown_grace_seconds(self) -> int:
+        return self._config.shutdown_grace_seconds
+
+    @property
+    def attempt_termination_upper_bound_ns(self) -> int:
+        return _PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+
+    def _require_invocation_deadlines(
+        self, invocation: _SmokeInvocationV1 | _PilotInvocationV1
+    ) -> None:
+        execution_deadline = invocation.deadline_monotonic_ns
+        cleanup_deadline = invocation.cleanup_deadline_monotonic_ns
+        authority_deadline = invocation.authority_deadline_monotonic_ns
+        attempt_termination_bound = invocation.attempt_termination_upper_bound_ns
+        grace_ns = self._config.shutdown_grace_seconds * 1_000_000_000
+        if (
+            type(execution_deadline) is not int
+            or type(cleanup_deadline) is not int
+            or cleanup_deadline <= execution_deadline
+            or cleanup_deadline - execution_deadline > grace_ns
+            or cleanup_deadline > authority_deadline
+            or attempt_termination_bound != _PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+            or cleanup_deadline - execution_deadline <= attempt_termination_bound
+        ):
+            raise ProductionDriverError(
+                "INVALID_DEADLINE_BINDING", "unit execution/cleanup deadline binding differs"
+            )
+        self._require_deadline(execution_deadline)
+
+    def _require_run_dispatch_allowed(self) -> None:
+        try:
+            self._run_fatal_latch.require_clear()
+        except ProductionRunFatalError as exc:
+            raise ProductionDriverError(exc.code, str(exc)) from exc
+
     def _require_resource_dispatch(
         self,
         host: PilotHostV1,
@@ -4854,7 +5006,16 @@ class _ProductionFixedExecutionPortV1:
         *,
         deadline_ns: int,
     ) -> None:
-        self._require_deadline(deadline_ns)
+        try:
+            self._require_deadline(deadline_ns)
+        except ProductionDriverError as exc:
+            if kind is ProductionDispatchKindV1.CLEANUP:
+                raise ProductionDriverError(
+                    "CLEANUP_DEADLINE_EXCEEDED", "unit cleanup authority elapsed"
+                ) from exc
+            raise
+        if kind is not ProductionDispatchKindV1.CLEANUP:
+            self._require_run_dispatch_allowed()
         self._resource_lifecycle.require_dispatch(
             host,
             kind,
@@ -5034,7 +5195,11 @@ class _ProductionFixedExecutionPortV1:
                 case_deadline_monotonic_ns=deadline_ns,
             )
             policy = live_policy
-        audit = ProductionRuntimeAuditV1(policy=live_policy, sink=self._audit_sink)
+        audit = ProductionRuntimeAuditV1(
+            policy=live_policy,
+            sink=self._audit_sink,
+            run_fatal_latch=self._run_fatal_latch,
+        )
         timeout_ms = max(1, (deadline_ns - time.monotonic_ns()) // 1_000_000)
         config = SentinelHostConfig(
             mode=SentinelMode(mode.value),
@@ -5060,6 +5225,7 @@ class _ProductionFixedExecutionPortV1:
         initial_observation: Observation,
     ) -> None:
         self._require_deadline(invocation.deadline_monotonic_ns)
+        self._require_run_dispatch_allowed()
         if isinstance(invocation, _SmokeInvocationV1):
             host = invocation.host
             mode = invocation.case.mode
@@ -5310,6 +5476,7 @@ class _ProductionFixedExecutionPortV1:
         self._journal_latest_audit_terminals(state)
         decisions = [_decision_projection(item) for item in state.decision_journal]
         terminals = [dict(item) for item in state.terminal_audit_journal]
+        fatal_state = self._run_fatal_latch.state
         raw = canonical_json_bytes(
             cast(
                 JsonValue,
@@ -5322,6 +5489,27 @@ class _ProductionFixedExecutionPortV1:
                     "terminal_audit_records_sha256": _hash_projection(
                         "production-unit-terminal-audit-journal",
                         cast(JsonValue, terminals),
+                    ),
+                    "run_fatal_state": (
+                        None
+                        if fatal_state is None
+                        else production_run_fatal_state_projection(fatal_state)
+                    ),
+                    "run_fatal_state_sha256": (
+                        None
+                        if fatal_state is None
+                        else production_run_fatal_state_sha256(fatal_state)
+                    ),
+                    "unit_deadline": cast(
+                        JsonValue,
+                        _deadline_projection(
+                            execution_deadline=state.deadline_monotonic_ns,
+                            cleanup_deadline=state.cleanup_deadline_monotonic_ns,
+                            authority_deadline=state.authority_deadline_monotonic_ns,
+                            attempt_termination_upper_bound_ns=(
+                                state.attempt_termination_upper_bound_ns
+                            ),
+                        ),
                     ),
                     "unit_id": state.unit_id,
                 },
@@ -5658,7 +5846,8 @@ class _ProductionFixedExecutionPortV1:
             self._pilot_inputs = resolved
 
     def reset_pilot_cell(self, invocation: _PilotInvocationV1) -> _PilotResetResultV1:
-        self._require_deadline(invocation.deadline_monotonic_ns)
+        self._require_invocation_deadlines(invocation)
+        self._require_run_dispatch_allowed()
         unit_id = self._unit_id(invocation)
         with self._lock:
             resolved = self._pilot_inputs
@@ -5691,6 +5880,9 @@ class _ProductionFixedExecutionPortV1:
                 host=invocation.cell.host,
                 task_name=task_input.task_name,
                 deadline_monotonic_ns=invocation.deadline_monotonic_ns,
+                cleanup_deadline_monotonic_ns=invocation.cleanup_deadline_monotonic_ns,
+                authority_deadline_monotonic_ns=invocation.authority_deadline_monotonic_ns,
+                attempt_termination_upper_bound_ns=(invocation.attempt_termination_upper_bound_ns),
                 environment=environment,
                 observation=None,
                 task_input=task_input,
@@ -5764,7 +5956,8 @@ class _ProductionFixedExecutionPortV1:
         lease: CaseAuthorityBrokerV1,
     ) -> _SmokePortResultV1:
         self._require_broker(lease)
-        self._require_deadline(invocation.deadline_monotonic_ns)
+        self._require_invocation_deadlines(invocation)
+        self._require_run_dispatch_allowed()
         fixture = _read_hash_bound_smoke_fixture(
             invocation.case,
             host=invocation.host,
@@ -5780,6 +5973,9 @@ class _ProductionFixedExecutionPortV1:
             host=invocation.host,
             task_name=invocation.case.task_id,
             deadline_monotonic_ns=invocation.deadline_monotonic_ns,
+            cleanup_deadline_monotonic_ns=invocation.cleanup_deadline_monotonic_ns,
+            authority_deadline_monotonic_ns=invocation.authority_deadline_monotonic_ns,
+            attempt_termination_upper_bound_ns=invocation.attempt_termination_upper_bound_ns,
             environment=None,
             observation=observation,
         )
@@ -5808,6 +6004,7 @@ class _ProductionFixedExecutionPortV1:
         lease: CaseAuthorityBrokerV1,
     ) -> _PilotPortResultV1:
         self._require_broker(lease)
+        self._require_run_dispatch_allowed()
         unit_id = self._unit_id(invocation)
         with self._lock:
             state = self._units.get(unit_id)
@@ -5825,6 +6022,7 @@ class _ProductionFixedExecutionPortV1:
         decisions: list[ActorDecisionEvidenceV1] = []
         for actor_call_index in range(1, self._manifest.pilot.max_steps_per_cell + 1):
             self._require_deadline(invocation.deadline_monotonic_ns)
+            self._require_run_dispatch_allowed()
             observation = state.observation
             agent = state.agent
             binding = state.task_binding
@@ -6075,6 +6273,17 @@ class _ProductionFixedExecutionPortV1:
             state = self._units.get(unit_id)
         if state is None:
             raise ProductionDriverError("UNIT_RUNTIME_MISSING", "unit cleanup state is absent")
+        if (
+            state.deadline_monotonic_ns != invocation.deadline_monotonic_ns
+            or state.cleanup_deadline_monotonic_ns != invocation.cleanup_deadline_monotonic_ns
+            or state.authority_deadline_monotonic_ns != invocation.authority_deadline_monotonic_ns
+            or state.attempt_termination_upper_bound_ns
+            != invocation.attempt_termination_upper_bound_ns
+        ):
+            raise ProductionDriverError(
+                "UNIT_DEADLINE_BINDING_MISMATCH",
+                "unit cleanup invocation differs from its frozen deadlines",
+            )
         journal_raw = self._unit_journal_snapshot(state)
         with self._lock:
             prior_journal = self._unit_journals.setdefault(unit_id, journal_raw)
@@ -6083,21 +6292,37 @@ class _ProductionFixedExecutionPortV1:
                 "UNIT_EVIDENCE_JOURNAL_DRIFT",
                 "per-unit terminal evidence changed across cleanup retry",
             )
-        failures: list[str] = []
+        cleanup_deadline_expired = time.monotonic_ns() >= state.cleanup_deadline_monotonic_ns
+        cleanup_dispatch_failure_code: str | None = (
+            "CLEANUP_DEADLINE_EXCEEDED" if cleanup_deadline_expired else None
+        )
+        failures: list[str] = ["CLEANUP_DEADLINE_EXCEEDED"] if cleanup_deadline_expired else []
         teardown_result: object = None
         teardown_result_sha256: str | None = None
         teardown_attempted = False
-        if state.environment is not None:
-            teardown_attempted = True
+        if state.environment is not None and not cleanup_deadline_expired:
             try:
                 self._require_resource_dispatch(
                     state.host,
                     ProductionDispatchKindV1.CLEANUP,
-                    deadline_ns=state.deadline_monotonic_ns,
+                    deadline_ns=state.cleanup_deadline_monotonic_ns,
                 )
-                teardown_result = state.environment.tear_down_task(state.task_name)
+
+                def mark_teardown_dispatched() -> None:
+                    nonlocal teardown_attempted
+                    teardown_attempted = True
+
+                with state.environment.request_deadline_scope(state.cleanup_deadline_monotonic_ns):
+                    teardown_result = state.environment.tear_down_task(
+                        state.task_name,
+                        dispatch_started=mark_teardown_dispatched,
+                    )
                 if type(teardown_result) is not Response or teardown_result.status != "success":
-                    failures.append("TASK_TEARDOWN_REJECTED")
+                    if time.monotonic_ns() >= state.cleanup_deadline_monotonic_ns:
+                        cleanup_dispatch_failure_code = "CLEANUP_DEADLINE_EXCEEDED"
+                        failures.append(cleanup_dispatch_failure_code)
+                    else:
+                        failures.append("TASK_TEARDOWN_REJECTED")
                 else:
                     teardown_result_sha256 = _hash_projection(
                         "production-task-teardown-result",
@@ -6112,8 +6337,18 @@ class _ProductionFixedExecutionPortV1:
                             },
                         ),
                     )
+            except Exception as exc:
+                cleanup_dispatch_failure_code = (
+                    "CLEANUP_DEADLINE_EXCEEDED"
+                    if time.monotonic_ns() >= state.cleanup_deadline_monotonic_ns
+                    else _exception_code(exc, "TASK_TEARDOWN_FAILED")
+                )
+                failures.append(cleanup_dispatch_failure_code)
+            try:
+                state.environment.close()
             except Exception:
-                failures.append("TASK_TEARDOWN_FAILED")
+                failures.append("ENVIRONMENT_CLOSE_FAILED")
+        elif state.environment is not None:
             try:
                 state.environment.close()
             except Exception:
@@ -6131,36 +6366,56 @@ class _ProductionFixedExecutionPortV1:
         if state.lifecycle is not None and state.task_binding is not None:
             binding = state.task_binding
             task_run_id = binding.metadata.task_run_id
-            binding.capture.end_task(
-                runtime_status="completed" if state.completed and not failures else "crashed",
-                termination_source="production_driver",
-                final_step_index=state.final_step_index,
-                score=state.score,
-                reason=state.score_reason,
-                teardown_attempted=teardown_attempted,
-                teardown_result=teardown_result,
-                token_usage=({} if state.agent is None else state.agent.get_total_token_usage()),
-            )
-            if not binding.capture.capture_complete:
-                failures.append("COLLECTOR_INCOMPLETE")
-            state.lifecycle.finish_task_attempt(
-                binding=binding,
-                result=None,
-                exception=None,
-                retry_planned=False,
-                runtime_status="completed" if state.completed and not failures else "crashed",
-            )
-            final_path = state.lifecycle.finalize(
-                runtime_status="completed" if state.completed and not failures else "crashed"
-            )
-            if final_path is None or not final_path.is_file() or final_path.is_symlink():
+            runtime_status = "completed" if state.completed and not failures else "crashed"
+            try:
+                binding.capture.end_task(
+                    runtime_status=runtime_status,
+                    termination_source="production_driver",
+                    final_step_index=state.final_step_index,
+                    score=state.score,
+                    reason=state.score_reason,
+                    teardown_attempted=teardown_attempted,
+                    teardown_result=teardown_result,
+                    token_usage=(
+                        {} if state.agent is None else state.agent.get_total_token_usage()
+                    ),
+                )
+                if not binding.capture.capture_complete:
+                    failures.append("COLLECTOR_INCOMPLETE")
+            except Exception:
+                failures.append("COLLECTOR_END_TASK_FAILED")
+            try:
+                state.lifecycle.finish_task_attempt(
+                    binding=binding,
+                    result=None,
+                    exception=None,
+                    retry_planned=False,
+                    runtime_status=runtime_status,
+                )
+            except Exception:
+                failures.append("COLLECTOR_FINISH_ATTEMPT_FAILED")
+            try:
+                final_path = state.lifecycle.finalize(runtime_status=runtime_status)
+                if final_path is None or not final_path.is_file() or final_path.is_symlink():
+                    failures.append("COLLECTOR_FINALIZE_FAILED")
+                else:
+                    raw = final_path.read_bytes()
+                    final_manifest_hash = hashlib.sha256(raw).hexdigest()
+            except Exception:
                 failures.append("COLLECTOR_FINALIZE_FAILED")
-            else:
-                raw = final_path.read_bytes()
-                final_manifest_hash = hashlib.sha256(raw).hexdigest()
+        if (
+            cleanup_dispatch_failure_code is None
+            and time.monotonic_ns() >= state.cleanup_deadline_monotonic_ns
+        ):
+            cleanup_dispatch_failure_code = "CLEANUP_DEADLINE_EXCEEDED"
+            failures.append(cleanup_dispatch_failure_code)
         if failures:
+            if cleanup_dispatch_failure_code == "CLEANUP_DEADLINE_EXCEEDED":
+                with self._lock:
+                    self._units.pop(unit_id, None)
             raise ProductionDriverError(
-                "UNIT_CLEANUP_FAILED", "production unit cleanup failed: " + ",".join(failures)
+                cleanup_dispatch_failure_code or "UNIT_CLEANUP_FAILED",
+                "production unit cleanup failed: " + ",".join(failures),
             )
         with self._lock:
             self._units.pop(unit_id, None)
@@ -6170,7 +6425,21 @@ class _ProductionFixedExecutionPortV1:
                 cast(
                     JsonValue,
                     {
+                        "cleanup_dispatch_authorized": (
+                            teardown_attempted if state.environment is not None else None
+                        ),
                         "collector_manifest_sha256": final_manifest_hash,
+                        "deadline_binding": cast(
+                            JsonValue,
+                            _deadline_projection(
+                                execution_deadline=state.deadline_monotonic_ns,
+                                cleanup_deadline=state.cleanup_deadline_monotonic_ns,
+                                authority_deadline=state.authority_deadline_monotonic_ns,
+                                attempt_termination_upper_bound_ns=(
+                                    state.attempt_termination_upper_bound_ns
+                                ),
+                            ),
+                        ),
                         "manifest_sha256": invocation.manifest_sha256,
                         "task_run_id": task_run_id,
                         "teardown_attempted": teardown_attempted,
@@ -6333,6 +6602,17 @@ class FixedLiveSmokeAdapterV1:
             records: list[SmokeCaseEvidenceV1] = []
             for index, case in enumerate(trusted_plan.cases):
                 unit_started_ns = time.monotonic_ns()
+                execution_deadline_ns, cleanup_deadline_ns = _freeze_unit_deadlines(
+                    unit_started_ns=unit_started_ns,
+                    unit_timeout_seconds=case.max_wall_time_seconds,
+                    authority_deadline_monotonic_ns=(
+                        trusted_context.authority_deadline_monotonic_ns
+                    ),
+                    shutdown_grace_seconds=self._port.shutdown_grace_seconds,
+                    attempt_termination_upper_bound_ns=(
+                        self._port.attempt_termination_upper_bound_ns
+                    ),
+                )
                 invocation = _SmokeInvocationV1(
                     manifest_sha256=trusted_context.manifest_sha256,
                     run_id=trusted_context.run_id,
@@ -6342,9 +6622,13 @@ class FixedLiveSmokeAdapterV1:
                     case=case,
                     actor_resource_sha256=resource_sha,
                     history_policy_stage_sha256=policy_sha,
-                    deadline_monotonic_ns=min(
-                        trusted_context.authority_deadline_monotonic_ns,
-                        unit_started_ns + case.max_wall_time_seconds * 1_000_000_000,
+                    deadline_monotonic_ns=execution_deadline_ns,
+                    cleanup_deadline_monotonic_ns=cleanup_deadline_ns,
+                    authority_deadline_monotonic_ns=(
+                        trusted_context.authority_deadline_monotonic_ns
+                    ),
+                    attempt_termination_upper_bound_ns=(
+                        self._port.attempt_termination_upper_bound_ns
                     ),
                 )
                 port_result: _SmokePortResultV1 | None = None
@@ -6378,11 +6662,12 @@ class FixedLiveSmokeAdapterV1:
                 except Exception as exc:
                     cleanup_error = exc
                 if cleanup_error is not None:
+                    cleanup_failure_code = _exception_code(cleanup_error, "UNIT_CLEANUP_FAILED")
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         unit_failure_evidence = self._port.failure_evidence_for_unit(
                             invocation,
                             failure_phase="CLEANUP",
-                            failure_code=_exception_code(cleanup_error, "UNIT_CLEANUP_FAILED"),
+                            failure_code=cleanup_failure_code,
                         )
                     self._failure_evidence[stage] = _smoke_unit_failure_preimage(
                         context=trusted_context,
@@ -6395,11 +6680,11 @@ class FixedLiveSmokeAdapterV1:
                         cleanup_error=cleanup_error,
                         dispatch_error=dispatch_error,
                         failure_phase="CLEANUP",
-                        failure_code="UNIT_CLEANUP_FAILED",
+                        failure_code=cleanup_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
                     raise ProductionDriverError(
-                        "UNIT_CLEANUP_FAILED", "smoke unit cleanup failed closed"
+                        cleanup_failure_code, "smoke unit cleanup failed closed"
                     ) from None
                 if dispatch_error is not None or port_result is None:
                     self._failure_evidence[stage] = _smoke_unit_failure_preimage(
@@ -6622,6 +6907,17 @@ class FixedPilotAdapterV1:
             effective_reset_states: dict[str, str] = {}
             for index, cell in enumerate(trusted_pilot.cells):
                 unit_started_ns = time.monotonic_ns()
+                execution_deadline_ns, cleanup_deadline_ns = _freeze_unit_deadlines(
+                    unit_started_ns=unit_started_ns,
+                    unit_timeout_seconds=trusted_pilot.per_cell_timeout_seconds,
+                    authority_deadline_monotonic_ns=(
+                        trusted_context.authority_deadline_monotonic_ns
+                    ),
+                    shutdown_grace_seconds=self._port.shutdown_grace_seconds,
+                    attempt_termination_upper_bound_ns=(
+                        self._port.attempt_termination_upper_bound_ns
+                    ),
+                )
                 invocation = _PilotInvocationV1(
                     manifest_sha256=trusted_context.manifest_sha256,
                     run_id=trusted_context.run_id,
@@ -6630,9 +6926,13 @@ class FixedPilotAdapterV1:
                     cell=cell,
                     actor_resource_sha256=resource_hashes[cell.host],
                     history_policy_stage_sha256=policy_sha,
-                    deadline_monotonic_ns=min(
-                        trusted_context.authority_deadline_monotonic_ns,
-                        unit_started_ns + trusted_pilot.per_cell_timeout_seconds * 1_000_000_000,
+                    deadline_monotonic_ns=execution_deadline_ns,
+                    cleanup_deadline_monotonic_ns=cleanup_deadline_ns,
+                    authority_deadline_monotonic_ns=(
+                        trusted_context.authority_deadline_monotonic_ns
+                    ),
+                    attempt_termination_upper_bound_ns=(
+                        self._port.attempt_termination_upper_bound_ns
                     ),
                 )
                 reset: _PilotResetResultV1 | None = None
@@ -6673,11 +6973,12 @@ class FixedPilotAdapterV1:
                 except Exception as exc:
                     cleanup_error = exc
                 if cleanup_error is not None:
+                    cleanup_failure_code = _exception_code(cleanup_error, "UNIT_CLEANUP_FAILED")
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         unit_failure_evidence = self._port.failure_evidence_for_unit(
                             invocation,
                             failure_phase="CLEANUP",
-                            failure_code=_exception_code(cleanup_error, "UNIT_CLEANUP_FAILED"),
+                            failure_code=cleanup_failure_code,
                         )
                     self._failure_evidence = _pilot_unit_failure_preimage(
                         context=trusted_context,
@@ -6690,11 +6991,11 @@ class FixedPilotAdapterV1:
                         cleanup_error=cleanup_error,
                         dispatch_error=dispatch_error,
                         failure_phase="CLEANUP",
-                        failure_code="UNIT_CLEANUP_FAILED",
+                        failure_code=cleanup_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
                     raise ProductionDriverError(
-                        "UNIT_CLEANUP_FAILED", "pilot unit cleanup failed closed"
+                        cleanup_failure_code, "pilot unit cleanup failed closed"
                     ) from None
                 if dispatch_error is not None or reset is None or port_result is None:
                     self._failure_evidence = _pilot_unit_failure_preimage(
