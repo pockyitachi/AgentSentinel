@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a corrected CPU/offline/injected-fake, SHADOW-only candidate at `54381b7b56b06d5aa262005af62b65269b4cf0a6`, pending owner review and not counted as accepted. ALE-327 / R2.4 and ALE-328 / R2.5 additionally have a joint CPU-only/offline/injected-fake repository-preparation candidate at `344e1c452e54aa01dc1bf29650af234f30a23f81`, also pending owner review and not counted as accepted. No `OWNER_AUTHORIZED` manifest was issued, and no live smoke or pilot was run. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. The initial joint R2.4/R2.5 CPU repository-preparation implementation is `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it **NO-GO**. Its remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains pending owner re-review: do not merge it or authorize live work. No `OWNER_AUTHORIZED` manifest was issued, no live smoke or pilot was run, and no persistent 117-row executable source, selected cohort, or frozen pilot manifest/hash exists. Only tooling/protocol preparation is claimed. Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -89,7 +89,7 @@ PromptSentinel.before_model_call(
 
 At the accepted R2.1 checkpoint, only deterministic no-op/fake policies were
 available. The accepted R2.2 boundary below adds automatic-policy contracts
-and fake-transport behavior; the R2.3 candidate adds the separate multi-path
+and fake-transport behavior; accepted R2.3 adds the separate multi-path
 rubric axis. Live model-backed Sentinel decisions still belong to later stories.
 
 The executable R2.1 edit surface is deterministic `DROP` only. Every `REPLACE`
@@ -175,10 +175,11 @@ Collector-to-evidence plumbing, runtime span discovery/capability overlays, a
 cancellable live transport/attempt receipt, secrets/resource authority, and a
 versioned zero-target bridge.
 
-## Candidate implementation boundary: ALE-326 / R2.3
+## Accepted implementation boundary: ALE-326 / R2.3
 
 Commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` is the corrected
-**Multi-Path Rubric Tracker** repository candidate pending owner review. Its
+**Multi-Path Rubric Tracker** repository checkpoint accepted through mainline
+merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. Its
 tested boundary is CPU-only, offline, injected-fake, and SHADOW-only. It does
 not authorize or claim a live model/provider call, network or GPU use,
 MobileWorld execution, active history mutation, action selection, or task
@@ -215,26 +216,32 @@ frozen-label-only calibration remain derived sidecars. Qwen and MAI are
 represented only by captured CPU fixtures; there is no host/model-specific
 runtime branch.
 
-R2.4 is now the next mechanically available repository dependency after owner
-review of this candidate, but any live vertical slice, provider/model use,
+R2.4 is now the next mechanically available repository dependency, but any
+live vertical slice, provider/model use,
 resource provisioning, GPU, backend, GUI, tool, action, or replay still needs
 separate explicit owner authorization.
 
 ## Candidate repository-preparation boundary: ALE-327 / R2.4 and ALE-328 / R2.5
 
-Commit `344e1c452e54aa01dc1bf29650af234f30a23f81` prepares the two-host runtime
+The initial implementation commit
+`344e1c42596a4dca717da66374eeca3d936c3f61` prepared the two-host runtime
 overlay, same-cutoff Collector evidence, independent history-free rubric and
 history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
-evidence, and a frozen 20-task / 80-cell pilot protocol under CPU fixtures and
-injected fakes. It is not an R2.4 live-smoke result or an R2.5 pilot result.
+evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
+fixtures and injected fakes. Owner review classified that candidate **NO-GO**.
+The remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains pending
+owner re-review. It must not be merged and does not authorize live execution.
+Neither checkpoint is an R2.4 live-smoke result or an R2.5 pilot result.
 
 This checkpoint made no live OpenAI/model/provider call; used no external
 network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
 GUI/tool/action, or replay; issued no `OWNER_AUTHORIZED` manifest; and
-established no effectiveness or causal claim. The frozen G1.5 Codecs remain
-`live_ready=false`. R2.3 remains pending owner review, Runtime Epic 2 remains
-2/6 accepted, and Linear remains owner-managed.
+established no effectiveness or causal claim. No persistent 117-row executable
+task source, selected cohort, frozen pilot manifest, or corresponding content
+hash was created; only tooling/protocol preparation exists. The frozen G1.5
+Codecs remain `live_ready=false`. R2.3 is accepted, Runtime Epic 2 remains 3/6
+accepted, and Linear remains owner-managed.
 
 ## Runtime Epic 2 sequence
 

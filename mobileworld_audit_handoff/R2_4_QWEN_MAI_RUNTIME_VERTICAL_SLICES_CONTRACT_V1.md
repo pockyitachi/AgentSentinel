@@ -1,6 +1,6 @@
 # R2.4 Qwen and MAI Runtime Vertical Slices Contract v1
 
-Status: **CPU IMPLEMENTATION CANDIDATE; LIVE AUTHORITY UNISSUED AND EXECUTION PENDING**
+Status: **IN PROGRESS; CPU REMEDIATION CANDIDATE; OWNER RE-REVIEW PENDING; LIVE AUTHORITY UNISSUED; MERGE/LIVE NO-GO**
 
 Contract ID: `mobileworld.runtime.r2-4-qwen-mai-vertical-slices/contract-v1`
 
@@ -15,6 +15,8 @@ Live-rubric schemas:
 
 - `schemas/r2_4/rubric_generate_output.v1.schema.json`
 - `schemas/r2_4/rubric_track_output.v1.schema.json`
+- `schemas/r2_4/rubric_backend_extension.v1.schema.json`
+- `schemas/r2_4/rubric_call_receipt.v1.schema.json`
 
 Decision date: 2026-09-03 UTC
 
@@ -35,9 +37,9 @@ Qwen3-VL or MAI assembles the exact actor request
   -> unchanged actor provider, parser, and action path
 ```
 
-The repository candidate establishes this behavior with CPU fixtures, injected
-fake transports, sealed resource/execution doubles, and strict external-output
-contracts. It does **not** by itself establish that a live OpenAI request, GPU
+The repository candidate scaffolds this intended behavior with CPU fixtures,
+injected fake transports, sealed resource/execution doubles, and strict
+external-output contracts. It does **not** by itself establish that a live OpenAI request, GPU
 model, MobileWorld backend, GUI action, smoke result, or task-effectiveness
 result exists. Those claims require an owner-authorized manifest, a passing
 production preflight, actual execution, and committed repo-external receipts.
@@ -219,6 +221,16 @@ attempt runs in a clean spawned child. A deadline causes TERM, then bounded
 KILL if necessary, followed by `waitpid`; the run cannot continue while worker
 termination is unconfirmed.
 
+The accepted R2.3 v1 descriptor, receipt, and schema bytes remain unchanged and
+cannot represent a live Responses call. Live rubric execution uses additive,
+versioned R2.4 backend-extension and call-receipt records. The extension binds
+the accepted R2.3 compatibility descriptor plus the sealed R2.4 provider,
+configuration, schema, execution-scope, transport-authority, and requested
+model identities. The R2.4 call receipt records both requested and returned
+model; a missing or mismatched returned identity fails closed. CPU/fake mode
+keeps both model fields null. An unreaped worker or otherwise unconfirmed
+termination is recorded as `TERMINATION_UNCONFIRMED`, never ordinary `FAILED`.
+
 `DISPATCHED` is emitted immediately before the SDK provider invocation and is
 conservatively counted as one attempt; the narrow signal-to-call crash window
 may overcount, never undercount. Failure while opening the secret or
@@ -293,14 +305,19 @@ This contract does not authorize:
 - merge, push, release, Linear mutation, or automatic owner acceptance; or
 - any claim that R2.4 or R2.5 has run before its committed receipts exist.
 
-## 12. Repository-candidate handoff
+## 12. Repository-candidate handoff and current disposition
 
 The final candidate handoff must record the exact commit, file/hash map,
 focused/affected/full CPU results, schema validation, static checks, external
 artifacts, and cleanup census. Until the owner reviews that candidate and
-separately authorizes a frozen live manifest, R2.4 remains pending and Runtime
-Epic 2 remains at its previously owner-accepted count.
+separately authorizes a frozen live manifest, R2.4 remains In Progress. The
+initial implementation commit is
+`344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
+**NO-GO**. Its remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains
+pending owner re-review. It must not be merged, and the six live-smoke cases
+remain unauthorized.
 
-R2.3 remains pending owner review under the current repository authority. A
-promoted run manifest neither accepts R2.3 nor changes Linear; both decisions
-remain owner-managed.
+R2.3 commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` is accepted through
+mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`, so Runtime Epic 2 is
+3/6 accepted. A promoted run manifest would neither change that acceptance nor
+change Linear; both live authorization and Linear workflow remain owner-managed.

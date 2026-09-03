@@ -1,6 +1,6 @@
 # R2.5 Frozen MobileWorld Pilot Protocol v1
 
-Status: **CPU PROTOCOL AND ANALYSIS CANDIDATE; PILOT NOT AUTHORIZED OR EXECUTED**
+Status: **BLOCKED ON R2.4 GO; CPU TOOLING/PROTOCOL PREPARED; PILOT NOT AUTHORIZED OR EXECUTED**
 
 Contract ID: `mobileworld.runtime.r2-5-mobileworld-pilot/contract-v1`
 
@@ -33,10 +33,11 @@ arm. It does not mean the joint-provider topology is used. The production pilot
 topology is frozen to `ISOLATED_HISTORY_FREE`: rubric and history-policy model
 calls remain independent.
 
-The CPU candidate defines selection, authority, reset/input binding, execution,
-audit, and analysis contracts. It contains no pilot outcome. Success rate,
-error reduction, or causal-effect claims require actual owner-authorized
-execution and committed evidence.
+The CPU candidate provides tooling and protocol for selection, authority,
+reset/input binding, execution, audit, and analysis. It contains no persisted
+executable-task source, selected cohort, frozen pilot manifest, pilot outcome,
+or corresponding artifact hash. Success rate, error reduction, or causal-effect
+claims require actual owner-authorized execution and committed evidence.
 
 ## 2. Source cohort and static-time eligibility
 
@@ -62,12 +63,14 @@ live reporting. Reintroducing them requires a new explicit effective-time
 authority and backend proof, not a relaxed boolean.
 
 Eligible rows are ranked by the versioned deterministic selection algorithm.
-The frozen cohort contains 20--30 unique tasks. The independent cohort-
-selection artifact persists the complete source audit and selected prefix;
-the task source, pilot manifest, run authority, and artifact bundle bind its
-exact path, bytes, and SHA-256. Production resolution reopens and recomputes
-these artifacts; a caller-supplied `STATIC` label or naked digest is
-insufficient.
+A later persisted and validated frozen cohort may contain 20--30 unique tasks.
+Only its independent cohort-selection artifact can persist the complete source
+audit and selected prefix; the task source, pilot manifest, run authority, and
+artifact bundle must then bind its exact path, bytes, and SHA-256. Production
+resolution reopens and recomputes those artifacts; a caller-supplied `STATIC`
+label or naked digest is insufficient. At this checkpoint those artifact
+instances and hashes do not exist; the repository contains tooling/protocol
+only.
 
 ## 3. Exact task parameters and reset authority
 
@@ -93,7 +96,8 @@ the backend is a failure.
 
 ## 4. Frozen matched matrix
 
-For `N` frozen tasks, the exact matrix contains `4N` cells, where
+For a later persisted and validated frozen set of `N` tasks, the exact matrix
+contains `4N` cells, where
 `20 <= N <= 30` and therefore `80 <= cells <= 120`:
 
 ```text
@@ -277,7 +281,7 @@ This protocol does not authorize:
   or output inside Git; or
 - merge, push, release, Linear mutation, automatic acceptance, or R2.6.
 
-## 12. Repository-candidate handoff
+## 12. Repository-candidate handoff and current disposition
 
 The CPU candidate handoff must state exact files and hashes, test/static/schema
 results, source/cohort census, external artifact census, cleanup, and all work
@@ -286,5 +290,11 @@ add the promoted authority hash, preflight/runtime/pricing hashes, resource
 receipts, smoke evidence, full pilot evidence, analysis artifact, cost/token
 census, cleanup/recovery state, and exact stop condition.
 
-Until those live artifacts exist and the owner reviews them, R2.5 remains
-pending and must not be described as run, successful, Done, or accepted.
+At the current checkpoint there is no persistent 117-row executable source,
+cohort-selection artifact, frozen pilot manifest, 80--120-cell matrix artifact,
+or corresponding content hash. The checked-in code prepares tooling/protocol;
+it does not freeze an actual cohort or pilot. R2.5 is blocked on an owner-reviewed
+R2.4 GO, and R2.4 currently remains In Progress / NO-GO. Until the required
+artifacts exist, R2.4 passes re-review, and the owner separately authorizes the
+live sequence, R2.5 must not be described as run, successful, Done, accepted,
+or ready to execute.

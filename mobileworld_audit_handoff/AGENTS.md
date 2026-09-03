@@ -75,18 +75,22 @@ revived as a separate causal-evaluation effort after an explicit owner decision.
 
 ### Active runtime work
 
-Runtime Epic 2 has 2/6 repository engineering stories accepted. ALE-324 / R2.1
+Runtime Epic 2 has 3/6 repository engineering stories accepted. ALE-324 / R2.1
 has an accepted CPU/fake checkpoint at commit
 `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. ALE-325 / R2.2 has an accepted
 CPU/offline/injected-fake-Responses, SHADOW-only checkpoint at commit
-`3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a
-corrected CPU/offline/injected-fake, SHADOW-only candidate at commit
-`54381b7b56b06d5aa262005af62b65269b4cf0a6`, pending owner review and not
-counted as accepted. ALE-327 / R2.4 and ALE-328 / R2.5 additionally have a
-joint CPU-only/offline/injected-fake repository-preparation candidate at commit
-`344e1c452e54aa01dc1bf29650af234f30a23f81`, pending owner review and not
-counted as accepted. It issued no `OWNER_AUTHORIZED` manifest and ran neither
-the six-case live smoke nor the 80-cell pilot. R2.1
+`3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has an accepted
+CPU/offline/injected-fake, SHADOW-only checkpoint at commit
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`, accepted through mainline merge
+`2aa0a268b7d709cf05d524e74c3fba8612f64003`. ALE-327 / R2.4 and ALE-328 /
+R2.5 have an initial joint CPU-only/offline/injected-fake repository-preparation
+implementation at `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
+**NO-GO**. The remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains
+pending owner re-review: do not merge it or authorize live work. Neither
+checkpoint issued an `OWNER_AUTHORIZED` manifest or ran the six-case live smoke
+or any pilot. No persistent 117-row executable source, selected cohort, or
+frozen pilot manifest/hash exists; only tooling/protocol preparation is
+claimed. R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
 History-IR snapshots,
 precomputed renderer-result binding, worker-owned policy-evaluation census, and
@@ -213,11 +217,12 @@ inert without explicit owner authorization. R2.4 must still add real evidence
 plumbing, runtime target discovery, a cancellable live transport/attempt
 receipt, secret/resource authority, and a versioned zero-target bridge.
 
-## 4B. Candidate scope: R2.3 CPU/offline/fake SHADOW rubric
+## 4B. Accepted scope: R2.3 CPU/offline/fake SHADOW rubric
 
 R2.3 adds the independent rubric/path-relevance axis without treating task
-relevance as factual validity or action advice. Candidate commit
-`54381b7b56b06d5aa262005af62b65269b4cf0a6` provides exact Unicode instruction
+relevance as factual validity or action advice. Commit
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`, accepted through mainline merge
+`2aa0a268b7d709cf05d524e74c3fba8612f64003`, provides exact Unicode instruction
 spans, an acyclic versioned `AND` / `OR` graph with legal alternatives and
 `OTHER_UNKNOWN`, generate-once caching, and explicit hash-bound revision.
 
@@ -244,9 +249,10 @@ result is `RETAIN`, and `ARCHIVE_SHADOW` remains schema-reserved for R2.4.
 Receipts are hash-only, include measured backend-failure latency, call census is
 cumulative, cache reuse is measured, and calibration labels are accepted only
 as explicit frozen offline inputs. Qwen and MAI coverage uses captured CPU
-fixtures and no host/model-specific runtime branch. This candidate is not
-owner-accepted yet and does not change Linear.
-R2.4 is mechanically next after review, but live/model/provider, network, GPU,
+fixtures and no host/model-specific runtime branch. This checkpoint is
+owner-accepted within that bounded repository scope; Linear remains
+owner-managed.
+R2.4 is mechanically next, but live/model/provider, network, GPU,
 backend, GUI/tool/action, replay, and resource authority remain separate.
 
 The shared candidate hook is
@@ -259,20 +265,26 @@ editing. First-host prompt builders are under:
 
 ## 4C. Candidate scope: R2.4/R2.5 CPU-only repository preparation
 
-Commit `344e1c452e54aa01dc1bf29650af234f30a23f81` prepares the two-host runtime
+The initial implementation commit
+`344e1c42596a4dca717da66374eeca3d936c3f61` prepared the two-host runtime
 overlay, same-cutoff Collector evidence, independent history-free rubric and
 history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
-evidence, and a frozen 20-task / 80-cell pilot protocol under CPU fixtures and
-injected fakes. It is not an R2.4 live-smoke result or an R2.5 pilot result.
+evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
+fixtures and injected fakes. Owner review classified it **NO-GO**. The
+remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains pending owner
+re-review. It must not be merged and does not authorize live execution. Neither
+checkpoint is an R2.4 live-smoke result or an R2.5 pilot result.
 
 This checkpoint made no live OpenAI/model/provider call; used no external
 network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
 GUI/tool/action, or replay; issued no `OWNER_AUTHORIZED` manifest; and
-established no effectiveness or causal claim. A DRAFT authority does not grant
-execution permission. The frozen G1.5 Codecs remain `live_ready=false`, R2.3
-remains pending owner review, Runtime Epic 2 remains 2/6 accepted, and Linear
-remains owner-managed.
+established no effectiveness or causal claim. No persistent 117-row executable
+task source, selected cohort, frozen pilot manifest, or corresponding content
+hash was created; only tooling/protocol preparation exists. A DRAFT authority
+does not grant execution permission. The frozen G1.5 Codecs remain
+`live_ready=false`, R2.3 is accepted, Runtime Epic 2 remains 3/6 accepted, and
+Linear remains owner-managed.
 
 ## 5. Reusable implementation assets
 
@@ -495,8 +507,13 @@ CPU/offline/fake SHADOW policy and its contracts, not live readiness,
 effectiveness, or permission to start R2.4 resources. Linear remains
 owner-managed.
 
-The joint R2.4/R2.5 repository-preparation candidate is
-`344e1c452e54aa01dc1bf29650af234f30a23f81`. It is CPU-only, offline, and
-injected-fake engineering evidence pending owner review. It did not issue live
-authority or run a smoke or pilot, does not accept R2.3, and does not change
-the 2/6 accepted count or Linear.
+The initial joint R2.4/R2.5 repository-preparation implementation is
+`344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
+**NO-GO**. Its remediation candidate is `91c224446679b4c312a054f3d34f9d4853f6d24f` and remains
+pending owner re-review. It is CPU-only, offline, injected-fake engineering
+evidence and must not be merged or treated as live authority. Neither
+checkpoint issued live authority or ran a smoke or pilot, and neither created
+a persistent executable-task source, selected cohort, or frozen pilot
+manifest/hash. R2.3 is accepted through merge
+`2aa0a268b7d709cf05d524e74c3fba8612f64003`; Runtime Epic 2 remains 3/6
+accepted, and Linear remains owner-managed.
