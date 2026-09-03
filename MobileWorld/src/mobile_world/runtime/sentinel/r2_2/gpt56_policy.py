@@ -19,8 +19,9 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Lock
-from time import perf_counter_ns
+from time import monotonic_ns, perf_counter_ns
 from typing import Protocol, TypeVar, cast, runtime_checkable
+from urllib.parse import urlsplit
 
 import openai
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
@@ -66,6 +67,16 @@ from mobile_world.runtime.sentinel.r2_2.sidecar import (
     detach_r22_policy_receipt,
     r22_policy_receipt_dict,
 )
+from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    LiveAttemptRoleV1,
+    ProductionHistoryPolicyAttemptCallV1,
+    ProductionHistoryPolicyAttemptRunnerV1,
+    build_canonical_history_policy_request,
+)
+from mobile_world.runtime.sentinel.r2_4.production_preflight import (
+    CaseExecutionLeaseV1,
+    case_execution_lease_sha256,
+)
 
 GPT56_POLICY_ID = "mobileworld.runtime.sentinel-policy.gpt56/v1"
 GPT56_REQUEST_SCHEMA_VERSION = "mobileworld.runtime.sentinel-gpt56-request/v1"
@@ -75,6 +86,10 @@ GPT56_REASONING_EFFORT = "medium"
 GPT56_OUTPUT_SCHEMA_NAME = "sentinel_policy_proposal_v1"
 GPT56_MAX_OUTPUT_TOKENS = 4096
 SUPPORTED_OPENAI_SDK_VERSION = "1.106.1"
+OPENAI_RESPONSES_TRANSPORT_BINDING_SCHEMA_VERSION = (
+    "mobileworld.runtime.sentinel-openai-responses-transport-binding/v1"
+)
+OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses"
 
 GPT56_POLICY_INSTRUCTIONS = """You are the bounded semantic validity classifier inside the Runtime Sentinel.
 
@@ -130,7 +145,7 @@ def _assert_exact_json(value: object, *, path: str = "$") -> JsonValue:
     if value is None or type(value) in {bool, int, str}:
         return cast(JsonValue, value)
     if type(value) is float:
-        if not math.isfinite(cast(float, value)):
+        if not math.isfinite(value):
             raise ValueError(f"non-finite JSON number at {path}")
         return cast(JsonValue, value)
     if type(value) is list:
@@ -175,7 +190,7 @@ def _strict_json_object(payload: bytes | str, *, require_canonical: bool) -> dic
     exact = _assert_exact_json(decoded)
     if type(exact) is not dict:
         raise ValueError("JSON payload must be an object")
-    projected = cast(dict[str, JsonValue], exact)
+    projected = exact
     if require_canonical and canonical_json_bytes(projected) != payload:
         raise ValueError("JSON snapshot is not the canonical byte representation")
     return projected
@@ -216,13 +231,13 @@ class ProposalSchemaSnapshotV1:
         exact = _assert_exact_json(value)
         if type(exact) is not dict:
             raise TypeError("proposal schema must be an exact JSON object")
-        canonical = canonical_json_bytes(cast(dict[str, JsonValue], exact))
+        canonical = canonical_json_bytes(exact)
         return cls(canonical_bytes=canonical, sha256=hashlib.sha256(canonical).hexdigest())
 
     @classmethod
     def from_checked_in(cls, path: Path | None = None) -> ProposalSchemaSnapshotV1:
         source = _checked_in_proposal_schema_path() if path is None else path
-        if not isinstance(source, Path) or not source.is_absolute():
+        if not isinstance(cast(object, source), Path) or not source.is_absolute():
             raise ValueError("checked-in schema path must be absolute")
         raw = source.read_bytes()
         schema = _strict_json_object(raw, require_canonical=False)
@@ -253,7 +268,7 @@ class EvidencePacketSchemaSnapshotV1:
     @classmethod
     def from_checked_in(cls, path: Path | None = None) -> EvidencePacketSchemaSnapshotV1:
         source = _checked_in_evidence_schema_path() if path is None else path
-        if not isinstance(source, Path) or not source.is_absolute():
+        if not isinstance(cast(object, source), Path) or not source.is_absolute():
             raise ValueError("checked-in evidence schema path must be absolute")
         schema = _strict_json_object(source.read_bytes(), require_canonical=False)
         canonical = canonical_json_bytes(schema)
@@ -564,6 +579,15 @@ class TransportDescriptorV1:
     model_on_call: bool
 
     def __post_init__(self) -> None:
+        if any(
+            type(value) is not str
+            for value in (
+                self.transport_kind,
+                self.transport_authority,
+                self.openai_sdk_version,
+            )
+        ):
+            raise TypeError("transport descriptor text fields must use exact strings")
         if self.transport_kind not in {"FAKE", "OPENAI_RESPONSES"}:
             raise ValueError("unknown R2.2 transport kind")
         if self.transport_authority not in {
@@ -578,7 +602,10 @@ class TransportDescriptorV1:
             raise ValueError("OpenAI SDK version must match the receipt schema")
         if type(self.sdk_max_retries) is not int or self.sdk_max_retries != 0:
             raise ValueError("R2.2 transport retries must be disabled")
-        if type(self.external_network_on_call) is not bool or type(self.model_on_call) is not bool:
+        if (
+            type(cast(object, self.external_network_on_call)) is not bool
+            or type(cast(object, self.model_on_call)) is not bool
+        ):
             raise TypeError("transport resource declarations must use exact booleans")
         if self.transport_kind == "FAKE" and (
             self.transport_authority != "CPU_OFFLINE_FAKE"
@@ -605,6 +632,265 @@ class TransportDescriptorV1:
         )
 
 
+def transport_descriptor_projection(
+    descriptor: TransportDescriptorV1,
+) -> dict[str, JsonValue]:
+    """Project the construction-bound transport authority without virtual dispatch."""
+
+    trusted = _detach_transport_descriptor(descriptor)
+    return {
+        "transport_kind": trusted.transport_kind,
+        "transport_authority": trusted.transport_authority,
+        "openai_sdk_version": trusted.openai_sdk_version,
+        "sdk_max_retries": trusted.sdk_max_retries,
+        "external_network_on_call": trusted.external_network_on_call,
+        "model_on_call": trusted.model_on_call,
+    }
+
+
+def transport_descriptor_sha256(descriptor: TransportDescriptorV1) -> str:
+    return canonical_sha256(transport_descriptor_projection(descriptor))
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAIResponsesTransportBindingV1:
+    """Construction-bound live transport configuration, excluding credentials."""
+
+    schema_version: str
+    descriptor_sha256: str
+    responses_endpoint: str
+    responses_endpoint_sha256: str
+    requested_model: str
+    max_output_tokens: int
+    transport_timeout_ns: int
+    seam_policy_deadline_ns: int
+    client_timeout_ceiling_ns: int
+    client_origin: str
+    authority_manifest_sha256: str | None
+    preflight_report_sha256: str | None
+    factory_binding_sha256: str | None
+    case_execution_lease_sha256: str | None
+    history_policy_stage_sha256: str | None
+    actor_request_sha256: str | None
+    pricing_binding_sha256: str | None
+    child_process_isolated: bool
+    environment_proxy_disabled: bool
+
+    def __post_init__(self) -> None:
+        if self.schema_version != OPENAI_RESPONSES_TRANSPORT_BINDING_SCHEMA_VERSION:
+            raise ValueError("unknown OpenAI Responses transport binding schema")
+        for digest_value, label in (
+            (self.descriptor_sha256, "descriptor_sha256"),
+            (self.responses_endpoint_sha256, "responses_endpoint_sha256"),
+        ):
+            if type(digest_value) is not str or _SHA256.fullmatch(digest_value) is None:
+                raise ValueError(f"{label} must be a lowercase SHA-256 digest")
+        endpoint = _canonical_responses_endpoint(self.responses_endpoint)
+        if endpoint != self.responses_endpoint:
+            raise ValueError("Responses endpoint is not canonical")
+        if hashlib.sha256(endpoint.encode("utf-8")).hexdigest() != self.responses_endpoint_sha256:
+            raise ValueError("Responses endpoint hash does not match the endpoint")
+        if self.requested_model != GPT56_REQUESTED_MODEL:
+            raise ValueError("live binding requested model differs from the policy")
+        if (
+            type(self.max_output_tokens) is not int
+            or self.max_output_tokens != GPT56_MAX_OUTPUT_TOKENS
+        ):
+            raise ValueError("live binding output-token bound differs from the policy")
+        for duration_ns, label in (
+            (self.transport_timeout_ns, "transport_timeout_ns"),
+            (self.seam_policy_deadline_ns, "seam_policy_deadline_ns"),
+            (self.client_timeout_ceiling_ns, "client_timeout_ceiling_ns"),
+        ):
+            if type(duration_ns) is not int or duration_ns <= 0:
+                raise ValueError(f"{label} must be a positive integer")
+        if self.transport_timeout_ns >= self.seam_policy_deadline_ns:
+            raise ValueError("transport timeout must be below the seam deadline")
+        if self.client_timeout_ceiling_ns >= self.seam_policy_deadline_ns:
+            raise ValueError("client timeout ceiling must be below the seam deadline")
+        if self.client_origin not in {"CALLER_INJECTED_TEST", "MODULE_OWNED_PRODUCTION"}:
+            raise ValueError("unknown OpenAI client origin")
+        if type(self.environment_proxy_disabled) is not bool:
+            raise TypeError("environment proxy declaration must be an exact boolean")
+        if type(self.child_process_isolated) is not bool:
+            raise TypeError("child-process isolation declaration must be an exact boolean")
+        if self.client_origin == "MODULE_OWNED_PRODUCTION":
+            if (
+                type(self.authority_manifest_sha256) is not str
+                or _SHA256.fullmatch(self.authority_manifest_sha256) is None
+                or any(
+                    type(value) is not str or _SHA256.fullmatch(value) is None
+                    for value in (
+                        self.preflight_report_sha256,
+                        self.factory_binding_sha256,
+                        self.case_execution_lease_sha256,
+                        self.history_policy_stage_sha256,
+                        self.actor_request_sha256,
+                        self.pricing_binding_sha256,
+                    )
+                )
+                or self.responses_endpoint != OPENAI_RESPONSES_ENDPOINT
+                or not self.child_process_isolated
+                or not self.environment_proxy_disabled
+            ):
+                raise ValueError("module-owned production transport binding is incomplete")
+        elif (
+            any(
+                value is not None
+                for value in (
+                    self.authority_manifest_sha256,
+                    self.preflight_report_sha256,
+                    self.factory_binding_sha256,
+                    self.case_execution_lease_sha256,
+                    self.history_policy_stage_sha256,
+                    self.actor_request_sha256,
+                    self.pricing_binding_sha256,
+                )
+            )
+            or self.child_process_isolated
+            or self.environment_proxy_disabled
+        ):
+            raise ValueError("caller-injected test transport cannot claim production authority")
+
+
+def openai_responses_transport_binding_projection(
+    binding: OpenAIResponsesTransportBindingV1,
+) -> dict[str, JsonValue]:
+    if type(binding) is not OpenAIResponsesTransportBindingV1:
+        raise TypeError("live transport binding projection requires the exact trusted type")
+    trusted = OpenAIResponsesTransportBindingV1(
+        schema_version=binding.schema_version,
+        descriptor_sha256=binding.descriptor_sha256,
+        responses_endpoint=binding.responses_endpoint,
+        responses_endpoint_sha256=binding.responses_endpoint_sha256,
+        requested_model=binding.requested_model,
+        max_output_tokens=binding.max_output_tokens,
+        transport_timeout_ns=binding.transport_timeout_ns,
+        seam_policy_deadline_ns=binding.seam_policy_deadline_ns,
+        client_timeout_ceiling_ns=binding.client_timeout_ceiling_ns,
+        client_origin=binding.client_origin,
+        authority_manifest_sha256=binding.authority_manifest_sha256,
+        preflight_report_sha256=binding.preflight_report_sha256,
+        factory_binding_sha256=binding.factory_binding_sha256,
+        case_execution_lease_sha256=binding.case_execution_lease_sha256,
+        history_policy_stage_sha256=binding.history_policy_stage_sha256,
+        actor_request_sha256=binding.actor_request_sha256,
+        pricing_binding_sha256=binding.pricing_binding_sha256,
+        child_process_isolated=binding.child_process_isolated,
+        environment_proxy_disabled=binding.environment_proxy_disabled,
+    )
+    return {
+        "schema_version": trusted.schema_version,
+        "descriptor_sha256": trusted.descriptor_sha256,
+        "responses_endpoint": trusted.responses_endpoint,
+        "responses_endpoint_sha256": trusted.responses_endpoint_sha256,
+        "requested_model": trusted.requested_model,
+        "max_output_tokens": trusted.max_output_tokens,
+        "transport_timeout_ns": trusted.transport_timeout_ns,
+        "seam_policy_deadline_ns": trusted.seam_policy_deadline_ns,
+        "client_timeout_ceiling_ns": trusted.client_timeout_ceiling_ns,
+        "client_origin": trusted.client_origin,
+        "authority_manifest_sha256": trusted.authority_manifest_sha256,
+        "preflight_report_sha256": trusted.preflight_report_sha256,
+        "factory_binding_sha256": trusted.factory_binding_sha256,
+        "case_execution_lease_sha256": trusted.case_execution_lease_sha256,
+        "history_policy_stage_sha256": trusted.history_policy_stage_sha256,
+        "actor_request_sha256": trusted.actor_request_sha256,
+        "pricing_binding_sha256": trusted.pricing_binding_sha256,
+        "child_process_isolated": trusted.child_process_isolated,
+        "environment_proxy_disabled": trusted.environment_proxy_disabled,
+    }
+
+
+def openai_responses_transport_binding_sha256(
+    binding: OpenAIResponsesTransportBindingV1,
+) -> str:
+    return canonical_sha256(openai_responses_transport_binding_projection(binding))
+
+
+def _detach_openai_responses_transport_binding(
+    binding: OpenAIResponsesTransportBindingV1,
+) -> OpenAIResponsesTransportBindingV1:
+    if type(binding) is not OpenAIResponsesTransportBindingV1:
+        raise TypeError("live transport binding requires the exact trusted type")
+    return OpenAIResponsesTransportBindingV1(
+        schema_version=binding.schema_version,
+        descriptor_sha256=binding.descriptor_sha256,
+        responses_endpoint=binding.responses_endpoint,
+        responses_endpoint_sha256=binding.responses_endpoint_sha256,
+        requested_model=binding.requested_model,
+        max_output_tokens=binding.max_output_tokens,
+        transport_timeout_ns=binding.transport_timeout_ns,
+        seam_policy_deadline_ns=binding.seam_policy_deadline_ns,
+        client_timeout_ceiling_ns=binding.client_timeout_ceiling_ns,
+        client_origin=binding.client_origin,
+        authority_manifest_sha256=binding.authority_manifest_sha256,
+        preflight_report_sha256=binding.preflight_report_sha256,
+        factory_binding_sha256=binding.factory_binding_sha256,
+        case_execution_lease_sha256=binding.case_execution_lease_sha256,
+        history_policy_stage_sha256=binding.history_policy_stage_sha256,
+        actor_request_sha256=binding.actor_request_sha256,
+        pricing_binding_sha256=binding.pricing_binding_sha256,
+        child_process_isolated=binding.child_process_isolated,
+        environment_proxy_disabled=binding.environment_proxy_disabled,
+    )
+
+
+def _canonical_responses_endpoint(value: object) -> str:
+    if type(value) is not str:
+        raise TypeError("Responses endpoint must be an exact string")
+    try:
+        parsed = urlsplit(value)
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Responses endpoint is malformed") from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed_port not in {None, 443}
+        or parsed.query
+        or parsed.fragment
+        or not parsed.path.endswith("/responses")
+    ):
+        raise ValueError("Responses endpoint is not an exact HTTPS Responses endpoint")
+    canonical = f"https://{parsed.hostname}"
+    if parsed_port == 443:
+        canonical += ":443"
+    canonical += parsed.path
+    return canonical
+
+
+def _client_responses_endpoint(client: OpenAI) -> str:
+    if type(client) is not OpenAI:
+        raise TypeError("live transport requires the exact supported OpenAI client")
+    raw_base_url = str(client.base_url)
+    try:
+        parsed = urlsplit(raw_base_url)
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise ValueError("OpenAI client base URL is malformed") from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed_port not in {None, 443}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("OpenAI client base URL is not an exact HTTPS endpoint")
+    path = parsed.path.rstrip("/")
+    if not path:
+        raise ValueError("OpenAI client base URL needs an API path")
+    endpoint = f"https://{parsed.hostname}"
+    if parsed_port == 443:
+        endpoint += ":443"
+    endpoint += f"{path}/responses"
+    return _canonical_responses_endpoint(endpoint)
+
+
 @runtime_checkable
 class ResponsesTransportV1(Protocol):
     @property
@@ -619,8 +905,40 @@ class ResponsesTransportV1(Protocol):
     ) -> ResponsesEnvelopeV1: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _ModuleOwnedProductionTransportSealV1:
+    authority_manifest_sha256: str
+    preflight_report_sha256: str
+    factory_binding_sha256: str
+    case_execution_lease_sha256: str
+    history_policy_stage_sha256: str
+    actor_request_sha256: str
+    pricing_binding_sha256: str
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.authority_manifest_sha256,
+            self.preflight_report_sha256,
+            self.factory_binding_sha256,
+            self.case_execution_lease_sha256,
+            self.history_policy_stage_sha256,
+            self.actor_request_sha256,
+            self.pricing_binding_sha256,
+        ):
+            if type(value) is not str or _SHA256.fullmatch(value) is None:
+                raise ValueError("production transport seal needs exact authority hashes")
+
+
 class OpenAIResponsesTransport:
-    """Narrow sync SDK adapter; construction itself performs no I/O."""
+    """Test SDK adapter or sealed one-case child-process production adapter."""
+
+    _client: OpenAI | None
+    _production_runner: ProductionHistoryPolicyAttemptRunnerV1 | None
+    _production_case_lease: CaseExecutionLeaseV1 | None
+    _production_attempt_id: str | None
+    _production_logical_call_id: str | None
+    _production_max_cost_usd_micros: int | None
+    _last_attempt_call: ProductionHistoryPolicyAttemptCallV1 | None
 
     def __init__(
         self,
@@ -628,6 +946,7 @@ class OpenAIResponsesTransport:
         *,
         seam_policy_deadline_seconds: float,
         live_call_authorized: bool = False,
+        _production_seal: _ModuleOwnedProductionTransportSealV1 | None = None,
     ) -> None:
         if type(client) is not OpenAI:
             raise TypeError("client must be the exact supported OpenAI SDK client")
@@ -639,9 +958,46 @@ class OpenAIResponsesTransport:
             raise ValueError("the dedicated OpenAI client must set max_retries=0")
         _validate_positive_finite_seconds(seam_policy_deadline_seconds, "seam deadline")
         timeout_ceiling = _validate_client_timeout(client.timeout, seam_policy_deadline_seconds)
+        responses_endpoint = _client_responses_endpoint(client)
+        if (
+            _production_seal is not None
+            and type(_production_seal) is not _ModuleOwnedProductionTransportSealV1
+        ):
+            raise TypeError("production transport seal is untrusted")
+        if _production_seal is not None and responses_endpoint != OPENAI_RESPONSES_ENDPOINT:
+            raise ValueError("production transport must use the canonical OpenAI endpoint")
         self._client = client
+        self._production_runner = None
+        self._production_case_lease = None
+        self._production_attempt_id = None
+        self._production_logical_call_id = None
+        self._production_max_cost_usd_micros = None
+        self._attempt_lock = Lock()
+        self._last_attempt_call = None
         self._seam_policy_deadline_seconds = seam_policy_deadline_seconds
         self._client_timeout_ceiling = timeout_ceiling
+        self._responses_endpoint = responses_endpoint
+        self._production_authority_manifest_sha256 = (
+            None if _production_seal is None else _production_seal.authority_manifest_sha256
+        )
+        self._production_preflight_report_sha256 = (
+            None if _production_seal is None else _production_seal.preflight_report_sha256
+        )
+        self._production_factory_binding_sha256 = (
+            None if _production_seal is None else _production_seal.factory_binding_sha256
+        )
+        self._production_case_execution_lease_sha256 = (
+            None if _production_seal is None else _production_seal.case_execution_lease_sha256
+        )
+        self._production_history_policy_stage_sha256 = (
+            None if _production_seal is None else _production_seal.history_policy_stage_sha256
+        )
+        self._production_actor_request_sha256 = (
+            None if _production_seal is None else _production_seal.actor_request_sha256
+        )
+        self._production_pricing_binding_sha256 = (
+            None if _production_seal is None else _production_seal.pricing_binding_sha256
+        )
         self._descriptor = TransportDescriptorV1(
             transport_kind="OPENAI_RESPONSES",
             transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
@@ -651,9 +1007,167 @@ class OpenAIResponsesTransport:
             model_on_call=True,
         )
 
+    @classmethod
+    def _from_production_attempt_runner(
+        cls,
+        *,
+        runner: ProductionHistoryPolicyAttemptRunnerV1,
+        case_lease: CaseExecutionLeaseV1,
+        attempt_id: str,
+        logical_call_id: str,
+        max_cost_usd_micros: int,
+        seam_policy_deadline_seconds: float,
+        client_timeout_seconds: float,
+        seal: _ModuleOwnedProductionTransportSealV1,
+    ) -> OpenAIResponsesTransport:
+        if type(runner) is not ProductionHistoryPolicyAttemptRunnerV1:
+            raise TypeError("production runner must use the exact trusted type")
+        if runner.role is not LiveAttemptRoleV1.HISTORY_POLICY:
+            raise ValueError("GPT56 history policy requires the HISTORY_POLICY attempt role")
+        lease = runner.attest_case_execution_lease(case_lease)
+        stage = runner.openai_stage
+        _validate_positive_finite_seconds(seam_policy_deadline_seconds, "seam deadline")
+        _validate_positive_finite_seconds(client_timeout_seconds, "client timeout")
+        if round(seam_policy_deadline_seconds * 1_000) != stage.timeout_ms:
+            raise ValueError("seam deadline differs from the owner-pinned stage")
+        if client_timeout_seconds >= seam_policy_deadline_seconds:
+            raise ValueError("client timeout must be below the seam policy deadline")
+        if type(max_cost_usd_micros) is not int or max_cost_usd_micros < 0:
+            raise ValueError("attempt cost bound must be nonnegative")
+        if type(seal) is not _ModuleOwnedProductionTransportSealV1:
+            raise TypeError("production transport seal is untrusted")
+        expected_seal = _ModuleOwnedProductionTransportSealV1(
+            authority_manifest_sha256=lease.manifest_sha256,
+            preflight_report_sha256=lease.preflight_report_sha256,
+            factory_binding_sha256=lease.factory_binding_sha256,
+            case_execution_lease_sha256=case_execution_lease_sha256(lease),
+            history_policy_stage_sha256=runner.openai_stage_sha256,
+            actor_request_sha256=lease.request_sha256,
+            pricing_binding_sha256=runner.pricing_binding_sha256,
+        )
+        if seal != expected_seal:
+            raise ValueError("production transport seal differs from the case authority")
+        value = object.__new__(cls)
+        value._client = None
+        value._production_runner = runner
+        value._production_case_lease = lease
+        value._production_attempt_id = attempt_id
+        value._production_logical_call_id = logical_call_id
+        value._production_max_cost_usd_micros = max_cost_usd_micros
+        value._attempt_lock = Lock()
+        value._last_attempt_call = None
+        value._seam_policy_deadline_seconds = seam_policy_deadline_seconds
+        value._client_timeout_ceiling = client_timeout_seconds
+        value._responses_endpoint = stage.endpoint
+        value._production_authority_manifest_sha256 = seal.authority_manifest_sha256
+        value._production_preflight_report_sha256 = seal.preflight_report_sha256
+        value._production_factory_binding_sha256 = seal.factory_binding_sha256
+        value._production_case_execution_lease_sha256 = seal.case_execution_lease_sha256
+        value._production_history_policy_stage_sha256 = seal.history_policy_stage_sha256
+        value._production_actor_request_sha256 = seal.actor_request_sha256
+        value._production_pricing_binding_sha256 = seal.pricing_binding_sha256
+        value._descriptor = TransportDescriptorV1(
+            transport_kind="OPENAI_RESPONSES",
+            transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+            openai_sdk_version=SUPPORTED_OPENAI_SDK_VERSION,
+            sdk_max_retries=0,
+            external_network_on_call=True,
+            model_on_call=True,
+        )
+        value._assert_construction_binding()
+        return value
+
     @property
     def descriptor(self) -> TransportDescriptorV1:
         return self._descriptor
+
+    def _assert_construction_binding(self) -> None:
+        if type(self._descriptor) is not TransportDescriptorV1:
+            raise RuntimeError("live transport descriptor type drifted")
+        if transport_descriptor_sha256(self._descriptor) != transport_descriptor_sha256(
+            TransportDescriptorV1(
+                transport_kind="OPENAI_RESPONSES",
+                transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+                openai_sdk_version=SUPPORTED_OPENAI_SDK_VERSION,
+                sdk_max_retries=0,
+                external_network_on_call=True,
+                model_on_call=True,
+            )
+        ):
+            raise RuntimeError("live transport descriptor drifted")
+        runner = self._production_runner
+        if runner is not None:
+            if (
+                type(runner) is not ProductionHistoryPolicyAttemptRunnerV1
+                or self._client is not None
+            ):
+                raise RuntimeError("production attempt runner binding drifted")
+            lease = self._production_case_lease
+            if type(lease) is not CaseExecutionLeaseV1:
+                raise RuntimeError("production case lease binding drifted")
+            trusted_lease = runner.attest_case_execution_lease(lease)
+            if (
+                self._production_authority_manifest_sha256 != runner.manifest_sha256
+                or self._production_preflight_report_sha256 != runner.preflight_report_sha256
+                or self._production_factory_binding_sha256 != runner.factory_binding_sha256
+                or self._production_case_execution_lease_sha256
+                != case_execution_lease_sha256(trusted_lease)
+                or self._production_history_policy_stage_sha256 != runner.openai_stage_sha256
+                or self._production_actor_request_sha256 != trusted_lease.request_sha256
+                or self._production_pricing_binding_sha256 != runner.pricing_binding_sha256
+                or self._responses_endpoint != OPENAI_RESPONSES_ENDPOINT
+            ):
+                raise RuntimeError("production attempt authority binding drifted")
+            return
+        if type(self._client) is not OpenAI:
+            raise RuntimeError("live transport client type drifted")
+        if type(self._client.max_retries) is not int or self._client.max_retries != 0:
+            raise RuntimeError("live transport retry configuration drifted")
+        current_timeout_ceiling = _validate_client_timeout(
+            self._client.timeout, self._seam_policy_deadline_seconds
+        )
+        if round(current_timeout_ceiling * 1_000_000_000) != round(
+            self._client_timeout_ceiling * 1_000_000_000
+        ):
+            raise RuntimeError("live transport client timeout drifted")
+        if _client_responses_endpoint(self._client) != self._responses_endpoint:
+            raise RuntimeError("live transport Responses endpoint drifted")
+        if self._production_authority_manifest_sha256 is not None:
+            raise RuntimeError("parent-process OpenAI client cannot claim production authority")
+
+    def _binding_for_policy(
+        self, *, transport_timeout_seconds: float
+    ) -> OpenAIResponsesTransportBindingV1:
+        self._assert_construction_binding()
+        _validate_positive_finite_seconds(transport_timeout_seconds, "transport timeout")
+        binding = OpenAIResponsesTransportBindingV1(
+            schema_version=OPENAI_RESPONSES_TRANSPORT_BINDING_SCHEMA_VERSION,
+            descriptor_sha256=transport_descriptor_sha256(self._descriptor),
+            responses_endpoint=self._responses_endpoint,
+            responses_endpoint_sha256=hashlib.sha256(
+                self._responses_endpoint.encode("utf-8")
+            ).hexdigest(),
+            requested_model=GPT56_REQUESTED_MODEL,
+            max_output_tokens=GPT56_MAX_OUTPUT_TOKENS,
+            transport_timeout_ns=round(transport_timeout_seconds * 1_000_000_000),
+            seam_policy_deadline_ns=round(self._seam_policy_deadline_seconds * 1_000_000_000),
+            client_timeout_ceiling_ns=round(self._client_timeout_ceiling * 1_000_000_000),
+            client_origin=(
+                "CALLER_INJECTED_TEST"
+                if self._production_authority_manifest_sha256 is None
+                else "MODULE_OWNED_PRODUCTION"
+            ),
+            authority_manifest_sha256=self._production_authority_manifest_sha256,
+            preflight_report_sha256=self._production_preflight_report_sha256,
+            factory_binding_sha256=self._production_factory_binding_sha256,
+            case_execution_lease_sha256=self._production_case_execution_lease_sha256,
+            history_policy_stage_sha256=self._production_history_policy_stage_sha256,
+            actor_request_sha256=self._production_actor_request_sha256,
+            pricing_binding_sha256=self._production_pricing_binding_sha256,
+            child_process_isolated=self._production_runner is not None,
+            environment_proxy_disabled=self._production_authority_manifest_sha256 is not None,
+        )
+        return _detach_openai_responses_transport_binding(binding)
 
     def create(
         self,
@@ -671,12 +1185,149 @@ class OpenAIResponsesTransport:
             raise ValueError("transport timeout must be below the seam policy deadline")
         if timeout_seconds > self._client_timeout_ceiling:
             raise ValueError("transport timeout exceeds the dedicated client timeout")
-        create_response = cast(Callable[..., object], self._client.responses.create)
+        self._assert_construction_binding()
+        if self._production_runner is not None:
+            return _detach_envelope(
+                cast(
+                    ResponsesEnvelopeV1,
+                    self.prepare_cancellable_call(
+                        request,
+                        call_role=call_role,
+                        timeout_seconds=timeout_seconds,
+                    )(),
+                )
+            )
+        client = self._client
+        if type(client) is not OpenAI:
+            raise RuntimeError("live transport client binding drifted")
+        create_response = cast(Callable[..., object], client.responses.create)
         raw = create_response(
             **responses_create_kwargs(request),
             timeout=timeout_seconds,
         )
         return _project_openai_response(raw, requested_model=GPT56_REQUESTED_MODEL)
+
+    def prepare_cancellable_call(
+        self,
+        request: ResponsesRequestV1,
+        *,
+        call_role: SentinelCallRole = SentinelCallRole.SENTINEL,
+        timeout_seconds: float,
+    ) -> ProductionHistoryPolicyAttemptCallV1:
+        """Prepare one child without reading a secret or authorizing dispatch."""
+
+        if type(request) is not ResponsesRequestV1:
+            raise TypeError("OpenAI adapter requires the exact frozen request type")
+        if call_role is not SentinelCallRole.SENTINEL:
+            raise ValueError("semantic-policy transport must use the Sentinel recursion role")
+        _validate_positive_finite_seconds(timeout_seconds, "transport timeout")
+        if timeout_seconds >= self._seam_policy_deadline_seconds:
+            raise ValueError("transport timeout must be below the seam policy deadline")
+        if timeout_seconds > self._client_timeout_ceiling:
+            raise ValueError("transport timeout exceeds the dedicated client timeout")
+        self._assert_construction_binding()
+        runner = self._production_runner
+        lease = self._production_case_lease
+        attempt_id = self._production_attempt_id
+        logical_call_id = self._production_logical_call_id
+        max_cost = self._production_max_cost_usd_micros
+        if (
+            type(runner) is not ProductionHistoryPolicyAttemptRunnerV1
+            or type(lease) is not CaseExecutionLeaseV1
+            or type(attempt_id) is not str
+            or type(logical_call_id) is not str
+            or type(max_cost) is not int
+        ):
+            raise PermissionError("production child-process transport is unavailable")
+        canonical_request = build_canonical_history_policy_request(responses_create_kwargs(request))
+        binding_sha256 = openai_responses_transport_binding_sha256(
+            self._binding_for_policy(transport_timeout_seconds=timeout_seconds)
+        )
+        with self._attempt_lock:
+            if self._last_attempt_call is not None:
+                raise RuntimeError("production transport already prepared its one attempt")
+            call = runner.begin(
+                case_lease=lease,
+                attempt_id=attempt_id,
+                logical_call_id=logical_call_id,
+                request=canonical_request,
+                transport_binding_sha256=binding_sha256,
+                deadline_monotonic_ns=(monotonic_ns() + round(timeout_seconds * 1_000_000_000)),
+                max_cost_usd_micros=max_cost,
+            )
+            self._last_attempt_call = call
+            return call
+
+    @property
+    def last_live_attempt_receipt_sha256(self) -> str | None:
+        with self._attempt_lock:
+            call = self._last_attempt_call
+        return None if call is None else call.terminal_receipt_sha256
+
+    @property
+    def live_attempt_receipt_root_sha256(self) -> str | None:
+        with self._attempt_lock:
+            call = self._last_attempt_call
+        return None if call is None else call.receipt_root_sha256
+
+    def close(self) -> None:
+        """Close the dedicated SDK client owned by this transport."""
+
+        with self._attempt_lock:
+            call = self._last_attempt_call
+        if call is not None and call.terminal_receipt is None:
+            call.cancel_and_join()
+        client = self._client
+        if type(client) is OpenAI:
+            client.close()
+
+
+def build_owner_authorized_openai_responses_transport(
+    *,
+    attempt_runner: ProductionHistoryPolicyAttemptRunnerV1,
+    case_execution_lease: CaseExecutionLeaseV1,
+    attempt_id: str,
+    logical_call_id: str,
+    max_cost_usd_micros: int,
+    seam_policy_deadline_seconds: float,
+    client_timeout_seconds: float,
+) -> OpenAIResponsesTransport:
+    """Build one sealed case-bound transport; no secret is read in this process."""
+
+    if type(attempt_runner) is not ProductionHistoryPolicyAttemptRunnerV1:
+        raise TypeError("attempt runner must use the exact production type")
+    if attempt_runner.role is not LiveAttemptRoleV1.HISTORY_POLICY:
+        raise ValueError("GPT56 transport requires the HISTORY_POLICY attempt role")
+    lease = attempt_runner.attest_case_execution_lease(case_execution_lease)
+    for value, label in (
+        (attempt_id, "attempt_id"),
+        (logical_call_id, "logical_call_id"),
+    ):
+        if type(value) is not str or _RUNTIME_ID.fullmatch(value) is None:
+            raise ValueError(f"{label} must be a bounded runtime ID")
+    seal = _ModuleOwnedProductionTransportSealV1(
+        authority_manifest_sha256=lease.manifest_sha256,
+        preflight_report_sha256=lease.preflight_report_sha256,
+        factory_binding_sha256=lease.factory_binding_sha256,
+        case_execution_lease_sha256=case_execution_lease_sha256(lease),
+        history_policy_stage_sha256=attempt_runner.openai_stage_sha256,
+        actor_request_sha256=lease.request_sha256,
+        pricing_binding_sha256=attempt_runner.pricing_binding_sha256,
+    )
+    _validate_positive_finite_seconds(client_timeout_seconds, "client timeout")
+    _validate_positive_finite_seconds(seam_policy_deadline_seconds, "seam deadline")
+    if client_timeout_seconds >= seam_policy_deadline_seconds:
+        raise ValueError("client timeout must be below the seam policy deadline")
+    return OpenAIResponsesTransport._from_production_attempt_runner(
+        runner=attempt_runner,
+        case_lease=lease,
+        attempt_id=attempt_id,
+        logical_call_id=logical_call_id,
+        max_cost_usd_micros=max_cost_usd_micros,
+        seam_policy_deadline_seconds=seam_policy_deadline_seconds,
+        client_timeout_seconds=client_timeout_seconds,
+        seal=seal,
+    )
 
 
 def _validate_positive_finite_seconds(value: object, label: str) -> None:
@@ -704,8 +1355,8 @@ def _project_openai_response(raw: object, *, requested_model: str) -> ResponsesE
 
     if type(raw) is not Response:
         raise TypeError("Responses adapter requires the exact supported SDK Response type")
-    response = cast(Response, raw)
-    if response.object != "response" or response.status != "completed":
+    response = raw
+    if response.status != "completed":
         raise ValueError("Responses API result is not completed")
     if response.error is not None or response.incomplete_details is not None:
         raise ValueError("Responses API result carries error or incomplete details")
@@ -721,7 +1372,7 @@ def _project_openai_response(raw: object, *, requested_model: str) -> ResponsesE
         if type(item) is not ResponseOutputMessage:
             raise ValueError("Responses result contains a non-message semantic output")
         message_count += 1
-        if item.type != "message" or item.role != "assistant" or item.status != "completed":
+        if item.status != "completed":
             raise ValueError("Responses result message is malformed or incomplete")
         if type(item.content) is not list or len(item.content) != 1:
             raise ValueError("Responses result must contain exactly one output text block")
@@ -884,7 +1535,7 @@ def _detach_context(value: SentinelContext) -> SentinelContext:
     return SentinelContext(
         logical_call_id=value.logical_call_id,
         host_id=value.host_id,
-        attributes=cast(dict[str, JsonValue], attributes),
+        attributes=attributes,
     )
 
 
@@ -1101,6 +1752,11 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
         self._evidence_schema = evidence_schema
         self._timeout_seconds = float(timeout_seconds)
         self._seam_policy_deadline_seconds = float(seam_policy_deadline_seconds)
+        self._live_transport_binding = (
+            transport._binding_for_policy(transport_timeout_seconds=self._timeout_seconds)
+            if type(transport) is OpenAIResponsesTransport
+            else None
+        )
         self._policy_id = policy_id
         self._evaluate_count = 0
         self._lock = Lock()
@@ -1113,6 +1769,42 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
     def evaluate_count(self) -> int:
         with self._lock:
             return self._evaluate_count
+
+    @property
+    def transport_descriptor(self) -> TransportDescriptorV1:
+        """Return a fresh copy of the descriptor fixed at policy construction."""
+
+        return _detach_transport_descriptor(self._descriptor)
+
+    @property
+    def transport_descriptor_sha256(self) -> str:
+        """Bind the fixed transport/resource authority through a module-owned projection."""
+
+        return transport_descriptor_sha256(self._descriptor)
+
+    def assert_live_transport_binding(self) -> OpenAIResponsesTransportBindingV1:
+        """Revalidate and return the exact construction-bound live transport attestation."""
+
+        expected = self._live_transport_binding
+        transport = self._transport
+        if (
+            type(expected) is not OpenAIResponsesTransportBindingV1
+            or type(transport) is not OpenAIResponsesTransport
+        ):
+            raise GPT56PolicyError("LIVE_TRANSPORT_ATTESTATION_REQUIRED")
+        try:
+            current = transport._binding_for_policy(transport_timeout_seconds=self._timeout_seconds)
+            if (
+                openai_responses_transport_binding_sha256(current)
+                != openai_responses_transport_binding_sha256(expected)
+                or current.descriptor_sha256 != self.transport_descriptor_sha256
+            ):
+                raise ValueError("live transport binding changed after policy construction")
+            return _detach_openai_responses_transport_binding(current)
+        except GPT56PolicyError:
+            raise
+        except Exception as exc:
+            raise GPT56PolicyError("LIVE_TRANSPORT_BINDING_DRIFT") from exc
 
     def evaluate(
         self,
@@ -1141,6 +1833,8 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
             raise GPT56PolicyError("UNTRUSTED_POLICY_INPUT_TYPE")
         if not isinstance(execution_control, PolicyExecutionControlV1):
             raise GPT56PolicyError("UNTRUSTED_EXECUTION_CONTROL")
+        if self._descriptor.transport_kind == "OPENAI_RESPONSES":
+            self.assert_live_transport_binding()
         try:
             trusted_request = _detach_json_value(request)
             trusted_context = _detach_context(context)
@@ -1214,6 +1908,7 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
             # transport has been linearized as started.
             transport_create = self._transport.create
             transport_request = _detach_request(responses_request)
+            attempt_call: ProductionHistoryPolicyAttemptCallV1 | None = None
 
             def invoke_transport() -> ResponsesEnvelopeV1:
                 state.transport_calls = 1
@@ -1224,9 +1919,30 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
                 )
 
             try:
-                envelope = _detach_envelope(execution_control.run_transport(invoke_transport))
+                if (
+                    type(self._transport) is OpenAIResponsesTransport
+                    and self._transport._production_runner is not None
+                ):
+                    attempt_call = self._transport.prepare_cancellable_call(
+                        transport_request,
+                        call_role=SentinelCallRole.SENTINEL,
+                        timeout_seconds=self._timeout_seconds,
+                    )
+                    envelope = _detach_envelope(
+                        cast(
+                            ResponsesEnvelopeV1,
+                            execution_control.run_transport(attempt_call),
+                        )
+                    )
+                    state.transport_calls = attempt_call.dispatch_count
+                else:
+                    envelope = _detach_envelope(execution_control.run_transport(invoke_transport))
                 state.envelope = envelope
             except Exception as exc:
+                if attempt_call is not None:
+                    if attempt_call.terminal_receipt is None:
+                        attempt_call.cancel_and_join()
+                    state.transport_calls = attempt_call.dispatch_count
                 state.transport_latency_ns = perf_counter_ns() - phase_started
                 if state.transport_calls == 0:
                     transaction.abort()
@@ -1688,6 +2404,9 @@ __all__ = [
     "GPT56_POLICY_INSTRUCTIONS",
     "GPT56_REASONING_EFFORT",
     "GPT56_REQUESTED_MODEL",
+    "OPENAI_RESPONSES_ENDPOINT",
+    "OPENAI_RESPONSES_TRANSPORT_BINDING_SCHEMA_VERSION",
+    "OpenAIResponsesTransportBindingV1",
     "OpenAIResponsesTransport",
     "PolicyExecutionControlV1",
     "PolicyCallProvenanceV1",
@@ -1697,7 +2416,12 @@ __all__ = [
     "ResponsesTransportV1",
     "SUPPORTED_OPENAI_SDK_VERSION",
     "TransportDescriptorV1",
+    "build_owner_authorized_openai_responses_transport",
+    "openai_responses_transport_binding_projection",
+    "openai_responses_transport_binding_sha256",
     "responses_create_kwargs",
     "responses_envelope_hash_projection",
     "responses_request_config_dict",
+    "transport_descriptor_projection",
+    "transport_descriptor_sha256",
 ]

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/cpu_topology_artifact.v1.schema.json",
+  "title": "R2.4 Real-Component CPU Topology Artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "comparison",
+    "comparison_sha256",
+    "isolated_component_census",
+    "joint_component_census",
+    "joint_failure_probe",
+    "producer_id",
+    "schema_version"
+  ],
+  "properties": {
+    "comparison": {
+      "$ref": "https://agentsentinel.local/schemas/r2_4/topology_comparison.v1.schema.json"
+    },
+    "comparison_sha256": {"$ref": "#/$defs/sha256"},
+    "isolated_component_census": {"$ref": "#/$defs/isolatedCensus"},
+    "joint_component_census": {"$ref": "#/$defs/jointCensus"},
+    "joint_failure_probe": {"$ref": "#/$defs/jointFailureProbe"},
+    "producer_id": {"const": "REAL_R23_SESSION_GPT56_POLICY_CPU_FAKE_V1"},
+    "schema_version": {
+      "const": "mobileworld.runtime.sentinel-r2.4-cpu-topology-artifact/v1"
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "isolatedCensus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "comparison_provider_dispatches",
+        "history_policy_output_admitted",
+        "policy_admission_adapter_calls",
+        "policy_evaluations",
+        "policy_receipts",
+        "rubric_output_admitted",
+        "rubric_session_receipts",
+        "setup_rubric_provider_calls",
+        "topology"
+      ],
+      "properties": {
+        "comparison_provider_dispatches": {"const": 2},
+        "history_policy_output_admitted": {"const": true},
+        "policy_admission_adapter_calls": {"const": 1},
+        "policy_evaluations": {"const": 1},
+        "policy_receipts": {"const": 1},
+        "rubric_output_admitted": {"const": true},
+        "rubric_session_receipts": {"const": 3},
+        "setup_rubric_provider_calls": {"const": 1},
+        "topology": {"const": "ISOLATED_HISTORY_FREE"}
+      }
+    },
+    "jointCensus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "comparison_provider_dispatches",
+        "history_policy_output_admitted",
+        "policy_admission_adapter_calls",
+        "policy_evaluations",
+        "policy_receipts",
+        "rubric_output_admitted",
+        "rubric_session_receipts",
+        "setup_rubric_provider_calls",
+        "topology"
+      ],
+      "properties": {
+        "comparison_provider_dispatches": {"const": 1},
+        "history_policy_output_admitted": {"const": true},
+        "policy_admission_adapter_calls": {"const": 1},
+        "policy_evaluations": {"const": 1},
+        "policy_receipts": {"const": 1},
+        "rubric_output_admitted": {"const": true},
+        "rubric_session_receipts": {"const": 3},
+        "setup_rubric_provider_calls": {"const": 1},
+        "topology": {"const": "JOINT_NON_INDEPENDENT"}
+      }
+    },
+    "jointFailureProbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "failure_coupled",
+        "history_policy_output_admitted",
+        "provider_dispatches",
+        "rubric_output_admitted"
+      ],
+      "properties": {
+        "failure_coupled": {"const": true},
+        "history_policy_output_admitted": {"const": false},
+        "provider_dispatches": {"const": 1},
+        "rubric_output_admitted": {"const": false}
+      }
+    }
+  }
+}

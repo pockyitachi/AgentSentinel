@@ -591,6 +591,11 @@ class RubricTaskSession(PathRelevanceInterfaceV1):
                 + sum(value.relevance is RecordRelevance.UNKNOWN for value in relevance_records)
             ),
             validation_checks=validation_checks,
+            backend_kind=descriptor.backend_kind.value,
+            transport_authority=descriptor.transport_authority.value,
+            external_network_attempted=descriptor.external_network_attempted,
+            model_call_attempted=descriptor.model_call_attempted,
+            local_gpu_used=descriptor.local_gpu_used,
         )
 
     def _emit(self, receipt: RubricReceiptV1) -> str:

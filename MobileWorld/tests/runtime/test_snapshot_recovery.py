@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import random
 import subprocess
 import threading
 import time
@@ -15,7 +17,6 @@ from fastapi import HTTPException
 from PIL import Image
 
 from mobile_world.core import server
-from mobile_world.runtime import client as client_module
 from mobile_world.runtime import controller as controller_module
 from mobile_world.runtime.client import TASK_INITIALIZATION_TIMEOUT_SECONDS, AndroidEnvClient
 from mobile_world.runtime.controller import (
@@ -26,7 +27,7 @@ from mobile_world.runtime.controller import (
 )
 from mobile_world.runtime.utils import helpers as helpers_module
 from mobile_world.runtime.utils.helpers import AdbResponse
-from mobile_world.runtime.utils.models import TaskOperationRequest
+from mobile_world.runtime.utils.models import JSONAction, StepRequest, TaskOperationRequest
 from mobile_world.tasks.base import BaseTask
 
 
@@ -372,13 +373,185 @@ def test_task_init_client_budget_outlives_bounded_recovery(
         observed.update(url=url, **kwargs)
         return Response()
 
-    monkeypatch.setattr(client_module.requests, "post", post)
+    client._session = type("Session", (), {"post": staticmethod(post)})()
+    client._request_deadline_monotonic_ns = None
 
     observation = client.initialize_task("FixtureTask")
 
     assert observation.screenshot is not None
     assert observed["timeout"] == TASK_INITIALIZATION_TIMEOUT_SECONDS
     assert TASK_INITIALIZATION_TIMEOUT_SECONDS == 600
+
+
+def test_task_init_client_sends_complete_frozen_episode_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = object.__new__(AndroidEnvClient)
+    client.base_url = "http://fixture.invalid"
+    client.device = "emulator-fixture"
+    client._current_task_type = None
+    client._ensure_initialized = lambda: None
+    client.get_screenshot = lambda *, wait_to_stabilize: object()
+    observed: dict[str, Any] = {}
+    parameters_sha256 = hashlib.sha256(b'{"task_name":"FixtureTask","trial":1}').hexdigest()
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+    def post(url: str, **kwargs: Any) -> Response:
+        observed.update(url=url, **kwargs)
+        return Response()
+
+    client._session = type("Session", (), {"post": staticmethod(post)})()
+    client._request_deadline_monotonic_ns = None
+
+    client.initialize_task(
+        "FixtureTask",
+        task_trial=1,
+        task_parameters_sha256=parameters_sha256,
+        reset_seed=73021,
+    )
+
+    assert observed["json"] == {
+        "req_device": "emulator-fixture",
+        "reset_seed": 73021,
+        "task_name": "FixtureTask",
+        "task_parameters_sha256": parameters_sha256,
+        "task_trial": 1,
+    }
+
+
+def test_task_init_client_rejects_partial_frozen_episode_binding() -> None:
+    client = object.__new__(AndroidEnvClient)
+    client.device = "emulator-fixture"
+    client._ensure_initialized = lambda: None
+
+    with pytest.raises(RuntimeError, match="binding is incomplete"):
+        client.initialize_task("FixtureTask", task_trial=1)
+
+
+class _JsonResponse:
+    def __init__(self, payload: Any) -> None:
+        self._payload = payload
+        self.status_code = 200
+        self.text = json.dumps(payload)
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> Any:
+        return self._payload
+
+
+def test_action_client_rejects_mismatched_success_echo_before_screenshot() -> None:
+    client = object.__new__(AndroidEnvClient)
+    client.base_url = "http://fixture.invalid"
+    client.device = "emulator-fixture"
+    client._ensure_initialized = lambda: None
+    client._request_deadline_monotonic_ns = None
+    screenshot_calls = 0
+
+    def get_screenshot(*, wait_to_stabilize: bool) -> object:
+        nonlocal screenshot_calls
+        screenshot_calls += 1
+        return object()
+
+    client.get_screenshot = get_screenshot
+    action = JSONAction(action_type="click", x=12, y=34)
+    mismatched = action.model_dump(mode="json")
+    mismatched["x"] = 99
+    client._session = type(
+        "Session",
+        (),
+        {
+            "post": staticmethod(
+                lambda *_args, **_kwargs: _JsonResponse(
+                    {
+                        "action": mismatched,
+                        "device": "emulator-fixture",
+                        "result": "OK",
+                    }
+                )
+            )
+        },
+    )()
+
+    with pytest.raises(RuntimeError, match="mismatched success envelope"):
+        client.execute_action(action)
+
+    assert screenshot_calls == 0
+
+
+def test_task_score_client_requires_exact_bound_envelope() -> None:
+    client = object.__new__(AndroidEnvClient)
+    client.base_url = "http://fixture.invalid"
+    client.device = "emulator-fixture"
+    client._ensure_initialized = lambda: None
+    client._request_deadline_monotonic_ns = None
+    client._session = type(
+        "Session",
+        (),
+        {
+            "get": staticmethod(
+                lambda *_args, **_kwargs: _JsonResponse(
+                    {
+                        "device": "emulator-fixture",
+                        "reason": "fixture evidence",
+                        "score": 0.75,
+                        "task_name": "FixtureTask",
+                    }
+                )
+            )
+        },
+    )()
+
+    assert client.get_task_score("FixtureTask") == (0.75, "fixture evidence")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "device": "emulator-fixture",
+            "reason": "fixture evidence",
+            "score": True,
+            "task_name": "FixtureTask",
+        },
+        {
+            "device": "emulator-other",
+            "reason": "fixture evidence",
+            "score": 1.0,
+            "task_name": "FixtureTask",
+        },
+        {
+            "device": "emulator-fixture",
+            "reason": "fixture evidence",
+            "score": 1.0,
+            "task_name": "DifferentTask",
+        },
+        {
+            "device": "emulator-fixture",
+            "reason": "",
+            "score": 1.0,
+            "task_name": "FixtureTask",
+        },
+    ],
+)
+def test_task_score_client_rejects_coercible_or_unbound_envelope(payload: dict[str, Any]) -> None:
+    client = object.__new__(AndroidEnvClient)
+    client.base_url = "http://fixture.invalid"
+    client.device = "emulator-fixture"
+    client._ensure_initialized = lambda: None
+    client._request_deadline_monotonic_ns = None
+    client._session = type(
+        "Session",
+        (),
+        {"get": staticmethod(lambda *_args, **_kwargs: _JsonResponse(payload))},
+    )()
+
+    with pytest.raises(RuntimeError, match="Failed to get task score"):
+        client.get_task_score("FixtureTask")
 
 
 class _SnapshotFailureTask(BaseTask):
@@ -442,6 +615,15 @@ class _Task:
         return self._initialize(self.calls, controller)
 
 
+class _ScoredTask(_Task):
+    def __init__(self, score: Any) -> None:
+        super().__init__(lambda _attempt, _controller: True)
+        self._score = score
+
+    def is_successful(self, _controller: _HealthyController) -> Any:
+        return self._score
+
+
 @pytest.fixture(autouse=True)
 def _isolated_server_state(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server, "CONTROLLERS", {})
@@ -460,6 +642,56 @@ def _request() -> TaskOperationRequest:
 
 def _response_json(response: Any) -> dict[str, Any]:
     return json.loads(response.body)
+
+
+def test_server_rejects_empty_input_text_as_typed_client_error() -> None:
+    controller = _HealthyController()
+    server.CONTROLLERS["emulator-fixture"] = controller
+
+    with pytest.raises(HTTPException) as raised:
+        server.step(
+            StepRequest(
+                device="emulator-fixture",
+                action=JSONAction(action_type="input_text", text=""),
+            )
+        )
+
+    assert raised.value.status_code == 400
+    assert "non-empty text" in raised.value.detail
+
+
+def test_server_task_score_is_bound_to_running_task_and_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _ScoredTask((0.5, "fixture evidence"))
+    server.CONTROLLERS["emulator-fixture"] = _HealthyController()
+    monkeypatch.setattr(server, "task_registry", _Registry(task))
+    server.RUNNING_TASK = task
+
+    response = server.eval_task(_request())
+
+    assert _response_json(response) == {
+        "device": "emulator-fixture",
+        "reason": "fixture evidence",
+        "score": 0.5,
+        "task_name": "FixtureTask",
+    }
+
+
+@pytest.mark.parametrize(
+    "score",
+    [True, float("nan"), -0.1, 1.1, 10**1_000, (1.0, "")],
+)
+def test_server_rejects_invalid_task_score(score: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    task = _ScoredTask(score)
+    server.CONTROLLERS["emulator-fixture"] = _HealthyController()
+    monkeypatch.setattr(server, "task_registry", _Registry(task))
+    server.RUNNING_TASK = task
+
+    with pytest.raises(HTTPException) as raised:
+        server.eval_task(_request())
+
+    assert raised.value.status_code == 500
 
 
 def test_server_rejects_explicit_false_even_if_task_sets_initialized_true(
@@ -528,6 +760,69 @@ def test_snapshot_failure_recovers_once_inside_same_init_request(
     assert server.CONTROLLERS["emulator-fixture"] is replacements[0]
     assert server.RUNNING_TASK is task
     assert server._last_restart_success is not None
+
+
+def test_frozen_task_seed_is_replayed_on_same_request_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initial_controller = _HealthyController()
+    observed_random_values: list[float] = []
+
+    def initialize(attempt: int, controller: _HealthyController) -> bool:
+        observed_random_values.append(random.random())
+        if attempt == 1:
+            raise DeviceUnhealthyError("Device is not healthy: fixture restart")
+        assert controller is not initial_controller
+        task.initialized = True
+        return True
+
+    task = _Task(initialize)
+    server.CONTROLLERS["emulator-fixture"] = initial_controller
+    monkeypatch.setattr(server, "task_registry", _Registry(task))
+    monkeypatch.setattr(
+        server,
+        "restart_emulator_with_avd",
+        lambda _avd: "emulator-recovered",
+    )
+    monkeypatch.setattr(server, "AndroidController", _HealthyController)
+    parameters_sha256 = hashlib.sha256(b'{"task_name":"FixtureTask","trial":1}').hexdigest()
+
+    response = server.init_task(
+        TaskOperationRequest(
+            task_name="FixtureTask",
+            req_device="emulator-fixture",
+            task_trial=1,
+            task_parameters_sha256=parameters_sha256,
+            reset_seed=73021,
+        )
+    )
+
+    assert response.status_code == 200
+    assert len(observed_random_values) == 2
+    assert observed_random_values[0] == observed_random_values[1]
+
+
+def test_frozen_task_init_rejects_parameter_hash_drift_before_device_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _Task(lambda _attempt, _controller: True)
+    server.CONTROLLERS["emulator-fixture"] = _HealthyController()
+    monkeypatch.setattr(server, "task_registry", _Registry(task))
+
+    with pytest.raises(HTTPException) as raised:
+        server.init_task(
+            TaskOperationRequest(
+                task_name="FixtureTask",
+                req_device="emulator-fixture",
+                task_trial=1,
+                task_parameters_sha256="0" * 64,
+                reset_seed=73021,
+            )
+        )
+
+    assert raised.value.status_code == 400
+    assert task.calls == 0
+    assert server.RUNNING_TASK is None
 
 
 def test_failed_recovery_retry_returns_500_after_one_restart(

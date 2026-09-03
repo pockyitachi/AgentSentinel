@@ -124,10 +124,12 @@ class RubricExecutionScope(StrEnum):
 
 class RubricBackendKind(StrEnum):
     INJECTED_FAKE = "INJECTED_FAKE"
+    OPENAI_RESPONSES = "OPENAI_RESPONSES"
 
 
 class RubricTransportAuthority(StrEnum):
     CPU_OFFLINE_FAKE = "CPU_OFFLINE_FAKE"
+    EXPLICIT_OWNER_AUTHORIZATION = "EXPLICIT_OWNER_AUTHORIZATION"
 
 
 class RubricSourceEventType(StrEnum):
@@ -572,16 +574,31 @@ class RubricBackendDescriptorV1:
             _require_sha256(value, name)
         _require_enum(self.backend_kind, RubricBackendKind, "backend_kind")
         _require_enum(self.transport_authority, RubricTransportAuthority, "transport_authority")
-        # Both enums intentionally have one member; the exact enum checks above
-        # therefore also enforce the fixed CPU/offline/fake values.
         for flag_name, flag_value in (
             ("external_network_attempted", self.external_network_attempted),
             ("model_call_attempted", self.model_call_attempted),
             ("local_gpu_used", self.local_gpu_used),
         ):
             _require_bool(flag_value, flag_name)
-            if flag_value:
-                _fail("UNAUTHORIZED_RESOURCE_USE", f"{flag_name} must remain false")
+        fake = (
+            self.backend_kind is RubricBackendKind.INJECTED_FAKE
+            and self.transport_authority is RubricTransportAuthority.CPU_OFFLINE_FAKE
+            and not self.external_network_attempted
+            and not self.model_call_attempted
+            and not self.local_gpu_used
+        )
+        owner_authorized_live = (
+            self.backend_kind is RubricBackendKind.OPENAI_RESPONSES
+            and self.transport_authority is RubricTransportAuthority.EXPLICIT_OWNER_AUTHORIZATION
+            and self.external_network_attempted
+            and self.model_call_attempted
+            and not self.local_gpu_used
+        )
+        if not (fake or owner_authorized_live):
+            _fail(
+                "INVALID_BACKEND_PROVENANCE",
+                "rubric backend resource flags differ from its transport authority",
+            )
 
 
 @dataclass(frozen=True, slots=True)

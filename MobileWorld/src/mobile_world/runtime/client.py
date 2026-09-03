@@ -1,6 +1,6 @@
 import base64
 import copy
-import json
+import math
 import os
 import time
 from io import BytesIO
@@ -53,6 +53,9 @@ class AndroidEnvClient:
         url: str = "http://localhost:8000",
         device: str = "emulator-5554",
         step_wait_time: float = 1.0,
+        *,
+        trust_env: bool = True,
+        request_deadline_monotonic_ns: int | None = None,
     ):
         logger.info(
             "Setting up Android environment using new server design - Initial setup may take"
@@ -66,6 +69,25 @@ class AndroidEnvClient:
         self._initialized = False
         self._task_registry = TaskRegistry()
         self.tools = []
+        if type(trust_env) is not bool:
+            raise TypeError("trust_env must be an exact bool")
+        if request_deadline_monotonic_ns is not None and (
+            type(request_deadline_monotonic_ns) is not int
+            or request_deadline_monotonic_ns <= time.monotonic_ns()
+        ):
+            raise ValueError("request deadline must be a future monotonic timestamp")
+        self._session = requests.Session()
+        self._session.trust_env = trust_env
+        self._request_deadline_monotonic_ns = request_deadline_monotonic_ns
+
+    def _request_timeout(self, ceiling_seconds: float | int | None = None) -> float | int | None:
+        deadline = self._request_deadline_monotonic_ns
+        if deadline is None:
+            return ceiling_seconds
+        remaining = (deadline - time.monotonic_ns()) / 1_000_000_000
+        if remaining <= 0:
+            raise TimeoutError("MobileWorld case request deadline elapsed")
+        return remaining if ceiling_seconds is None else min(float(ceiling_seconds), remaining)
 
     def _ensure_initialized(self):
         """Ensure the device is initialized."""
@@ -74,7 +96,9 @@ class AndroidEnvClient:
             init_data = {
                 "device": self.device,
             }
-            response = requests.post(f"{self.base_url}/init", json=init_data)
+            response = self._session.post(
+                f"{self.base_url}/init", json=init_data, timeout=self._request_timeout()
+            )
             response.raise_for_status()
             self._initialized = True
 
@@ -95,10 +119,10 @@ class AndroidEnvClient:
         logger.info(f"Switching to suite_family: {target_family}")
 
         try:
-            response = requests.post(
+            response = self._session.post(
                 f"{self.base_url}/suite_family/switch",
                 params={"target_family": target_family},
-                timeout=300,  # Allow time for emulator restart
+                timeout=self._request_timeout(300),  # Allow time for emulator restart
             )
             response.raise_for_status()
             result = response.json()
@@ -141,9 +165,10 @@ class AndroidEnvClient:
         if wait_to_stabilize:
             time.sleep(self.step_wait_time)
 
-        response = requests.get(
+        response = self._session.get(
             f"{self.base_url}/screenshot",
             params={"device": self.device, "return_b64": True},
+            timeout=self._request_timeout(),
         )
         # response.raise_for_status()
         if not response.ok:
@@ -188,21 +213,38 @@ class AndroidEnvClient:
             step_data,
             request_endpoint=request_endpoint,
         )
-        response = requests.post(request_endpoint, json=step_data)
+        response = self._session.post(
+            request_endpoint, json=step_data, timeout=self._request_timeout()
+        )
         _safe_audit_hook(record_gui_response, response)
         logger.debug(f"""execute_action response: {{
             "status": {response.status_code},
             "message": {response.text},
         }}""")
 
-        if response.status_code != 200 and action.action_type == "ask_user":
-            raise RuntimeError(f"Step action failed (HTTP {response.status_code}): {response.text}")
+        try:
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                f"Step action failed (HTTP {response.status_code}): {response.text}"
+            ) from exc
+        try:
+            response_payload = response.json()
+        except Exception as exc:
+            raise RuntimeError("Step action returned a non-JSON success envelope") from exc
+        expected_action = action.model_dump(mode="json")
+        if (
+            type(response_payload) is not dict
+            or response_payload.get("device") != self.device
+            or response_payload.get("action") != expected_action
+            or "result" not in response_payload
+        ):
+            raise RuntimeError("Step action returned an invalid or mismatched success envelope")
 
         res = self.get_screenshot(wait_to_stabilize=True)
         ask_user_response = None
-        if action.action_type == "ask_user" and response.text is not None:
-            message = json.loads(response.text)
-            ask_user_response = message.get("result", "")
+        if action.action_type == "ask_user":
+            ask_user_response = response_payload.get("result", "")
             logger.debug(f"ask_user_response: {ask_user_response}")
 
         return Observation(
@@ -225,7 +267,7 @@ class AndroidEnvClient:
         """
         self._ensure_initialized()
 
-        response = requests.get(f"{self.base_url}/task/list")
+        response = self._session.get(f"{self.base_url}/task/list", timeout=self._request_timeout())
         response.raise_for_status()
         task_list = response.json()
 
@@ -257,16 +299,44 @@ class AndroidEnvClient:
         # For the new server, this is just a no-op
         return Response(status="success", message="Suite reinitialized")
 
-    def initialize_task(self, task_name: str) -> Observation:
+    def initialize_task(
+        self,
+        task_name: str,
+        *,
+        task_trial: int | None = None,
+        task_parameters_sha256: str | None = None,
+        reset_seed: int | None = None,
+    ) -> Observation:
         """Initializes the task in the environment."""
         self._ensure_initialized()
 
         try:
             init_data = {"task_name": task_name, "req_device": self.device}
-            response = requests.post(
+            frozen_values = (task_trial, task_parameters_sha256, reset_seed)
+            if any(value is not None for value in frozen_values):
+                if (
+                    type(task_trial) is not int
+                    or not 1 <= task_trial <= 1_000_000
+                    or type(task_parameters_sha256) is not str
+                    or len(task_parameters_sha256) != 64
+                    or any(
+                        character not in "0123456789abcdef" for character in task_parameters_sha256
+                    )
+                    or type(reset_seed) is not int
+                    or not 0 <= reset_seed <= 2_147_483_647
+                ):
+                    raise ValueError("frozen task initialization binding is incomplete or invalid")
+                init_data.update(
+                    {
+                        "task_trial": task_trial,
+                        "task_parameters_sha256": task_parameters_sha256,
+                        "reset_seed": reset_seed,
+                    }
+                )
+            response = self._session.post(
                 f"{self.base_url}/task/init",
                 json=init_data,
-                timeout=TASK_INITIALIZATION_TIMEOUT_SECONDS,
+                timeout=self._request_timeout(TASK_INITIALIZATION_TIMEOUT_SECONDS),
             )
             response.raise_for_status()
 
@@ -288,7 +358,11 @@ class AndroidEnvClient:
 
         try:
             tear_down_data = {"task_name": task_type, "req_device": self.device}
-            response = requests.post(f"{self.base_url}/task/tear_down", json=tear_down_data)
+            response = self._session.post(
+                f"{self.base_url}/task/tear_down",
+                json=tear_down_data,
+                timeout=self._request_timeout(),
+            )
             response.raise_for_status()
 
             self._current_task_type = None
@@ -305,15 +379,33 @@ class AndroidEnvClient:
         self._ensure_initialized()
 
         try:
-            response = requests.get(
+            response = self._session.get(
                 f"{self.base_url}/task/eval",
                 json={"task_name": task_type, "req_device": self.device},
+                timeout=self._request_timeout(),
             )
             response.raise_for_status()
             result = response.json()
-            score = float(result.get("score", 0.0))
-            reason = result.get("reason", f"No reason provided for {task_type}")
-            return score, reason
+            if type(result) is not dict or set(result) != {
+                "device",
+                "reason",
+                "score",
+                "task_name",
+            }:
+                raise ValueError("task evaluation returned an invalid success envelope")
+            if result["device"] != self.device or result["task_name"] != task_type:
+                raise ValueError("task evaluation response binding does not match the request")
+            score = result["score"]
+            reason = result["reason"]
+            if (
+                type(score) not in (int, float)
+                or not 0.0 <= score <= 1.0
+                or not math.isfinite(float(score))
+            ):
+                raise ValueError("task evaluation score must be a finite number in [0, 1]")
+            if type(reason) is not str or not reason or len(reason) > 16_384:
+                raise ValueError("task evaluation reason must be a bounded non-empty string")
+            return float(score), reason
         except Exception:
             logger.exception(f"Failed to get task score for {task_type}")
             raise RuntimeError(f"Failed to get task score for {task_type}")
@@ -322,7 +414,11 @@ class AndroidEnvClient:
         """Gets the goal of the current task."""
         self._ensure_initialized()
 
-        response = requests.get(f"{self.base_url}/task/goal", params={"task_name": task_type})
+        response = self._session.get(
+            f"{self.base_url}/task/goal",
+            params={"task_name": task_type},
+            timeout=self._request_timeout(),
+        )
         response.raise_for_status()
         return response.json()
 
@@ -330,19 +426,22 @@ class AndroidEnvClient:
         """Gets the metadata of the current task."""
         self._ensure_initialized()
 
-        response = requests.get(f"{self.base_url}/task/metadata", params={"task_name": task_type})
+        response = self._session.get(
+            f"{self.base_url}/task/metadata",
+            params={"task_name": task_type},
+            timeout=self._request_timeout(),
+        )
         response.raise_for_status()
         return response.json()
 
     def close(self) -> None:
         """Closes the environment."""
-        # The new server doesn't have a close endpoint, so this is a no-op
-        pass
+        self._session.close()
 
     def health(self) -> bool:
         """Checks the health of the environment."""
         try:
-            response = requests.get(f"{self.base_url}/health")
+            response = self._session.get(f"{self.base_url}/health", timeout=self._request_timeout())
             response.raise_for_status()
             result = response.json()
             return result.get("ok", False)
@@ -354,7 +453,11 @@ class AndroidEnvClient:
         """Gets the complexity of the current task."""
         self._ensure_initialized()
 
-        response = requests.get(f"{self.base_url}/task/complexity", params={"task_name": task_type})
+        response = self._session.get(
+            f"{self.base_url}/task/complexity",
+            params={"task_name": task_type},
+            timeout=self._request_timeout(),
+        )
         response.raise_for_status()
         return float(response.json())
 
@@ -371,7 +474,7 @@ class AndroidEnvClient:
 
     def get_task_list(self) -> list[str]:
         """Get the list of tasks."""
-        response = requests.get(f"{self.base_url}/task/list")
+        response = self._session.get(f"{self.base_url}/task/list", timeout=self._request_timeout())
         response.raise_for_status()
         return response.json()
 

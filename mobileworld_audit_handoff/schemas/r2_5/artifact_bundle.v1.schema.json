@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_5/artifact_bundle.v1.schema.json",
+  "title": "R2.4/R2.5 Authority Artifact Bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_bundle", "artifact_bundle_sha256"],
+  "properties": {
+    "artifact_bundle": {"$ref": "#/$defs/artifactBundle"},
+    "artifact_bundle_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "executionCensus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_model_calls",
+        "backend_operations",
+        "docker_operations",
+        "gpu_operations",
+        "gui_actions",
+        "network_calls",
+        "secret_content_reads"
+      ],
+      "properties": {
+        "actor_model_calls": {"const": 0},
+        "backend_operations": {"const": 0},
+        "docker_operations": {"const": 0},
+        "gpu_operations": {"const": 0},
+        "gui_actions": {"const": 0},
+        "network_calls": {"const": 0},
+        "secret_content_reads": {"const": 0}
+      }
+    },
+    "artifactBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_manifest",
+        "authority_manifest_sha256",
+        "authority_status",
+        "cohort_selection",
+        "cohort_selection_artifact_byte_count",
+        "cohort_selection_artifact_sha256",
+        "execution_census",
+        "executable_task_source",
+        "executable_task_source_byte_count",
+        "executable_task_source_schema_version",
+        "executable_task_source_sha256",
+        "frozen_pilot_manifest",
+        "frozen_pilot_manifest_sha256",
+        "gui_only_task_source_byte_count",
+        "gui_only_task_source_sha256",
+        "schema_version",
+        "topology_comparison_artifact",
+        "topology_comparison_artifact_byte_count",
+        "topology_comparison_artifact_sha256"
+      ],
+      "properties": {
+        "authority_manifest": {
+          "$ref": "https://agentsentinel.local/schemas/r2_4/run_authority_manifest.v1.schema.json"
+        },
+        "authority_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "authority_status": {"const": "DRAFT_NOT_AUTHORIZED"},
+        "cohort_selection": {
+          "$ref": "https://agentsentinel.local/schemas/r2_5/cohort_selection.v1.schema.json"
+        },
+        "cohort_selection_artifact_byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "cohort_selection_artifact_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_census": {"$ref": "#/$defs/executionCensus"},
+        "executable_task_source": {
+          "$ref": "https://agentsentinel.local/schemas/r2_5/executable_task_source.v1.schema.json"
+        },
+        "executable_task_source_byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "executable_task_source_schema_version": {
+          "const": "mobileworld.runtime.sentinel-r2.5-executable-task-source/v1"
+        },
+        "executable_task_source_sha256": {"$ref": "#/$defs/sha256"},
+        "frozen_pilot_manifest": {
+          "$ref": "https://agentsentinel.local/schemas/r2_5/frozen_pilot_manifest.v1.schema.json"
+        },
+        "frozen_pilot_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "gui_only_task_source_byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "gui_only_task_source_sha256": {"$ref": "#/$defs/sha256"},
+        "schema_version": {
+          "const": "mobileworld.runtime.sentinel-r2.4-r2.5-artifacts/v1"
+        },
+        "topology_comparison_artifact": {
+          "$ref": "https://agentsentinel.local/schemas/r2_4/cpu_topology_artifact.v1.schema.json"
+        },
+        "topology_comparison_artifact_byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "topology_comparison_artifact_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

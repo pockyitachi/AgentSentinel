@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_5/frozen_pilot_manifest.v1.schema.json",
+  "title": "R2.5 Frozen Matched Pilot Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "arms",
+    "baseline_mode",
+    "cohort_id",
+    "cohort_selection_artifact_byte_count",
+    "cohort_selection_artifact_path",
+    "cohort_selection_artifact_sha256",
+    "cohort_selection_sha256",
+    "dynamic_wall_clock_tasks_excluded",
+    "environment_reset_between_cells",
+    "frozen_at_utc",
+    "hosts",
+    "joint_mode",
+    "matched_task_ids",
+    "matched_task_parameters",
+    "max_steps_per_cell",
+    "max_total_actor_calls",
+    "max_total_cost_usd_micros",
+    "max_total_openai_calls",
+    "max_total_wall_time_seconds",
+    "official_success_metric_required",
+    "per_cell_timeout_seconds",
+    "schema_version",
+    "seed_policy",
+    "task_manifest_byte_count",
+    "task_manifest_path",
+    "task_manifest_sha256",
+    "task_time_authority",
+    "tasks",
+    "topology",
+    "topology_comparison_artifact_byte_count",
+    "topology_comparison_artifact_path",
+    "topology_comparison_artifact_sha256"
+  ],
+  "properties": {
+    "arms": {
+      "type": "array",
+      "prefixItems": [
+        {"const": "BASELINE"},
+        {"const": "JOINT_SENTINEL"}
+      ],
+      "items": false
+    },
+    "baseline_mode": {"const": "OFF"},
+    "cohort_id": {"$ref": "#/$defs/runtimeId"},
+    "cohort_selection_artifact_byte_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8388608
+    },
+    "cohort_selection_artifact_path": {"$ref": "#/$defs/absolutePath"},
+    "cohort_selection_artifact_sha256": {"$ref": "#/$defs/sha256"},
+    "cohort_selection_sha256": {"$ref": "#/$defs/sha256"},
+    "dynamic_wall_clock_tasks_excluded": {"const": true},
+    "environment_reset_between_cells": {"const": true},
+    "frozen_at_utc": {"$ref": "#/$defs/utcSecond"},
+    "hosts": {
+      "type": "array",
+      "prefixItems": [
+        {"const": "QWEN3_VL"},
+        {"const": "MAI_UI"}
+      ],
+      "items": false
+    },
+    "joint_mode": {"const": "ACTIVE"},
+    "matched_task_ids": {"const": true},
+    "matched_task_parameters": {"const": true},
+    "max_steps_per_cell": {"type": "integer", "minimum": 1, "maximum": 200},
+    "max_total_actor_calls": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "max_total_cost_usd_micros": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000000000
+    },
+    "max_total_openai_calls": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2000000
+    },
+    "max_total_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 604800
+    },
+    "official_success_metric_required": {"const": true},
+    "per_cell_timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 14400
+    },
+    "schema_version": {
+      "const": "mobileworld.runtime.sentinel-r2.5-frozen-pilot/v1"
+    },
+    "seed_policy": {
+      "const": "FIXED_PER_TASK_SHARED_ACROSS_HOSTS_AND_ARMS"
+    },
+    "task_manifest_byte_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000000
+    },
+    "task_manifest_path": {"$ref": "#/$defs/absolutePath"},
+    "task_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "task_time_authority": {"const": "STATIC_WALL_CLOCK_INDEPENDENT_ONLY"},
+    "tasks": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 30,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/task"}
+    },
+    "topology": {"const": "ISOLATED_HISTORY_FREE"},
+    "topology_comparison_artifact_byte_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8388608
+    },
+    "topology_comparison_artifact_path": {"$ref": "#/$defs/absolutePath"},
+    "topology_comparison_artifact_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/"
+    },
+    "runtimeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "utcSecond": {
+      "type": "string",
+      "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reset_seed", "task_id", "task_parameters_sha256"],
+      "properties": {
+        "reset_seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "task_id": {"$ref": "#/$defs/runtimeId"},
+        "task_parameters_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

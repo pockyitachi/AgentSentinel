@@ -1,0 +1,395 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/run_authority_manifest.v1.schema.json",
+  "title": "R2.4/R2.5 Run Authority Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "actor_resources",
+    "authorization",
+    "max_resource_preflight_wall_time_seconds",
+    "max_sequence_actor_calls",
+    "max_sequence_cost_usd_micros",
+    "max_sequence_openai_calls",
+    "max_sequence_wall_time_seconds",
+    "openai_stages",
+    "output_root",
+    "pilot",
+    "run_id",
+    "safety",
+    "schema_version",
+    "secret",
+    "smoke_plans",
+    "source_commit",
+    "topology_comparison_artifact_sha256"
+  ],
+  "properties": {
+    "actor_resources": {
+      "type": "array",
+      "prefixItems": [
+        {"$ref": "#/$defs/qwenResource"},
+        {"$ref": "#/$defs/maiResource"}
+      ],
+      "items": false
+    },
+    "authorization": {"$ref": "#/$defs/authorization"},
+    "max_resource_preflight_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "max_sequence_actor_calls": {"type": "integer", "minimum": 1},
+    "max_sequence_cost_usd_micros": {"type": "integer", "minimum": 1},
+    "max_sequence_openai_calls": {"type": "integer", "minimum": 1},
+    "max_sequence_wall_time_seconds": {"type": "integer", "minimum": 1},
+    "openai_stages": {
+      "type": "array",
+      "prefixItems": [
+        {"$ref": "#/$defs/rubricOpenAIStage"},
+        {"$ref": "#/$defs/historyOpenAIStage"}
+      ],
+      "items": false
+    },
+    "output_root": {"$ref": "#/$defs/absolutePath"},
+    "pilot": {
+      "$ref": "https://agentsentinel.local/schemas/r2_5/frozen_pilot_manifest.v1.schema.json"
+    },
+    "run_id": {"$ref": "#/$defs/runtimeId"},
+    "safety": {"$ref": "#/$defs/safety"},
+    "schema_version": {
+      "const": "mobileworld.runtime.sentinel-r2.4-r2.5-run-authority/v1"
+    },
+    "secret": {"$ref": "#/$defs/secret"},
+    "smoke_plans": {
+      "type": "array",
+      "prefixItems": [
+        {"$ref": "#/$defs/qwenSmokePlan"},
+        {"$ref": "#/$defs/maiSmokePlan"}
+      ],
+      "items": false
+    },
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "topology_comparison_artifact_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/"
+    },
+    "runtimeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "utcSecond": {
+      "type": "string",
+      "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_model_calls_allowed",
+        "authorization_id",
+        "authorized_by",
+        "backend_allowed",
+        "docker_allowed",
+        "expires_at_utc",
+        "frozen_artifact_mutation_allowed",
+        "gpu_allowed",
+        "issued_at_utc",
+        "linear_update_allowed",
+        "merge_allowed",
+        "model_loading_allowed",
+        "network_allowed",
+        "pilot_gui_actions_allowed",
+        "sentinel_provider_calls_allowed",
+        "smoke_gui_actions_allowed",
+        "status"
+      ],
+      "properties": {
+        "actor_model_calls_allowed": {"const": true},
+        "authorization_id": {"$ref": "#/$defs/runtimeId"},
+        "authorized_by": {"$ref": "#/$defs/runtimeId"},
+        "backend_allowed": {"const": true},
+        "docker_allowed": {"const": true},
+        "expires_at_utc": {"$ref": "#/$defs/utcSecond"},
+        "frozen_artifact_mutation_allowed": {"const": false},
+        "gpu_allowed": {"const": true},
+        "issued_at_utc": {"$ref": "#/$defs/utcSecond"},
+        "linear_update_allowed": {"const": false},
+        "merge_allowed": {"const": false},
+        "model_loading_allowed": {"const": true},
+        "network_allowed": {"const": true},
+        "pilot_gui_actions_allowed": {"const": true},
+        "sentinel_provider_calls_allowed": {"const": true},
+        "smoke_gui_actions_allowed": {"const": false},
+        "status": {"enum": ["DRAFT_NOT_AUTHORIZED", "OWNER_AUTHORIZED"]}
+      }
+    },
+    "secret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "content_may_be_read_by_preflight",
+        "environment_key",
+        "path",
+        "persist_value_or_hash",
+        "required_mode"
+      ],
+      "properties": {
+        "content_may_be_read_by_preflight": {"const": false},
+        "environment_key": {"const": "OPENAI_API_KEY"},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "persist_value_or_hash": {"const": false},
+        "required_mode": {"const": 384}
+      }
+    },
+    "openAIStageBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "external_network_on_call",
+        "max_attempts",
+        "max_output_tokens",
+        "model",
+        "model_on_call",
+        "openai_sdk_version",
+        "role",
+        "sdk_max_retries",
+        "store",
+        "timeout_ms",
+        "transport_authority",
+        "transport_kind"
+      ],
+      "properties": {
+        "endpoint": {"const": "https://api.openai.com/v1/responses"},
+        "external_network_on_call": {"const": true},
+        "max_attempts": {"const": 1},
+        "max_output_tokens": {"type": "integer"},
+        "model": {"const": "gpt-5.6-sol"},
+        "model_on_call": {"const": true},
+        "openai_sdk_version": {"const": "1.106.1"},
+        "role": {"type": "string"},
+        "sdk_max_retries": {"const": 0},
+        "store": {"const": false},
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000},
+        "transport_authority": {"const": "EXPLICIT_OWNER_AUTHORIZATION"},
+        "transport_kind": {"const": "OPENAI_RESPONSES"}
+      }
+    },
+    "rubricOpenAIStage": {
+      "allOf": [
+        {"$ref": "#/$defs/openAIStageBase"},
+        {
+          "properties": {
+            "role": {"const": "RUBRIC"},
+            "max_output_tokens": {"const": 8192}
+          }
+        }
+      ]
+    },
+    "historyOpenAIStage": {
+      "allOf": [
+        {"$ref": "#/$defs/openAIStageBase"},
+        {
+          "properties": {
+            "role": {"const": "HISTORY_POLICY"},
+            "max_output_tokens": {"const": 4096}
+          }
+        }
+      ]
+    },
+    "resourceBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_endpoint",
+        "history_codec_id",
+        "host",
+        "host_enabled",
+        "independent_kill_switch",
+        "served_model_id",
+        "snapshot_file_count",
+        "snapshot_path",
+        "snapshot_storage_root",
+        "snapshot_total_bytes",
+        "snapshot_tree_algorithm",
+        "snapshot_tree_sha256"
+      ],
+      "properties": {
+        "actor_endpoint": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "history_codec_id": {"type": "string"},
+        "host": {"type": "string"},
+        "host_enabled": {"const": true},
+        "independent_kill_switch": {"const": true},
+        "served_model_id": {"$ref": "#/$defs/runtimeId"},
+        "snapshot_file_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "snapshot_path": {"$ref": "#/$defs/absolutePath"},
+        "snapshot_storage_root": {"$ref": "#/$defs/absolutePath"},
+        "snapshot_total_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000000000
+        },
+        "snapshot_tree_algorithm": {"const": "SHA256_LOGICAL_TREE_V1"},
+        "snapshot_tree_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "qwenResource": {
+      "allOf": [
+        {"$ref": "#/$defs/resourceBase"},
+        {
+          "properties": {
+            "host": {"const": "QWEN3_VL"},
+            "history_codec_id": {
+              "const": "mobileworld.g1.history-codec.qwen-flat-progress"
+            }
+          }
+        }
+      ]
+    },
+    "maiResource": {
+      "allOf": [
+        {"$ref": "#/$defs/resourceBase"},
+        {
+          "properties": {
+            "host": {"const": "MAI_UI"},
+            "history_codec_id": {
+              "const": "mobileworld.g1.history-codec.mai-raw-replay"
+            }
+          }
+        }
+      ]
+    },
+    "smokeCaseBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_action_allowed",
+        "case_id",
+        "max_actor_calls",
+        "max_cost_usd_micros",
+        "max_openai_calls",
+        "max_wall_time_seconds",
+        "mode",
+        "provider_final_request_proof_required",
+        "request_fixture_byte_count",
+        "request_fixture_path",
+        "request_fixture_sha256",
+        "task_id"
+      ],
+      "properties": {
+        "actor_action_allowed": {"const": false},
+        "case_id": {"$ref": "#/$defs/runtimeId"},
+        "max_actor_calls": {"const": 1},
+        "max_cost_usd_micros": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000000
+        },
+        "max_openai_calls": {"type": "integer"},
+        "max_wall_time_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1800
+        },
+        "mode": {"type": "string"},
+        "provider_final_request_proof_required": {"const": true},
+        "request_fixture_byte_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000000
+        },
+        "request_fixture_path": {"$ref": "#/$defs/absolutePath"},
+        "request_fixture_sha256": {"$ref": "#/$defs/sha256"},
+        "task_id": {"$ref": "#/$defs/runtimeId"}
+      }
+    },
+    "offSmokeCase": {
+      "allOf": [
+        {"$ref": "#/$defs/smokeCaseBase"},
+        {"properties": {"mode": {"const": "OFF"}, "max_openai_calls": {"const": 0}}}
+      ]
+    },
+    "shadowSmokeCase": {
+      "allOf": [
+        {"$ref": "#/$defs/smokeCaseBase"},
+        {"properties": {"mode": {"const": "SHADOW"}, "max_openai_calls": {"const": 3}}}
+      ]
+    },
+    "activeSmokeCase": {
+      "allOf": [
+        {"$ref": "#/$defs/smokeCaseBase"},
+        {"properties": {"mode": {"const": "ACTIVE"}, "max_openai_calls": {"const": 3}}}
+      ]
+    },
+    "smokePlanBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cases", "host"],
+      "properties": {
+        "cases": {
+          "type": "array",
+          "prefixItems": [
+            {"$ref": "#/$defs/offSmokeCase"},
+            {"$ref": "#/$defs/shadowSmokeCase"},
+            {"$ref": "#/$defs/activeSmokeCase"}
+          ],
+          "items": false
+        },
+        "host": {"type": "string"}
+      }
+    },
+    "qwenSmokePlan": {
+      "allOf": [
+        {"$ref": "#/$defs/smokePlanBase"},
+        {"properties": {"host": {"const": "QWEN3_VL"}}}
+      ]
+    },
+    "maiSmokePlan": {
+      "allOf": [
+        {"$ref": "#/$defs/smokePlanBase"},
+        {"properties": {"host": {"const": "MAI_UI"}}}
+      ]
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arbitrary_commands_forbidden",
+        "default_dry_run",
+        "pilot_only_after_both_smokes_pass",
+        "repo_external_output_required",
+        "secrets_in_logs_forbidden",
+        "stages",
+        "stop_on_failure"
+      ],
+      "properties": {
+        "arbitrary_commands_forbidden": {"const": true},
+        "default_dry_run": {"const": true},
+        "pilot_only_after_both_smokes_pass": {"const": true},
+        "repo_external_output_required": {"const": true},
+        "secrets_in_logs_forbidden": {"const": true},
+        "stages": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "RESOURCE_PREFLIGHT"},
+            {"const": "QWEN_LIVE_SMOKE"},
+            {"const": "MAI_LIVE_SMOKE"},
+            {"const": "R25_PILOT"}
+          ],
+          "items": false
+        },
+        "stop_on_failure": {"const": true}
+      }
+    }
+  }
+}

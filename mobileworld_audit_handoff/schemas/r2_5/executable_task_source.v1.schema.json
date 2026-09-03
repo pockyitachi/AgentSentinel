@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_5/executable_task_source.v1.schema.json",
+  "title": "R2.5 Executable Pilot Task Source v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cohort_id", "schema_version", "seed_policy", "tasks"],
+  "properties": {
+    "cohort_id": {"$ref": "#/$defs/runtimeId"},
+    "schema_version": {
+      "const": "mobileworld.runtime.sentinel-r2.5-executable-task-source/v1"
+    },
+    "seed_policy": {
+      "const": "FIXED_PER_TASK_SHARED_ACROSS_HOSTS_AND_ARMS"
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 30,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/executableTask"}
+    }
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/"
+    },
+    "runtimeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "mobileworldParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_name", "trial"],
+      "properties": {
+        "task_name": {"$ref": "#/$defs/runtimeId"},
+        "trial": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      }
+    },
+    "inlineParameterSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["byte_count", "kind", "payload", "sha256"],
+      "properties": {
+        "byte_count": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "kind": {"const": "INLINE_CANONICAL_JSON"},
+        "payload": {"$ref": "#/$defs/mobileworldParameters"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "externalParameterSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["byte_count", "kind", "path", "sha256"],
+      "properties": {
+        "byte_count": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "kind": {"const": "EXTERNAL_CANONICAL_JSON_BLOB"},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "executableTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parameter_source",
+        "reset_seed",
+        "task_id",
+        "task_parameters_sha256"
+      ],
+      "properties": {
+        "parameter_source": {
+          "oneOf": [
+            {"$ref": "#/$defs/inlineParameterSource"},
+            {"$ref": "#/$defs/externalParameterSource"}
+          ]
+        },
+        "reset_seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "task_id": {"$ref": "#/$defs/runtimeId"},
+        "task_parameters_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

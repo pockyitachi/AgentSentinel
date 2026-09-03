@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/topology_comparison.v1.schema.json",
+  "title": "R2.4 CPU/Fake Topology Comparison v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "comparison_id",
+    "logical_call_id",
+    "pair_id",
+    "stimulus_sha256",
+    "task_instruction_sha256",
+    "causal_cutoff_sha256",
+    "current_observation_sha256",
+    "isolated_rubric_script_sha256",
+    "isolated_policy_script_sha256",
+    "joint_script_sha256",
+    "isolated_input_binding_sha256",
+    "joint_input_binding_sha256",
+    "source_r23_comparison_sha256",
+    "source_isolated_run_sha256",
+    "source_joint_run_sha256",
+    "source_isolated_run",
+    "source_joint_run",
+    "outcome",
+    "failure_observation",
+    "isolated_status",
+    "joint_status",
+    "isolated_succeeded",
+    "joint_succeeded",
+    "isolated_timed_out",
+    "joint_timed_out",
+    "output_agreement",
+    "isolated_observed_stages",
+    "joint_observed_stages",
+    "isolated_call_count",
+    "joint_call_count",
+    "total_call_count",
+    "isolated_latency_ns",
+    "joint_latency_ns",
+    "total_latency_ns",
+    "primary_topology",
+    "joint_classification",
+    "independent_grounding_source",
+    "joint_may_replace_isolated",
+    "proposed_pilot_topology",
+    "pilot_selection_status",
+    "owner_authority_present",
+    "deployment_topology_frozen",
+    "claim_limitations",
+    "cpu_only",
+    "offline",
+    "external_network_attempted",
+    "gpu_used",
+    "mobileworld_backend_used",
+    "action_executed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mobileworld.runtime.sentinel-r2.4-topology-comparison/v1"
+    },
+    "comparison_id": {"$ref": "#/$defs/runtimeId"},
+    "logical_call_id": {"$ref": "#/$defs/runtimeId"},
+    "pair_id": {"$ref": "#/$defs/runtimeId"},
+    "stimulus_sha256": {"$ref": "#/$defs/sha256"},
+    "task_instruction_sha256": {"$ref": "#/$defs/sha256"},
+    "causal_cutoff_sha256": {"$ref": "#/$defs/sha256"},
+    "current_observation_sha256": {"$ref": "#/$defs/sha256"},
+    "isolated_rubric_script_sha256": {"$ref": "#/$defs/sha256"},
+    "isolated_policy_script_sha256": {"$ref": "#/$defs/sha256"},
+    "joint_script_sha256": {"$ref": "#/$defs/sha256"},
+    "isolated_input_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "joint_input_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "source_r23_comparison_sha256": {"$ref": "#/$defs/sha256"},
+    "source_isolated_run_sha256": {"$ref": "#/$defs/sha256"},
+    "source_joint_run_sha256": {"$ref": "#/$defs/sha256"},
+    "source_isolated_run": {"$ref": "#/$defs/isolatedRun"},
+    "source_joint_run": {"$ref": "#/$defs/jointRun"},
+    "outcome": {
+      "enum": [
+        "BOTH_ADMITTED_AGREE",
+        "BOTH_ADMITTED_DIVERGE",
+        "ISOLATED_ONLY_ADMITTED",
+        "JOINT_ONLY_ADMITTED",
+        "BOTH_FAILED",
+        "ISOLATED_TIMEOUT",
+        "JOINT_TIMEOUT",
+        "BOTH_TIMEOUT"
+      ]
+    },
+    "failure_observation": {
+      "enum": [
+        "NO_FAILURE",
+        "ISOLATED_ONLY_FAILURE",
+        "JOINT_ONLY_FAILURE",
+        "BOTH_FAILED_SAME_TRIAL"
+      ]
+    },
+    "isolated_status": {"enum": ["ADMITTED", "FALLBACK"]},
+    "joint_status": {"enum": ["ADMITTED", "FALLBACK"]},
+    "isolated_succeeded": {"type": "boolean"},
+    "joint_succeeded": {"type": "boolean"},
+    "isolated_timed_out": {"type": "boolean"},
+    "joint_timed_out": {"type": "boolean"},
+    "output_agreement": {"type": ["boolean", "null"]},
+    "isolated_observed_stages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "prefixItems": [
+        {"const": "ISOLATED_RUBRIC"},
+        {"const": "ISOLATED_HISTORY_POLICY"}
+      ],
+      "items": false
+    },
+    "joint_observed_stages": {
+      "type": "array",
+      "prefixItems": [{"const": "JOINT_RUBRIC_POLICY"}],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "isolated_call_count": {"type": "integer", "minimum": 1, "maximum": 2},
+    "joint_call_count": {"const": 1},
+    "total_call_count": {"type": "integer", "minimum": 2, "maximum": 3},
+    "isolated_latency_ns": {"type": "integer", "minimum": 0},
+    "joint_latency_ns": {"type": "integer", "minimum": 0},
+    "total_latency_ns": {"type": "integer", "minimum": 0},
+    "primary_topology": {"const": "ISOLATED_HISTORY_FREE"},
+    "joint_classification": {"const": "JOINT_NON_INDEPENDENT"},
+    "independent_grounding_source": {"const": "ISOLATED_ONLY"},
+    "joint_may_replace_isolated": {"const": false},
+    "proposed_pilot_topology": {"const": "ISOLATED_HISTORY_FREE"},
+    "pilot_selection_status": {"const": "FROZEN_FOR_R25"},
+    "owner_authority_present": {"const": false},
+    "deployment_topology_frozen": {"const": true},
+    "claim_limitations": {
+      "type": "array",
+      "prefixItems": [
+        {"const": "CPU_FAKE_ONLY"},
+        {"const": "NO_LIVE_OR_EFFECTIVENESS_CLAIM"},
+        {"const": "JOINT_GROUNDING_NON_INDEPENDENT"},
+        {"const": "LIVE_EXECUTION_REQUIRES_SEPARATE_OWNER_AUTHORITY"}
+      ],
+      "items": false,
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "cpu_only": {"const": true},
+    "offline": {"const": true},
+    "external_network_attempted": {"const": false},
+    "gpu_used": {"const": false},
+    "mobileworld_backend_used": {"const": false},
+    "action_executed": {"const": false}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "runtimeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "nullableSha256": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "nullableFailure": {
+      "anyOf": [
+        {"type": "null"},
+        {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Z][A-Z0-9_]*$"}
+      ]
+    },
+    "isolatedRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topology",
+        "status",
+        "rubric_input_sha256",
+        "rubric_output_sha256",
+        "rubric_receipt_sha256",
+        "history_policy_input_sha256",
+        "history_policy_output_sha256",
+        "failure_code",
+        "total_latency_ns"
+      ],
+      "properties": {
+        "topology": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "independent_grounding_claim_eligible"],
+          "properties": {
+            "kind": {"const": "ISOLATED_HISTORY_FREE"},
+            "independent_grounding_claim_eligible": {"const": true}
+          }
+        },
+        "status": {"enum": ["ADMITTED", "FALLBACK"]},
+        "rubric_input_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "rubric_output_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "rubric_receipt_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "history_policy_input_sha256": {"type": "null"},
+        "history_policy_output_sha256": {"type": "null"},
+        "failure_code": {"$ref": "#/$defs/nullableFailure"},
+        "total_latency_ns": {"type": "integer", "minimum": 0}
+      }
+    },
+    "jointRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topology",
+        "status",
+        "rubric_input_sha256",
+        "rubric_output_sha256",
+        "rubric_receipt_sha256",
+        "history_policy_input_sha256",
+        "history_policy_output_sha256",
+        "failure_code",
+        "total_latency_ns"
+      ],
+      "properties": {
+        "topology": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "independent_grounding_claim_eligible"],
+          "properties": {
+            "kind": {"const": "JOINT_NON_INDEPENDENT"},
+            "independent_grounding_claim_eligible": {"const": false}
+          }
+        },
+        "status": {"enum": ["ADMITTED", "FALLBACK"]},
+        "rubric_input_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "rubric_output_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "rubric_receipt_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "history_policy_input_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "history_policy_output_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "failure_code": {"$ref": "#/$defs/nullableFailure"},
+        "total_latency_ns": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

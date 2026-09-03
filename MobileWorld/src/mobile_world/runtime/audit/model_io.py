@@ -8,6 +8,7 @@ private serialized graph and never mutates live request/response objects.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any, TypeVar
@@ -16,7 +17,13 @@ from urllib.parse import urlsplit
 from mobile_world.runtime.audit.context import AuditContext, get_audit_context
 from mobile_world.runtime.audit.ids import new_ulid
 from mobile_world.runtime.audit.secret_policy import is_placeholder_credential
-from mobile_world.runtime.audit.serializer import ArtifactSerializer, ArtifactSnapshot
+from mobile_world.runtime.audit.serializer import (
+    ArtifactSerializer,
+    ArtifactSnapshot,
+)
+from mobile_world.runtime.audit.serializer import (
+    canonical_json_bytes as audit_canonical_json_bytes,
+)
 
 _T = TypeVar("_T")
 _UNSET = object()
@@ -227,6 +234,10 @@ class ModelCallAudit:
         )
         if isinstance(event, Mapping) and isinstance(event.get("event_id"), str):
             attempt.request_event_id = event["event_id"]
+            attempt.request_event_sha256 = hashlib.sha256(
+                audit_canonical_json_bytes(event)
+            ).hexdigest()
+            attempt.request_snapshot_blob = dict(snapshot.snapshot_blob)
 
     def _capture(
         self,
@@ -270,6 +281,12 @@ class ModelAttemptAudit:
         self.attempt_index = attempt_index
         self.stream = stream
         self.request_event_id: str | None = None
+        self.request_event_sha256: str | None = None
+        self.request_snapshot_blob: dict[str, Any] | None = None
+        self.terminal_event_id: str | None = None
+        self.terminal_event_sha256: str | None = None
+        self.terminal_event_type: str | None = None
+        self.terminal_snapshot_blob: dict[str, Any] | None = None
         self._terminal = False
         self._observed_chunk_count = 0
         self._chunk_event_ids: list[str] = []
@@ -292,6 +309,42 @@ class ModelAttemptAudit:
         """Whether the enclosing adapter has declared a later retry."""
 
         return self.call.adapter_retry_planned
+
+    @property
+    def request_artifact_locator(self) -> dict[str, Any] | None:
+        """Return the exact existing Collector request event/blob locator."""
+
+        if (
+            self.request_event_id is None
+            or self.request_event_sha256 is None
+            or self.request_snapshot_blob is None
+        ):
+            return None
+        return {
+            "run_id": self.call.context.run_id,
+            "task_run_id": self.call.context.task_run_id,
+            "event_type": "model_request",
+            "event_id": self.request_event_id,
+            "event_sha256": self.request_event_sha256,
+            "snapshot_blob": dict(self.request_snapshot_blob),
+        }
+
+    @property
+    def terminal_artifact_locator(self) -> dict[str, Any] | None:
+        """Return the exact existing Collector response/failure event locator."""
+
+        if self.terminal_event_id is None or self.terminal_event_sha256 is None:
+            return None
+        return {
+            "run_id": self.call.context.run_id,
+            "task_run_id": self.call.context.task_run_id,
+            "event_type": self.terminal_event_type,
+            "event_id": self.terminal_event_id,
+            "event_sha256": self.terminal_event_sha256,
+            "snapshot_blob": (
+                None if self.terminal_snapshot_blob is None else dict(self.terminal_snapshot_blob)
+            ),
+        }
 
     @property
     def correlation_payload(self) -> dict[str, Any]:
@@ -678,10 +731,23 @@ class ModelAttemptAudit:
             related_event_id=self.request_event_id,
         )
         if isinstance(event, Mapping) and isinstance(event.get("event_id"), str):
+            self.terminal_event_id = event["event_id"]
+            self.terminal_event_type = event_type
+            self.terminal_event_sha256 = hashlib.sha256(
+                audit_canonical_json_bytes(event)
+            ).hexdigest()
+            raw_response = payload.get("raw_response")
+            if isinstance(raw_response, Mapping) and isinstance(
+                raw_response.get("snapshot_blob"), Mapping
+            ):
+                self.terminal_snapshot_blob = dict(raw_response["snapshot_blob"])
+            elif isinstance(payload.get("raw_response_snapshot_blob"), Mapping):
+                self.terminal_snapshot_blob = dict(payload["raw_response_snapshot_blob"])
             self.call._last_attempt_terminal_event_id = event["event_id"]
-            if self.call.context.model_call_trace is not None:
+            trace = self.call.context.model_call_trace
+            if trace is not None:
                 self.call._capture(
-                    lambda: self.call.context.model_call_trace.record_terminal(
+                    lambda: trace.record_terminal(
                         self.call.model_call_id,
                         event["event_id"],
                     ),
@@ -870,8 +936,6 @@ def _sdk_arguments_for_audit(
     captured = dict(arguments)
     excluded = ["api_key", "authorization_headers", "cookies"]
     for raw_key in list(captured):
-        if not isinstance(raw_key, str):
-            continue
         normalized = raw_key.casefold().replace("_", "-")
         if normalized in _CREDENTIAL_ARGUMENT_NAMES:
             captured.pop(raw_key)

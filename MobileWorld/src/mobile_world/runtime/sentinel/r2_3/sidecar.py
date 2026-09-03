@@ -128,13 +128,14 @@ class RubricReceiptV1:
             raise TypeError("operation must be an exact RubricReceiptOperation")
         if type(self.status) is not RubricEvaluationStatus:
             raise TypeError("status must be an exact RubricEvaluationStatus")
-        for value, expected, name in (
-            (self.execution_scope, "SHADOW_ONLY", "execution_scope"),
-            (self.backend_kind, "INJECTED_FAKE", "backend_kind"),
-            (self.transport_authority, "CPU_OFFLINE_FAKE", "transport_authority"),
+        if type(self.execution_scope) is not str or self.execution_scope != "SHADOW_ONLY":
+            raise ValueError("execution_scope is outside the R2.3 SHADOW-only scope")
+        for value, name in (
+            (self.backend_kind, "backend_kind"),
+            (self.transport_authority, "transport_authority"),
         ):
-            if type(value) is not str or value != expected:
-                raise ValueError(f"{name} is outside the R2.3 CPU/offline scope")
+            if type(value) is not str:
+                raise ValueError(f"{name} must be exact text")
         if self.topology_kind not in {"ISOLATED_HISTORY_FREE", "JOINT_NON_INDEPENDENT"}:
             raise ValueError("unknown rubric topology")
         for name in ("backend_id", "backend_version"):
@@ -225,9 +226,6 @@ class RubricReceiptV1:
         if len(self.validation_checks) != len(set(self.validation_checks)):
             raise ValueError("validation_checks must be unique")
         for name in (
-            "external_network_attempted",
-            "model_call_attempted",
-            "local_gpu_used",
             "mobileworld_action_executed",
             "actor_request_mutated",
             "collector_raw_mutated",
@@ -239,6 +237,29 @@ class RubricReceiptV1:
             value = getattr(self, name)
             if type(value) is not bool or value:
                 raise ValueError(f"{name} must be exact false")
+        for name in (
+            "external_network_attempted",
+            "model_call_attempted",
+            "local_gpu_used",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be an exact bool")
+        fake = (
+            self.backend_kind == "INJECTED_FAKE"
+            and self.transport_authority == "CPU_OFFLINE_FAKE"
+            and not self.external_network_attempted
+            and not self.model_call_attempted
+            and not self.local_gpu_used
+        )
+        owner_authorized_live = (
+            self.backend_kind == "OPENAI_RESPONSES"
+            and self.transport_authority == "EXPLICIT_OWNER_AUTHORIZATION"
+            and self.external_network_attempted
+            and self.model_call_attempted
+            and not self.local_gpu_used
+        )
+        if not (fake or owner_authorized_live):
+            raise ValueError("backend resource flags differ from transport provenance")
         if self.total_latency_ns < max(
             self.packet_build_latency_ns,
             self.backend_latency_ns,

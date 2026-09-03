@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_5/cohort_selection.v1.schema.json",
+  "title": "R2.5 Source-Bound Cohort Selection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "algorithm",
+    "eligible_task_count",
+    "excluded_dynamic_time",
+    "excluded_mcp",
+    "excluded_missing_registry",
+    "excluded_user_interaction",
+    "members",
+    "registry_sha256",
+    "registry_task_count",
+    "schema_version",
+    "source_byte_count",
+    "source_path",
+    "source_sha256",
+    "source_task_audit",
+    "source_task_count",
+    "task_time_dependency_audit_algorithm"
+  ],
+  "properties": {
+    "algorithm": {"const": "SHA256_R25_PILOT_V1"},
+    "eligible_task_count": {"type": "integer", "minimum": 20, "maximum": 10000},
+    "excluded_dynamic_time": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "excluded_mcp": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "excluded_missing_registry": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "excluded_user_interaction": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "members": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 30,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/cohortMember"}
+    },
+    "registry_sha256": {"$ref": "#/$defs/sha256"},
+    "registry_task_count": {"type": "integer", "minimum": 1, "maximum": 10000},
+    "schema_version": {
+      "const": "mobileworld.runtime.sentinel-r2.5-cohort-selection/v1"
+    },
+    "source_byte_count": {"type": "integer", "minimum": 1, "maximum": 8388608},
+    "source_path": {"$ref": "#/$defs/absolutePath"},
+    "source_sha256": {"$ref": "#/$defs/sha256"},
+    "source_task_audit": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 10000,
+      "uniqueItems": true,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/eligibleAudit"},
+          {"$ref": "#/$defs/missingRegistryAudit"},
+          {"$ref": "#/$defs/registryExclusionAudit"}
+        ]
+      }
+    },
+    "source_task_count": {"type": "integer", "minimum": 20, "maximum": 10000},
+    "task_time_dependency_audit_algorithm": {
+      "const": "PYTHON_SOURCE_WALL_CLOCK_SCAN_V1"
+    }
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/"
+    },
+    "runtimeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cohortMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reset_seed",
+        "selection_sha256",
+        "task_id",
+        "task_parameters_sha256",
+        "trial"
+      ],
+      "properties": {
+        "reset_seed": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "selection_sha256": {"$ref": "#/$defs/sha256"},
+        "task_id": {"$ref": "#/$defs/runtimeId"},
+        "task_parameters_sha256": {"$ref": "#/$defs/sha256"},
+        "trial": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      }
+    },
+    "eligibleAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "definition_source_sha256",
+        "disposition",
+        "selection_sha256",
+        "source_row_index",
+        "task_id",
+        "trial"
+      ],
+      "properties": {
+        "definition_source_sha256": {"$ref": "#/$defs/sha256"},
+        "disposition": {"const": "ELIGIBLE"},
+        "selection_sha256": {"$ref": "#/$defs/sha256"},
+        "source_row_index": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "task_id": {"$ref": "#/$defs/runtimeId"},
+        "trial": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      }
+    },
+    "missingRegistryAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "definition_source_sha256",
+        "disposition",
+        "selection_sha256",
+        "source_row_index",
+        "task_id",
+        "trial"
+      ],
+      "properties": {
+        "definition_source_sha256": {"type": "null"},
+        "disposition": {"const": "EXCLUDED_MISSING_REGISTRY"},
+        "selection_sha256": {"type": "null"},
+        "source_row_index": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "task_id": {"$ref": "#/$defs/runtimeId"},
+        "trial": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      }
+    },
+    "registryExclusionAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "definition_source_sha256",
+        "disposition",
+        "selection_sha256",
+        "source_row_index",
+        "task_id",
+        "trial"
+      ],
+      "properties": {
+        "definition_source_sha256": {"$ref": "#/$defs/sha256"},
+        "disposition": {
+          "enum": [
+            "EXCLUDED_USER_INTERACTION",
+            "EXCLUDED_MCP",
+            "EXCLUDED_DYNAMIC_OR_UNKNOWN_WALL_CLOCK"
+          ]
+        },
+        "selection_sha256": {"type": "null"},
+        "source_row_index": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "task_id": {"$ref": "#/$defs/runtimeId"},
+        "trial": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      }
+    }
+  }
+}
