@@ -1919,6 +1919,42 @@ def validate_live_history_policy_attempt_request_anchor_v1(
             "HISTORY_REQUEST_PROOF_MISMATCH",
             "history authority differs from deadline, request, lease, stage, pricing, or transport",
         )
+    r22 = anchor.r22_policy_receipt
+    if receipt.status is not LiveAttemptStatusV1.COMPLETED and r22 is not None:
+        response_or_semantic_values = (
+            r22.returned_model,
+            r22.response_id,
+            r22.response_status,
+            r22.service_tier,
+            r22.response_envelope_sha256,
+            r22.provider_output_sha256,
+            r22.parsed_proposal_sha256,
+            r22.admitted_plan_sha256,
+            r22.input_tokens,
+            r22.output_tokens,
+            r22.total_tokens,
+        )
+        decision_census = (
+            r22.decision_count,
+            r22.keep_count,
+            r22.drop_count,
+            r22.replace_count,
+            r22.keep_uncertain_count,
+            r22.material_decision_count,
+            r22.abstain_decision_count,
+        )
+        if (
+            receipt.dispatch_count != 1
+            or r22.transport_calls != 1
+            or r22.evaluation_status is not PolicyEvaluationStatus.TRANSPORT_ERROR
+            or r22.failure_code != "POLICY_TRANSPORT_ERROR"
+            or any(item is not None for item in response_or_semantic_values)
+            or any(decision_census)
+        ):
+            raise R24ContractError(
+                "HISTORY_REQUEST_PROOF_MISMATCH",
+                "a non-completed history attempt can bind only a pre-response R2.2 transport-error receipt",
+            )
     envelope = anchor.response_envelope
     if (receipt.response_envelope_sha256 is None) != (envelope is None):
         raise R24ContractError(
@@ -1943,7 +1979,6 @@ def validate_live_history_policy_attempt_request_anchor_v1(
             "HISTORY_REQUEST_PROOF_MISMATCH",
             "history provider response differs from the attempt receipt",
         )
-    r22 = anchor.r22_policy_receipt
     if r22 is None:
         if receipt.status is LiveAttemptStatusV1.COMPLETED and (
             receipt.dispatch_count != 1

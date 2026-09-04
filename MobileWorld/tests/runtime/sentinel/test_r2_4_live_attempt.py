@@ -13,6 +13,9 @@ import httpx
 import pytest
 
 from mobile_world.runtime.sentinel.r2_4 import (
+    live_attempt as live_attempt_module,
+)
+from mobile_world.runtime.sentinel.r2_4 import (
     production_preflight as production_preflight_module,
 )
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
@@ -1041,6 +1044,87 @@ def test_production_completion_binds_requested_and_returned_stage_model() -> Non
     with pytest.raises(LiveAttemptError) as model_drift:
         replace(receipt, returned_model="gpt-5.6-sol-snapshot")
     assert model_drift.value.code == "INVALID_COMPLETED_RECEIPT"
+
+
+def test_cancel_flag_after_completed_receive_cannot_publish_or_return_response() -> None:
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(exited=True),
+    )
+    envelope = _completed_envelope("resp-cancel-before-finalize")
+    connection.queue(("COMPLETED", call.authority_sha256, envelope, 2))
+    response_received = threading.Event()
+    cancellation_recorded = threading.Event()
+    original_recv = connection.recv
+
+    def receive_after_cancel_flag() -> tuple[object, ...]:
+        value = original_recv()
+        response_received.set()
+        assert cancellation_recorded.wait(2.0)
+        return value
+
+    connection.recv = receive_after_cancel_flag  # type: ignore[method-assign]
+
+    def request_cancel_before_finalization() -> None:
+        assert response_received.wait(2.0)
+        call._cancel_requested.set()
+        cancellation_recorded.set()
+
+    cancel_thread = threading.Thread(target=request_cancel_before_finalization)
+    cancel_thread.start()
+    with pytest.raises(LiveAttemptError) as raised:
+        call()
+    cancel_thread.join(2.0)
+
+    assert not cancel_thread.is_alive()
+    assert raised.value.code == "LIVE_ATTEMPT_CANCELLED"
+    receipt = call.terminal_receipt
+    assert receipt is not None
+    assert receipt.status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
+    assert receipt.cancellation_requested and receipt.late_output_detected
+    assert not receipt.passed
+    assert receipt.response_envelope_sha256 == cast(Any, envelope).sha256
+    assert (receipt.input_tokens, receipt.cached_input_tokens, receipt.output_tokens) == (7, 2, 3)
+    assert receipt.cost_status is LiveAttemptCostStatusV1.EXACT
+    assert _retained_response_for_call(call) == envelope
+    assert sink.receipts == (receipt,)
+
+
+def test_deadline_expiring_while_reaping_completed_child_cannot_publish_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _TerminatingProcess(exited=True)
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=process,
+    )
+    envelope = _completed_envelope("resp-deadline-during-finalize")
+    connection.queue(("COMPLETED", call.authority_sha256, envelope, 1))
+    deadline_ns = call.authority.deadline_monotonic_ns
+    current_ns = [deadline_ns - 1]
+    original_join = process.join
+
+    def join_and_expire_deadline(timeout_seconds: float = 0.0) -> None:
+        original_join(timeout_seconds)
+        current_ns[0] = deadline_ns
+
+    process.join = join_and_expire_deadline  # type: ignore[method-assign]
+    monkeypatch.setattr(live_attempt_module.time, "monotonic_ns", lambda: current_ns[0])
+
+    with pytest.raises(LiveAttemptError) as raised:
+        call()
+
+    assert raised.value.code == "LIVE_ATTEMPT_CANCELLED"
+    receipt = call.terminal_receipt
+    assert receipt is not None
+    assert receipt.status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
+    assert receipt.cancellation_requested and receipt.late_output_detected
+    assert not receipt.passed
+    assert receipt.response_envelope_sha256 == cast(Any, envelope).sha256
+    assert (receipt.input_tokens, receipt.cached_input_tokens, receipt.output_tokens) == (7, 1, 3)
+    assert receipt.cost_status is LiveAttemptCostStatusV1.EXACT
+    assert _retained_response_for_call(call) == envelope
+    assert sink.receipts == (receipt,)
 
 
 def _retained_response_for_call(call: ProductionOpenAIAttemptCallV1) -> object | None:

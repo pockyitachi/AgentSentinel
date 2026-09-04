@@ -2806,76 +2806,40 @@ class ProductionOpenAIAttemptCallV1:
                 )
             )
 
-    def cancel_and_join(self) -> LiveAttemptReceiptV1:
-        """TERM, then KILL if needed, and publish only after waitpid observation."""
+    def _cancel_and_join_locked(self) -> LiveAttemptReceiptV1:
+        """Terminalize cancellation while the caller owns ``_finalize_lock``."""
 
+        terminal = self.terminal_receipt
+        if terminal is not None:
+            return terminal
+        # The cancel flag and every terminal publication share one
+        # linearization lock.  It therefore cannot flip after a successful
+        # response's final check but before that response is published.
         self._cancel_requested.set()
-        with self._finalize_lock:
-            terminal = self.terminal_receipt
-            if terminal is not None:
-                return terminal
-            with self._state_lock:
-                command_sent = self._dispatch_command_sent
-            self._send(("CANCEL", self._authority_sha256))
-            stop = self._stop_worker(cooperative=not command_sent)
-            messages = self._drain()
-            self._observe_dispatch(messages)
-            dispatch_count = self.dispatch_count
-            late_output, observed = self._late_completed_response()
-            exact_observed_cost = (
-                observed is not None and observed.cost_status is LiveAttemptCostStatusV1.EXACT
-            )
-            if not stop.worker_reaped:
-                return self._publish(
-                    self._make_receipt(
-                        status=LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
-                        dispatch_count=dispatch_count,
-                        stop=stop,
-                        cost_status=(
-                            LiveAttemptCostStatusV1.EXACT
-                            if exact_observed_cost
-                            else LiveAttemptCostStatusV1.UNKNOWN
-                        ),
-                        cost_usd_micros=(
-                            observed.cost_usd_micros
-                            if exact_observed_cost and observed is not None
-                            else None
-                        ),
-                        cancellation_requested=True,
-                        response_envelope_sha256=(
-                            None if observed is None else observed.response_envelope_sha256
-                        ),
-                        input_tokens=None if observed is None else observed.input_tokens,
-                        cached_input_tokens=(
-                            None if observed is None else observed.cached_input_tokens
-                        ),
-                        output_tokens=None if observed is None else observed.output_tokens,
-                        total_tokens=None if observed is None else observed.total_tokens,
-                        late_output_detected=late_output,
-                        failure_code="TERMINATION_UNCONFIRMED",
-                        requested_model=None if observed is None else observed.requested_model,
-                        returned_model=None if observed is None else observed.returned_model,
-                    )
-                )
-            pre_dispatch = dispatch_count == 0
+        with self._state_lock:
+            command_sent = self._dispatch_command_sent
+        self._send(("CANCEL", self._authority_sha256))
+        stop = self._stop_worker(cooperative=not command_sent)
+        messages = self._drain()
+        self._observe_dispatch(messages)
+        dispatch_count = self.dispatch_count
+        late_output, observed = self._late_completed_response()
+        exact_observed_cost = (
+            observed is not None and observed.cost_status is LiveAttemptCostStatusV1.EXACT
+        )
+        if not stop.worker_reaped:
             return self._publish(
                 self._make_receipt(
-                    status=(
-                        LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH
-                        if pre_dispatch
-                        else LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
-                    ),
+                    status=LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
                     dispatch_count=dispatch_count,
                     stop=stop,
                     cost_status=(
                         LiveAttemptCostStatusV1.EXACT
-                        if pre_dispatch or exact_observed_cost
+                        if exact_observed_cost
                         else LiveAttemptCostStatusV1.UNKNOWN
                     ),
                     cost_usd_micros=(
-                        0
-                        if pre_dispatch
-                        else observed.cost_usd_micros
+                        observed.cost_usd_micros
                         if exact_observed_cost and observed is not None
                         else None
                     ),
@@ -2890,10 +2854,52 @@ class ProductionOpenAIAttemptCallV1:
                     output_tokens=None if observed is None else observed.output_tokens,
                     total_tokens=None if observed is None else observed.total_tokens,
                     late_output_detected=late_output,
+                    failure_code="TERMINATION_UNCONFIRMED",
                     requested_model=None if observed is None else observed.requested_model,
                     returned_model=None if observed is None else observed.returned_model,
                 )
             )
+        pre_dispatch = dispatch_count == 0
+        return self._publish(
+            self._make_receipt(
+                status=(
+                    LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH
+                    if pre_dispatch
+                    else LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
+                ),
+                dispatch_count=dispatch_count,
+                stop=stop,
+                cost_status=(
+                    LiveAttemptCostStatusV1.EXACT
+                    if pre_dispatch or exact_observed_cost
+                    else LiveAttemptCostStatusV1.UNKNOWN
+                ),
+                cost_usd_micros=(
+                    0
+                    if pre_dispatch
+                    else observed.cost_usd_micros
+                    if exact_observed_cost and observed is not None
+                    else None
+                ),
+                cancellation_requested=True,
+                response_envelope_sha256=(
+                    None if observed is None else observed.response_envelope_sha256
+                ),
+                input_tokens=None if observed is None else observed.input_tokens,
+                cached_input_tokens=(None if observed is None else observed.cached_input_tokens),
+                output_tokens=None if observed is None else observed.output_tokens,
+                total_tokens=None if observed is None else observed.total_tokens,
+                late_output_detected=late_output,
+                requested_model=None if observed is None else observed.requested_model,
+                returned_model=None if observed is None else observed.returned_model,
+            )
+        )
+
+    def cancel_and_join(self) -> LiveAttemptReceiptV1:
+        """TERM, then KILL if needed, and publish only after waitpid observation."""
+
+        with self._finalize_lock:
+            return self._cancel_and_join_locked()
 
     def __call__(self) -> object:
         with self._state_lock:
@@ -3054,9 +3060,25 @@ class ProductionOpenAIAttemptCallV1:
                     terminal = self.terminal_receipt
                     if terminal is not None:
                         raise LiveAttemptError("LIVE_ATTEMPT_CANCELLED", "attempt is terminal")
+                    if (
+                        self._cancel_requested.is_set()
+                        or time.monotonic_ns() >= self._authority.deadline_monotonic_ns
+                    ):
+                        self._cancel_and_join_locked()
+                        raise LiveAttemptError(
+                            "LIVE_ATTEMPT_CANCELLED", "attempt cancellation won finalization"
+                        )
                     with self._state_lock:
                         self._result = envelope
                     self._process.join(self._cancel_grace_seconds)
+                    if (
+                        self._cancel_requested.is_set()
+                        or time.monotonic_ns() >= self._authority.deadline_monotonic_ns
+                    ):
+                        self._cancel_and_join_locked()
+                        raise LiveAttemptError(
+                            "LIVE_ATTEMPT_CANCELLED", "attempt cancellation won finalization"
+                        )
                     if self._process.is_alive():
                         stop = self._stop_worker(cooperative=False)
                         failure_code = (
@@ -3149,6 +3171,14 @@ class ProductionOpenAIAttemptCallV1:
                         )
                         raise LiveAttemptError(
                             "PROVIDER_RESULT_EXCEEDS_AUTHORITY", "provider result exceeds authority"
+                        )
+                    if (
+                        self._cancel_requested.is_set()
+                        or time.monotonic_ns() >= self._authority.deadline_monotonic_ns
+                    ):
+                        self._cancel_and_join_locked()
+                        raise LiveAttemptError(
+                            "LIVE_ATTEMPT_CANCELLED", "attempt cancellation won finalization"
                         )
                     self._publish(
                         self._make_receipt(

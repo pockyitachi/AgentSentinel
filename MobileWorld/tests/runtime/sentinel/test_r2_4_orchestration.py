@@ -2112,6 +2112,189 @@ def test_durable_history_policy_request_proof_is_independently_reconstructable(
         "worker_reaped",
         "failure_code",
     ),
+    _LATE_RESPONSE_TERMINAL_STATES
+    + (
+        (
+            LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH,
+            True,
+            LiveAttemptTerminationV1.COOPERATIVE,
+            0,
+            True,
+            None,
+        ),
+    ),
+)
+def test_durable_history_noncompleted_attempt_rejects_committed_admitted_r22_receipt(
+    status: LiveAttemptStatusV1,
+    cancellation_requested: bool,
+    termination: LiveAttemptTerminationV1,
+    worker_exit_code: int | None,
+    worker_reaped: bool,
+    failure_code: str | None,
+    tmp_path: Path,
+) -> None:
+    completed, source_anchor, source = _complete_live_history_request_proof(tmp_path)
+    r22 = source_anchor.r22_policy_receipt
+    assert r22 is not None
+    assert r22.evaluation_status is PolicyEvaluationStatus.ADMITTED
+    assert r22.admitted_plan_sha256 is not None
+    if status is LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH:
+        terminal = replace(
+            completed,
+            status=status,
+            dispatch_count=0,
+            response_envelope_sha256=None,
+            requested_model=None,
+            returned_model=None,
+            input_tokens=None,
+            cached_input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+            cost_usd_micros=0,
+            cancellation_requested=cancellation_requested,
+            termination=termination,
+            worker_exit_code=worker_exit_code,
+            worker_reaped=worker_reaped,
+            failure_code=failure_code,
+        )
+    else:
+        terminal = replace(
+            completed,
+            status=status,
+            cancellation_requested=cancellation_requested,
+            termination=termination,
+            worker_exit_code=worker_exit_code,
+            worker_reaped=worker_reaped,
+            late_output_detected=True,
+            failure_code=failure_code,
+        )
+    proof = cast(dict[str, JsonValue], deepcopy(source))
+    proof["attempt_status"] = status.value
+    proof["attempt_dispatch_count"] = terminal.dispatch_count
+    proof["attempt_receipt_sha256"] = live_attempt_receipt_sha256(terminal)
+
+    with pytest.raises(R24ContractError, match="non-completed history attempt"):
+        validate_live_history_policy_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            attempt_receipt=terminal,
+            **_expected_request_proof_roots(terminal, cast(JsonValue, proof)),
+        )
+
+
+def test_durable_history_failed_dispatch_allows_committed_transport_error_receipt(
+    tmp_path: Path,
+) -> None:
+    completed, source_anchor, source = _complete_live_history_request_proof(tmp_path)
+    admitted = source_anchor.r22_policy_receipt
+    assert admitted is not None
+    transport_error = replace(
+        admitted,
+        returned_model=None,
+        response_id=None,
+        response_status=None,
+        service_tier=None,
+        response_envelope_sha256=None,
+        provider_output_sha256=None,
+        parsed_proposal_sha256=None,
+        admitted_plan_sha256=None,
+        evaluation_status=PolicyEvaluationStatus.TRANSPORT_ERROR,
+        failure_code="POLICY_TRANSPORT_ERROR",
+        validation_checks=("TRANSPORT_CALL_FAILED",),
+        input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        parse_latency_ns=0,
+        admission_latency_ns=0,
+        decision_count=0,
+        keep_count=0,
+    )
+    failed = replace(
+        completed,
+        status=LiveAttemptStatusV1.FAILED,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+        cost_usd_micros=None,
+        worker_exit_code=0,
+        late_output_detected=False,
+        failure_code="PROVIDER_CHILD_FAILED",
+    )
+    proof = cast(dict[str, JsonValue], deepcopy(source))
+    proof.update(
+        {
+            "attempt_status": "FAILED",
+            "attempt_receipt_sha256": live_attempt_receipt_sha256(failed),
+            "response_envelope": None,
+            "r22_policy_receipt": cast(
+                JsonValue, live_policy_module.r22_policy_receipt_dict(transport_error)
+            ),
+            "r22_policy_receipt_sha256": transport_error.sha256,
+        }
+    )
+    validate_live_history_policy_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=failed,
+        **_expected_request_proof_roots(failed, cast(JsonValue, proof)),
+    )
+    assert proof["attempt_status"] == "FAILED"
+    assert proof["r22_receipt_state"] == "R22_RECEIPT_COMMITTED"
+    assert (
+        cast(dict[str, JsonValue], proof["r22_policy_receipt"])["evaluation_status"]
+        == "TRANSPORT_ERROR"
+    )
+
+
+def test_completed_history_attempt_allows_committed_nonadmitted_r22_receipt(
+    tmp_path: Path,
+) -> None:
+    completed, source_anchor, source = _complete_live_history_request_proof(tmp_path)
+    admitted = source_anchor.r22_policy_receipt
+    assert admitted is not None
+    rejected = replace(
+        admitted,
+        admitted_plan_sha256=None,
+        evaluation_status=PolicyEvaluationStatus.ADMISSION_REJECTED,
+        failure_code="POLICY_ADMISSION_REJECTED",
+        validation_checks=("POLICY_ADMISSION_REJECTED",),
+        decision_count=0,
+        keep_count=0,
+    )
+    proof = cast(dict[str, JsonValue], deepcopy(source))
+    proof.update(
+        {
+            "r22_policy_receipt": cast(
+                JsonValue, live_policy_module.r22_policy_receipt_dict(rejected)
+            ),
+            "r22_policy_receipt_sha256": rejected.sha256,
+        }
+    )
+    validate_live_history_policy_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=completed,
+        **_expected_request_proof_roots(completed, cast(JsonValue, proof)),
+    )
+    assert proof["attempt_status"] == "COMPLETED"
+    assert proof["r22_receipt_state"] == "R22_RECEIPT_COMMITTED"
+    assert (
+        cast(dict[str, JsonValue], proof["r22_policy_receipt"])["evaluation_status"]
+        == "ADMISSION_REJECTED"
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "status",
+        "cancellation_requested",
+        "termination",
+        "worker_exit_code",
+        "worker_reaped",
+        "failure_code",
+    ),
     _LATE_RESPONSE_TERMINAL_STATES,
 )
 def test_durable_history_late_over_authority_response_remains_proof_only(
