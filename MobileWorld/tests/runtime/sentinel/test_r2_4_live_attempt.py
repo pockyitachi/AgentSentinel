@@ -1050,6 +1050,188 @@ def _retained_response_for_call(call: ProductionOpenAIAttemptCallV1) -> object |
     return runner.response_envelope_for_attempt(call.authority.attempt_id)
 
 
+def _completed_envelope(response_id: str) -> object:
+    from mobile_world.runtime.sentinel.r2_2.gpt56_policy import ResponsesEnvelopeV1
+
+    return ResponsesEnvelopeV1(
+        response_id=response_id,
+        requested_model="gpt-5.6-sol",
+        returned_model="gpt-5.6-sol",
+        status="completed",
+        service_tier=None,
+        output_text="{}",
+        input_tokens=7,
+        output_tokens=3,
+        total_tokens=10,
+    )
+
+
+def test_cancel_race_retains_late_completed_envelope_only_as_proof() -> None:
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(),
+    )
+    envelope = _completed_envelope("resp-late-cancel")
+    connection.queue(("COMPLETED", call.authority_sha256, envelope, 2))
+
+    receipt = call.cancel_and_join()
+
+    assert receipt.status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
+    assert receipt.dispatch_count == 1
+    assert receipt.late_output_detected
+    assert receipt.response_envelope_sha256 == cast(Any, envelope).sha256
+    assert (receipt.input_tokens, receipt.cached_input_tokens, receipt.output_tokens) == (7, 2, 3)
+    assert receipt.total_tokens == 10
+    assert receipt.cost_status is LiveAttemptCostStatusV1.EXACT
+    assert receipt.cost_usd_micros == live_attempt_cost_usd_micros(
+        _pricing(), input_tokens=7, cached_input_tokens=2, output_tokens=3
+    )
+    assert receipt.requested_model == receipt.returned_model == "gpt-5.6-sol"
+    assert not receipt.passed
+    retained = _retained_response_for_call(call)
+    assert retained == envelope and retained is not envelope
+    object.__setattr__(cast(Any, retained), "output_text", '{"caller":"drift"}')
+    assert _retained_response_for_call(call) == envelope
+    assert live_attempt_receipt_sha256(receipt) == live_attempt_receipt_sha256(
+        snapshot_live_attempt_receipt(receipt)
+    )
+    assert sink.receipts == (receipt,)
+    with pytest.raises(LiveAttemptError) as unavailable_to_policy:
+        call()
+    assert unavailable_to_policy.value.code == "LIVE_ATTEMPT_CANCELLED"
+
+
+def test_cancel_after_natural_exit_with_dispatched_signal_is_terminal() -> None:
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(exited=True),
+    )
+    connection.queue(("DISPATCHED", call.authority_sha256))
+
+    receipt = call.cancel_and_join()
+
+    assert receipt.status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
+    assert receipt.dispatch_count == 1
+    assert receipt.termination is LiveAttemptTerminationV1.COOPERATIVE
+    assert receipt.worker_reaped and receipt.worker_exit_code == 0
+    assert receipt.cancellation_requested
+    assert not receipt.late_output_detected
+    assert receipt.response_envelope_sha256 is None
+    assert receipt.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+    assert receipt.cost_usd_micros is None
+    assert call.terminal_receipt == receipt
+    assert sink.receipts == (receipt,)
+
+
+def test_failed_race_retains_completion_already_removed_from_ipc_pipe() -> None:
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(),
+    )
+    envelope = _completed_envelope("resp-late-failed")
+    connection.queue(("COMPLETED", call.authority_sha256, envelope, 1))
+
+    received = call._receive(0.0)
+    assert received is not None
+    receipt = call._failed("PROVIDER_CHILD_PROTOCOL_VIOLATION")
+
+    assert receipt.status is LiveAttemptStatusV1.FAILED
+    assert receipt.failure_code == "PROVIDER_CHILD_PROTOCOL_VIOLATION"
+    assert receipt.dispatch_count == 1
+    assert receipt.late_output_detected
+    assert receipt.response_envelope_sha256 == cast(Any, envelope).sha256
+    assert (receipt.input_tokens, receipt.cached_input_tokens, receipt.output_tokens) == (7, 1, 3)
+    assert receipt.cost_status is LiveAttemptCostStatusV1.EXACT
+    assert receipt.cost_usd_micros == live_attempt_cost_usd_micros(
+        _pricing(), input_tokens=7, cached_input_tokens=1, output_tokens=3
+    )
+    assert not receipt.passed
+    assert _retained_response_for_call(call) == envelope
+    assert sink.receipts == (receipt,)
+    with pytest.raises(LiveAttemptError) as unavailable_to_policy:
+        call()
+    assert unavailable_to_policy.value.code == "PROVIDER_CHILD_DISPATCH_FAILED"
+    assert sink.receipts == (receipt,)
+
+
+def test_unreaped_cancel_race_retains_late_completion_with_exact_cost() -> None:
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(stoppable=False),
+    )
+    envelope = _completed_envelope("resp-late-unreaped")
+    connection.queue(("COMPLETED", call.authority_sha256, envelope, 2))
+
+    receipt = call.cancel_and_join()
+
+    assert receipt.status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+    assert receipt.failure_code == "TERMINATION_UNCONFIRMED"
+    assert receipt.termination is LiveAttemptTerminationV1.UNCONFIRMED
+    assert not receipt.worker_reaped
+    assert receipt.late_output_detected
+    assert receipt.response_envelope_sha256 == cast(Any, envelope).sha256
+    assert (receipt.input_tokens, receipt.cached_input_tokens, receipt.output_tokens) == (7, 2, 3)
+    assert receipt.cost_status is LiveAttemptCostStatusV1.EXACT
+    assert receipt.cost_usd_micros == live_attempt_cost_usd_micros(
+        _pricing(), input_tokens=7, cached_input_tokens=2, output_tokens=3
+    )
+    assert not receipt.passed
+    assert _retained_response_for_call(call) == envelope
+    assert sink.receipts == (receipt,)
+    with pytest.raises(LiveAttemptError) as unavailable_to_policy:
+        call()
+    assert unavailable_to_policy.value.code == "LIVE_ATTEMPT_CANCELLED"
+
+
+def test_malformed_late_completion_is_not_retained_or_serialized() -> None:
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(),
+    )
+    unsafe_payload = "UNSAFE_LATE_PROVIDER_PAYLOAD"
+    connection.queue(
+        (
+            "COMPLETED",
+            call.authority_sha256,
+            {"untrusted_response": unsafe_payload},
+            0,
+        )
+    )
+
+    receipt = call.cancel_and_join()
+
+    assert receipt.status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
+    assert receipt.dispatch_count == 1
+    assert receipt.late_output_detected
+    assert receipt.response_envelope_sha256 is None
+    assert receipt.requested_model is None and receipt.returned_model is None
+    assert receipt.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+    assert _retained_response_for_call(call) is None
+    assert unsafe_payload not in json.dumps(live_attempt_receipt_projection(receipt))
+    assert sink.receipts == (receipt,)
+
+
+def test_duplicate_conflicting_late_completions_fail_closed_without_response() -> None:
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(),
+    )
+    first = _completed_envelope("resp-late-first")
+    second = _completed_envelope("resp-late-second")
+    connection.queue(("COMPLETED", call.authority_sha256, first, 0))
+    assert call._receive(0.0) is not None
+    connection.queue(("COMPLETED", call.authority_sha256, second, 0))
+
+    receipt = call.cancel_and_join()
+
+    assert receipt.status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
+    assert receipt.late_output_detected
+    assert receipt.response_envelope_sha256 is None
+    assert receipt.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+    assert _retained_response_for_call(call) is None
+    assert sink.receipts == (receipt,)
+
+
 def test_usage_missing_terminal_retains_observed_provider_envelope() -> None:
     from mobile_world.runtime.sentinel.r2_2.gpt56_policy import ResponsesEnvelopeV1
 

@@ -1131,6 +1131,12 @@ class LiveAttemptReceiptV1:
         observed_response = self.response_envelope_sha256 is not None and (
             all(value is None for value in tokens) or all(value is not None for value in tokens)
         )
+        late_response_accounting = complete_response_accounting or (
+            observed_response
+            and all(value is None for value in tokens)
+            and self.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+            and self.cost_usd_micros is None
+        )
         model_values = (self.requested_model, self.returned_model)
         if self.execution_kind is LiveAttemptExecutionKindV1.CPU_FIXED_SUBPROCESS:
             if any(value is not None for value in model_values):
@@ -1280,10 +1286,41 @@ class LiveAttemptReceiptV1:
                 and self.failure_code == "TERMINATION_UNCONFIRMED"
                 and observed_response
                 and self.dispatch_count == 1
-                and self.cost_status is LiveAttemptCostStatusV1.UNKNOWN
                 and self.cancellation_requested
                 and self.termination is LiveAttemptTerminationV1.UNCONFIRMED
                 and not self.worker_reaped
+                and (
+                    self.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+                    or complete_response_accounting
+                )
+            )
+            or (
+                self.status is LiveAttemptStatusV1.FAILED
+                and self.late_output_detected
+                and late_response_accounting
+                and self.dispatch_count == 1
+                and self.worker_reaped
+                and not self.cancellation_requested
+                and self.termination
+                in {
+                    LiveAttemptTerminationV1.COOPERATIVE,
+                    LiveAttemptTerminationV1.TERM,
+                    LiveAttemptTerminationV1.KILL,
+                }
+            )
+            or (
+                self.status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
+                and self.late_output_detected
+                and late_response_accounting
+                and self.dispatch_count == 1
+                and self.cancellation_requested
+                and self.worker_reaped
+                and self.termination
+                in {
+                    LiveAttemptTerminationV1.COOPERATIVE,
+                    LiveAttemptTerminationV1.TERM,
+                    LiveAttemptTerminationV1.KILL,
+                }
             )
         )
         if (
@@ -1307,12 +1344,20 @@ class LiveAttemptReceiptV1:
                 )
             return
         if self.status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH:
+            exact_late_response = self.late_output_detected and complete_response_accounting
+            unknown_cost = (
+                self.cost_status is LiveAttemptCostStatusV1.UNKNOWN and self.cost_usd_micros is None
+            )
+            stopped_after_dispatch = self.termination in {
+                LiveAttemptTerminationV1.COOPERATIVE,
+                LiveAttemptTerminationV1.TERM,
+                LiveAttemptTerminationV1.KILL,
+            }
             if (
                 self.dispatch_count != 1
-                or self.cost_status is not LiveAttemptCostStatusV1.UNKNOWN
+                or not (unknown_cost or exact_late_response)
                 or not self.cancellation_requested
-                or self.termination
-                not in {LiveAttemptTerminationV1.TERM, LiveAttemptTerminationV1.KILL}
+                or not stopped_after_dispatch
                 or not self.worker_reaped
                 or self.failure_code is not None
             ):
@@ -1321,8 +1366,12 @@ class LiveAttemptReceiptV1:
                 )
             return
         if self.status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED:
+            exact_late_response = self.late_output_detected and complete_response_accounting
+            unknown_cost = (
+                self.cost_status is LiveAttemptCostStatusV1.UNKNOWN and self.cost_usd_micros is None
+            )
             if (
-                self.cost_status is not LiveAttemptCostStatusV1.UNKNOWN
+                not (unknown_cost or exact_late_response)
                 or not self.cancellation_requested
                 or self.termination is not LiveAttemptTerminationV1.UNCONFIRMED
                 or self.worker_reaped
@@ -1338,7 +1387,7 @@ class LiveAttemptReceiptV1:
         exact_failed_response = (
             self.failure_code == "PROVIDER_RESULT_EXCEEDS_AUTHORITY"
             and complete_response_accounting
-        )
+        ) or (self.late_output_detected and complete_response_accounting)
         expected_cost = (
             LiveAttemptCostStatusV1.EXACT
             if self.dispatch_count == 0 or exact_failed_response
@@ -1611,6 +1660,21 @@ class _StopResult:
     termination: LiveAttemptTerminationV1
     worker_reaped: bool
     worker_exit_code: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ObservedCompletedResponseV1:
+    """Validated, detached provider evidence observed before terminalization."""
+
+    response_envelope_sha256: str
+    input_tokens: int | None
+    cached_input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    cost_status: LiveAttemptCostStatusV1
+    cost_usd_micros: int | None
+    requested_model: str
+    returned_model: str
 
 
 class CpuFixedLiveAttemptHandleV1:
@@ -2336,6 +2400,9 @@ class ProductionOpenAIAttemptCallV1:
         self._cancel_requested = threading.Event()
         self._terminal_receipt: LiveAttemptReceiptV1 | None = None
         self._result: object | None = None
+        self._completed_message_detected = False
+        self._completed_message_count = 0
+        self._observed_completed_response: _ObservedCompletedResponseV1 | None = None
         self._state_lock = threading.Lock()
         self._io_lock = threading.Lock()
         self._finalize_lock = threading.Lock()
@@ -2379,7 +2446,101 @@ class ProductionOpenAIAttemptCallV1:
                 value = connection.recv()
             except (EOFError, OSError):
                 return None
-        return value if type(value) is tuple else ("INVALID",)
+            message = value if type(value) is tuple else ("INVALID",)
+            if message and type(message[0]) is str and message[0] == "COMPLETED":
+                # Keep recv + validated observation atomic against drain and
+                # terminalization in a competing cancellation thread.
+                self._observe_completed_message(message)
+            return message
+
+    def _observe_completed_message(self, message: tuple[object, ...]) -> None:
+        """Retain only a unique, validated COMPLETED envelope as evidence.
+
+        This runs immediately after ``recv`` so a cancellation thread cannot
+        terminalize the attempt after another thread removed the envelope from
+        the pipe but before that thread acquired the finalization lock.
+        Malformed, conflicting, or duplicate payloads are never retained.
+        """
+
+        matched_authority = (
+            len(message) >= 2 and type(message[1]) is str and message[1] == self._authority_sha256
+        )
+        with self._state_lock:
+            self._completed_message_detected = True
+            if matched_authority:
+                self._dispatch_count = 1
+                self._completed_message_count += 1
+                message_count = self._completed_message_count
+                if message_count > 1:
+                    self._observed_completed_response = None
+                    self._result = None
+            else:
+                message_count = 0
+        if not matched_authority or message_count != 1 or len(message) != 4:
+            return
+
+        from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+            ResponsesEnvelopeV1,
+            _detach_envelope,
+        )
+
+        try:
+            raw_envelope = message[2]
+            cached_input_tokens = message[3]
+            stage = self._stage
+            if type(raw_envelope) is not ResponsesEnvelopeV1:
+                raise TypeError("provider child envelope type differs")
+            if type(cached_input_tokens) is not int or cached_input_tokens < 0:
+                raise TypeError("provider child cached-token usage differs")
+            if type(stage) is not OpenAIResponsesStageV1:
+                raise TypeError("provider child stage snapshot is absent")
+            envelope = _detach_envelope(raw_envelope)
+            if envelope.requested_model != stage.model or envelope.returned_model != stage.model:
+                raise ValueError("provider child envelope model differs")
+            usage = (
+                envelope.input_tokens,
+                envelope.output_tokens,
+                envelope.total_tokens,
+            )
+            if all(value is None for value in usage):
+                retained_cached_input_tokens: int | None = None
+                cost_status = LiveAttemptCostStatusV1.UNKNOWN
+                cost_usd_micros: int | None = None
+            elif all(value is not None for value in usage):
+                retained_cached_input_tokens = cached_input_tokens
+                cost_usd_micros = live_attempt_cost_usd_micros(
+                    self._pricing,
+                    input_tokens=cast(int, envelope.input_tokens),
+                    cached_input_tokens=cached_input_tokens,
+                    output_tokens=cast(int, envelope.output_tokens),
+                )
+                cost_status = LiveAttemptCostStatusV1.EXACT
+            else:
+                raise ValueError("provider child usage is incomplete")
+            observed = _ObservedCompletedResponseV1(
+                response_envelope_sha256=envelope.sha256,
+                input_tokens=envelope.input_tokens,
+                cached_input_tokens=retained_cached_input_tokens,
+                output_tokens=envelope.output_tokens,
+                total_tokens=envelope.total_tokens,
+                cost_status=cost_status,
+                cost_usd_micros=cost_usd_micros,
+                requested_model=stage.model,
+                returned_model=envelope.returned_model,
+            )
+        except Exception:
+            return
+        with self._state_lock:
+            if self._completed_message_count != 1:
+                return
+            self._observed_completed_response = observed
+            self._result = _detach_envelope(envelope)
+
+    def _late_completed_response(
+        self,
+    ) -> tuple[bool, _ObservedCompletedResponseV1 | None]:
+        with self._state_lock:
+            return self._completed_message_detected, self._observed_completed_response
 
     def _send(self, value: tuple[str, str]) -> bool:
         with self._io_lock:
@@ -2510,6 +2671,10 @@ class ProductionOpenAIAttemptCallV1:
             self._observe_dispatch(messages)
             dispatch_count = self.dispatch_count
             termination_unconfirmed = not stop.worker_reaped
+            late_output, observed = self._late_completed_response()
+            exact_observed_cost = (
+                observed is not None and observed.cost_status is LiveAttemptCostStatusV1.EXACT
+            )
             return self._publish(
                 self._make_receipt(
                     status=(
@@ -2521,17 +2686,33 @@ class ProductionOpenAIAttemptCallV1:
                     stop=stop,
                     cost_status=(
                         LiveAttemptCostStatusV1.EXACT
-                        if dispatch_count == 0 and not termination_unconfirmed
+                        if (
+                            (dispatch_count == 0 and not termination_unconfirmed)
+                            or exact_observed_cost
+                        )
                         else LiveAttemptCostStatusV1.UNKNOWN
                     ),
                     cost_usd_micros=(
-                        0 if dispatch_count == 0 and not termination_unconfirmed else None
+                        observed.cost_usd_micros
+                        if exact_observed_cost and observed is not None
+                        else 0
+                        if dispatch_count == 0 and not termination_unconfirmed
+                        else None
                     ),
                     cancellation_requested=termination_unconfirmed,
-                    late_output_detected=any(
-                        message and message[0] == "COMPLETED" for message in messages
+                    response_envelope_sha256=(
+                        None if observed is None else observed.response_envelope_sha256
                     ),
+                    input_tokens=None if observed is None else observed.input_tokens,
+                    cached_input_tokens=(
+                        None if observed is None else observed.cached_input_tokens
+                    ),
+                    output_tokens=None if observed is None else observed.output_tokens,
+                    total_tokens=None if observed is None else observed.total_tokens,
+                    late_output_detected=late_output,
                     failure_code="TERMINATION_UNCONFIRMED" if termination_unconfirmed else code,
+                    requested_model=None if observed is None else observed.requested_model,
+                    returned_model=None if observed is None else observed.returned_model,
                 )
             )
 
@@ -2640,18 +2821,40 @@ class ProductionOpenAIAttemptCallV1:
             messages = self._drain()
             self._observe_dispatch(messages)
             dispatch_count = self.dispatch_count
-            late_output = any(message and message[0] == "COMPLETED" for message in messages)
+            late_output, observed = self._late_completed_response()
+            exact_observed_cost = (
+                observed is not None and observed.cost_status is LiveAttemptCostStatusV1.EXACT
+            )
             if not stop.worker_reaped:
                 return self._publish(
                     self._make_receipt(
                         status=LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
                         dispatch_count=dispatch_count,
                         stop=stop,
-                        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
-                        cost_usd_micros=None,
+                        cost_status=(
+                            LiveAttemptCostStatusV1.EXACT
+                            if exact_observed_cost
+                            else LiveAttemptCostStatusV1.UNKNOWN
+                        ),
+                        cost_usd_micros=(
+                            observed.cost_usd_micros
+                            if exact_observed_cost and observed is not None
+                            else None
+                        ),
                         cancellation_requested=True,
+                        response_envelope_sha256=(
+                            None if observed is None else observed.response_envelope_sha256
+                        ),
+                        input_tokens=None if observed is None else observed.input_tokens,
+                        cached_input_tokens=(
+                            None if observed is None else observed.cached_input_tokens
+                        ),
+                        output_tokens=None if observed is None else observed.output_tokens,
+                        total_tokens=None if observed is None else observed.total_tokens,
                         late_output_detected=late_output,
                         failure_code="TERMINATION_UNCONFIRMED",
+                        requested_model=None if observed is None else observed.requested_model,
+                        returned_model=None if observed is None else observed.returned_model,
                     )
                 )
             pre_dispatch = dispatch_count == 0
@@ -2666,12 +2869,29 @@ class ProductionOpenAIAttemptCallV1:
                     stop=stop,
                     cost_status=(
                         LiveAttemptCostStatusV1.EXACT
-                        if pre_dispatch
+                        if pre_dispatch or exact_observed_cost
                         else LiveAttemptCostStatusV1.UNKNOWN
                     ),
-                    cost_usd_micros=0 if pre_dispatch else None,
+                    cost_usd_micros=(
+                        0
+                        if pre_dispatch
+                        else observed.cost_usd_micros
+                        if exact_observed_cost and observed is not None
+                        else None
+                    ),
                     cancellation_requested=True,
+                    response_envelope_sha256=(
+                        None if observed is None else observed.response_envelope_sha256
+                    ),
+                    input_tokens=None if observed is None else observed.input_tokens,
+                    cached_input_tokens=(
+                        None if observed is None else observed.cached_input_tokens
+                    ),
+                    output_tokens=None if observed is None else observed.output_tokens,
+                    total_tokens=None if observed is None else observed.total_tokens,
                     late_output_detected=late_output,
+                    requested_model=None if observed is None else observed.requested_model,
+                    returned_model=None if observed is None else observed.returned_model,
                 )
             )
 
@@ -3503,9 +3723,8 @@ class ProductionOpenAIAttemptRunnerV1:
             request=trusted_request,
             stage=self._stage,
         )
-        if deadline_binding is not None:
-            with self._constraint_lock:
-                self._attempt_calls[attempt_id] = call
+        with self._constraint_lock:
+            self._attempt_calls[attempt_id] = call
         ready_deadline_ns = min(
             authority.deadline_monotonic_ns,
             time.monotonic_ns() + self._startup_timeout_ns,

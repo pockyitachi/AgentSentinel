@@ -202,6 +202,34 @@ def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+_LATE_RESPONSE_TERMINAL_STATES = (
+    (
+        LiveAttemptStatusV1.FAILED,
+        False,
+        LiveAttemptTerminationV1.COOPERATIVE,
+        0,
+        True,
+        "PROVIDER_CHILD_PROTOCOL_VIOLATION",
+    ),
+    (
+        LiveAttemptStatusV1.CANCELLED_POST_DISPATCH,
+        True,
+        LiveAttemptTerminationV1.TERM,
+        -15,
+        True,
+        None,
+    ),
+    (
+        LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+        True,
+        LiveAttemptTerminationV1.UNCONFIRMED,
+        None,
+        False,
+        "TERMINATION_UNCONFIRMED",
+    ),
+)
+
+
 def _expected_request_proof_roots(
     attempt: LiveAttemptReceiptV1 | dict[str, JsonValue] | None,
     proof: JsonValue | None = None,
@@ -1633,6 +1661,33 @@ def test_durable_live_rubric_request_proof_is_independently_reconstructable(
     assert proofs[1]["tracking_packet_sha256"] == _anchored_tracking_packet_sha256(anchors)
 
 
+def test_durable_live_rubric_request_proof_requires_matching_terminal_receipt(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    attempt = attempts[0]
+    proof = live_rubric_attempt_request_proof_projection(
+        _attempt_request_anchors((attempt,), anchors)[0],
+        attempt_receipt=attempt,
+        backend_extension=extension,
+    )
+    proof["attempt_status"] = "FAILED"
+    proof["attempt_receipt_sha256"] = _sha("rewritten-terminal-receipt")
+    owner_roots = _expected_request_proof_roots(attempt, cast(JsonValue, proof))
+
+    with pytest.raises(TypeError, match="attempt_receipt"):
+        validate_live_rubric_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            **owner_roots,
+        )
+    with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
+        validate_live_rubric_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            attempt_receipt=attempt,
+            **owner_roots,
+        )
+
+
 def test_durable_live_rubric_request_proof_rejects_authority_below_request_token_limit(
     tmp_path: Path,
 ) -> None:
@@ -1754,6 +1809,60 @@ def test_durable_rubric_over_authority_failure_retains_exact_accounting(
         expected_attempt_order=1,
         **_expected_request_proof_roots(over_limit, cast(JsonValue, proof)),
     )
+
+
+@pytest.mark.parametrize(
+    (
+        "status",
+        "cancellation_requested",
+        "termination",
+        "worker_exit_code",
+        "worker_reaped",
+        "failure_code",
+    ),
+    _LATE_RESPONSE_TERMINAL_STATES,
+)
+def test_durable_rubric_late_over_authority_response_remains_proof_bound(
+    status: LiveAttemptStatusV1,
+    cancellation_requested: bool,
+    termination: LiveAttemptTerminationV1,
+    worker_exit_code: int | None,
+    worker_reaped: bool,
+    failure_code: str | None,
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    source = attempts[0]
+    output_tokens = LIVE_RUBRIC_MAX_OUTPUT_TOKENS + 1
+    late_attempt = replace(
+        source,
+        status=status,
+        response_envelope_sha256=_sha(f"late-rubric-envelope:{status.value}"),
+        output_tokens=output_tokens,
+        total_tokens=cast(int, source.input_tokens) + output_tokens,
+        cancellation_requested=cancellation_requested,
+        termination=termination,
+        worker_exit_code=worker_exit_code,
+        worker_reaped=worker_reaped,
+        late_output_detected=True,
+        failure_code=failure_code,
+    )
+    anchor = _attempt_request_anchors((late_attempt,), anchors)[0]
+
+    proof = live_rubric_attempt_request_proof_projection(
+        anchor,
+        attempt_receipt=late_attempt,
+        backend_extension=extension,
+    )
+    validate_live_rubric_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=live_attempt_receipt_projection(late_attempt),
+        expected_attempt_order=1,
+        **_expected_request_proof_roots(late_attempt, cast(JsonValue, proof)),
+    )
+
+    assert proof["attempt_status"] == status.value
+    assert not late_attempt.passed
 
 
 @pytest.mark.parametrize(
@@ -1992,6 +2101,86 @@ def test_durable_history_policy_request_proof_is_independently_reconstructable(
             (attempt,),
             _sha("wrong-coordinator-history-root"),
         )
+
+
+@pytest.mark.parametrize(
+    (
+        "status",
+        "cancellation_requested",
+        "termination",
+        "worker_exit_code",
+        "worker_reaped",
+        "failure_code",
+    ),
+    _LATE_RESPONSE_TERMINAL_STATES,
+)
+def test_durable_history_late_over_authority_response_remains_proof_only(
+    status: LiveAttemptStatusV1,
+    cancellation_requested: bool,
+    termination: LiveAttemptTerminationV1,
+    worker_exit_code: int | None,
+    worker_reaped: bool,
+    failure_code: str | None,
+    tmp_path: Path,
+) -> None:
+    completed, source_anchor, _ = _complete_live_history_request_proof(tmp_path)
+    source_envelope = source_anchor.response_envelope
+    assert source_envelope is not None
+    output_tokens = GPT56_MAX_OUTPUT_TOKENS + 1
+    late_envelope = replace(
+        source_envelope,
+        output_tokens=output_tokens,
+        total_tokens=cast(int, source_envelope.input_tokens) + output_tokens,
+    )
+    late_attempt = replace(
+        completed,
+        status=status,
+        response_envelope_sha256=late_envelope.sha256,
+        output_tokens=late_envelope.output_tokens,
+        total_tokens=late_envelope.total_tokens,
+        cancellation_requested=cancellation_requested,
+        termination=termination,
+        worker_exit_code=worker_exit_code,
+        worker_reaped=worker_reaped,
+        late_output_detected=True,
+        failure_code=failure_code,
+    )
+    late_anchor = live_policy_module._build_live_history_policy_attempt_request_anchor_v1(
+        attempt_id=source_anchor.attempt_id,
+        logical_call_id=source_anchor.logical_call_id,
+        actor_request_sha256=source_anchor.actor_request_sha256,
+        coordinator_evidence_packet_sha256=(source_anchor.coordinator_evidence_packet_sha256),
+        attempt_authority=source_anchor.attempt_authority,
+        deadline_binding=source_anchor.deadline_binding,
+        constraint_binding=source_anchor.constraint_binding,
+        case_execution_lease=production_preflight_module._restore_case_execution_lease(
+            source_anchor.case_execution_lease
+        ),
+        openai_stage=source_anchor.openai_stage,
+        rubric_openai_stage=source_anchor.rubric_openai_stage,
+        pricing=source_anchor.pricing,
+        transport_binding=source_anchor.transport_binding,
+        provider_request=source_anchor.provider_request,
+        response_envelope=late_envelope,
+        r22_policy_receipt=None,
+        r22_receipt_state=(LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_ABSENT_POST_DISPATCH),
+    )
+
+    proof = live_history_policy_attempt_request_proof_projection(
+        late_anchor,
+        attempt_receipt=late_attempt,
+    )
+    validate_live_history_policy_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=live_attempt_receipt_projection(late_attempt),
+        **_expected_request_proof_roots(late_attempt, cast(JsonValue, proof)),
+    )
+
+    assert proof["attempt_status"] == status.value
+    assert proof["response_envelope"] is not None
+    assert proof["r22_policy_receipt"] is None
+    assert proof["r22_receipt_state"] == "R22_RECEIPT_ABSENT_POST_DISPATCH"
+    assert not late_attempt.passed
 
 
 @pytest.mark.parametrize(
@@ -2609,6 +2798,7 @@ def test_durable_live_rubric_request_proof_uses_type_sensitive_task_binding(
     with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
         validate_live_rubric_request_proof_projection_v1(
             cast(JsonValue, proof),
+            attempt_receipt=attempts[0],
             **_expected_request_proof_roots(attempts[0], cast(JsonValue, proof)),
         )
 
@@ -2624,6 +2814,7 @@ def test_durable_live_rubric_request_proof_rejects_boolean_byte_count(tmp_path: 
     with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
         validate_live_rubric_request_proof_projection_v1(
             cast(JsonValue, proof),
+            attempt_receipt=attempts[0],
             **_expected_request_proof_roots(attempts[0], cast(JsonValue, proof)),
         )
 
@@ -2635,6 +2826,7 @@ def test_durable_live_rubric_request_proof_parser_is_not_limited_to_provider_out
     with pytest.raises(LiveRubricError) as rejected:
         validate_live_rubric_request_proof_projection_v1(
             oversized_for_output,
+            attempt_receipt={},
             **_expected_request_proof_roots(None, oversized_for_output),
         )
     assert "byte count is outside bounds" not in str(rejected.value)

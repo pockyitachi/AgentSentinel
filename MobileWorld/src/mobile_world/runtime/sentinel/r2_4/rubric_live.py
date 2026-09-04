@@ -2068,7 +2068,29 @@ def _receipt_authority_limit_state_is_valid(
     exceeds = _receipt_result_exceeds_authority(receipt, authority)
     if receipt.failure_code == "PROVIDER_RESULT_EXCEEDS_AUTHORITY":
         return receipt.status is LiveAttemptStatusV1.FAILED and exceeds
-    return not exceeds
+    if not exceeds:
+        return True
+    return (
+        receipt.status
+        in {
+            LiveAttemptStatusV1.FAILED,
+            LiveAttemptStatusV1.CANCELLED_POST_DISPATCH,
+            LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+        }
+        and receipt.late_output_detected
+        and receipt.response_envelope_sha256 is not None
+        and receipt.cost_status is LiveAttemptCostStatusV1.EXACT
+        and receipt.cost_usd_micros is not None
+        and all(
+            value is not None
+            for value in (
+                receipt.input_tokens,
+                receipt.cached_input_tokens,
+                receipt.output_tokens,
+                receipt.total_tokens,
+            )
+        )
+    )
 
 
 def _receipt_exact_cost_matches_pricing(
@@ -2269,7 +2291,7 @@ def _validate_durable_current_image_projection(
 def validate_live_rubric_request_proof_projection_v1(
     value: JsonValue,
     *,
-    attempt_receipt: LiveAttemptReceiptV1 | dict[str, JsonValue] | None = None,
+    attempt_receipt: LiveAttemptReceiptV1 | dict[str, JsonValue],
     expected_attempt_order: int | None = None,
     expected_attempt_authority_sha256: str,
     expected_constraint_binding_sha256: str,
@@ -2281,7 +2303,7 @@ def validate_live_rubric_request_proof_projection_v1(
     expected_transport_binding_sha256: str,
     expected_request_sha256: str,
 ) -> None:
-    """Validate a durable request proof against caller-known owner roots."""
+    """Validate a durable request proof and its terminal receipt against owner roots."""
 
     proof = _snapshot_request_proof(value)
     if tuple(_request_proof_validator().iter_errors(proof)):
@@ -2359,16 +2381,14 @@ def validate_live_rubric_request_proof_projection_v1(
     attempt_receipt_sha256 = _require_sha256(
         proof["attempt_receipt_sha256"], "attempt_receipt_sha256"
     )
-    receipt: LiveAttemptReceiptV1 | None = None
-    if attempt_receipt is not None:
-        if type(attempt_receipt) is LiveAttemptReceiptV1:
-            receipt = snapshot_live_attempt_receipt(attempt_receipt)
-        elif type(attempt_receipt) is dict:
-            receipt = _parse_durable_live_attempt_receipt_projection(attempt_receipt)
-        else:
-            raise LiveRubricError(
-                "INVALID_REQUEST_PROOF", "matching attempt receipt has an untrusted type"
-            )
+    if type(attempt_receipt) is LiveAttemptReceiptV1:
+        receipt = snapshot_live_attempt_receipt(attempt_receipt)
+    elif type(attempt_receipt) is dict:
+        receipt = _parse_durable_live_attempt_receipt_projection(attempt_receipt)
+    else:
+        raise LiveRubricError(
+            "INVALID_REQUEST_PROOF", "matching attempt receipt has an untrusted type"
+        )
     extension_sha256 = _require_sha256(
         proof["backend_extension_descriptor_sha256"],
         "backend_extension_descriptor_sha256",
@@ -2542,8 +2562,7 @@ def validate_live_rubric_request_proof_projection_v1(
             },
             request_sha256=expected_request.request_sha256,
             allow_cost_reservation_failure=(
-                receipt is not None
-                and receipt.status is LiveAttemptStatusV1.FAILED
+                receipt.status is LiveAttemptStatusV1.FAILED
                 and receipt.dispatch_count == 0
                 and receipt.failure_code == "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY"
             ),
@@ -2594,32 +2613,31 @@ def validate_live_rubric_request_proof_projection_v1(
             "attempt authority differs from request, stage, lease, pricing, or transport",
         ) from exc
 
-    if receipt is not None:
-        if (
-            live_attempt_receipt_sha256(receipt) != attempt_receipt_sha256
-            or receipt.attempt_id != attempt_id
-            or receipt.role is not LiveAttemptRoleV1.RUBRIC
-            or receipt.logical_call_id != logical_call_id
-            or receipt.authority_sha256 != authority_sha256
-            or receipt.manifest_sha256 != authority.manifest_sha256
-            or receipt.preflight_sha256 != authority.preflight_sha256
-            or receipt.case_execution_lease_sha256 != authority.case_execution_lease_sha256
-            or receipt.stage_sha256 != authority.stage_sha256
-            or receipt.case_id != authority.case_id
-            or receipt.actor_request_sha256 != authority.actor_request_sha256
-            or receipt.request_sha256 != expected_request.request_sha256
-            or receipt.transport_binding_sha256 != authority.transport_binding_sha256
-            or receipt.pricing_binding_sha256 != authority.pricing_binding_sha256
-            or receipt.status is not attempt_status
-            or receipt.dispatch_count != dispatch_count
-            or receipt.dispatch_count > stage.max_attempts
-            or not _receipt_exact_cost_matches_pricing(receipt, pricing)
-            or not _receipt_authority_limit_state_is_valid(receipt, authority)
-            or (receipt.requested_model is not None and receipt.requested_model != stage.model)
-        ):
-            raise LiveRubricError(
-                "INVALID_REQUEST_PROOF", "request proof differs from its attempt receipt"
-            )
+    if (
+        live_attempt_receipt_sha256(receipt) != attempt_receipt_sha256
+        or receipt.attempt_id != attempt_id
+        or receipt.role is not LiveAttemptRoleV1.RUBRIC
+        or receipt.logical_call_id != logical_call_id
+        or receipt.authority_sha256 != authority_sha256
+        or receipt.manifest_sha256 != authority.manifest_sha256
+        or receipt.preflight_sha256 != authority.preflight_sha256
+        or receipt.case_execution_lease_sha256 != authority.case_execution_lease_sha256
+        or receipt.stage_sha256 != authority.stage_sha256
+        or receipt.case_id != authority.case_id
+        or receipt.actor_request_sha256 != authority.actor_request_sha256
+        or receipt.request_sha256 != expected_request.request_sha256
+        or receipt.transport_binding_sha256 != authority.transport_binding_sha256
+        or receipt.pricing_binding_sha256 != authority.pricing_binding_sha256
+        or receipt.status is not attempt_status
+        or receipt.dispatch_count != dispatch_count
+        or receipt.dispatch_count > stage.max_attempts
+        or not _receipt_exact_cost_matches_pricing(receipt, pricing)
+        or not _receipt_authority_limit_state_is_valid(receipt, authority)
+        or (receipt.requested_model is not None and receipt.requested_model != stage.model)
+    ):
+        raise LiveRubricError(
+            "INVALID_REQUEST_PROOF", "request proof differs from its attempt receipt"
+        )
 
 
 def _parse_durable_live_attempt_receipt_projection(

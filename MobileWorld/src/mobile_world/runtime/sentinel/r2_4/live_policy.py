@@ -1412,7 +1412,29 @@ def _history_receipt_authority_limits_are_valid(
     ) or (receipt.output_tokens is not None and receipt.output_tokens > authority.max_output_tokens)
     if receipt.failure_code == "PROVIDER_RESULT_EXCEEDS_AUTHORITY":
         return receipt.status is LiveAttemptStatusV1.FAILED and exceeds
-    return not exceeds
+    if not exceeds:
+        return True
+    return (
+        receipt.status
+        in {
+            LiveAttemptStatusV1.FAILED,
+            LiveAttemptStatusV1.CANCELLED_POST_DISPATCH,
+            LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+        }
+        and receipt.late_output_detected
+        and receipt.response_envelope_sha256 is not None
+        and receipt.cost_status is LiveAttemptCostStatusV1.EXACT
+        and receipt.cost_usd_micros is not None
+        and all(
+            value is not None
+            for value in (
+                receipt.input_tokens,
+                receipt.cached_input_tokens,
+                receipt.output_tokens,
+                receipt.total_tokens,
+            )
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
