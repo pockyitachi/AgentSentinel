@@ -82,7 +82,7 @@ GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 CPU-only/offline/injected-fake repository engineering preparation implementation
 是 `344e1c42596a4dca717da66374eeca3d936c3f61`；owner review 结论为
 `NO-GO`。最新整改候选 commit 为
-`375fb87809cd0964bc9fb06aac52ff8228ccd09f`，已完成 CPU-only/offline 代码整改但仍须
+`dfbad16dc96fc6f5d930c0764999c102b624d5d5`，已完成 CPU-only/offline 代码整改但仍须
 owner 复审；R2.4 保持 In Progress / NO-GO，不得 merge/push，也不得进入 live 授权。** 最新
 候选保留此前 SDK/http logging、type-sensitive sealed schema、request anchor、bounded
 cleanup 与 fatal-dispatch 整改，并将每个 formed `RUBRIC`/`HISTORY_POLICY` attempt 的完整
@@ -92,6 +92,13 @@ manifest、preflight、case lease、stage、pricing、transport、request 九个
 `HISTORY_POLICY` 已收到 provider response 但 R2.2 receipt prepare/publish/deadline
 失败时，response 与 request proof 继续保留，receipt 明确记录为 post-dispatch absent，
 policy result 不会被 admit。
+deadline/cancel 与已到达的有效 `COMPLETED` Responses envelope 发生竞争时，最终为
+`FAILED`、`CANCELLED_POST_DISPATCH` 或 `TERMINATION_UNCONFIRMED` 的 attempt 会保留
+detached response hash 与 requested/returned model；provider usage 存在时再保留完整 usage、
+cached-input census 与精确重算 cost，usage 缺失时仍为 `UNKNOWN` 并触发既有 run-fatal。
+late output 仍被丢弃且不会 admit，已知 exact 超限结果也只作 proof。已 dispatch 的 child
+若在 cancellation 中自然退出，可形成 cooperative terminal cancellation。rubric durable
+validator 现在必须接收并完整核验 matching terminal attempt receipt。
 Production-audit `begin` 从 root/destination/temp/write/file-fsync/directory-fsync 到 sink-begin/
 transaction-binding 的失败均保留 module-sealed 完整 pre-provider recovery receipt。超过 4 MiB
 的 unit-evidence journal 使用 owner-only content-addressed blob 与 compact bound reference；blob
@@ -1396,4 +1403,59 @@ is established. Owner re-review is the next repository decision, and any
 resource/run authorization remains a separate owner action.
 Owner approval required: yes before merge, push, live authority, live smoke,
 pilot, or any resource/model/backend/action execution.
+```
+
+```text
+Date: 2026-09-04 UTC
+Latest ALE-327 / R2.4 CPU/offline remediation candidate: implementation commit
+`dfbad16dc96fc6f5d930c0764999c102b624d5d5` supersedes
+`375fb87809cd0964bc9fb06aac52ff8228ccd09f` after closing the reported
+deadline/cancellation response-retention P1 and durable-rubric-validator P2.
+This candidate remains ready only for owner re-review. R2.4 stays In Progress /
+NO-GO and must not be merged or pushed; it grants no live authority. Runtime
+Epic 2 remains 3/6 accepted, R2.5 remains unauthorized, and Linear was not
+changed.
+
+Late-response proof boundary: receipt formation now serializes receive/drain
+with cancellation and failure finalization. If a valid `COMPLETED` Responses
+envelope has arrived while the attempt ultimately becomes `FAILED`,
+`CANCELLED_POST_DISPATCH`, or `TERMINATION_UNCONFIRMED`, owner-only proof
+retains its detached envelope hash and requested and returned model. When
+provider usage is present, complete usage including cached input and exact
+recomputed cost are retained as well; absent usage remains `UNKNOWN` and trips
+the existing run-fatal rule. The terminal attempt does not become `COMPLETED`,
+`passed`, or admitted; policy-facing invocation still fails. Known exact
+usage/cost beyond authority is retained only as proof, while completed over-
+limit, non-late, partial-accounting, receipt-hash, and terminal-state drift
+remain rejected. A dispatched child that exits naturally during cancellation
+can terminalize as a cooperative post-dispatch cancellation without being
+promoted to success.
+
+Durable-validator boundary: the public rubric request-proof validator now
+requires the complete matching terminal attempt receipt. It reconstructs and
+checks the canonical receipt hash, terminal status/dispatch state, authority,
+request/model, exact pricing, usage, and limit state; rewriting only proof-local
+terminal fields or omitting the receipt cannot validate. HISTORY_POLICY late
+proof records the R2.2 receipt as absent post-dispatch and never admits the late
+provider output.
+
+Verification: R2.4 passed 447/447; the combined R2.3--R2.5 gate passed 549/549;
+and the complete MobileWorld suite passed 2239/2239 in 623.68 seconds.
+Independent final red-team review reported GO for the late-response races,
+natural-exit cancellation,
+negative authority/accounting cases, retained HISTORY_POLICY proof, and
+mandatory rubric receipt. Ruff check and format check passed; configured mypy
+passed over 28 source files; all 22 R2.2--R2.5 schemas passed; accepted R2.3
+implementation/schema bytes remained exactly equal to
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`; and Git diff checks passed.
+
+Authority and artifact boundary: no live OpenAI/API/model/provider call,
+external network, credential or production secret, GPU, Docker, model service
+or weights, MobileWorld backend/emulator, GUI/tool/action, replay, smoke, pilot,
+or other live resource was used. No `OWNER_AUTHORIZED` manifest, persistent
+117-row executable source, selected cohort, frozen pilot manifest, 80--120-cell
+execution artifact, or corresponding content hash was created. Only CPU/
+offline tooling and protocol preparation is claimed; no effectiveness or
+causal claim is established. Owner re-review is the next repository decision,
+and any later resource/run authorization remains a separate owner action.
 ```

@@ -131,6 +131,17 @@ or deadline handling fails, the attempt and response remain proof-bound with a
 closed publication-failure code and `R22_RECEIPT_ABSENT_POST_DISPATCH`; the
 policy result is not admitted.
 
+If deadline or cancellation handling wins a race with an already-arrived valid
+`COMPLETED` Responses envelope, a terminal `FAILED`,
+`CANCELLED_POST_DISPATCH`, or `TERMINATION_UNCONFIRMED` attempt retains the
+detached envelope hash and requested/returned model. When provider usage is
+present, it also retains the full usage including cached input and exact
+recomputed cost; absent usage remains `UNKNOWN` and trips the existing run-fatal
+rule. That late output remains discarded and is never admitted, including when
+its known exact usage or cost exceeds authority. The public durable rubric
+request-proof validator requires the complete matching terminal attempt
+receipt; a proof-local terminal status or hash is insufficient.
+
 Until a separately trusted record-level R2.2 resolver is installed, record
 relevance remains graph-derived (`ACTIVE_PATH`, `INACTIVE_BRANCH`,
 `PATH_INDEPENDENT`, or `UNKNOWN`), while every v1 disposition remains
@@ -277,6 +288,9 @@ manifest/preflight/case lease, and pricing table. Each rubric or history-policy
 attempt runs in a clean spawned child. A deadline causes TERM, then bounded
 KILL if necessary, followed by `waitpid`; the run cannot continue while worker
 termination is unconfirmed.
+A child that has already dispatched but exits naturally during cancellation
+may terminalize as a cooperative post-dispatch cancellation. This does not
+promote a late response to success or admission.
 
 Strict production scope suppresses the pinned OpenAI, httpx, and httpcore
 standard loggers during the Sentinel Responses child setup/dispatch and actor
@@ -339,7 +353,10 @@ detail contract. It uses owner-only repo-external directories/files and binds:
   history-policy proof additionally binds the actor request, Coordinator
   evidence packet, observed response envelope, and R2.2 receipt state. Failed,
   cancelled, over-limit, and termination-unconfirmed attempts retain truthful
-  proof without inventing a provider response or admitted policy result.
+  proof without inventing a provider response or admitted policy result. A
+  valid late envelope carries its hash and model identities into this proof;
+  when usage is present, complete usage, cached-input census, and exact cost are
+  retained as well. It remains unavailable to semantic admission.
 
 Hidden provider chain-of-thought is not requested or separately persisted in
 the derived audit detail or ordinary production logs. Observable actor output
@@ -421,12 +438,13 @@ separately authorizes a frozen live manifest, R2.4 remains In Progress. The
 initial implementation commit is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. Its latest remediation candidate is
-`375fb87809cd0964bc9fb06aac52ff8228ccd09f` and remains pending owner
-re-review. R2.4 tests passed 434/434; focused R2.3--R2.5 tests passed 536/536;
-and the complete MobileWorld suite passed 2226/2226 in 621.39 seconds.
-Independent authority/request-proof QA passed 301/301, while separate audit-
-admission/blob review passed 87/87 plus 6/6. Ruff check and format check passed
-over all 15 changed Python files; configured mypy passed over 28 source files;
+`dfbad16dc96fc6f5d930c0764999c102b624d5d5` and remains pending owner
+re-review. R2.4 tests passed 447/447; focused R2.3--R2.5 tests passed 549/549;
+and the complete MobileWorld suite passed 2239/2239 in 623.68 seconds.
+Independent final red-team review reported GO for the late-response races,
+authority-limit negative cases, and mandatory-receipt validation. Ruff check
+and format check passed;
+configured mypy passed over 28 source files;
 all 19 R2.3--R2.5 and all 22 R2.2--R2.5 schemas passed; accepted R2.3 bytes
 remained exactly equal; and Git diff checks passed. These CPU/offline checks
 make the remediation candidate ready only for owner re-review; they do not
