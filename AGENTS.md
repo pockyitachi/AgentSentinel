@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. The initial joint R2.4/R2.5 CPU repository-preparation implementation is `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it **NO-GO**. Its latest remediation candidate is `dfbad16dc96fc6f5d930c0764999c102b624d5d5` and remains pending owner re-review: R2.4 remains In Progress / NO-GO; do not merge or push it, and do not authorize live work. No `OWNER_AUTHORIZED` manifest was issued, no live smoke or pilot was run, and no persistent 117-row executable source, selected cohort, or frozen pilot manifest/hash exists. Only tooling/protocol preparation is claimed. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. The initial joint R2.4/R2.5 CPU repository-preparation implementation is `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it **NO-GO**. Its latest remediation candidate is `37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner re-review: R2.4 remains In Progress / NO-GO; do not merge or push it, and do not authorize live work. No `OWNER_AUTHORIZED` manifest was issued, no live smoke or pilot was run, and no persistent 117-row executable source, selected cohort, or frozen pilot manifest/hash exists. Only tooling/protocol preparation is claimed. Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -231,7 +231,7 @@ authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified that candidate **NO-GO**.
 The latest remediation candidate is
-`dfbad16dc96fc6f5d930c0764999c102b624d5d5` and remains pending owner
+`37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner
 re-review. It retains the earlier strict-logging, type-sensitive-schema,
 request-anchor, run-fatal, bounded-cleanup, and no-cleanup-initialization
 repairs. It additionally binds every formed `RUBRIC` and `HISTORY_POLICY`
@@ -252,6 +252,15 @@ discarded and cannot be admitted; even a known exact over-limit result is
 evidence only. A clean natural child exit can terminalize as a cooperative
 post-dispatch cancellation. The public durable rubric-proof validator requires
 the complete matching terminal attempt receipt.
+Cancellation signaling, deadline adjudication, and successful `COMPLETED`
+publication now share one finalization lock. If cancellation or deadline wins
+before terminal publication, an arrived response cannot be returned or
+published as `COMPLETED`; it remains late evidence only. A non-`COMPLETED`
+history-policy attempt cannot bind an `ADMITTED` R2.2 receipt or an admitted
+plan. The sole committed-receipt exception is a strict pre-response
+`POLICY_TRANSPORT_ERROR` receipt with one dispatched transport call, no
+returned-model/response/output/proposal/plan/usage fields, and a zero semantic
+decision census.
 
 Production-audit `begin` failures now retain a module-sealed full pre-provider
 recovery receipt across root, destination, temporary-file, write, file-fsync,

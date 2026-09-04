@@ -82,7 +82,7 @@ GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 CPU-only/offline/injected-fake repository engineering preparation implementation
 是 `344e1c42596a4dca717da66374eeca3d936c3f61`；owner review 结论为
 `NO-GO`。最新整改候选 commit 为
-`dfbad16dc96fc6f5d930c0764999c102b624d5d5`，已完成 CPU-only/offline 代码整改但仍须
+`37bde84c33c885dd0a266d9b2a770501b9e0855b`，已完成 CPU-only/offline 代码整改但仍须
 owner 复审；R2.4 保持 In Progress / NO-GO，不得 merge/push，也不得进入 live 授权。** 最新
 候选保留此前 SDK/http logging、type-sensitive sealed schema、request anchor、bounded
 cleanup 与 fatal-dispatch 整改，并将每个 formed `RUBRIC`/`HISTORY_POLICY` attempt 的完整
@@ -99,6 +99,13 @@ cached-input census 与精确重算 cost，usage 缺失时仍为 `UNKNOWN` 并�
 late output 仍被丢弃且不会 admit，已知 exact 超限结果也只作 proof。已 dispatch 的 child
 若在 cancellation 中自然退出，可形成 cooperative terminal cancellation。rubric durable
 validator 现在必须接收并完整核验 matching terminal attempt receipt。
+cancel signal 设置、deadline adjudication 与 `COMPLETED` 发布/返回现在由同一个
+finalization lock 线性化，并在发布成功前于锁内复查；若 cancellation 或 deadline 先赢，
+已到达的 response 只能保留为 late proof，不能被 return、标记 passed 或 admit。
+HISTORY_POLICY durable validator 禁止 non-`COMPLETED` attempt 搭配 `ADMITTED` R2.2
+receipt 或 admitted plan。唯一允许的 committed-receipt 例外是严格 pre-response
+`POLICY_TRANSPORT_ERROR`：attempt dispatch 与 policy transport call 均为 1，returned-model/
+response/output/proposal/plan/usage 字段均为空，semantic decision census 全为 0。
 Production-audit `begin` 从 root/destination/temp/write/file-fsync/directory-fsync 到 sink-begin/
 transaction-binding 的失败均保留 module-sealed 完整 pre-provider recovery receipt。超过 4 MiB
 的 unit-evidence journal 使用 owner-only content-addressed blob 与 compact bound reference；blob
@@ -1458,4 +1465,56 @@ execution artifact, or corresponding content hash was created. Only CPU/
 offline tooling and protocol preparation is claimed; no effectiveness or
 causal claim is established. Owner re-review is the next repository decision,
 and any later resource/run authorization remains a separate owner action.
+```
+
+```text
+Date: 2026-09-04 UTC
+Latest ALE-327 / R2.4 CPU/offline remediation candidate: implementation commit
+`37bde84c33c885dd0a266d9b2a770501b9e0855b` supersedes
+`dfbad16dc96fc6f5d930c0764999c102b624d5d5` after closing the reported
+cancel-versus-success publication race and the adjacent durable
+history-policy admission inconsistency. This candidate remains ready only for
+owner re-review. R2.4 stays In Progress / NO-GO and must not be merged or
+pushed; it grants no live authority. Runtime Epic 2 remains 3/6 accepted, R2.5
+remains unauthorized, and Linear was not changed.
+
+Cancellation and deadline boundary: cancellation signaling, deadline
+adjudication, and successful `COMPLETED` publication share one finalization
+lock. After receiving a provider envelope, the attempt rechecks cancellation
+and deadline under that lock after child reaping and immediately before
+terminal success publication. If cancellation or deadline wins, cancellation
+terminalization runs instead: an arrived response is retained only as late
+proof and cannot be returned, marked passed, or admitted. Deterministic CPU
+regressions cover cancellation after receive and deadline expiry during child
+reaping.
+
+History-policy proof boundary: a non-`COMPLETED` attempt cannot bind an R2.2
+receipt with `evaluation_status=ADMITTED` or a non-null admitted-plan hash.
+The only committed-receipt exception is a strict pre-response
+`POLICY_TRANSPORT_ERROR` receipt: attempt dispatch count and policy transport
+call count are both one; returned-model, response, provider-output, parsed-
+proposal, admitted-plan, and usage fields are absent; and every semantic
+decision count is zero. This preserves truthful durable evidence for a
+transport failure without allowing a cancelled, failed, or
+termination-unconfirmed attempt to claim semantic admission.
+
+Verification: the combined affected gate passed 247/247; R2.4 passed 455/455;
+the combined R2.3--R2.5 gate passed 557/557; and the complete MobileWorld suite
+passed 2247/2247 in 604.38 seconds. Independent scoped red-team review reported
+GO. Ruff check and format check passed over the four changed
+implementation/test files; configured mypy passed over 28 source files; all 22
+R2.2--R2.5 schemas passed; accepted R2.3 implementation/schema bytes remained
+exactly equal; and Git diff checks passed. These are CPU/offline repository
+engineering results, not owner acceptance or a live result.
+
+Authority and artifact boundary: no live OpenAI/API/model/provider call,
+external network, credential or production secret, GPU, Docker, model service
+or weights, MobileWorld backend/emulator, GUI/tool/action, replay, smoke, pilot,
+or other live resource was used. No `OWNER_AUTHORIZED` manifest, persistent
+117-row executable source, selected cohort, frozen pilot manifest,
+80--120-cell execution artifact, or corresponding content hash was created.
+Only CPU/offline tooling and protocol preparation is claimed; no effectiveness
+or causal claim is established. Owner re-review is the next repository
+decision, and merge, push, live authorization, resource use, and Linear remain
+separate owner actions.
 ```

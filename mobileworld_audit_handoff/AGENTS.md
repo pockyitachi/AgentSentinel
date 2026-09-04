@@ -86,7 +86,7 @@ CPU/offline/injected-fake, SHADOW-only checkpoint at commit
 R2.5 have an initial joint CPU-only/offline/injected-fake repository-preparation
 implementation at `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. The latest remediation candidate is
-`dfbad16dc96fc6f5d930c0764999c102b624d5d5` and remains pending owner
+`37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner
 re-review: R2.4 remains In Progress / NO-GO; do not merge or push it, and do not
 authorize live work. No repository-preparation or remediation checkpoint issued
 an `OWNER_AUTHORIZED` manifest or ran the six-case live smoke or any pilot. No
@@ -274,7 +274,7 @@ history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified it **NO-GO**. The latest
-remediation candidate is `dfbad16dc96fc6f5d930c0764999c102b624d5d5`
+remediation candidate is `37bde84c33c885dd0a266d9b2a770501b9e0855b`
 and remains pending owner re-review. It retains the earlier strict SDK/HTTP
 logging suppression, type-sensitive canonical-byte sealed-schema comparison,
 module-owned request anchors, bounded cleanup, and fatal-dispatch repairs. It
@@ -310,6 +310,15 @@ clean natural child exit can terminalize as a cooperative post-dispatch
 cancellation. Durable rubric-proof validation now requires the complete
 matching terminal attempt receipt rather than accepting a proof-local terminal
 hash alone.
+Cancellation signaling, deadline adjudication, and successful `COMPLETED`
+publication are linearized by the same finalization lock. If cancellation or
+deadline wins before terminal publication, an arrived response is retained
+only as late evidence and cannot be returned, passed, or admitted. Durable
+history-policy validation rejects every non-`COMPLETED` attempt paired with an
+`ADMITTED` R2.2 receipt or admitted plan. Its only committed-receipt exception
+is a strict pre-response `POLICY_TRANSPORT_ERROR` receipt with one dispatched
+transport call, no returned-model/response/output/proposal/plan/usage fields,
+and a zero semantic decision census.
 
 Cleanup teardown cannot initialize or reinitialize a backend. If
 client/backend `/init` was not locally confirmed, cleanup records the
@@ -551,17 +560,17 @@ owner-managed.
 The initial joint R2.4/R2.5 repository-preparation implementation is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. Its latest remediation candidate is
-`dfbad16dc96fc6f5d930c0764999c102b624d5d5` and remains pending owner
+`37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner
 re-review. It is CPU-only, offline, injected-fake engineering
 evidence, is ready only for owner re-review, and must not be merged, pushed, or
-treated as live authority. R2.4 tests passed 447/447; the combined R2.3--R2.5
-gate passed 549/549; and the complete MobileWorld suite passed 2239/2239.
-The complete suite took 623.68 seconds.
-Independent final red-team review reported GO for the late-response race,
-authority-limit negative cases, and mandatory-receipt validation. Ruff check
-and format check passed; configured mypy passed over 28 source files; R2.3--R2.5
-schemas passed 19/19 and R2.2--R2.5 schemas passed 22/22; accepted R2.3 bytes
-remained exactly equal; and Git diff checks passed.
+treated as live authority. The combined affected gate passed 247/247; R2.4
+passed 455/455; the combined R2.3--R2.5 gate passed 557/557; and the complete
+MobileWorld suite passed 2247/2247 in 604.38 seconds. Independent scoped
+red-team review reported GO for cancellation/success linearization and the
+non-completed history-policy admission boundary. Ruff check and format check
+passed over the four implementation/test files; configured mypy passed over 28
+source files; R2.2--R2.5 schemas passed 22/22; accepted R2.3 bytes remained
+exactly equal; and Git diff checks passed.
 
 No repository-preparation or remediation checkpoint issued live authority, ran
 a smoke or pilot, or created a persistent executable-task source, selected

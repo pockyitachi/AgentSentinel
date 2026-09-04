@@ -142,6 +142,13 @@ its known exact usage or cost exceeds authority. The public durable rubric
 request-proof validator requires the complete matching terminal attempt
 receipt; a proof-local terminal status or hash is insufficient.
 
+For durable HISTORY_POLICY proof, a non-`COMPLETED` attempt cannot bind an
+R2.2 receipt with `evaluation_status=ADMITTED` or any non-null admitted-plan
+hash. The sole committed-receipt exception is a strict pre-response
+`POLICY_TRANSPORT_ERROR` receipt: the attempt and policy transport each record
+one dispatched call, returned-model/response/output/proposal/plan/usage fields
+are absent, and every semantic decision count is zero.
+
 Until a separately trusted record-level R2.2 resolver is installed, record
 relevance remains graph-derived (`ACTIVE_PATH`, `INACTIVE_BRANCH`,
 `PATH_INDEPENDENT`, or `UNKNOWN`), while every v1 disposition remains
@@ -291,6 +298,12 @@ termination is unconfirmed.
 A child that has already dispatched but exits naturally during cancellation
 may terminalize as a cooperative post-dispatch cancellation. This does not
 promote a late response to success or admission.
+Cancellation signaling, deadline adjudication, and successful `COMPLETED`
+publication are linearized under the same finalization lock. After receiving a
+response, the attempt rechecks cancellation and deadline under that lock before
+publishing `COMPLETED` or returning the result. If cancellation or deadline
+wins, cancellation terminalization runs instead and the response remains only
+late proof; it is never returned, passed, or admitted.
 
 Strict production scope suppresses the pinned OpenAI, httpx, and httpcore
 standard loggers during the Sentinel Responses child setup/dispatch and actor
@@ -438,15 +451,15 @@ separately authorizes a frozen live manifest, R2.4 remains In Progress. The
 initial implementation commit is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. Its latest remediation candidate is
-`dfbad16dc96fc6f5d930c0764999c102b624d5d5` and remains pending owner
-re-review. R2.4 tests passed 447/447; focused R2.3--R2.5 tests passed 549/549;
-and the complete MobileWorld suite passed 2239/2239 in 623.68 seconds.
-Independent final red-team review reported GO for the late-response races,
-authority-limit negative cases, and mandatory-receipt validation. Ruff check
-and format check passed;
-configured mypy passed over 28 source files;
-all 19 R2.3--R2.5 and all 22 R2.2--R2.5 schemas passed; accepted R2.3 bytes
-remained exactly equal; and Git diff checks passed. These CPU/offline checks
+`37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner
+re-review. The combined affected gate passed 247/247; R2.4 passed 455/455;
+focused R2.3--R2.5 tests passed 557/557; and the complete MobileWorld suite
+passed 2247/2247 in 604.38 seconds. Independent scoped red-team review reported
+GO for cancellation/success linearization and the non-completed history-policy
+admission boundary. Ruff check and format check passed over the four changed
+implementation/test files; configured mypy passed over 28 source files; all 22
+R2.2--R2.5 schemas passed; accepted R2.3 bytes remained exactly equal; and Git
+diff checks passed. These CPU/offline checks
 make the remediation candidate ready only for owner re-review; they do not
 constitute owner approval, acceptance, a live-ready claim, or a live result.
 The candidate must not be merged or pushed, and the six live-smoke cases
