@@ -1,6 +1,6 @@
 # R2.4 Qwen and MAI Runtime Vertical Slices Contract v1
 
-Status: **IN PROGRESS; CPU REMEDIATION CANDIDATE; OWNER RE-REVIEW PENDING; LIVE AUTHORITY UNISSUED; MERGE/LIVE NO-GO**
+Status: **IN PROGRESS; CPU REMEDIATION CANDIDATE; OWNER RE-REVIEW PENDING; LIVE AUTHORITY UNISSUED; MERGE/PUSH/LIVE NO-GO**
 
 Contract ID: `mobileworld.runtime.r2-4-qwen-mai-vertical-slices/contract-v1`
 
@@ -11,15 +11,16 @@ CPU-topology schemas:
 - `schemas/r2_4/topology_comparison.v1.schema.json`
 - `schemas/r2_4/cpu_topology_artifact.v1.schema.json`
 
-Live-rubric schemas:
+Live rubric and history-policy schemas:
 
 - `schemas/r2_4/rubric_generate_output.v1.schema.json`
 - `schemas/r2_4/rubric_track_output.v1.schema.json`
 - `schemas/r2_4/rubric_backend_extension.v1.schema.json`
 - `schemas/r2_4/rubric_call_receipt.v1.schema.json`
 - `schemas/r2_4/rubric_request_proof.v1.schema.json`
+- `schemas/r2_4/history_policy_request_proof.v1.schema.json`
 
-Decision date: 2026-09-03 UTC
+Decision date: 2026-09-04 UTC
 
 ## 1. Decision and claim boundary
 
@@ -110,6 +111,25 @@ tool, storage, streaming, truncation, and output-token settings. Its canonical
 request hash must equal the corresponding attempt request hash and, for a
 completed call, the call-receipt request hash. Rewriting those hashes and their
 downstream roots while leaving the anchor unchanged fails closed.
+
+Every formed rubric or history-policy attempt also retains the complete
+attempt authority, deadline/constraint, case-execution lease, exact two-stage
+set, pricing, transport, and canonical provider-request preimages. Durable
+proof validation requires nine caller-known roots for authority, constraint,
+manifest, preflight, case lease, stage, pricing, transport, and request; proof-
+local replacement followed by coherent downstream rehashing cannot substitute
+for those roots. Token, call, deadline, stage, model, usage, and cost bounds are
+recomputed from these preimages, including exact cost from the sealed pricing
+table and observed token census. Legal zero-dispatch cost-reservation failures
+and post-dispatch bound violations remain typed proof rather than being
+discarded as invalid authority.
+
+For HISTORY_POLICY, the proof retains the canonical R2.2 request, observed
+Responses envelope, and R2.2 policy receipt independently. If the provider
+response arrives but R2.2 receipt preparation, publication, mutation checking,
+or deadline handling fails, the attempt and response remain proof-bound with a
+closed publication-failure code and `R22_RECEIPT_ABSENT_POST_DISPATCH`; the
+policy result is not admitted.
 
 Until a separately trusted record-level R2.2 resolver is installed, record
 relevance remains graph-derived (`ACTIVE_PATH`, `INACTIVE_BRANCH`,
@@ -281,18 +301,22 @@ model; a missing or mismatched returned identity fails closed. CPU/fake mode
 keeps both model fields null. An unreaped worker or otherwise unconfirmed
 termination is recorded as `TERMINATION_UNCONFIRMED`, never ordinary `FAILED`.
 The first exact occurrence trips a module-owned one-way run-fatal latch before
-the final actor SDK gate. It blocks the current Original actor call and every
-later reset, runtime/model, backend, task-goal, action, score, or cell dispatch;
-only the bounded CLEANUP recovery stage may still run.
+the final actor SDK gate. A dispatched attempt whose provider usage/cost cannot
+be determined trips the same one-way latch under the distinct
+`LIVE_COST_ACCOUNTING_UNKNOWN` reason. Either condition blocks the current
+Original actor call and every later reset, runtime/model, backend, task-goal,
+action, score, or cell dispatch; only the bounded CLEANUP recovery stage may
+still run.
 
 `DISPATCHED` is emitted immediately before the SDK provider invocation and is
 conservatively counted as one attempt; the narrow signal-to-call crash window
 may overcount, never undercount. Failure while opening the secret or
 building/validating the request is zero dispatch and zero exact cost. A
 post-dispatch cancellation or provider failure is one call; when provider usage
-is unavailable, cost is explicitly unknown and the stage cannot pass. Known
-usage and cost remain recorded even when they exceed a bound. Worst-case cost
-is atomically reserved before dispatch and settled from the terminal receipt.
+is unavailable, cost is explicitly unknown, the stage cannot pass, and the
+run-fatal cost latch prevents any later non-cleanup dispatch. Known usage and
+cost remain recorded even when they exceed a bound. Worst-case cost is
+atomically reserved before dispatch and settled from the terminal receipt.
 
 ## 9. Audit and durable output
 
@@ -306,17 +330,16 @@ detail contract. It uses owner-only repo-external directories/files and binds:
 - actor attempt/response locator, parser result, action projection, and
   latency/census; and
 - every OpenAI attempt authority, receipt, usage/cost status, and receipt root;
-  plus, for every live rubric attempt whose request reaches admission, a
-  module-sealed request anchor registered before transport authorization. A
-  normal attempt linearizes the anchor after `begin` returns and before
-  transport; if START/READY admission instead publishes
-  `TERMINATION_UNCONFIRMED`, the port linearizes the same anchor only after
-  reading that exact terminal from the attempt sink. The
-  restricted durable projection binds its attempt ID, exact order, terminal
-  status/dispatch count/receipt hash, Collector/current-image preimages, and
-  complete canonical provider-request preimage/hash. Failed, cancelled, and
-  termination-unconfirmed attempts retain this proof without claiming a
-  completed rubric call or provider response.
+  plus a module-sealed full request anchor for every formed live rubric or
+  history-policy attempt. The restricted durable projections bind attempt ID,
+  role/order, terminal status/dispatch count/receipt hash, complete authority,
+  deadline/constraint, lease, both stage preimages, pricing, transport, and
+  canonical provider request. Rubric proof additionally binds Collector,
+  tracking-packet/current-image, provider-input, and R2.3 descriptor roots;
+  history-policy proof additionally binds the actor request, Coordinator
+  evidence packet, observed response envelope, and R2.2 receipt state. Failed,
+  cancelled, over-limit, and termination-unconfirmed attempts retain truthful
+  proof without inventing a provider response or admitted policy result.
 
 Hidden provider chain-of-thought is not requested or separately persisted in
 the derived audit detail or ordinary production logs. Observable actor output
@@ -332,9 +355,23 @@ live work has occurred, a publication failure must retain recoverable
 owner-only evidence and must never relabel it as success.
 If a production-audit terminal commit has unknown outcome, its module-sealed
 recovery receipt retains the full pre-provider projection and hash as well as
-the attempted terminal and actor-attempt census. Thus a rubric request proof,
-including a zero-dispatch `TERMINATION_UNCONFIRMED` proof, remains independently
-reconstructible even if the external transaction removes its temporary file.
+the attempted terminal and actor-attempt census. If pre-provider audit `begin`
+fails at root-open, destination check, temporary creation, admission write,
+file fsync, directory fsync, sink begin, or transaction binding, a separate
+module-sealed `ADMISSION_OUTCOME_UNKNOWN` recovery receipt retains the same
+complete detached pre-provider projection before actor dispatch. Both recovery
+receipt types return detached projections so later caller mutation cannot
+rewrite their proof.
+
+Canonical unit-evidence journals up to 4 MiB remain inline. A larger legal
+preimage is atomically persisted under the exact owner-only audit root as a
+SHA-256 content-addressed mode-0600 blob; the bounded journal carries only its
+canonical hash/size/locator reference. Blob-root, write, fsync, link,
+collision, or readback failure retains the full in-memory preimage in outer
+failure evidence and cannot preempt backend/environment teardown, local
+closure, Collector finish, or already-created audit finalization. Thus rubric
+and history-policy request proof remains recoverable across audit admission,
+terminal commit, and oversized-journal publication failures.
 
 ## 10. R2.4 live-smoke acceptance
 
@@ -384,15 +421,26 @@ separately authorizes a frozen live manifest, R2.4 remains In Progress. The
 initial implementation commit is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. Its latest remediation candidate is
-`c03c3c0848f76adbbac049bde5e498e7e89355f0` and remains pending owner
-re-review. Focused R2.3--R2.5 tests passed 443/443 and the complete MobileWorld
-suite passed 2133/2133; independent normal-exact red teams reported GO for the
-code boundary. Ruff check/format, targeted mypy over 28 source files, all 18
-R2.3--R2.5 schemas, accepted R2.3 byte-equality, and Git diff checks also
-passed. `runtime/client.py` retains 16 pre-existing unrelated mypy diagnostics;
-the remediation introduced none on changed lines. These CPU checks are not a
-live result. The candidate must not be merged, and the six live-smoke cases
+`375fb87809cd0964bc9fb06aac52ff8228ccd09f` and remains pending owner
+re-review. R2.4 tests passed 434/434; focused R2.3--R2.5 tests passed 536/536;
+and the complete MobileWorld suite passed 2226/2226 in 621.39 seconds.
+Independent authority/request-proof QA passed 301/301, while separate audit-
+admission/blob review passed 87/87 plus 6/6. Ruff check and format check passed
+over all 15 changed Python files; configured mypy passed over 28 source files;
+all 19 R2.3--R2.5 and all 22 R2.2--R2.5 schemas passed; accepted R2.3 bytes
+remained exactly equal; and Git diff checks passed. These CPU/offline checks
+make the remediation candidate ready only for owner re-review; they do not
+constitute owner approval, acceptance, a live-ready claim, or a live result.
+The candidate must not be merged or pushed, and the six live-smoke cases
 remain unauthorized.
+
+No `OWNER_AUTHORIZED` manifest was issued and no live OpenAI/model/provider,
+external network, live credential or production secret, GPU, Docker, model
+service/weights, MobileWorld backend/emulator, GUI/tool/action, replay, smoke,
+or pilot resource was used.
+No persistent 117-row executable source, selected cohort, frozen pilot
+manifest, 80--120-cell execution artifact, or corresponding content hash was
+created; only CPU/offline tooling and protocol preparation is claimed.
 
 R2.3 commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` is accepted through
 mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`, so Runtime Epic 2 is

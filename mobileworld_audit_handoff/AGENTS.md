@@ -1,6 +1,6 @@
 # Instructions for AgentSentinel coding agents
 
-Last synchronized with the owner-facing repository state: **2026-09-03 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-04 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
 This directory preserves the scientific contracts and provenance for the
@@ -86,11 +86,11 @@ CPU/offline/injected-fake, SHADOW-only checkpoint at commit
 R2.5 have an initial joint CPU-only/offline/injected-fake repository-preparation
 implementation at `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. The latest remediation candidate is
-`c03c3c0848f76adbbac049bde5e498e7e89355f0` and remains pending owner
-re-review: R2.4 remains In Progress / NO-GO; do not merge it or authorize live
-work. No repository-preparation or remediation checkpoint issued an `OWNER_AUTHORIZED`
-manifest or ran the six-case live smoke or any pilot. No persistent 117-row
-executable source, selected cohort, or
+`375fb87809cd0964bc9fb06aac52ff8228ccd09f` and remains pending owner
+re-review: R2.4 remains In Progress / NO-GO; do not merge or push it, and do not
+authorize live work. No repository-preparation or remediation checkpoint issued
+an `OWNER_AUTHORIZED` manifest or ran the six-case live smoke or any pilot. No
+persistent 117-row executable source, selected cohort, or
 frozen pilot manifest/hash exists; only tooling/protocol preparation is
 claimed. R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
@@ -274,26 +274,36 @@ history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified it **NO-GO**. The latest
-remediation candidate is `c03c3c0848f76adbbac049bde5e498e7e89355f0`
-and remains pending owner re-review. It suppresses pinned SDK/HTTP standard
-logging inside strict production calls, performs type-sensitive canonical-byte
-sealed-schema comparison, binds live-rubric proof to module-owned prompt,
-Collector, current-image, Responses-envelope, and output anchors, and uses a
-run-fatal latch to block the current actor call and every later dispatch after
-`TERMINATION_UNCONFIRMED`. Cleanup alone receives a bounded reserved window
-cross-bound to the seven-second termination upper bound, with at least eight
-seconds of grace and typed cleanup failure. It must not be merged and does not
-authorize live execution. No repository-preparation or remediation checkpoint
-is an R2.4 live-smoke result or an R2.5 pilot result.
+remediation candidate is `375fb87809cd0964bc9fb06aac52ff8228ccd09f`
+and remains pending owner re-review. It retains the earlier strict SDK/HTTP
+logging suppression, type-sensitive canonical-byte sealed-schema comparison,
+module-owned request anchors, bounded cleanup, and fatal-dispatch repairs. It
+must not be merged or pushed and does not authorize live execution. No
+repository-preparation or remediation checkpoint is an R2.4 live-smoke result
+or an R2.5 pilot result.
 
-Cleanup teardown cannot initialize a backend: an uninitialized client produces
-the hash-bound `NOT_INITIALIZED_NO_IO` outcome without a dispatch callback,
-resource re-attestation, or backend request. Each admitted live-rubric attempt,
-including failed, cancelled, and termination-unconfirmed attempts, is bound to
-a module-sealed complete canonical provider request. The owner-only durable
-proof independently reconstructs the request and cross-binds its exact prompt,
-task or tracking packet, Coordinator packet root, Collector stimulus, current
-image, schema/settings, attempt receipt, and any completed-call receipt.
+Every formed `RUBRIC` and `HISTORY_POLICY` attempt now retains the complete
+authority, deadline/constraint, case lease, exact two-stage set, pricing,
+transport, and canonical provider-request preimages. Durable proof validation
+requires nine caller-known roots for authority, constraint, manifest,
+preflight, case lease, stage, pricing, transport, and request. A received
+`HISTORY_POLICY` provider response remains proof-bound if R2.2 receipt preparation,
+publication, or deadline handling fails; the receipt is explicitly absent
+post-dispatch and the policy result is not admitted. Production-audit `begin`
+failures retain a module-sealed full pre-provider recovery receipt across root,
+destination, temporary-file, write, file-fsync, directory-fsync, sink-begin,
+and transaction-binding faults. Unit-evidence journals larger than 4 MiB use
+an owner-only content-addressed blob with a compact bound reference; blob
+publication/readback faults preserve full outer failure evidence while cleanup
+and audit finalization continue. Post-dispatch `UNKNOWN` cost and
+`TERMINATION_UNCONFIRMED` trip distinct one-way run-fatal reasons before actor
+or later dispatch.
+
+Cleanup teardown cannot initialize or reinitialize a backend. If
+client/backend `/init` was not locally confirmed, cleanup records the
+hash-bound `NOT_INITIALIZED_NO_IO` outcome without a dispatch callback,
+resource re-attestation, or backend request. Local closure and any already-
+created audit finalization still run.
 
 These repository candidates made no live OpenAI/model/provider call; used no
 external network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
@@ -529,11 +539,19 @@ owner-managed.
 The initial joint R2.4/R2.5 repository-preparation implementation is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. Its latest remediation candidate is
-`c03c3c0848f76adbbac049bde5e498e7e89355f0` and remains pending owner
+`375fb87809cd0964bc9fb06aac52ff8228ccd09f` and remains pending owner
 re-review. It is CPU-only, offline, injected-fake engineering
-evidence and must not be merged or treated as live authority. No
-repository-preparation or remediation checkpoint issued live authority, ran a
-smoke or pilot, or created a persistent executable-task source, selected
+evidence, is ready only for owner re-review, and must not be merged, pushed, or
+treated as live authority. R2.4 tests passed 434/434; the combined R2.3--R2.5
+gate passed 536/536; and the complete MobileWorld suite passed 2226/2226 in
+621.39 seconds. Independent QA passed 301/301, with separate audit-admission/
+blob checks at 87/87 plus 6/6. Ruff check and format check passed over all 15
+changed Python files; configured mypy passed over 28 source files; R2.3--R2.5
+schemas passed 19/19 and R2.2--R2.5 schemas passed 22/22; accepted R2.3 bytes
+remained exactly equal; and Git diff checks passed.
+
+No repository-preparation or remediation checkpoint issued live authority, ran
+a smoke or pilot, or created a persistent executable-task source, selected
 cohort, or frozen pilot manifest/hash. R2.3 is accepted through merge
 `2aa0a268b7d709cf05d524e74c3fba8612f64003`; Runtime Epic 2 remains 3/6
 accepted, and Linear remains owner-managed.

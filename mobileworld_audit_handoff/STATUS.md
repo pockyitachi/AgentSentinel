@@ -1,6 +1,6 @@
 # Project Status：GUI Agent Previous-Step Misleading Motivation Study
 
-Last updated: 2026-09-03 (UTC)
+Last updated: 2026-09-04 (UTC)
 
 ## 1. Project objective
 
@@ -16,7 +16,7 @@ Last updated: 2026-09-03 (UTC)
 
 该方向已在 accepted R2.3 CPU/offline/injected-fake checkpoint 与 R2.4
 CPU remediation candidate 中形成 rubric/tracking 与 runtime glue；R2.4 当前
-仍是 **NO-GO / In Progress**，不得 merge 或进入 live 授权。真实
+仍是 **NO-GO / In Progress**，不得 merge、push 或进入 live 授权。真实
 model-backed/live 执行尚未获授权，R2.5 pilot 也未运行。
 
 ## 2. Current stage and decision
@@ -82,18 +82,23 @@ GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 CPU-only/offline/injected-fake repository engineering preparation implementation
 是 `344e1c42596a4dca717da66374eeca3d936c3f61`；owner review 结论为
 `NO-GO`。最新整改候选 commit 为
-`c03c3c0848f76adbbac049bde5e498e7e89355f0`，已完成 CPU-only 代码整改但仍须
-owner 复审；R2.4 保持 In Progress，不得 merge，也不得进入 live 授权。** 最新整改在前一
-候选基础上进一步封闭四项独立复审 P1：OpenAI SDK/http 标准 logging 请求泄露、sealed
-JSON Schema 的 Python `1 == true` 类型混淆、rubric live proof 缺少可信 prompt/Collector/
-current-image/provider-output 锚点，以及 `TERMINATION_UNCONFIRMED` 未真正阻断 actor/later
-dispatch。该整改还为终止与清理划分 hash-bound 时限：清理窗口与七秒终止上界交叉绑定，
-最小 grace 为八秒，过期或不足均产生 typed cleanup failure；并进一步禁止 cleanup 在初始
-`/init` 失败后重新初始化 backend，未初始化 cleanup 以
-`NOT_INITIALIZED_NO_IO`/zero-I/O 形成 hash-bound recovery evidence。每个 admitted rubric
-attempt（包括 failed、cancelled 与 `TERMINATION_UNCONFIRMED`）均绑定完整 canonical
-provider request，owner-only proof 可独立重建 prompt、task/tracking packet、Coordinator/
-Collector roots、current image、schema/settings 与 request/receipt hashes。
+`375fb87809cd0964bc9fb06aac52ff8228ccd09f`，已完成 CPU-only/offline 代码整改但仍须
+owner 复审；R2.4 保持 In Progress / NO-GO，不得 merge/push，也不得进入 live 授权。** 最新
+候选保留此前 SDK/http logging、type-sensitive sealed schema、request anchor、bounded
+cleanup 与 fatal-dispatch 整改，并将每个 formed `RUBRIC`/`HISTORY_POLICY` attempt 的完整
+authority、deadline/constraint、case lease、精确双-stage set、pricing、transport 与 canonical
+provider request preimage 写入 owner-only proof。validator 还要求 authority、constraint、
+manifest、preflight、case lease、stage、pricing、transport、request 九个 caller-known roots。
+`HISTORY_POLICY` 已收到 provider response 但 R2.2 receipt prepare/publish/deadline
+失败时，response 与 request proof 继续保留，receipt 明确记录为 post-dispatch absent，
+policy result 不会被 admit。
+Production-audit `begin` 从 root/destination/temp/write/file-fsync/directory-fsync 到 sink-begin/
+transaction-binding 的失败均保留 module-sealed 完整 pre-provider recovery receipt。超过 4 MiB
+的 unit-evidence journal 使用 owner-only content-addressed blob 与 compact bound reference；blob
+故障仍保留 outer failure evidence，且不会阻止 cleanup 与 audit finalize。post-dispatch
+`UNKNOWN` cost 与 `TERMINATION_UNCONFIRMED` 使用独立 run-fatal reason 阻断 actor/later
+dispatch。cleanup 只有在 client/backend `/init` 已在本地确认后才可 teardown dispatch；否则
+记录 `NOT_INITIALIZED_NO_IO`/zero-I/O recovery evidence。
 当前只有 tooling/protocol preparation：没有持久化的 117-row executable task source、
 selected cohort、frozen pilot manifest 或对应 hash。R2.4 的 6 个 action-free live
 smoke cases 未运行；R2.5 的 80--120-cell pilot 未获授权且未执行。没有
@@ -1317,4 +1322,78 @@ corresponding artifact/hash. Only tooling/protocol preparation is claimed; no
 effectiveness or causal claim is established. Owner re-review is the next
 repository decision, and any later resource/run authority remains a separate
 owner action.
+```
+
+```text
+Date: 2026-09-04 UTC
+Latest ALE-327 / R2.4 CPU/offline remediation candidate: implementation commit
+`375fb87809cd0964bc9fb06aac52ff8228ccd09f` supersedes the preceding
+`c03c3c0848f76adbbac049bde5e498e7e89355f0` remediation candidate after
+closing the three newly reported durable-proof/recovery P1 findings and the
+additional normal-exact failures found during independent review. This
+candidate is ready only for owner re-review. R2.4 remains In Progress / NO-GO,
+must not be merged or pushed, and does not authorize any live smoke or other
+live work. R2.5 remains blocked on future owner approval of R2.4. R2.3 remains
+accepted through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`;
+Runtime Epic 2 remains 3/6 accepted and Linear was not changed.
+
+Authority and proof boundary: each formed `RUBRIC` and `HISTORY_POLICY`
+attempt retains the complete `LiveAttemptAuthorityV1`, deadline/constraint,
+case-execution lease, both exact OpenAI stage preimages and reconstructed stage
+set, pricing, transport, canonical provider request, terminal attempt receipt,
+and any observed response envelope or committed R2.2 receipt. Validation
+cross-checks token, deadline, stage, call, model, usage, and exact recomputed
+cost constraints and requires nine caller-known roots for authority,
+constraint, manifest, preflight, case lease, stage, pricing, transport, and
+request. Thus coherently rewriting proof-local hashes cannot replace a sealed
+authority or request. If `HISTORY_POLICY` receives a provider response but
+R2.2 receipt prepare, publish, mutation, or deadline handling fails, the
+response/request proof remains durable with an explicit
+`R22_RECEIPT_ABSENT_POST_DISPATCH`
+state and closed publication-failure code; the policy result is not admitted.
+
+Audit and recovery boundary: failure of production-audit pre-provider `begin`
+now creates a module-sealed `ADMISSION_OUTCOME_UNKNOWN` recovery receipt that
+retains the complete detached pre-provider projection across root-open,
+destination, temporary creation, admission write, file-fsync,
+directory-fsync, sink-begin, and transaction-binding faults. Existing terminal
+commit-outcome recovery is detached from caller mutation. Canonical unit
+evidence larger than 4 MiB is atomically persisted as an owner-only
+content-addressed blob and represented in the small journal by a hash/size/
+locator-bound reference. Blob root, write, fsync, link, collision, or readback
+failure preserves the full in-memory projection in outer failure evidence;
+cleanup and already-created audit finalization still execute. A dispatched
+attempt with `UNKNOWN` cost trips the separate
+`LIVE_COST_ACCOUNTING_UNKNOWN` one-way fatal reason, while
+`TERMINATION_UNCONFIRMED` keeps its own fatal reason; either blocks the current
+actor and all later non-cleanup dispatch. Cleanup never initializes or
+reinitializes a backend: if client/backend `/init` was not locally confirmed,
+it records `NOT_INITIALIZED_NO_IO` with zero backend I/O and continues local
+closure/finalization.
+
+Verification: R2.4 passed 434/434; the combined R2.3--R2.5 gate passed 536/536;
+and the complete MobileWorld suite passed 2226/2226 in 621.39 seconds.
+Independent authority/request-proof QA passed 301/301; independent
+audit-admission/blob review passed 87/87 plus 6/6. Ruff check and format check
+passed over all 15 changed Python files. Configured mypy passed over 28 source
+files. R2.3--R2.5 schemas passed 19/19 and R2.2--R2.5 schemas passed 22/22,
+including the additive
+`schemas/r2_4/history_policy_request_proof.v1.schema.json`. The accepted R2.3
+implementation/schema files are byte-identical to
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`; staged/unstaged and commit-range
+Git diff checks passed. These CPU results are repository engineering evidence,
+not an owner acceptance or live result.
+
+Authority and artifact boundary: this remediation used no live OpenAI/API/
+model/provider call, external network, live credential or production secret,
+GPU, Docker, model service or weights, MobileWorld backend/emulator,
+GUI/tool/action, replay,
+pilot, or live resource. It issued no `OWNER_AUTHORIZED` manifest and created
+no persistent 117-row executable source, selected cohort, frozen pilot
+manifest, 80--120-cell execution artifact, or corresponding content hash.
+Only tooling/protocol preparation is claimed; no effectiveness or causal claim
+is established. Owner re-review is the next repository decision, and any
+resource/run authorization remains a separate owner action.
+Owner approval required: yes before merge, push, live authority, live smoke,
+pilot, or any resource/model/backend/action execution.
 ```
