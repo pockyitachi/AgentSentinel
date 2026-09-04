@@ -1,17 +1,29 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import inspect
+import io
 import json
+import os
+import random
+import stat
 import threading
 import time
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from PIL import Image
 
+from mobile_world.runtime.client import (
+    CleanupTaskTeardownResultV1,
+    CleanupTaskTeardownStatusV1,
+)
+from mobile_world.runtime.sentinel.r2_4 import live_executor as live_executor_module
 from mobile_world.runtime.sentinel.r2_4 import production_audit as production_audit_module
 from mobile_world.runtime.sentinel.r2_4 import production_driver as production_driver_module
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_sha256
@@ -59,6 +71,10 @@ from mobile_world.runtime.sentinel.r2_4.production_driver import (
     production_resource_stage_evidence_sha256,
     production_runtime_config_sha256,
     smoke_stage_evidence_sha256,
+)
+from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+    LiveRubricOperationV1,
+    build_live_rubric_provider_request_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.run_fatal import (
     build_production_run_fatal_latch_v1,
@@ -1608,6 +1624,981 @@ def test_terminal_commit_fault_is_bound_into_current_unit_journal(
     assert journal["terminal_audit_records_sha256"] == _journal_sha(
         "production-unit-terminal-audit-journal", terminals
     )
+
+
+def test_pre_provider_admission_failure_is_bound_without_a_transaction() -> None:
+    pre_provider = _audit_commit_failure_recovery(action_executed=False).pre_provider
+    recovery = production_audit_module.ProductionRuntimeAuditAdmissionFailureReceiptV1(
+        logical_call_id=pre_provider.logical_call_id,
+        publication_status=(
+            production_audit_module.ProductionRuntimeAuditPublicationStatusV1.ADMISSION_OUTCOME_UNKNOWN
+        ),
+        failure_phase="AUDIT_PRE_PROVIDER_ADMISSION",
+        failure_code="AUDIT_PRE_PROVIDER_ADMISSION_FAILED",
+        admission_stage=(
+            production_audit_module.ProductionRuntimeAuditAdmissionStageV1.ADMISSION_FILE_FSYNC
+        ),
+        sink_exception_type="OSError",
+        pre_provider=pre_provider,
+        pre_provider_sha256=(
+            production_audit_module.production_runtime_audit_pre_provider_sha256(pre_provider)
+        ),
+        sentinel_receipt_sha256="f" * 64,
+        _seal=production_audit_module._ADMISSION_FAILURE_RECEIPT_SEAL,
+    )
+    audit = SimpleNamespace(
+        latest_admission_failure_receipt=recovery,
+        latest_completed_receipt=None,
+        latest_failure_receipt=None,
+        latest_commit_failure_receipt=None,
+    )
+    deadline_ns = time.monotonic_ns() + 1_000_000_000
+    state = production_driver_module._ProductionUnitStateV1(
+        unit_id="smoke:QWEN3_VL:OFF",
+        host=PilotHostV1.QWEN3_VL,
+        task_name="admission-fault-task",
+        deadline_monotonic_ns=deadline_ns,
+        cleanup_deadline_monotonic_ns=deadline_ns,
+        authority_deadline_monotonic_ns=deadline_ns,
+        attempt_termination_upper_bound_ns=0,
+        environment=None,
+        observation=None,
+        runtime_audit=cast(Any, audit),
+    )
+    port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
+
+    journal = json.loads(port._unit_journal_snapshot(state))
+
+    terminals = cast(list[dict[str, Any]], journal["terminal_audit_records"])
+    assert len(terminals) == 1
+    assert terminals[0]["kind"] == "ADMISSION_OUTCOME_UNKNOWN"
+    receipt = cast(dict[str, Any], terminals[0]["receipt"])
+    assert receipt["pre_provider"] == (
+        production_audit_module.production_runtime_audit_pre_provider_projection(pre_provider)
+    )
+    assert receipt["pre_provider_sha256"] == (
+        production_audit_module.production_runtime_audit_pre_provider_sha256(pre_provider)
+    )
+    assert receipt["recovery_required"] is True
+    assert receipt["admission_stage"] == "ADMISSION_FILE_FSYNC"
+    assert journal["terminal_audit_records_sha256"] == _journal_sha(
+        "production-unit-terminal-audit-journal", terminals
+    )
+
+
+@pytest.fixture(scope="module")
+def large_legal_rubric_provider_request() -> dict[str, Any]:
+    """Build a real, schema-bounded Responses request above the old 4 MiB cap."""
+
+    pixels = random.Random(2404).randbytes(1280 * 1280 * 3)
+    image = Image.frombytes("RGB", (1280, 1280), pixels)
+    encoded = io.BytesIO()
+    image.save(encoded, format="PNG")
+    data_url = "data:image/png;base64," + base64.b64encode(encoded.getvalue()).decode("ascii")
+    request = build_live_rubric_provider_request_v1(
+        operation=LiveRubricOperationV1.TRACK,
+        provider_input={"packet": {"schema_version": "cpu-large-proof/v1"}},
+        current_image_data_url=data_url,
+    )
+    assert 4 * 1024 * 1024 < request.byte_count < 8 * 1024 * 1024
+    return cast(dict[str, Any], json.loads(request.canonical_bytes))
+
+
+def _large_failed_terminal(request: dict[str, Any]) -> dict[str, Any]:
+    request_raw = production_driver_module.canonical_json_bytes(cast(Any, request))
+    proof: dict[str, Any] = {
+        "provider_request": request,
+        "provider_request_byte_count": len(request_raw),
+        "provider_request_sha256": hashlib.sha256(request_raw).hexdigest(),
+        "schema_version": "mobileworld.runtime.sentinel-r2.4-live-rubric-request-proof/v1",
+    }
+    terminal: dict[str, Any] = {
+        "attempt_journal_failure_code": None,
+        "kind": "FAILED",
+        "live_attempt_receipt_sha256s": [],
+        "live_attempt_receipts": [],
+        "receipt": {
+            "pre_provider": {"restricted_stage_projection": {"rubric_request_proofs": [proof]}}
+        },
+        "receipt_sha256": "1" * 64,
+    }
+    terminal["canonical_evidence_sha256"] = _journal_sha("production-unit-terminal-audit", terminal)
+    return terminal
+
+
+def _large_unit_journal_port(
+    tmp_path: Path,
+    request: dict[str, Any],
+) -> tuple[
+    production_driver_module._ProductionFixedExecutionPortV1,
+    production_driver_module._ProductionUnitStateV1,
+    production_driver_module._SmokeInvocationV1,
+    production_audit_module.ExternalProductionRuntimeAuditSinkV1,
+]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    audit_sink = production_audit_module.ExternalProductionRuntimeAuditSinkV1(
+        tmp_path / "owner-only-audit"
+    )
+    terminal = _large_failed_terminal(request)
+    now = time.monotonic_ns()
+    plan = _smoke_plan(tmp_path, PilotHostV1.QWEN3_VL)
+    invocation = production_driver_module._SmokeInvocationV1(
+        manifest_sha256="a" * 64,
+        run_id="large-proof-run",
+        source_commit="b" * 40,
+        host=PilotHostV1.QWEN3_VL,
+        sequence_index=0,
+        case=plan.cases[0],
+        actor_resource_sha256="c" * 64,
+        history_policy_stage_sha256="d" * 64,
+        deadline_monotonic_ns=now + 20_000_000_000,
+        cleanup_deadline_monotonic_ns=now + 30_000_000_000,
+        authority_deadline_monotonic_ns=now + 30_000_000_000,
+        attempt_termination_upper_bound_ns=0,
+    )
+    port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    state = production_driver_module._ProductionUnitStateV1(
+        unit_id=port._unit_id(invocation),
+        host=invocation.host,
+        task_name=invocation.case.task_id,
+        deadline_monotonic_ns=invocation.deadline_monotonic_ns,
+        cleanup_deadline_monotonic_ns=invocation.cleanup_deadline_monotonic_ns,
+        authority_deadline_monotonic_ns=invocation.authority_deadline_monotonic_ns,
+        attempt_termination_upper_bound_ns=invocation.attempt_termination_upper_bound_ns,
+        environment=None,
+        observation=None,
+        terminal_audit_journal=[cast(Any, terminal)],
+    )
+    object.__setattr__(port, "_audit_sink", audit_sink)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
+    object.__setattr__(port, "_lock", threading.RLock())
+    object.__setattr__(port, "_units", {state.unit_id: state})
+    object.__setattr__(port, "_unit_journals", {})
+    object.__setattr__(port, "_unpublished_unit_evidence", {})
+    return port, state, invocation, audit_sink
+
+
+def _configure_large_cleanup_state(
+    *,
+    port: production_driver_module._ProductionFixedExecutionPortV1,
+    state: production_driver_module._ProductionUnitStateV1,
+    tmp_path: Path,
+    events: list[str],
+) -> None:
+    class _InitializedEnvironment:
+        is_initialized = True
+
+        @staticmethod
+        def request_deadline_scope(_: int) -> object:
+            return nullcontext()
+
+        @staticmethod
+        def tear_down_task_if_initialized(
+            _: str, *, dispatch_started: object
+        ) -> CleanupTaskTeardownResultV1:
+            assert callable(dispatch_started)
+            cast(Any, dispatch_started)()
+            events.append("teardown")
+            return CleanupTaskTeardownResultV1(
+                status=CleanupTaskTeardownStatusV1.SUCCEEDED,
+                message="closed",
+                request_dispatched=True,
+            )
+
+        @staticmethod
+        def close() -> None:
+            events.append("environment-close")
+
+    manifest_path = tmp_path / "collector-manifest.json"
+    manifest_path.write_bytes(b"{}")
+
+    def finalize_collector(**_: object) -> Path:
+        events.append("collector-finalize")
+        return manifest_path
+
+    state.environment = cast(Any, _InitializedEnvironment())
+    state.agent = cast(
+        Any,
+        SimpleNamespace(
+            done=lambda: events.append("agent-done"),
+            openai_client=SimpleNamespace(close=lambda: events.append("client-close")),
+            get_total_token_usage=lambda: {},
+        ),
+    )
+    state.task_binding = cast(
+        Any,
+        SimpleNamespace(
+            capture=SimpleNamespace(
+                capture_complete=True,
+                end_task=lambda **_: events.append("collector-end-task"),
+            ),
+            metadata=SimpleNamespace(task_run_id="large-proof-task-run"),
+        ),
+    )
+    state.lifecycle = cast(
+        Any,
+        SimpleNamespace(
+            finish_task_attempt=lambda **_: events.append("collector-finish-attempt"),
+            finalize=finalize_collector,
+        ),
+    )
+    object.__setattr__(
+        port,
+        "_resource_lifecycle",
+        SimpleNamespace(
+            require_dispatch=lambda *_, **__: events.append("cleanup-dispatch-authorized")
+        ),
+    )
+
+
+def _assert_full_large_failure_evidence(
+    evidence: dict[str, Any],
+    *,
+    request: dict[str, Any],
+    publication_failure_code: str,
+    terminal_kind: str = "FAILED",
+) -> None:
+    terminals = cast(list[dict[str, Any]], evidence["terminal_audit_records"])
+    assert [terminal["kind"] for terminal in terminals] == [terminal_kind]
+    assert "actor_completed_receipt" not in evidence
+    proof = terminals[0]["receipt"]["pre_provider"]["restricted_stage_projection"][
+        "rubric_request_proofs"
+    ][0]
+    assert proof["provider_request"] == request
+    request_raw = production_driver_module.canonical_json_bytes(cast(Any, request))
+    assert proof["provider_request_byte_count"] == len(request_raw)
+    assert proof["provider_request_sha256"] == hashlib.sha256(request_raw).hexdigest()
+
+    publication = cast(dict[str, Any], evidence["evidence_publication_failure"])
+    assert publication["publication_failure_code"] == publication_failure_code
+    assert publication["status"] in {
+        "PUBLICATION_FAILED_IN_MEMORY_RECOVERED",
+        "PUBLICATION_FAILURE_DURABLY_RECOVERED",
+    }
+    assert evidence["evidence_publication_failure_code"] == publication_failure_code
+    full_projection = {
+        name: evidence[name]
+        for name in (
+            "cleanup_recovery_outcome",
+            "cleanup_recovery_outcome_sha256",
+            "completed_decisions",
+            "completed_decisions_sha256",
+            "terminal_audit_records",
+            "terminal_audit_records_sha256",
+            "run_fatal_state",
+            "run_fatal_state_sha256",
+            "unit_deadline",
+            "unit_id",
+        )
+    }
+    full_raw = production_driver_module.canonical_json_bytes(cast(Any, full_projection))
+    assert len(full_raw) == publication["full_unit_evidence_byte_count"]
+    assert hashlib.sha256(full_raw).hexdigest() == publication["full_unit_evidence_sha256"]
+    binding = dict(publication)
+    claimed_binding_sha256 = binding.pop("binding_sha256")
+    assert claimed_binding_sha256 == _journal_sha(
+        "production-unit-evidence-publication-failure", binding
+    )
+
+
+def test_large_legal_request_proof_is_atomically_blobbed_and_cleanup_proceeds(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+) -> None:
+    port, state, invocation, audit_sink = _large_unit_journal_port(
+        tmp_path, large_legal_rubric_provider_request
+    )
+
+    journal_reference_raw = port._unit_journal_snapshot(state)
+    reference = cast(dict[str, Any], json.loads(journal_reference_raw))
+    blob = cast(dict[str, Any], reference["blob"])
+    blob_path = audit_sink.root / cast(str, blob["safe_locator"])
+
+    assert len(journal_reference_raw) < 4 * 1024 * 1024
+    assert reference["storage"] == "OWNER_ONLY_CONTENT_ADDRESSED_BLOB"
+    assert blob["byte_count"] > 4 * 1024 * 1024
+    assert blob_path.is_file() and not blob_path.is_symlink()
+    assert blob_path.stat().st_mode & 0o777 == 0o600
+    assert hashlib.sha256(blob_path.read_bytes()).hexdigest() == blob["sha256"]
+
+    cleanup = port.cleanup_unit(invocation)
+
+    assert len(cleanup.cleanup_receipt_sha256) == 64
+    assert state.unit_id not in port._units
+    assert port._unit_journals[state.unit_id] == journal_reference_raw
+    recovered = cast(dict[str, Any], port.failure_evidence_for_unit(invocation))
+    recovered_proof = recovered["terminal_audit_records"][0]["receipt"]["pre_provider"][
+        "restricted_stage_projection"
+    ]["rubric_request_proofs"][0]
+    assert recovered_proof["provider_request"] == large_legal_rubric_provider_request
+    assert recovered_proof["provider_request_sha256"] == canonical_sha256(
+        cast(Any, large_legal_rubric_provider_request)
+    )
+
+
+@pytest.mark.parametrize("mutation", ("content", "mode"))
+def test_large_unit_journal_readback_rejects_blob_tamper(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+    mutation: str,
+) -> None:
+    port, state, invocation, audit_sink = _large_unit_journal_port(
+        tmp_path, large_legal_rubric_provider_request
+    )
+    journal_reference_raw = port._unit_journal_snapshot(state)
+    reference = cast(dict[str, Any], json.loads(journal_reference_raw))
+    blob = cast(dict[str, Any], reference["blob"])
+    blob_path = audit_sink.root / cast(str, blob["safe_locator"])
+    port._unit_journals[state.unit_id] = journal_reference_raw
+    port._units.clear()
+    if mutation == "content":
+        with blob_path.open("r+b") as handle:
+            handle.write(b"X")
+            handle.flush()
+            os.fsync(handle.fileno())
+    else:
+        blob_path.chmod(0o640)
+
+    with pytest.raises(ProductionDriverError) as raised:
+        port.failure_evidence_for_unit(invocation)
+
+    assert raised.value.code == "UNIT_EVIDENCE_BLOB_INVALID"
+
+
+@pytest.mark.parametrize("mutation", ("bool-byte-count", "path-traversal"))
+def test_large_unit_journal_rejects_rehashed_unsafe_reference(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+    mutation: str,
+) -> None:
+    port, state, invocation, _ = _large_unit_journal_port(
+        tmp_path, large_legal_rubric_provider_request
+    )
+    reference = cast(dict[str, Any], json.loads(port._unit_journal_snapshot(state)))
+    blob = cast(dict[str, Any], reference["blob"])
+    if mutation == "bool-byte-count":
+        blob["byte_count"] = True
+    else:
+        blob["safe_locator"] = "../escaped-unit-evidence.json"
+    reference_without_hash = dict(reference)
+    del reference_without_hash["reference_sha256"]
+    reference["reference_sha256"] = canonical_sha256(cast(Any, reference_without_hash))
+    port._unit_journals[state.unit_id] = production_driver_module.canonical_json_bytes(
+        cast(Any, reference)
+    )
+    port._units.clear()
+
+    with pytest.raises(ProductionDriverError) as raised:
+        port.failure_evidence_for_unit(invocation)
+
+    assert raised.value.code == "UNIT_EVIDENCE_BLOB_REFERENCE_INVALID"
+
+
+def test_large_unit_journal_rejects_content_address_collision_without_overwrite(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+) -> None:
+    port, state, _, first_sink = _large_unit_journal_port(
+        tmp_path / "first", large_legal_rubric_provider_request
+    )
+    first_reference = cast(dict[str, Any], json.loads(port._unit_journal_snapshot(state)))
+    first_blob = cast(dict[str, Any], first_reference["blob"])
+    assert (first_sink.root / cast(str, first_blob["safe_locator"])).is_file()
+    (tmp_path / "second").mkdir()
+    second_sink = production_audit_module.ExternalProductionRuntimeAuditSinkV1(
+        tmp_path / "second" / "owner-only-audit"
+    )
+    collision_path = second_sink.root / cast(str, first_blob["safe_locator"])
+    with collision_path.open("wb") as handle:
+        handle.write(b"X")
+        handle.truncate(cast(int, first_blob["byte_count"]))
+        handle.flush()
+        os.fsync(handle.fileno())
+    collision_path.chmod(0o600)
+    object.__setattr__(port, "_audit_sink", second_sink)
+
+    with pytest.raises(ProductionDriverError) as raised:
+        port._unit_journal_snapshot(state)
+
+    assert raised.value.code == "UNIT_EVIDENCE_BLOB_COLLISION"
+    assert collision_path.read_bytes()[:1] == b"X"
+
+
+def _large_off_pre_provider(
+    request: dict[str, Any],
+) -> production_audit_module.ProductionRuntimeAuditPreProviderV1:
+    base = _audit_commit_failure_recovery(action_executed=False).pre_provider
+    terminal = _large_failed_terminal(request)
+    proof = terminal["receipt"]["pre_provider"]["restricted_stage_projection"][
+        "rubric_request_proofs"
+    ][0]
+    request_sha256 = canonical_sha256(cast(Any, request))
+    restricted: dict[str, Any] = {
+        "kind": "OFF_NO_SEMANTIC_WORK",
+        "raw_request": request,
+        "rubric_request_proofs": [proof],
+    }
+    return replace(
+        base,
+        logical_call_id="large-admission-fault-logical-call-1",
+        raw_request_sha256=request_sha256,
+        candidate_request_sha256=request_sha256,
+        final_request_sha256=request_sha256,
+        restricted_stage_projection=restricted,
+        restricted_stage_projection_sha256=canonical_sha256(cast(Any, restricted)),
+        _seal=production_audit_module._PRE_PROVIDER_SEAL,
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_admission_stage", "expected_blob_code"),
+    (
+        (
+            "root_open",
+            production_audit_module.ProductionRuntimeAuditAdmissionStageV1.ROOT_OPEN,
+            "UNIT_EVIDENCE_BLOB_ROOT_INVALID",
+        ),
+        (
+            "write",
+            production_audit_module.ProductionRuntimeAuditAdmissionStageV1.ADMISSION_WRITE,
+            "UNIT_EVIDENCE_BLOB_PERSIST_FAILED",
+        ),
+        (
+            "file_fsync",
+            production_audit_module.ProductionRuntimeAuditAdmissionStageV1.ADMISSION_FILE_FSYNC,
+            "UNIT_EVIDENCE_BLOB_PERSIST_FAILED",
+        ),
+    ),
+)
+def test_actual_audit_admission_and_large_recovery_share_persistent_fault(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+    expected_admission_stage: production_audit_module.ProductionRuntimeAuditAdmissionStageV1,
+    expected_blob_code: str,
+) -> None:
+    port, state, invocation, audit_sink = _large_unit_journal_port(
+        tmp_path, large_legal_rubric_provider_request
+    )
+    state.terminal_audit_journal.clear()
+    state.terminal_audit_sha256s.clear()
+    audit = production_audit_module.ProductionRuntimeAuditV1(
+        policy=None,
+        sink=audit_sink,
+    )
+    pre_provider = _large_off_pre_provider(large_legal_rubric_provider_request)
+    original_open_root = audit_sink._open_root
+    original_write = os.write
+    original_fsync = os.fsync
+
+    def fail_root_open(*_: object, **__: object) -> int:
+        raise OSError("injected persistent audit/recovery root-open failure")
+
+    def fail_write(*_: object, **__: object) -> int:
+        raise OSError("injected persistent audit/recovery write failure")
+
+    def fail_fsync(*_: object, **__: object) -> None:
+        raise OSError("injected persistent audit/recovery fsync failure")
+
+    if failure_stage == "root_open":
+        assert callable(original_open_root)
+        monkeypatch.setattr(
+            production_audit_module.ExternalProductionRuntimeAuditSinkV1,
+            "_open_root",
+            fail_root_open,
+        )
+    elif failure_stage == "write":
+        assert callable(original_write)
+        monkeypatch.setattr(production_audit_module.os, "write", fail_write)
+    else:
+        assert callable(original_fsync)
+        monkeypatch.setattr(production_audit_module.os, "fsync", fail_fsync)
+
+    with pytest.raises(production_audit_module.ProductionRuntimeAuditError) as admission_error:
+        audit._admit_pre_provider(
+            pre_provider,
+            sentinel_receipt_sha256="f" * 64,
+        )
+
+    assert admission_error.value.code == "AUDIT_PRE_PROVIDER_ADMISSION_FAILED"
+    admission_failure = audit.latest_admission_failure_receipt
+    assert admission_failure is not None
+    assert admission_failure.admission_stage is expected_admission_stage
+    assert audit.pending_count == 0
+    assert audit.latest_completed_receipt is None
+    assert audit.latest_failure_receipt is None
+    assert audit.latest_commit_failure_receipt is None
+    state.runtime_audit = audit
+    events: list[str] = []
+    _configure_large_cleanup_state(
+        port=port,
+        state=state,
+        tmp_path=tmp_path,
+        events=events,
+    )
+
+    initial = cast(
+        dict[str, Any],
+        port._recoverable_failure_evidence_for_unit(
+            invocation,
+            failure_phase="DISPATCH",
+            failure_code="AUDIT_PRE_PROVIDER_ADMISSION_FAILED",
+        ),
+    )
+    _assert_full_large_failure_evidence(
+        initial,
+        request=large_legal_rubric_provider_request,
+        publication_failure_code=expected_blob_code,
+        terminal_kind="ADMISSION_OUTCOME_UNKNOWN",
+    )
+    assert initial["actor_admission_failure_receipt"]["pre_provider"] == (
+        production_audit_module.production_runtime_audit_pre_provider_projection(pre_provider)
+    )
+
+    with pytest.raises(ProductionDriverError) as cleanup_error:
+        port.cleanup_unit(invocation)
+
+    assert cleanup_error.value.code == expected_blob_code
+    assert events == [
+        "cleanup-dispatch-authorized",
+        "teardown",
+        "environment-close",
+        "agent-done",
+        "client-close",
+        "collector-end-task",
+        "collector-finish-attempt",
+        "collector-finalize",
+    ]
+    final = cast(
+        dict[str, Any],
+        port._recoverable_failure_evidence_for_unit(
+            invocation,
+            failure_phase="CLEANUP",
+            failure_code=expected_blob_code,
+        ),
+    )
+    _assert_full_large_failure_evidence(
+        final,
+        request=large_legal_rubric_provider_request,
+        publication_failure_code=expected_blob_code,
+        terminal_kind="ADMISSION_OUTCOME_UNKNOWN",
+    )
+    assert final["cleanup_recovery_outcome"]["outcome"] == "SUCCEEDED"
+    assert tuple(audit_sink.root.iterdir()) == ()
+    port._release_unpublished_unit_evidence(invocation)
+    assert port._unpublished_unit_evidence == {}
+
+
+@pytest.mark.parametrize("failure_stage", ("root_open", "write", "file_fsync", "link"))
+def test_large_unit_journal_publish_failure_is_typed_and_cleanup_still_runs(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    port, state, invocation, audit_sink = _large_unit_journal_port(
+        tmp_path, large_legal_rubric_provider_request
+    )
+    events: list[str] = []
+    _configure_large_cleanup_state(
+        port=port,
+        state=state,
+        tmp_path=tmp_path,
+        events=events,
+    )
+
+    def fail_io(*_: object, **__: object) -> None:
+        raise OSError("injected atomic publication failure")
+
+    if failure_stage == "root_open":
+        monkeypatch.setattr(
+            production_audit_module.ExternalProductionRuntimeAuditSinkV1,
+            "_open_root",
+            fail_io,
+        )
+    elif failure_stage == "write":
+        monkeypatch.setattr(
+            production_driver_module._ProductionFixedExecutionPortV1,
+            "_write_unit_evidence_blob",
+            staticmethod(fail_io),
+        )
+    elif failure_stage == "file_fsync":
+        monkeypatch.setattr(production_driver_module.os, "fsync", fail_io)
+    else:
+        monkeypatch.setattr(production_driver_module.os, "link", fail_io)
+
+    recovery_failure = cast(
+        dict[str, Any],
+        port._recoverable_failure_evidence_for_unit(
+            invocation,
+            failure_phase="DISPATCH",
+            failure_code="RUN_FATAL_TERMINATION_UNCONFIRMED",
+        ),
+    )
+    expected_code = (
+        "UNIT_EVIDENCE_BLOB_ROOT_INVALID"
+        if failure_stage == "root_open"
+        else "UNIT_EVIDENCE_BLOB_PERSIST_FAILED"
+    )
+    _assert_full_large_failure_evidence(
+        recovery_failure,
+        request=large_legal_rubric_provider_request,
+        publication_failure_code=expected_code,
+    )
+
+    with pytest.raises(ProductionDriverError) as raised:
+        port.cleanup_unit(invocation)
+
+    assert raised.value.code == expected_code
+    assert tuple(audit_sink.root.iterdir()) == ()
+    assert events == [
+        "cleanup-dispatch-authorized",
+        "teardown",
+        "environment-close",
+        "agent-done",
+        "client-close",
+        "collector-end-task",
+        "collector-finish-attempt",
+        "collector-finalize",
+    ]
+    assert state.unit_id in port._units
+    final_failure = cast(
+        dict[str, Any],
+        port._recoverable_failure_evidence_for_unit(
+            invocation,
+            failure_phase="CLEANUP",
+            failure_code=expected_code,
+        ),
+    )
+    _assert_full_large_failure_evidence(
+        final_failure,
+        request=large_legal_rubric_provider_request,
+        publication_failure_code=expected_code,
+    )
+    assert final_failure["cleanup_recovery_outcome"]["outcome"] == "SUCCEEDED"
+    assert state.unit_id in port._unpublished_unit_evidence
+    port._release_unpublished_unit_evidence(invocation)
+    assert port._unpublished_unit_evidence == {}
+
+
+def test_large_unit_journal_fifo_collision_is_nonblocking_and_cleanup_still_runs(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    port, state, invocation, audit_sink = _large_unit_journal_port(
+        tmp_path, large_legal_rubric_provider_request
+    )
+    events: list[str] = []
+    _configure_large_cleanup_state(
+        port=port,
+        state=state,
+        tmp_path=tmp_path,
+        events=events,
+    )
+    full_raw = port._unit_journal_full_snapshot(state)
+    reference = port._unit_evidence_blob_reference(unit_id=state.unit_id, raw=full_raw)
+    blob = cast(dict[str, Any], reference["blob"])
+    locator = cast(str, blob["safe_locator"])
+    fifo_path = audit_sink.root / locator
+    os.mkfifo(fifo_path, 0o600)
+    original_open = os.open
+    observed_fifo_open_flags: list[int] = []
+
+    def guarded_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == locator:
+            observed_fifo_open_flags.append(flags)
+            assert flags & os.O_NONBLOCK
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(production_driver_module.os, "open", guarded_open)
+
+    initial = cast(
+        dict[str, Any],
+        port._recoverable_failure_evidence_for_unit(
+            invocation,
+            failure_phase="DISPATCH",
+            failure_code="RUN_FATAL_TERMINATION_UNCONFIRMED",
+        ),
+    )
+    _assert_full_large_failure_evidence(
+        initial,
+        request=large_legal_rubric_provider_request,
+        publication_failure_code="UNIT_EVIDENCE_BLOB_COLLISION",
+    )
+
+    with pytest.raises(ProductionDriverError) as raised:
+        port.cleanup_unit(invocation)
+
+    assert raised.value.code == "UNIT_EVIDENCE_BLOB_COLLISION"
+    assert observed_fifo_open_flags
+    assert stat.S_ISFIFO(fifo_path.lstat().st_mode)
+    assert events == [
+        "cleanup-dispatch-authorized",
+        "teardown",
+        "environment-close",
+        "agent-done",
+        "client-close",
+        "collector-end-task",
+        "collector-finish-attempt",
+        "collector-finalize",
+    ]
+    final = cast(
+        dict[str, Any],
+        port._recoverable_failure_evidence_for_unit(
+            invocation,
+            failure_phase="CLEANUP",
+            failure_code="UNIT_EVIDENCE_BLOB_COLLISION",
+        ),
+    )
+    _assert_full_large_failure_evidence(
+        final,
+        request=large_legal_rubric_provider_request,
+        publication_failure_code="UNIT_EVIDENCE_BLOB_COLLISION",
+    )
+    assert final["cleanup_recovery_outcome"]["outcome"] == "SUCCEEDED"
+    port._release_unpublished_unit_evidence(invocation)
+    assert port._unpublished_unit_evidence == {}
+
+
+@pytest.mark.parametrize(
+    "fault_mode",
+    (
+        "one_time_link",
+        "one_time_readback",
+        "persistent_root_open",
+        "persistent_write",
+        "persistent_file_fsync",
+        "persistent_link",
+        "persistent_readback",
+    ),
+)
+def test_smoke_outer_failure_transaction_keeps_large_proof_and_releases_memory(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    fault_mode: str,
+) -> None:
+    audit_sink = production_audit_module.ExternalProductionRuntimeAuditSinkV1(
+        tmp_path / "owner-only-audit"
+    )
+    port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(port, "_audit_sink", audit_sink)
+    object.__setattr__(port, "_config", SimpleNamespace(shutdown_grace_seconds=8))
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
+    object.__setattr__(port, "_lock", threading.RLock())
+    object.__setattr__(port, "_units", {})
+    object.__setattr__(port, "_unit_journals", {})
+    object.__setattr__(port, "_unpublished_unit_evidence", {})
+    events: list[str] = []
+    created_states: list[production_driver_module._ProductionUnitStateV1] = []
+
+    def fail_dispatch(
+        exact_port: production_driver_module._ProductionFixedExecutionPortV1,
+        invocation: production_driver_module._SmokeInvocationV1,
+        _: object,
+    ) -> None:
+        assert exact_port is port
+        state = production_driver_module._ProductionUnitStateV1(
+            unit_id=port._unit_id(invocation),
+            host=invocation.host,
+            task_name=invocation.case.task_id,
+            deadline_monotonic_ns=invocation.deadline_monotonic_ns,
+            cleanup_deadline_monotonic_ns=invocation.cleanup_deadline_monotonic_ns,
+            authority_deadline_monotonic_ns=invocation.authority_deadline_monotonic_ns,
+            attempt_termination_upper_bound_ns=invocation.attempt_termination_upper_bound_ns,
+            environment=None,
+            observation=None,
+            terminal_audit_journal=[
+                cast(Any, _large_failed_terminal(large_legal_rubric_provider_request))
+            ],
+        )
+        _configure_large_cleanup_state(
+            port=port,
+            state=state,
+            tmp_path=tmp_path,
+            events=events,
+        )
+        port._units[state.unit_id] = state
+        created_states.append(state)
+        raise ProductionDriverError(
+            "RUN_FATAL_TERMINATION_UNCONFIRMED",
+            "injected dispatch failure with a legal large request proof",
+        )
+
+    monkeypatch.setattr(
+        production_driver_module._ProductionFixedExecutionPortV1,
+        "run_smoke_case",
+        fail_dispatch,
+    )
+    link_calls = 0
+    successful_readbacks = 0
+    expected_publication_code: str
+    if fault_mode == "persistent_root_open":
+
+        def fail_root_open(*_: object, **__: object) -> None:
+            raise OSError("injected persistent root-open failure")
+
+        monkeypatch.setattr(
+            production_audit_module.ExternalProductionRuntimeAuditSinkV1,
+            "_open_root",
+            fail_root_open,
+        )
+        expected_publication_code = "UNIT_EVIDENCE_BLOB_ROOT_INVALID"
+    elif fault_mode == "persistent_write":
+
+        def fail_blob_write(*_: object, **__: object) -> None:
+            raise OSError("injected persistent blob write failure")
+
+        monkeypatch.setattr(
+            production_driver_module._ProductionFixedExecutionPortV1,
+            "_write_unit_evidence_blob",
+            staticmethod(fail_blob_write),
+        )
+        expected_publication_code = "UNIT_EVIDENCE_BLOB_PERSIST_FAILED"
+    elif fault_mode == "persistent_file_fsync":
+        original_fsync = os.fsync
+
+        def fail_audit_root_fsync(descriptor: int) -> None:
+            target = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+            if target == audit_sink.root or target.is_relative_to(audit_sink.root):
+                raise OSError("injected persistent blob fsync failure")
+            original_fsync(descriptor)
+
+        monkeypatch.setattr(production_driver_module.os, "fsync", fail_audit_root_fsync)
+        expected_publication_code = "UNIT_EVIDENCE_BLOB_PERSIST_FAILED"
+    elif fault_mode == "persistent_link":
+
+        def fail_blob_link(*_: object, **__: object) -> None:
+            raise OSError("injected persistent blob link failure")
+
+        monkeypatch.setattr(production_driver_module.os, "link", fail_blob_link)
+        expected_publication_code = "UNIT_EVIDENCE_BLOB_PERSIST_FAILED"
+    elif fault_mode in {"one_time_readback", "persistent_readback"}:
+        original_readback = (
+            production_driver_module._ProductionFixedExecutionPortV1._read_unit_evidence_blob
+        )
+
+        def fail_post_link_readback(
+            exact_port: production_driver_module._ProductionFixedExecutionPortV1,
+            **kwargs: Any,
+        ) -> bytes | None:
+            nonlocal successful_readbacks
+            result = original_readback(exact_port, **kwargs)
+            if result is None:
+                return None
+            successful_readbacks += 1
+            if fault_mode == "persistent_readback" or successful_readbacks == 1:
+                raise ProductionDriverError(
+                    "UNIT_EVIDENCE_BLOB_READ_FAILED",
+                    "injected post-link exact-readback failure",
+                )
+            return result
+
+        monkeypatch.setattr(
+            production_driver_module._ProductionFixedExecutionPortV1,
+            "_read_unit_evidence_blob",
+            fail_post_link_readback,
+        )
+        expected_publication_code = "UNIT_EVIDENCE_BLOB_READ_FAILED"
+    else:
+        original_link = os.link
+
+        def fail_link_once(*args: object, **kwargs: object) -> None:
+            nonlocal link_calls
+            link_calls += 1
+            if link_calls == 1:
+                raise OSError("injected one-time link failure")
+            cast(Any, original_link)(*args, **kwargs)
+
+        monkeypatch.setattr(production_driver_module.os, "link", fail_link_once)
+        expected_publication_code = "UNIT_EVIDENCE_BLOB_PERSIST_FAILED"
+
+    adapter = production_driver_module.FixedLiveSmokeAdapterV1(
+        port, seal=production_driver_module._MODULE_SEAL
+    )
+    context = _context()
+    with pytest.raises(ProductionDriverError):
+        adapter.run_host(
+            PilotHostV1.QWEN3_VL,
+            _smoke_plan(tmp_path, PilotHostV1.QWEN3_VL),
+            _resources(tmp_path)[0],
+            _live_stages(),
+            context,
+            _Lease(context.manifest_sha256),
+        )
+
+    outer_raw = adapter.failure_evidence_preimage(RunStageV1.QWEN_LIVE_SMOKE)
+    assert outer_raw is not None
+    outer = cast(dict[str, Any], json.loads(outer_raw))
+    assert outer["status"] == "FAILED"
+    unit_failure = cast(dict[str, Any], outer["unit_failure_evidence"])
+    _assert_full_large_failure_evidence(
+        unit_failure,
+        request=large_legal_rubric_provider_request,
+        publication_failure_code=expected_publication_code,
+    )
+    assert adapter.evidence_for_stage(RunStageV1.QWEN_LIVE_SMOKE) is None
+    assert events == [
+        "cleanup-dispatch-authorized",
+        "teardown",
+        "environment-close",
+        "agent-done",
+        "client-close",
+        "collector-end-task",
+        "collector-finish-attempt",
+        "collector-finalize",
+    ]
+    assert created_states
+    assert port._unpublished_unit_evidence == {}
+    if fault_mode not in {"one_time_link", "one_time_readback"}:
+        assert outer["failure_phase"] == "CLEANUP"
+        assert port._unit_journals == {}
+        assert created_states[0].unit_id in port._units
+        assert unit_failure["cleanup_recovery_outcome"]["outcome"] == "SUCCEEDED"
+    else:
+        assert outer["failure_phase"] == "DISPATCH"
+        if fault_mode == "one_time_link":
+            assert link_calls >= 2
+        else:
+            assert successful_readbacks >= 3
+        assert created_states[0].unit_id not in port._units
+        assert len(port._unit_journals) == 1
+        archived = next(iter(port._unit_journals.values()))
+        assert len(archived) < 4 * 1024 * 1024
+    if fault_mode in {"one_time_readback", "persistent_readback"}:
+        blob_paths = tuple(audit_sink.root.glob("*.production-unit-evidence-blob.v1.json"))
+        assert blob_paths
+        assert all(path.is_file() and path.stat().st_mode & 0o777 == 0o600 for path in blob_paths)
+        assert tuple(audit_sink.root.glob("*.tmp")) == ()
+
+    output_root = tmp_path / "independent-executor-failure"
+    output = live_executor_module.AtomicExternalOutputTransactionV1(
+        output_root=output_root,
+        repository_root=Path(__file__).resolve().parents[4],
+        run_id="large-proof-run",
+        source_commit="b" * 40,
+        manifest_sha256="a" * 64,
+    )
+    output.fail(
+        failed_stage=RunStageV1.QWEN_LIVE_SMOKE,
+        failure_code="STAGE_ADAPTER_FAILED",
+        stage_failure_evidence_preimage=outer_raw,
+    )
+    durable_failure_raw = (output_root / "failure.json").read_bytes()
+    durable_failure = cast(dict[str, Any], json.loads(durable_failure_raw))
+    assert durable_failure["status"] == "FAILED"
+    assert durable_failure["stage_failure_evidence"] == outer
+    assert durable_failure["stage_failure_evidence_sha256"] == hashlib.sha256(outer_raw).hexdigest()
+    assert (output_root / "failure.json").stat().st_mode & 0o777 == 0o600
 
 
 def test_production_factory_requires_exact_explicit_dependencies() -> None:

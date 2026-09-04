@@ -14,9 +14,10 @@ never copied into the hash-only terminal section.
 The external sink is two-phase.  ``begin`` creates and fsyncs an owner-only
 0600 transaction before actor-provider dispatch.  ``commit`` atomically
 publishes the terminal record under an owner-only 0700 directory.  A failed
-begin therefore prevents a transformed request from reaching the provider;
-a failed terminal commit is observable and cannot be replaced by a fabricated
-hash or success flag.
+begin prevents a transformed request from reaching the provider and creates a
+module-sealed recovery receipt containing the complete detached pre-provider
+preimage for the outer durable journal.  A failed terminal commit is likewise
+observable and cannot be replaced by a fabricated hash or success flag.
 """
 
 from __future__ import annotations
@@ -81,16 +82,21 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptReceiptV1,
     LiveAttemptRoleV1,
     LiveAttemptStatusV1,
+    live_attempt_authority_sha256,
     live_attempt_receipt_projection,
     live_attempt_receipt_root_sha256,
     live_attempt_receipt_sha256,
     snapshot_live_attempt_receipt,
 )
 from mobile_world.runtime.sentinel.r2_4.live_policy import (
+    LiveHistoryPolicyAttemptRequestAnchorV1,
     OwnerAuthorizedLivePerCallPolicyV1,
     ResolvedLivePolicyCallBindingV1,
+    live_history_policy_attempt_request_proof_projection,
     resolved_live_policy_call_binding_projection,
     resolved_live_policy_call_binding_sha256,
+    snapshot_live_history_policy_attempt_request_anchor,
+    validate_live_history_policy_request_proof_projection_v1,
     validate_live_rubric_cross_bindings_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.orchestration import (
@@ -116,6 +122,7 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LiveRubricError,
     LiveRubricExecutionScopeV1,
     R24RubricBackendExtensionDescriptorV1,
+    live_rubric_attempt_constraint_binding_projection,
     live_rubric_attempt_request_proof_projection,
     live_rubric_call_receipt_projection,
     live_rubric_call_receipt_sha256,
@@ -123,6 +130,7 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     snapshot_live_rubric_attempt_request_anchor,
     snapshot_live_rubric_call_receipt,
     snapshot_r24_rubric_backend_extension_descriptor,
+    validate_live_rubric_request_proof_projection_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.run_fatal import (
     ProductionRunFatalError,
@@ -145,15 +153,11 @@ PRODUCTION_RUNTIME_AUDIT_FAILURE_SCHEMA_VERSION = (
 PRODUCTION_RUNTIME_AUDIT_FAILURE_RECEIPT_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-production-audit-failure-receipt/v1"
 )
-_BEGIN_FAILURE_CODES_WITHOUT_REQUEST_ANCHOR = frozenset(
-    {
-        "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
-        "PROVIDER_CHILD_START_FAILED",
-        "PROVIDER_CHILD_READY_FAILED",
-    }
-)
 PRODUCTION_RUNTIME_AUDIT_COMMIT_FAILURE_RECEIPT_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-production-audit-commit-failure-receipt/v1"
+)
+PRODUCTION_RUNTIME_AUDIT_ADMISSION_FAILURE_RECEIPT_SCHEMA_VERSION = (
+    "mobileworld.runtime.sentinel-r2.4-production-audit-admission-failure-receipt/v1"
 )
 PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-production-actor-provider-attempt/v1"
@@ -178,6 +182,7 @@ _DETAIL_SEAL = object()
 _RECEIPT_SEAL = object()
 _FAILURE_RECEIPT_SEAL = object()
 _COMMIT_FAILURE_RECEIPT_SEAL = object()
+_ADMISSION_FAILURE_RECEIPT_SEAL = object()
 
 
 class ProductionRuntimeAuditError(R24ContractError):
@@ -211,6 +216,39 @@ class ProductionRuntimeAuditTerminalKindV1(StrEnum):
 
 class ProductionRuntimeAuditPublicationStatusV1(StrEnum):
     COMMIT_OUTCOME_UNKNOWN = "COMMIT_OUTCOME_UNKNOWN"
+    ADMISSION_OUTCOME_UNKNOWN = "ADMISSION_OUTCOME_UNKNOWN"
+
+
+class ProductionRuntimeAuditAdmissionStageV1(StrEnum):
+    """Narrow stage at which pre-provider sink admission stopped."""
+
+    SINK_BEGIN = "SINK_BEGIN"
+    ROOT_OPEN = "ROOT_OPEN"
+    DESTINATION_CHECK = "DESTINATION_CHECK"
+    TEMPORARY_CREATE = "TEMPORARY_CREATE"
+    ADMISSION_WRITE = "ADMISSION_WRITE"
+    ADMISSION_FILE_FSYNC = "ADMISSION_FILE_FSYNC"
+    ADMISSION_DIRECTORY_FSYNC = "ADMISSION_DIRECTORY_FSYNC"
+    TRANSACTION_BINDING = "TRANSACTION_BINDING"
+
+
+class ProductionRuntimeAuditSinkAdmissionError(ProductionRuntimeAuditError):
+    """Typed, content-free signal from a staged external-sink ``begin``."""
+
+    def __init__(
+        self,
+        stage: ProductionRuntimeAuditAdmissionStageV1,
+        sink_exception_type: str,
+    ) -> None:
+        if type(stage) is not ProductionRuntimeAuditAdmissionStageV1:
+            raise TypeError("production audit admission stage type differs")
+        _require_id(sink_exception_type, "sink_exception_type", semantic=True)
+        self.admission_stage = stage
+        self.sink_exception_type = sink_exception_type
+        super().__init__(
+            "AUDIT_SINK_ADMISSION_FAILED",
+            f"production audit sink admission failed at {stage.value}",
+        )
 
 
 def _require_sha256(value: object, label: str) -> str:
@@ -233,6 +271,15 @@ def _canonical_snapshot(value: JsonValue) -> JsonValue:
         raise ProductionRuntimeAuditError(
             "NON_CANONICAL_JSON", "production audit input is not canonical JSON"
         ) from exc
+
+
+def _exception_type_label(exc: Exception) -> str:
+    """Return a bounded class label without persisting an exception message."""
+
+    label = type(exc).__name__
+    if _SAFE_ID.fullmatch(label) is None:
+        return "Exception"
+    return label
 
 
 def _overlay_projection(value: RuntimeCodecOverlayDeclarationV1) -> dict[str, JsonValue]:
@@ -355,7 +402,7 @@ def _rubric_request_proof_detail_projection(
         if any(_rubric_attempt_requires_request_anchor(value) for value in rubric_attempts):
             raise ProductionRuntimeAuditError(
                 "RUBRIC_CROSS_BINDING_MISMATCH",
-                "begin-success rubric attempt has no durable request proof",
+                "formed rubric attempt has no durable request proof",
             )
         return []
     if extension is None:
@@ -395,6 +442,41 @@ def _rubric_request_proof_detail_projection(
                 strict=True,
             )
         ]
+        for proof, attempt, anchor in zip(
+            proofs,
+            rubric_attempts[: len(proofs)],
+            trusted_anchors,
+            strict=True,
+        ):
+            validate_live_rubric_request_proof_projection_v1(
+                proof,
+                attempt_receipt=attempt,
+                expected_attempt_order=cast(
+                    int, cast(dict[str, JsonValue], proof)["attempt_order"]
+                ),
+                expected_attempt_authority_sha256=live_attempt_authority_sha256(
+                    anchor.attempt_authority
+                ),
+                expected_constraint_binding_sha256=canonical_sha256(
+                    cast(
+                        JsonValue,
+                        live_rubric_attempt_constraint_binding_projection(
+                            anchor.constraint_binding
+                        ),
+                    )
+                ),
+                expected_manifest_sha256=anchor.attempt_authority.manifest_sha256,
+                expected_preflight_sha256=anchor.attempt_authority.preflight_sha256,
+                expected_case_execution_lease_sha256=(
+                    anchor.attempt_authority.case_execution_lease_sha256
+                ),
+                expected_stage_sha256=anchor.attempt_authority.stage_sha256,
+                expected_pricing_binding_sha256=(anchor.attempt_authority.pricing_binding_sha256),
+                expected_transport_binding_sha256=(
+                    anchor.attempt_authority.transport_binding_sha256
+                ),
+                expected_request_sha256=anchor.attempt_authority.request_sha256,
+            )
         tracking_roots = tuple(
             cast(dict[str, JsonValue], proof)["tracking_packet_sha256"]
             for proof in proofs
@@ -416,13 +498,84 @@ def _rubric_request_proof_detail_projection(
 
 
 def _rubric_attempt_requires_request_anchor(value: LiveAttemptReceiptV1) -> bool:
-    """Distinguish a returned callable from failures inside ``runner.begin``."""
+    """Every terminal receipt proves that an attempt authority was formed."""
 
-    if value.dispatch_count != 0:
-        return True
-    if value.status is LiveAttemptStatusV1.FAILED:
-        return value.failure_code not in _BEGIN_FAILURE_CODES_WITHOUT_REQUEST_ANCHOR
+    snapshot_live_attempt_receipt(value)
     return True
+
+
+def _history_request_proof_detail_projection(
+    anchor: LiveHistoryPolicyAttemptRequestAnchorV1 | None,
+    attempts: tuple[LiveAttemptReceiptV1, ...],
+    expected_evidence_packet_sha256: str | None,
+) -> JsonValue:
+    """Persist one complete history request proof, or an exact absent census."""
+
+    history_attempts = tuple(
+        snapshot_live_attempt_receipt(value)
+        for value in attempts
+        if value.role is LiveAttemptRoleV1.HISTORY_POLICY
+    )
+    if not history_attempts:
+        if anchor is not None:
+            raise ProductionRuntimeAuditError(
+                "HISTORY_REQUEST_PROOF_MISMATCH",
+                "history request proof exists without an attempt",
+            )
+        return None
+    if len(history_attempts) != 1 or anchor is None:
+        raise ProductionRuntimeAuditError(
+            "HISTORY_REQUEST_PROOF_MISMATCH",
+            "history attempt lacks one complete durable request proof",
+        )
+    try:
+        trusted = snapshot_live_history_policy_attempt_request_anchor(anchor)
+        if (
+            expected_evidence_packet_sha256 is not None
+            and trusted.coordinator_evidence_packet_sha256 != expected_evidence_packet_sha256
+        ):
+            raise ProductionRuntimeAuditError(
+                "HISTORY_REQUEST_PROOF_MISMATCH",
+                "history request proof differs from the Coordinator evidence root",
+            )
+        attempt = history_attempts[0]
+        proof = cast(
+            JsonValue,
+            live_history_policy_attempt_request_proof_projection(
+                trusted,
+                attempt_receipt=attempt,
+            ),
+        )
+        validate_live_history_policy_request_proof_projection_v1(
+            proof,
+            attempt_receipt=attempt,
+            expected_attempt_authority_sha256=live_attempt_authority_sha256(
+                trusted.attempt_authority
+            ),
+            expected_constraint_binding_sha256=canonical_sha256(
+                cast(
+                    JsonValue,
+                    live_rubric_attempt_constraint_binding_projection(trusted.constraint_binding),
+                )
+            ),
+            expected_manifest_sha256=trusted.attempt_authority.manifest_sha256,
+            expected_preflight_sha256=trusted.attempt_authority.preflight_sha256,
+            expected_case_execution_lease_sha256=(
+                trusted.attempt_authority.case_execution_lease_sha256
+            ),
+            expected_stage_sha256=trusted.attempt_authority.stage_sha256,
+            expected_pricing_binding_sha256=(trusted.attempt_authority.pricing_binding_sha256),
+            expected_transport_binding_sha256=(trusted.attempt_authority.transport_binding_sha256),
+            expected_request_sha256=trusted.attempt_authority.request_sha256,
+        )
+        return proof
+    except ProductionRuntimeAuditError:
+        raise
+    except Exception as exc:
+        raise ProductionRuntimeAuditError(
+            "HISTORY_REQUEST_PROOF_MISMATCH",
+            "durable history request proof could not be reconstructed",
+        ) from exc
 
 
 def _collector_artifact_locator_projection(
@@ -1600,15 +1753,61 @@ class ProductionRuntimeAuditCommitFailureReceiptV1:
             )
 
 
-def production_runtime_audit_commit_failure_receipt_projection(
+def _snapshot_production_runtime_audit_commit_failure_receipt(
     value: ProductionRuntimeAuditCommitFailureReceiptV1,
-) -> dict[str, JsonValue]:
+) -> ProductionRuntimeAuditCommitFailureReceiptV1:
+    """Rebuild and detach one terminal-publication recovery receipt."""
+
     if type(value) is not ProductionRuntimeAuditCommitFailureReceiptV1:
         raise ProductionRuntimeAuditError(
             "UNTRUSTED_TYPE", "audit commit-failure receipt type differs"
         )
     terminal = value.attempted_terminal_receipt
-    if value.terminal_kind is ProductionRuntimeAuditTerminalKindV1.ACTION_EXECUTION:
+    if type(terminal) is ProductionRuntimeAuditReceiptV1:
+        trusted_terminal: ProductionRuntimeAuditReceiptV1 | ProductionRuntimeAuditFailureReceiptV1
+        trusted_terminal = ProductionRuntimeAuditReceiptV1(
+            **{item.name: getattr(terminal, item.name) for item in fields(terminal)},
+            _seal=_RECEIPT_SEAL,
+        )
+    elif type(terminal) is ProductionRuntimeAuditFailureReceiptV1:
+        trusted_terminal = ProductionRuntimeAuditFailureReceiptV1(
+            **{item.name: getattr(terminal, item.name) for item in fields(terminal)},
+            _seal=_FAILURE_RECEIPT_SEAL,
+        )
+    else:
+        raise ProductionRuntimeAuditError(
+            "UNTRUSTED_TYPE", "audit commit-failure terminal receipt type differs"
+        )
+    trusted_attempts = tuple(
+        ProductionActorProviderAttemptV1(
+            **{item.name: getattr(attempt, item.name) for item in fields(attempt)}
+        )
+        for attempt in value.actor_provider_attempts
+    )
+    return ProductionRuntimeAuditCommitFailureReceiptV1(
+        logical_call_id=value.logical_call_id,
+        terminal_kind=value.terminal_kind,
+        publication_status=value.publication_status,
+        failure_phase=value.failure_phase,
+        failure_code=value.failure_code,
+        attempted_terminal_receipt=trusted_terminal,
+        attempted_terminal_receipt_sha256=value.attempted_terminal_receipt_sha256,
+        pre_provider=value.pre_provider,
+        actor_provider_attempts=trusted_attempts,
+        parsed_action=(
+            None if value.parsed_action is None else _canonical_snapshot(value.parsed_action)
+        ),
+        schema_version=value.schema_version,
+        _seal=_COMMIT_FAILURE_RECEIPT_SEAL,
+    )
+
+
+def production_runtime_audit_commit_failure_receipt_projection(
+    value: ProductionRuntimeAuditCommitFailureReceiptV1,
+) -> dict[str, JsonValue]:
+    trusted = _snapshot_production_runtime_audit_commit_failure_receipt(value)
+    terminal = trusted.attempted_terminal_receipt
+    if trusted.terminal_kind is ProductionRuntimeAuditTerminalKindV1.ACTION_EXECUTION:
         if type(terminal) is not ProductionRuntimeAuditReceiptV1:
             raise ProductionRuntimeAuditError(
                 "UNTRUSTED_TYPE", "action terminal receipt type differs"
@@ -1623,24 +1822,24 @@ def production_runtime_audit_commit_failure_receipt_projection(
     return {
         "actor_provider_attempts": [
             production_actor_provider_attempt_projection(item)
-            for item in value.actor_provider_attempts
+            for item in trusted.actor_provider_attempts
         ],
         "attempted_terminal_receipt": cast(JsonValue, terminal_projection),
-        "attempted_terminal_receipt_sha256": value.attempted_terminal_receipt_sha256,
-        "failure_code": value.failure_code,
-        "failure_phase": value.failure_phase,
-        "logical_call_id": value.logical_call_id,
+        "attempted_terminal_receipt_sha256": trusted.attempted_terminal_receipt_sha256,
+        "failure_code": trusted.failure_code,
+        "failure_phase": trusted.failure_phase,
+        "logical_call_id": trusted.logical_call_id,
         "parsed_action": (
-            None if value.parsed_action is None else _canonical_snapshot(value.parsed_action)
+            None if trusted.parsed_action is None else _canonical_snapshot(trusted.parsed_action)
         ),
         "pre_provider": cast(
             JsonValue,
-            production_runtime_audit_pre_provider_projection(value.pre_provider),
+            production_runtime_audit_pre_provider_projection(trusted.pre_provider),
         ),
-        "publication_status": value.publication_status.value,
+        "publication_status": trusted.publication_status.value,
         "recovery_required": True,
-        "schema_version": value.schema_version,
-        "terminal_kind": value.terminal_kind.value,
+        "schema_version": trusted.schema_version,
+        "terminal_kind": trusted.terminal_kind.value,
     }
 
 
@@ -1649,6 +1848,115 @@ def production_runtime_audit_commit_failure_receipt_sha256(
 ) -> str:
     return canonical_sha256(
         cast(JsonValue, production_runtime_audit_commit_failure_receipt_projection(value))
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionRuntimeAuditAdmissionFailureReceiptV1:
+    """Owner-only recovery preimage when pre-provider admission has no result.
+
+    A sink may have written and fsynced some bytes before ``begin`` raises, so
+    the publication outcome is conservatively unknown.  This receipt is not a
+    successful admission and cannot open actor transport.  It retains the
+    complete detached pre-provider projection so an outer recovery journal can
+    durably preserve every already-built rubric request proof.
+    """
+
+    logical_call_id: str
+    publication_status: ProductionRuntimeAuditPublicationStatusV1
+    failure_phase: str
+    failure_code: str
+    admission_stage: ProductionRuntimeAuditAdmissionStageV1
+    sink_exception_type: str
+    pre_provider: ProductionRuntimeAuditPreProviderV1
+    pre_provider_sha256: str
+    sentinel_receipt_sha256: str | None
+    schema_version: str = PRODUCTION_RUNTIME_AUDIT_ADMISSION_FAILURE_RECEIPT_SCHEMA_VERSION
+    _seal: InitVar[object | None] = None
+
+    def __post_init__(self, _seal: object | None) -> None:
+        if _seal is not _ADMISSION_FAILURE_RECEIPT_SEAL:
+            raise PermissionError("production audit admission-failure receipt is module-owned")
+        if self.schema_version != PRODUCTION_RUNTIME_AUDIT_ADMISSION_FAILURE_RECEIPT_SCHEMA_VERSION:
+            raise ProductionRuntimeAuditError(
+                "UNKNOWN_SCHEMA_VERSION", "admission-failure receipt schema differs"
+            )
+        _require_id(self.logical_call_id, "logical_call_id")
+        if (
+            self.publication_status
+            is not ProductionRuntimeAuditPublicationStatusV1.ADMISSION_OUTCOME_UNKNOWN
+            or type(self.admission_stage) is not ProductionRuntimeAuditAdmissionStageV1
+            or self.failure_phase != "AUDIT_PRE_PROVIDER_ADMISSION"
+            or self.failure_code != "AUDIT_PRE_PROVIDER_ADMISSION_FAILED"
+        ):
+            raise ProductionRuntimeAuditError(
+                "INVALID_ADMISSION_FAILURE", "admission-failure classification differs"
+            )
+        _require_id(self.sink_exception_type, "sink_exception_type", semantic=True)
+        _require_sha256(self.pre_provider_sha256, "pre_provider_sha256")
+        if self.sentinel_receipt_sha256 is not None:
+            _require_sha256(self.sentinel_receipt_sha256, "sentinel_receipt_sha256")
+        trusted_pre_provider = _snapshot_production_runtime_audit_pre_provider(self.pre_provider)
+        if (
+            trusted_pre_provider.logical_call_id != self.logical_call_id
+            or production_runtime_audit_pre_provider_sha256(trusted_pre_provider)
+            != self.pre_provider_sha256
+        ):
+            raise ProductionRuntimeAuditError(
+                "TRACE_BINDING_MISMATCH", "admission-failure pre-provider proof differs"
+            )
+        object.__setattr__(self, "pre_provider", trusted_pre_provider)
+
+
+def _snapshot_production_runtime_audit_admission_failure_receipt(
+    value: ProductionRuntimeAuditAdmissionFailureReceiptV1,
+) -> ProductionRuntimeAuditAdmissionFailureReceiptV1:
+    if type(value) is not ProductionRuntimeAuditAdmissionFailureReceiptV1:
+        raise ProductionRuntimeAuditError(
+            "UNTRUSTED_TYPE", "audit admission-failure receipt type differs"
+        )
+    return ProductionRuntimeAuditAdmissionFailureReceiptV1(
+        logical_call_id=value.logical_call_id,
+        publication_status=value.publication_status,
+        failure_phase=value.failure_phase,
+        failure_code=value.failure_code,
+        admission_stage=value.admission_stage,
+        sink_exception_type=value.sink_exception_type,
+        pre_provider=value.pre_provider,
+        pre_provider_sha256=value.pre_provider_sha256,
+        sentinel_receipt_sha256=value.sentinel_receipt_sha256,
+        schema_version=value.schema_version,
+        _seal=_ADMISSION_FAILURE_RECEIPT_SEAL,
+    )
+
+
+def production_runtime_audit_admission_failure_receipt_projection(
+    value: ProductionRuntimeAuditAdmissionFailureReceiptV1,
+) -> dict[str, JsonValue]:
+    trusted = _snapshot_production_runtime_audit_admission_failure_receipt(value)
+    return {
+        "admission_stage": trusted.admission_stage.value,
+        "failure_code": trusted.failure_code,
+        "failure_phase": trusted.failure_phase,
+        "logical_call_id": trusted.logical_call_id,
+        "pre_provider": cast(
+            JsonValue,
+            production_runtime_audit_pre_provider_projection(trusted.pre_provider),
+        ),
+        "pre_provider_sha256": trusted.pre_provider_sha256,
+        "publication_status": trusted.publication_status.value,
+        "recovery_required": True,
+        "schema_version": trusted.schema_version,
+        "sentinel_receipt_sha256": trusted.sentinel_receipt_sha256,
+        "sink_exception_type": trusted.sink_exception_type,
+    }
+
+
+def production_runtime_audit_admission_failure_receipt_sha256(
+    value: ProductionRuntimeAuditAdmissionFailureReceiptV1,
+) -> str:
+    return canonical_sha256(
+        cast(JsonValue, production_runtime_audit_admission_failure_receipt_projection(value))
     )
 
 
@@ -1974,7 +2282,14 @@ class ExternalProductionRuntimeAuditSinkV1:
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         descriptor = os.open(self._root, flags)
-        self._validate_open_root(descriptor)
+        try:
+            self._validate_open_root(descriptor)
+        except Exception:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            raise
         return descriptor
 
     def _validate_open_root(self, descriptor: int) -> None:
@@ -2009,8 +2324,10 @@ class ExternalProductionRuntimeAuditSinkV1:
             self._active.add(logical_call_id)
         directory_fd = -1
         file_fd = -1
+        admission_stage = ProductionRuntimeAuditAdmissionStageV1.ROOT_OPEN
         try:
             directory_fd = self._open_root()
+            admission_stage = ProductionRuntimeAuditAdmissionStageV1.DESTINATION_CHECK
             try:
                 os.stat(destination, dir_fd=directory_fd, follow_symlinks=False)
             except FileNotFoundError:
@@ -2020,6 +2337,7 @@ class ExternalProductionRuntimeAuditSinkV1:
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
             if hasattr(os, "O_NOFOLLOW"):
                 flags |= os.O_NOFOLLOW
+            admission_stage = ProductionRuntimeAuditAdmissionStageV1.TEMPORARY_CREATE
             file_fd = os.open(temporary, flags, 0o600, dir_fd=directory_fd)
             admission = canonical_json_bytes(
                 cast(
@@ -2031,8 +2349,11 @@ class ExternalProductionRuntimeAuditSinkV1:
                     },
                 )
             )
+            admission_stage = ProductionRuntimeAuditAdmissionStageV1.ADMISSION_WRITE
             self._write_all(file_fd, admission)
+            admission_stage = ProductionRuntimeAuditAdmissionStageV1.ADMISSION_FILE_FSYNC
             os.fsync(file_fd)
+            admission_stage = ProductionRuntimeAuditAdmissionStageV1.ADMISSION_DIRECTORY_FSYNC
             os.fsync(directory_fd)
             return _ExternalProductionRuntimeAuditTransactionV1(
                 sink=self,
@@ -2043,7 +2364,7 @@ class ExternalProductionRuntimeAuditSinkV1:
                 temporary=temporary,
                 destination=destination,
             )
-        except Exception:
+        except Exception as exc:
             if file_fd >= 0:
                 try:
                     os.close(file_fd)
@@ -2059,7 +2380,10 @@ class ExternalProductionRuntimeAuditSinkV1:
                 except OSError:
                     pass
             self._finish(logical_call_id, committed=False)
-            raise
+            raise ProductionRuntimeAuditSinkAdmissionError(
+                admission_stage,
+                _exception_type_label(exc),
+            ) from exc
 
     def _finish(self, logical_call_id: str, *, committed: bool) -> None:
         with self._lock:
@@ -2119,10 +2443,33 @@ class ProductionRuntimeAuditV1:
         self._completed: dict[str, ProductionRuntimeAuditReceiptV1] = {}
         self._failures: dict[str, ProductionRuntimeAuditFailureReceiptV1] = {}
         self._commit_failures: dict[str, ProductionRuntimeAuditCommitFailureReceiptV1] = {}
+        self._admission_failures: dict[str, ProductionRuntimeAuditAdmissionFailureReceiptV1] = {}
         self._completed_order: list[str] = []
         self._failure_order: list[str] = []
         self._commit_failure_order: list[str] = []
+        self._admission_failure_order: list[str] = []
         self._lock = Lock()
+
+    def _record_admission_failure(
+        self,
+        receipt: ProductionRuntimeAuditAdmissionFailureReceiptV1,
+    ) -> None:
+        """Retain one pre-provider recovery proof without admitting transport."""
+
+        with self._lock:
+            logical_call_id = receipt.logical_call_id
+            if (
+                logical_call_id in self._pending
+                or logical_call_id in self._completed
+                or logical_call_id in self._failures
+                or logical_call_id in self._commit_failures
+                or logical_call_id in self._admission_failures
+            ):
+                raise ProductionRuntimeAuditError(
+                    "DUPLICATE_AUDIT_CALL", "admission-failure recovery receipt repeats"
+                )
+            self._admission_failures[logical_call_id] = receipt
+            self._admission_failure_order.append(logical_call_id)
 
     def _record_commit_failure(
         self,
@@ -2136,6 +2483,7 @@ class ProductionRuntimeAuditV1:
                 logical_call_id in self._completed
                 or logical_call_id in self._failures
                 or logical_call_id in self._commit_failures
+                or logical_call_id in self._admission_failures
             ):
                 raise ProductionRuntimeAuditError(
                     "DUPLICATE_AUDIT_CALL", "terminal recovery receipt repeats"
@@ -2257,6 +2605,9 @@ class ProductionRuntimeAuditV1:
         rubric_attempt_request_anchors = self._policy.rubric_attempt_request_anchors_for_call(
             logical_call_id
         )
+        history_attempt_request_anchor = (
+            self._policy.history_policy_attempt_request_anchor_for_call(logical_call_id)
+        )
         rubric_backend_extension = self._policy.rubric_backend_extension_descriptor()
         coordinated = self._policy.coordinated_record_for_call(logical_call_id)
         self._validate_live_bindings(
@@ -2266,6 +2617,7 @@ class ProductionRuntimeAuditV1:
             binding=binding,
             attempts=attempts,
             rubric_attempt_request_anchors=rubric_attempt_request_anchors,
+            history_attempt_request_anchor=history_attempt_request_anchor,
             rubric_call_receipts=rubric_call_receipts,
             rubric_call_trust_anchors=rubric_call_trust_anchors,
             rubric_backend_extension=rubric_backend_extension,
@@ -2334,6 +2686,13 @@ class ProductionRuntimeAuditV1:
                 attempts,
                 rubric_backend_extension,
                 coordinated.tracking_packet_sha256,
+            ),
+            "r2_4_history_policy_request_proof": (
+                _history_request_proof_detail_projection(
+                    history_attempt_request_anchor,
+                    attempts,
+                    coordinated.gpt56_evidence_packet_sha256,
+                )
             ),
             "r2_4_rubric_backend_extension": (
                 r24_rubric_backend_extension_descriptor_projection(rubric_backend_extension)
@@ -2675,9 +3034,11 @@ class ProductionRuntimeAuditV1:
         rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...] = ()
         rubric_call_trust_anchors: tuple[LiveRubricCallTrustAnchorV1, ...] = ()
         rubric_attempt_request_anchors: tuple[LiveRubricAttemptRequestAnchorV1, ...] = ()
+        history_attempt_request_anchor: LiveHistoryPolicyAttemptRequestAnchorV1 | None = None
         rubric_backend_extension: R24RubricBackendExtensionDescriptorV1 | None = None
         expected_collector_stimulus_sha256: str | None = None
         expected_tracking_packet_sha256: str | None = None
+        expected_history_evidence_packet_sha256: str | None = None
         actor_call_index: int | None = None
         policy_failure_code: str | None = None
         try:
@@ -2713,6 +3074,9 @@ class ProductionRuntimeAuditV1:
                 rubric_attempt_request_anchors = (
                     self._policy.rubric_attempt_request_anchors_for_call(logical_call_id)
                 )
+                history_attempt_request_anchor = (
+                    self._policy.history_policy_attempt_request_anchor_for_call(logical_call_id)
+                )
                 rubric_backend_extension = snapshot_r24_rubric_backend_extension_descriptor(
                     self._policy.rubric_backend_extension_descriptor()
                 )
@@ -2721,6 +3085,9 @@ class ProductionRuntimeAuditV1:
                 )
                 expected_tracking_packet_sha256 = (
                     self._policy.rubric_tracking_packet_sha256_for_call(logical_call_id)
+                )
+                expected_history_evidence_packet_sha256 = (
+                    self._policy.history_evidence_packet_sha256_for_call(logical_call_id)
                 )
                 actor_call_index = self._policy.actor_call_index_for_call(logical_call_id)
                 policy_failure_code = self._policy.failure_for_call(logical_call_id)
@@ -2733,9 +3100,11 @@ class ProductionRuntimeAuditV1:
                 rubric_call_receipts = ()
                 rubric_call_trust_anchors = ()
                 rubric_attempt_request_anchors = ()
+                history_attempt_request_anchor = None
                 rubric_backend_extension = None
                 expected_collector_stimulus_sha256 = None
                 expected_tracking_packet_sha256 = None
+                expected_history_evidence_packet_sha256 = None
                 actor_call_index = None
                 policy_failure_code = None
         live_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
@@ -2771,6 +3140,7 @@ class ProductionRuntimeAuditV1:
                     )
                 ),
                 allow_incomplete=True,
+                history_policy_attempt_request_anchor=history_attempt_request_anchor,
             )
         except R24ContractError as exc:
             raise ProductionRuntimeAuditError(
@@ -2819,6 +3189,13 @@ class ProductionRuntimeAuditV1:
                 attempts,
                 rubric_backend_extension,
                 expected_tracking_packet_sha256,
+            ),
+            "r2_4_history_policy_request_proof": (
+                _history_request_proof_detail_projection(
+                    history_attempt_request_anchor,
+                    attempts,
+                    expected_history_evidence_packet_sha256,
+                )
             ),
             "r2_4_rubric_backend_extension": (
                 None
@@ -3152,6 +3529,7 @@ class ProductionRuntimeAuditV1:
                 rubric_backend_extension,
                 coordinated.tracking_packet_sha256,
             ),
+            "r2_4_history_policy_request_proof": None,
             "r2_4_rubric_backend_extension": (
                 r24_rubric_backend_extension_descriptor_projection(rubric_backend_extension)
             ),
@@ -3234,18 +3612,88 @@ class ProductionRuntimeAuditV1:
         *,
         sentinel_receipt_sha256: str | None,
     ) -> None:
+        # Retain a private detached recovery preimage before the sink sees a
+        # second detached copy.  A failing/malicious sink therefore cannot
+        # mutate nested request-proof data and erase the recovery record.
+        pre = _snapshot_production_runtime_audit_pre_provider(pre)
+        sink_pre = _snapshot_production_runtime_audit_pre_provider(pre)
         logical_call_id = pre.logical_call_id
-        transaction = self._sink_begin(pre)
-        if (
-            not isinstance(transaction, ProductionRuntimeAuditTransactionV1)  # type: ignore[redundant-expr]
-            or transaction.logical_call_id != logical_call_id
-            or transaction.pre_provider_sha256 != production_runtime_audit_pre_provider_sha256(pre)
-        ):
+        pre_provider_sha256 = production_runtime_audit_pre_provider_sha256(pre)
+        with self._lock:
+            if (
+                logical_call_id in self._pending
+                or logical_call_id in self._completed
+                or logical_call_id in self._failures
+                or logical_call_id in self._commit_failures
+                or logical_call_id in self._admission_failures
+            ):
+                raise ProductionRuntimeAuditError(
+                    "DUPLICATE_AUDIT_CALL", "logical call repeats before admission"
+                )
+
+        try:
+            transaction = self._sink_begin(sink_pre)
+        except Exception as exc:
+            if type(exc) is ProductionRuntimeAuditSinkAdmissionError:
+                admission_stage = exc.admission_stage
+                sink_exception_type = exc.sink_exception_type
+            else:
+                admission_stage = ProductionRuntimeAuditAdmissionStageV1.SINK_BEGIN
+                sink_exception_type = _exception_type_label(exc)
+            recovery = ProductionRuntimeAuditAdmissionFailureReceiptV1(
+                logical_call_id=logical_call_id,
+                publication_status=(
+                    ProductionRuntimeAuditPublicationStatusV1.ADMISSION_OUTCOME_UNKNOWN
+                ),
+                failure_phase="AUDIT_PRE_PROVIDER_ADMISSION",
+                failure_code="AUDIT_PRE_PROVIDER_ADMISSION_FAILED",
+                admission_stage=admission_stage,
+                sink_exception_type=sink_exception_type,
+                pre_provider=pre,
+                pre_provider_sha256=pre_provider_sha256,
+                sentinel_receipt_sha256=sentinel_receipt_sha256,
+                _seal=_ADMISSION_FAILURE_RECEIPT_SEAL,
+            )
+            self._record_admission_failure(recovery)
+            raise ProductionRuntimeAuditError(
+                "AUDIT_PRE_PROVIDER_ADMISSION_FAILED",
+                "production audit pre-provider admission outcome is unknown",
+            ) from exc
+
+        try:
+            transaction_matches = (
+                isinstance(  # type: ignore[redundant-expr]
+                    transaction, ProductionRuntimeAuditTransactionV1
+                )
+                and transaction.logical_call_id == logical_call_id
+                and transaction.pre_provider_sha256 == pre_provider_sha256
+            )
+        except Exception:
+            transaction_matches = False
+        if not transaction_matches:
             try:
                 transaction.abort()
             except Exception:
                 pass
-            raise ProductionRuntimeAuditError("SINK_ADMISSION_MISMATCH", "sink transaction differs")
+            recovery = ProductionRuntimeAuditAdmissionFailureReceiptV1(
+                logical_call_id=logical_call_id,
+                publication_status=(
+                    ProductionRuntimeAuditPublicationStatusV1.ADMISSION_OUTCOME_UNKNOWN
+                ),
+                failure_phase="AUDIT_PRE_PROVIDER_ADMISSION",
+                failure_code="AUDIT_PRE_PROVIDER_ADMISSION_FAILED",
+                admission_stage=(ProductionRuntimeAuditAdmissionStageV1.TRANSACTION_BINDING),
+                sink_exception_type="SinkAdmissionMismatch",
+                pre_provider=pre,
+                pre_provider_sha256=pre_provider_sha256,
+                sentinel_receipt_sha256=sentinel_receipt_sha256,
+                _seal=_ADMISSION_FAILURE_RECEIPT_SEAL,
+            )
+            self._record_admission_failure(recovery)
+            raise ProductionRuntimeAuditError(
+                "AUDIT_PRE_PROVIDER_ADMISSION_FAILED",
+                "production audit sink transaction differs",
+            )
         pending = _PendingProductionAudit(
             pre_provider=pre,
             transaction=transaction,
@@ -3267,6 +3715,7 @@ class ProductionRuntimeAuditV1:
                 or logical_call_id in self._completed
                 or logical_call_id in self._failures
                 or logical_call_id in self._commit_failures
+                or logical_call_id in self._admission_failures
             ):
                 transaction.abort()
                 raise ProductionRuntimeAuditError("DUPLICATE_AUDIT_CALL", "logical call repeats")
@@ -3281,6 +3730,7 @@ class ProductionRuntimeAuditV1:
         binding: ResolvedLivePolicyCallBindingV1,
         attempts: tuple[LiveAttemptReceiptV1, ...],
         rubric_attempt_request_anchors: tuple[LiveRubricAttemptRequestAnchorV1, ...],
+        history_attempt_request_anchor: LiveHistoryPolicyAttemptRequestAnchorV1 | None,
         rubric_call_receipts: tuple[LiveRubricCallReceiptV1, ...],
         rubric_call_trust_anchors: tuple[LiveRubricCallTrustAnchorV1, ...],
         rubric_backend_extension: R24RubricBackendExtensionDescriptorV1,
@@ -3306,6 +3756,7 @@ class ProductionRuntimeAuditV1:
                 actor_call_index=binding.actor_call_index,
                 expect_history_policy=True,
                 allow_incomplete=False,
+                history_policy_attempt_request_anchor=history_attempt_request_anchor,
             )
         except R24ContractError as exc:
             raise ProductionRuntimeAuditError(
@@ -3791,6 +4242,7 @@ class ProductionRuntimeAuditV1:
                 logical_call_id in self._completed
                 or logical_call_id in self._failures
                 or logical_call_id in self._commit_failures
+                or logical_call_id in self._admission_failures
             ):
                 raise ProductionRuntimeAuditError(
                     "DUPLICATE_AUDIT_CALL", "terminal receipt repeats"
@@ -3921,6 +4373,7 @@ class ProductionRuntimeAuditV1:
                 logical_call_id in self._completed
                 or logical_call_id in self._failures
                 or logical_call_id in self._commit_failures
+                or logical_call_id in self._admission_failures
             ):
                 raise ProductionRuntimeAuditError(
                     "DUPLICATE_AUDIT_CALL", "terminal failed receipt repeats"
@@ -3966,7 +4419,20 @@ class ProductionRuntimeAuditV1:
                 "AUDIT_COMMIT_FAILURE_RECEIPT_UNAVAILABLE",
                 "commit-failure recovery receipt is absent",
             )
-        return receipt
+        return _snapshot_production_runtime_audit_commit_failure_receipt(receipt)
+
+    def admission_failure_receipt_for(
+        self, logical_call_id: str
+    ) -> ProductionRuntimeAuditAdmissionFailureReceiptV1:
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            receipt = self._admission_failures.get(logical_call_id)
+        if receipt is None:
+            raise ProductionRuntimeAuditError(
+                "AUDIT_ADMISSION_FAILURE_RECEIPT_UNAVAILABLE",
+                "admission-failure recovery receipt is absent",
+            )
+        return _snapshot_production_runtime_audit_admission_failure_receipt(receipt)
 
     @property
     def latest_failure_receipt(self) -> ProductionRuntimeAuditFailureReceiptV1 | None:
@@ -3989,7 +4455,18 @@ class ProductionRuntimeAuditV1:
         with self._lock:
             if not self._commit_failure_order:
                 return None
-            return self._commit_failures[self._commit_failure_order[-1]]
+            receipt = self._commit_failures[self._commit_failure_order[-1]]
+        return _snapshot_production_runtime_audit_commit_failure_receipt(receipt)
+
+    @property
+    def latest_admission_failure_receipt(
+        self,
+    ) -> ProductionRuntimeAuditAdmissionFailureReceiptV1 | None:
+        with self._lock:
+            if not self._admission_failure_order:
+                return None
+            receipt = self._admission_failures[self._admission_failure_order[-1]]
+        return _snapshot_production_runtime_audit_admission_failure_receipt(receipt)
 
     @property
     def pending_action_logical_call_ids(self) -> tuple[str, ...]:
@@ -4011,6 +4488,7 @@ __all__ = [
     "MemoryProductionRuntimeAuditSinkV1",
     "PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION",
     "PRODUCTION_RUNTIME_AUDIT_DETAIL_SCHEMA_VERSION",
+    "PRODUCTION_RUNTIME_AUDIT_ADMISSION_FAILURE_RECEIPT_SCHEMA_VERSION",
     "PRODUCTION_RUNTIME_AUDIT_COMMIT_FAILURE_RECEIPT_SCHEMA_VERSION",
     "PRODUCTION_RUNTIME_AUDIT_FAILURE_RECEIPT_SCHEMA_VERSION",
     "PRODUCTION_RUNTIME_AUDIT_FAILURE_SCHEMA_VERSION",
@@ -4018,6 +4496,8 @@ __all__ = [
     "PRODUCTION_RUNTIME_AUDIT_RECEIPT_SCHEMA_VERSION",
     "ProductionActorProviderAttemptStatusV1",
     "ProductionActorProviderAttemptV1",
+    "ProductionRuntimeAuditAdmissionFailureReceiptV1",
+    "ProductionRuntimeAuditAdmissionStageV1",
     "ProductionRuntimeAuditDetailV1",
     "ProductionRuntimeAuditCommitFailureReceiptV1",
     "ProductionRuntimeAuditError",
@@ -4028,10 +4508,13 @@ __all__ = [
     "ProductionRuntimeAuditPublicationStatusV1",
     "ProductionRuntimeAuditReceiptV1",
     "ProductionRuntimeAuditSinkV1",
+    "ProductionRuntimeAuditSinkAdmissionError",
     "ProductionRuntimeAuditTerminalKindV1",
     "ProductionRuntimeAuditTransactionV1",
     "ProductionRuntimeAuditV1",
     "production_actor_provider_attempt_projection",
+    "production_runtime_audit_admission_failure_receipt_projection",
+    "production_runtime_audit_admission_failure_receipt_sha256",
     "production_runtime_audit_detail_projection",
     "production_runtime_audit_detail_sha256",
     "production_runtime_audit_commit_failure_receipt_projection",

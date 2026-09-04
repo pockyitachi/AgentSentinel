@@ -1,9 +1,9 @@
-"""One-way production run-fatal latch for unreaped live workers.
+"""One-way production run-fatal latch for unsafe live-attempt terminals.
 
 The latch is deliberately small and module-owned.  It carries no authority and
 cannot make an execution path live; the production driver shares one instance
-across every per-call audit so an unconfirmed worker termination permanently
-blocks the current run.
+across every per-call audit so an unconfirmed worker termination or incomplete
+post-dispatch cost accounting permanently blocks the current run.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import Final
 from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_4.contracts import R24ContractError, canonical_sha256
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    LiveAttemptCostStatusV1,
     LiveAttemptReceiptV1,
     LiveAttemptStatusV1,
     live_attempt_receipt_sha256,
@@ -29,10 +30,15 @@ PRODUCTION_RUN_FATAL_STATE_SCHEMA_VERSION: Final[str] = (
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _RUNTIME_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _LATCH_SEAL: Final[object] = object()
+_TERMINATION_UNCONFIRMED: Final[str] = "TERMINATION_UNCONFIRMED"
+_LIVE_COST_ACCOUNTING_UNKNOWN: Final[str] = "LIVE_COST_ACCOUNTING_UNKNOWN"
+_FATAL_REASONS: Final[frozenset[str]] = frozenset(
+    {_TERMINATION_UNCONFIRMED, _LIVE_COST_ACCOUNTING_UNKNOWN}
+)
 
 
 class ProductionRunFatalError(R24ContractError):
-    """Typed refusal after a production worker cannot be proven terminated."""
+    """Typed refusal after a production attempt makes dispatch unsafe."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +47,7 @@ class ProductionRunFatalStateV1:
 
     logical_call_id: str
     attempt_receipt_sha256: str
-    failure_code: str = "TERMINATION_UNCONFIRMED"
+    failure_code: str = _TERMINATION_UNCONFIRMED
     schema_version: str = PRODUCTION_RUN_FATAL_STATE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -57,7 +63,7 @@ class ProductionRunFatalStateV1:
             or _SHA256.fullmatch(self.attempt_receipt_sha256) is None
         ):
             raise ProductionRunFatalError("INVALID_SHA256", "attempt receipt hash is invalid")
-        if self.failure_code != "TERMINATION_UNCONFIRMED":
+        if type(self.failure_code) is not str or self.failure_code not in _FATAL_REASONS:
             raise ProductionRunFatalError("INVALID_FATAL_REASON", "run-fatal reason differs")
 
 
@@ -78,7 +84,7 @@ class ProductionRunFatalLatchV1:
         logical_call_id: str,
         attempts: tuple[LiveAttemptReceiptV1, ...],
     ) -> ProductionRunFatalStateV1 | None:
-        """Trip on the first exact ``TERMINATION_UNCONFIRMED`` receipt."""
+        """Trip on the first unsafe terminal, with worker uncertainty first."""
 
         if type(attempts) is not tuple:
             raise ProductionRunFatalError("UNTRUSTED_TYPE", "attempts must be an exact tuple")
@@ -93,11 +99,24 @@ class ProductionRunFatalLatchV1:
             ),
             None,
         )
+        failure_code = _TERMINATION_UNCONFIRMED
+        if terminal is None:
+            terminal = next(
+                (
+                    item
+                    for item in trusted
+                    if item.dispatch_count > 0
+                    and item.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+                ),
+                None,
+            )
+            failure_code = _LIVE_COST_ACCOUNTING_UNKNOWN
         if terminal is None:
             return self.state
         candidate = ProductionRunFatalStateV1(
             logical_call_id=logical_call_id,
             attempt_receipt_sha256=live_attempt_receipt_sha256(terminal),
+            failure_code=failure_code,
         )
         with self._lock:
             if self._state is None:
@@ -105,14 +124,23 @@ class ProductionRunFatalLatchV1:
             return self._state
 
     def require_clear(self) -> None:
-        """Fail closed once any worker termination is unconfirmed."""
+        """Fail closed once any unsafe live-attempt terminal was observed."""
 
         with self._lock:
             state = self._state
         if state is not None:
+            if state.failure_code == _TERMINATION_UNCONFIRMED:
+                error_code = "RUN_FATAL_TERMINATION_UNCONFIRMED"
+                message = "a live attempt worker remains unconfirmed; this run cannot dispatch"
+            else:
+                error_code = "RUN_FATAL_LIVE_COST_ACCOUNTING_UNKNOWN"
+                message = (
+                    "a dispatched live attempt lacks exact cost accounting; "
+                    "this run cannot dispatch"
+                )
             raise ProductionRunFatalError(
-                "RUN_FATAL_TERMINATION_UNCONFIRMED",
-                "a live attempt worker remains unconfirmed; this run cannot dispatch",
+                error_code,
+                message,
             )
 
     @property

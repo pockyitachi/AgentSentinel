@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentsentinel.local/schemas/r2_4/rubric_request_proof.v1.schema.json",
   "title": "R2.4 Owner-Only Live Rubric Request Proof v1",
-  "description": "Restricted durable preimage proof for one admitted owner-authorized live rubric attempt. This artifact binds the ordered terminal attempt receipt to the exact task, Collector stimulus, current image when tracking, provider input, and sealed OpenAI Responses request; it must never enter ordinary logs or the public hash-only receipt.",
+  "description": "Restricted durable preimage proof for one admitted owner-authorized live rubric attempt. This artifact binds the full attempt authority and its independently derived deadline/cost constraint to the lease, stages, pricing, transport, exact task, Collector stimulus, current image when tracking, provider input, sealed OpenAI Responses request, and ordered terminal receipt; it must never enter ordinary logs or the public hash-only receipt.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,6 +16,13 @@
     "attempt_status",
     "attempt_dispatch_count",
     "attempt_receipt_sha256",
+    "attempt_authority",
+    "attempt_authority_sha256",
+    "attempt_constraint_binding",
+    "case_execution_lease",
+    "openai_stage",
+    "pricing",
+    "transport_binding",
     "backend_extension_descriptor_sha256",
     "r23_compatibility_descriptor_sha256",
     "collector_stimulus",
@@ -57,6 +64,13 @@
       "maximum": 1
     },
     "attempt_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "attempt_authority": {"$ref": "#/$defs/attemptAuthority"},
+    "attempt_authority_sha256": {"$ref": "#/$defs/sha256"},
+    "attempt_constraint_binding": {"$ref": "#/$defs/attemptConstraintBinding"},
+    "case_execution_lease": {"$ref": "#/$defs/caseExecutionLease"},
+    "openai_stage": {"$ref": "#/$defs/openAIStage"},
+    "pricing": {"$ref": "#/$defs/pricing"},
+    "transport_binding": {"$ref": "#/$defs/transportBinding"},
     "backend_extension_descriptor_sha256": {"$ref": "#/$defs/sha256"},
     "r23_compatibility_descriptor_sha256": {"$ref": "#/$defs/sha256"},
     "collector_stimulus": {"$ref": "#/$defs/collectorStimulus"},
@@ -168,6 +182,206 @@
       "minLength": 1,
       "maxLength": 256,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "attemptAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "actor_request_sha256",
+        "case_id",
+        "case_execution_lease_sha256",
+        "deadline_monotonic_ns",
+        "logical_call_id",
+        "manifest_sha256",
+        "max_cost_usd_micros",
+        "max_output_tokens",
+        "preflight_sha256",
+        "pricing_binding_sha256",
+        "request_sha256",
+        "role",
+        "schema_version",
+        "stage_sha256",
+        "transport_binding_sha256"
+      ],
+      "properties": {
+        "attempt_id": {"$ref": "#/$defs/runtimeId"},
+        "actor_request_sha256": {"$ref": "#/$defs/sha256"},
+        "case_id": {"$ref": "#/$defs/runtimeId"},
+        "case_execution_lease_sha256": {"$ref": "#/$defs/sha256"},
+        "deadline_monotonic_ns": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "logical_call_id": {"$ref": "#/$defs/runtimeId"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "max_cost_usd_micros": {"type": "integer", "minimum": 0, "maximum": 100000000000},
+        "max_output_tokens": {"const": 8192},
+        "preflight_sha256": {"$ref": "#/$defs/sha256"},
+        "pricing_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "request_sha256": {"$ref": "#/$defs/sha256"},
+        "role": {"const": "RUBRIC"},
+        "schema_version": {"const": "mobileworld.runtime.sentinel-r2.4-live-attempt-authority/v1"},
+        "stage_sha256": {"$ref": "#/$defs/sha256"},
+        "transport_binding_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "caseExecutionLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_call_index", "case_id", "execution_scope", "expires_at_utc",
+        "factory_binding_sha256", "host", "issued_at_utc", "manifest_sha256",
+        "mode", "openai_stage_set_sha256", "preflight_report_sha256",
+        "pricing_binding_sha256", "request_sha256", "reset_seed", "schema_version",
+        "stage", "task_id", "task_parameters_sha256"
+      ],
+      "properties": {
+        "actor_call_index": {"type": "integer", "minimum": 1},
+        "case_id": {"$ref": "#/$defs/runtimeId"},
+        "execution_scope": {"const": "OWNER_AUTHORIZED_LIVE"},
+        "expires_at_utc": {"type": "string", "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+        "factory_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "host": {"enum": ["QWEN3_VL", "MAI_UI"]},
+        "issued_at_utc": {"type": "string", "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "mode": {"enum": ["OFF", "SHADOW", "ACTIVE"]},
+        "openai_stage_set_sha256": {"$ref": "#/$defs/sha256"},
+        "preflight_report_sha256": {"$ref": "#/$defs/sha256"},
+        "pricing_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "request_sha256": {"$ref": "#/$defs/sha256"},
+        "reset_seed": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0, "maximum": 2147483647}]},
+        "schema_version": {"const": "mobileworld.runtime.sentinel-r2.4-case-execution-lease/v1"},
+        "stage": {"enum": ["QWEN_LIVE_SMOKE", "MAI_LIVE_SMOKE", "R25_PILOT"]},
+        "task_id": {"$ref": "#/$defs/runtimeId"},
+        "task_parameters_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}
+      }
+    },
+    "attemptConstraintBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_max_cost_usd_micros", "case_execution_deadline_monotonic_ns",
+        "case_host", "case_id", "case_max_cost_usd_micros", "case_mode",
+        "case_stage", "effective_deadline_monotonic_ns", "history_stage",
+        "issued_monotonic_ns", "max_actor_calls", "max_openai_calls",
+        "max_wall_time_seconds", "requested_call_deadline_monotonic_ns",
+        "reset_seed", "rubric_stage_sha256", "rubric_stage_timeout_ms",
+        "schema_version", "task_id", "task_parameters_sha256"
+      ],
+      "properties": {
+        "attempt_max_cost_usd_micros": {"type": "integer", "minimum": 1, "maximum": 100000000000},
+        "case_execution_deadline_monotonic_ns": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "case_host": {"enum": ["QWEN3_VL", "MAI_UI"]},
+        "case_id": {"$ref": "#/$defs/runtimeId"},
+        "case_max_cost_usd_micros": {"type": "integer", "minimum": 1, "maximum": 100000000000},
+        "case_mode": {"enum": ["SHADOW", "ACTIVE"]},
+        "case_stage": {"enum": ["QWEN_LIVE_SMOKE", "MAI_LIVE_SMOKE", "R25_PILOT"]},
+        "effective_deadline_monotonic_ns": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "history_stage": {"$ref": "#/$defs/historyOpenAIStage"},
+        "issued_monotonic_ns": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "max_actor_calls": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "max_openai_calls": {"type": "integer", "minimum": 1, "maximum": 2000001},
+        "max_wall_time_seconds": {"type": "integer", "minimum": 1, "maximum": 31536000},
+        "requested_call_deadline_monotonic_ns": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "reset_seed": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0, "maximum": 2147483647}]},
+        "rubric_stage_sha256": {"$ref": "#/$defs/sha256"},
+        "rubric_stage_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 86400000},
+        "schema_version": {"const": "mobileworld.runtime.sentinel-r2.4-live-rubric-attempt-constraint/v1"},
+        "task_id": {"$ref": "#/$defs/runtimeId"},
+        "task_parameters_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}
+      }
+    },
+    "historyOpenAIStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint", "external_network_on_call", "max_attempts", "max_output_tokens",
+        "model", "model_on_call", "openai_sdk_version", "role", "sdk_max_retries",
+        "store", "timeout_ms", "transport_authority", "transport_kind"
+      ],
+      "properties": {
+        "endpoint": {"const": "https://api.openai.com/v1/responses"},
+        "external_network_on_call": {"const": true},
+        "max_attempts": {"const": 1},
+        "max_output_tokens": {"const": 4096},
+        "model": {"const": "gpt-5.6-sol"},
+        "model_on_call": {"const": true},
+        "openai_sdk_version": {"const": "1.106.1"},
+        "role": {"const": "HISTORY_POLICY"},
+        "sdk_max_retries": {"const": 0},
+        "store": {"const": false},
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000},
+        "transport_authority": {"const": "EXPLICIT_OWNER_AUTHORIZATION"},
+        "transport_kind": {"const": "OPENAI_RESPONSES"}
+      }
+    },
+    "openAIStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint", "external_network_on_call", "max_attempts", "max_output_tokens",
+        "model", "model_on_call", "openai_sdk_version", "role", "sdk_max_retries",
+        "store", "timeout_ms", "transport_authority", "transport_kind"
+      ],
+      "properties": {
+        "endpoint": {"const": "https://api.openai.com/v1/responses"},
+        "external_network_on_call": {"const": true},
+        "max_attempts": {"const": 1},
+        "max_output_tokens": {"const": 8192},
+        "model": {"const": "gpt-5.6-sol"},
+        "model_on_call": {"const": true},
+        "openai_sdk_version": {"const": "1.106.1"},
+        "role": {"const": "RUBRIC"},
+        "sdk_max_retries": {"const": 0},
+        "store": {"const": false},
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000},
+        "transport_authority": {"const": "EXPLICIT_OWNER_AUTHORIZATION"},
+        "transport_kind": {"const": "OPENAI_RESPONSES"}
+      }
+    },
+    "pricing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cached_input_usd_micros_per_million_tokens", "effective_at_utc",
+        "input_usd_micros_per_million_tokens", "model",
+        "output_usd_micros_per_million_tokens", "pricing_id", "rounding_policy",
+        "schema_version", "source_sha256"
+      ],
+      "properties": {
+        "cached_input_usd_micros_per_million_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000000000},
+        "effective_at_utc": {"type": "string", "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+        "input_usd_micros_per_million_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000000000},
+        "model": {"const": "gpt-5.6-sol"},
+        "output_usd_micros_per_million_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000000000},
+        "pricing_id": {"$ref": "#/$defs/runtimeId"},
+        "rounding_policy": {"const": "CEIL_PER_ATTEMPT_USD_MICRO"},
+        "schema_version": {"const": "mobileworld.runtime.sentinel-r2.4-live-pricing/v1"},
+        "source_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "transportBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backend_extension_descriptor_sha256", "execution_scope", "factory_binding_sha256",
+        "input_schema_version", "manifest_sha256", "model", "operation",
+        "output_schema_sha256", "preflight_sha256", "pricing_binding_sha256",
+        "prompt_sha256", "role", "stage_sha256"
+      ],
+      "properties": {
+        "backend_extension_descriptor_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_scope": {"const": "OWNER_AUTHORIZED_LIVE"},
+        "factory_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "input_schema_version": {"enum": ["mobileworld.runtime.sentinel-r2.4-live-rubric-generate-input/v1", "mobileworld.runtime.sentinel-r2.4-live-rubric-track-input/v1"]},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "model": {"const": "gpt-5.6-sol"},
+        "operation": {"enum": ["GENERATE", "TRACK"]},
+        "output_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "preflight_sha256": {"$ref": "#/$defs/sha256"},
+        "pricing_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "prompt_sha256": {"$ref": "#/$defs/sha256"},
+        "role": {"const": "RUBRIC"},
+        "stage_sha256": {"$ref": "#/$defs/sha256"}
+      }
     },
     "collectorStimulus": {
       "type": "object",

@@ -5,6 +5,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -179,6 +180,36 @@ def _unconfirmed_attempt(logical_call_id: str = "fatal-call-1") -> LiveAttemptRe
     )
 
 
+def _accounting_unknown_attempt(
+    status: LiveAttemptStatusV1,
+    *,
+    logical_call_id: str = "accounting-fatal-call-1",
+) -> LiveAttemptReceiptV1:
+    source = _unconfirmed_attempt(logical_call_id)
+    if status is LiveAttemptStatusV1.FAILED:
+        return replace(
+            source,
+            attempt_id="accounting-failed-attempt-1",
+            status=LiveAttemptStatusV1.FAILED,
+            cancellation_requested=False,
+            termination=LiveAttemptTerminationV1.NONE,
+            worker_exit_code=0,
+            worker_reaped=True,
+            failure_code="PROVIDER_CHILD_PROTOCOL_VIOLATION",
+        )
+    if status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH:
+        return replace(
+            source,
+            attempt_id="accounting-cancelled-attempt-1",
+            status=LiveAttemptStatusV1.CANCELLED_POST_DISPATCH,
+            termination=LiveAttemptTerminationV1.TERM,
+            worker_exit_code=-15,
+            worker_reaped=True,
+            failure_code=None,
+        )
+    raise AssertionError(f"unsupported accounting terminal: {status}")
+
+
 def test_unconfirmed_attempt_irreversibly_trips_module_owned_latch() -> None:
     attempt = _unconfirmed_attempt()
     latch = build_production_run_fatal_latch_v1()
@@ -198,6 +229,54 @@ def test_unconfirmed_attempt_irreversibly_trips_module_owned_latch() -> None:
     with pytest.raises(ProductionRunFatalError) as raised:
         latch.require_clear()
     assert raised.value.code == "RUN_FATAL_TERMINATION_UNCONFIRMED"
+
+
+@pytest.mark.parametrize(
+    "status",
+    (LiveAttemptStatusV1.FAILED, LiveAttemptStatusV1.CANCELLED_POST_DISPATCH),
+)
+def test_post_dispatch_unknown_accounting_irreversibly_trips_independent_latch(
+    status: LiveAttemptStatusV1,
+) -> None:
+    attempt = _accounting_unknown_attempt(status)
+    latch = build_production_run_fatal_latch_v1()
+
+    state = latch.observe_attempts(
+        logical_call_id=attempt.logical_call_id,
+        attempts=(attempt,),
+    )
+
+    assert state is not None
+    assert state.failure_code == "LIVE_COST_ACCOUNTING_UNKNOWN"
+    assert state.attempt_receipt_sha256 == live_attempt_receipt_sha256(attempt)
+    with pytest.raises(ProductionRunFatalError) as raised:
+        latch.require_clear()
+    assert raised.value.code == "RUN_FATAL_LIVE_COST_ACCOUNTING_UNKNOWN"
+
+
+def test_zero_dispatch_unknown_accounting_does_not_trip_dispatch_latch() -> None:
+    source = _accounting_unknown_attempt(LiveAttemptStatusV1.FAILED)
+    attempt = replace(
+        source,
+        attempt_id="zero-dispatch-accounting-attempt",
+        dispatch_count=0,
+        cost_status=LiveAttemptCostStatusV1.EXACT,
+        cost_usd_micros=0,
+        worker_pid=None,
+        worker_exit_code=None,
+        worker_reaped=False,
+        failure_code="PROVIDER_CHILD_START_FAILED",
+    )
+    latch = build_production_run_fatal_latch_v1()
+
+    assert (
+        latch.observe_attempts(
+            logical_call_id=attempt.logical_call_id,
+            attempts=(attempt,),
+        )
+        is None
+    )
+    latch.require_clear()
 
 
 def test_latch_rejects_caller_construction_and_cross_call_attempts() -> None:
@@ -346,6 +425,53 @@ def test_fatal_latch_and_expired_execution_still_allow_open_cleanup_teardown() -
     later_port, _ = _cleanup_port(later_invocation, latch=latch, environment=later_environment)
     later_result = later_port.cleanup_unit(later_invocation)
     assert later_result.cleanup_receipt_sha256 != result.cleanup_receipt_sha256
+
+
+@pytest.mark.parametrize(
+    "status",
+    (LiveAttemptStatusV1.FAILED, LiveAttemptStatusV1.CANCELLED_POST_DISPATCH),
+)
+def test_unknown_cost_fatal_blocks_actor_and_action_but_journals_and_cleans(
+    status: LiveAttemptStatusV1,
+) -> None:
+    now = time.monotonic_ns()
+    invocation = _cleanup_invocation(
+        execution_deadline_ns=now - 1,
+        cleanup_deadline_ns=now + 8_000_000_000,
+    )
+    latch = build_production_run_fatal_latch_v1()
+    attempt = _accounting_unknown_attempt(status)
+    fatal = latch.observe_attempts(
+        logical_call_id=attempt.logical_call_id,
+        attempts=(attempt,),
+    )
+    assert fatal is not None
+    environment = _CleanupEnvironment()
+    port, resource_calls = _cleanup_port(invocation, latch=latch, environment=environment)
+
+    for kind in (
+        production_driver_module.ProductionDispatchKindV1.ACTOR,
+        production_driver_module.ProductionDispatchKindV1.ACTION,
+    ):
+        with pytest.raises(production_driver_module.ProductionDriverError) as raised:
+            port._require_resource_dispatch(
+                invocation.host,
+                kind,
+                deadline_ns=invocation.cleanup_deadline_monotonic_ns,
+            )
+        assert raised.value.code == "RUN_FATAL_LIVE_COST_ACCOUNTING_UNKNOWN"
+    assert resource_calls == []
+
+    result = port.cleanup_unit(invocation)
+
+    assert len(result.cleanup_receipt_sha256) == 64
+    assert environment.teardown_calls == 1
+    assert environment.closed is True
+    assert len(resource_calls) == 1
+    unit_id = port._unit_id(invocation)
+    journal = cast(dict[str, JsonValue], json.loads(port._unit_journals[unit_id]))
+    assert journal["run_fatal_state"] == production_run_fatal_state_projection(fatal)
+    assert journal["run_fatal_state_sha256"] == production_run_fatal_state_sha256(fatal)
 
 
 def test_cleanup_scope_failure_after_resource_reattest_does_not_claim_teardown_attempt(

@@ -7,7 +7,7 @@ import socket
 import subprocess
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -75,8 +75,12 @@ from mobile_world.runtime.sentinel.r2_5.pilot import (
     executable_pilot_task_source_projection,
 )
 
-_NOW = datetime(2026, 9, 3, 12, tzinfo=UTC)
+_NOW = datetime.now(UTC).replace(microsecond=0)
 _SECRET_PLACEHOLDER = b"fixture-secret-must-never-appear"
+
+
+def _utc(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
 def _sha(raw: bytes) -> str:
@@ -325,7 +329,7 @@ def _smoke(tmp_path: Path, host: PilotHostV1) -> HostLiveSmokePlanV1:
                 request_fixture_byte_count=size,
                 max_actor_calls=1,
                 max_openai_calls=0 if mode is SmokeModeV1.OFF else 3,
-                max_wall_time_seconds=10,
+                max_wall_time_seconds=120,
                 max_cost_usd_micros=100,
                 actor_action_allowed=False,
                 provider_final_request_proof_required=True,
@@ -391,8 +395,8 @@ def _manifest(tmp_path: Path) -> tuple[R24R25RunAuthorityManifestV1, Path]:
                 status=RunAuthorizationStatusV1.OWNER_AUTHORIZED,
                 authorization_id="owner-approval-fixture",
                 authorized_by="owner",
-                issued_at_utc="2026-09-03T00:00:00Z",
-                expires_at_utc="2026-09-04T00:00:00Z",
+                issued_at_utc=_utc(_NOW - timedelta(hours=1)),
+                expires_at_utc=_utc(_NOW + timedelta(days=1)),
                 network_allowed=True,
                 gpu_allowed=True,
                 docker_allowed=True,
@@ -437,7 +441,7 @@ def _manifest(tmp_path: Path) -> tuple[R24R25RunAuthorityManifestV1, Path]:
             topology_comparison_artifact_sha256=(pilot.topology_comparison_artifact_sha256),
             output_root=str(tmp_path / "outputs" / "fresh-run"),
             max_resource_preflight_wall_time_seconds=100,
-            max_sequence_wall_time_seconds=10_160,
+            max_sequence_wall_time_seconds=10_820,
             max_sequence_openai_calls=92,
             max_sequence_actor_calls=86,
             max_sequence_cost_usd_micros=1_000_600,
@@ -752,14 +756,40 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
         request_byte_count=request.byte_count,
         max_output_tokens=runner.openai_stage.max_output_tokens,
     )
-    with pytest.raises(LiveAttemptError) as insufficient:
-        runner.begin(
+
+    def begin_attempt(
+        *,
+        attempt_id: str,
+        logical_call_id: str,
+        transport_binding_sha256: str,
+        max_cost_usd_micros: int,
+    ):
+        deadline_ns = time.monotonic_ns() + 5_000_000_000
+        if role is LiveAttemptRoleV1.HISTORY_POLICY:
+            runner.register_history_attempt_constraint(
+                case_lease=lease,
+                attempt_id=attempt_id,
+                logical_call_id=logical_call_id,
+                case_execution_deadline_monotonic_ns=deadline_ns,
+                request_timeout_ns=4_000_000_000,
+                max_cost_usd_micros=max_cost_usd_micros,
+            )
+            deadline_ns = time.monotonic_ns() + 4_000_000_000
+        return runner.begin(
             case_lease=lease,
+            attempt_id=attempt_id,
+            logical_call_id=logical_call_id,
+            request=request,
+            transport_binding_sha256=transport_binding_sha256,
+            deadline_monotonic_ns=deadline_ns,
+            max_cost_usd_micros=max_cost_usd_micros,
+        )
+
+    with pytest.raises(LiveAttemptError) as insufficient:
+        begin_attempt(
             attempt_id=f"insufficient-budget-{role.value.lower()}",
             logical_call_id=f"logical-insufficient-{role.value.lower()}",
-            request=request,
             transport_binding_sha256=_sha(f"transport-{role.value}".encode()),
-            deadline_monotonic_ns=time.monotonic_ns() + 5_000_000_000,
             max_cost_usd_micros=max(0, reservation - 1),
         )
     assert insufficient.value.code == "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY"
@@ -771,13 +801,10 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
     # Manifest/topology fixture construction may itself use sealed child
     # processes.  Observe only the production attempt launches below.
     process_start_methods.clear()
-    call = runner.begin(
-        case_lease=lease,
+    call = begin_attempt(
         attempt_id=f"pre-dispatch-{role.value.lower()}",
         logical_call_id=f"logical-{role.value.lower()}",
-        request=request,
         transport_binding_sha256=_sha(f"transport-{role.value}".encode()),
-        deadline_monotonic_ns=time.monotonic_ns() + 5_000_000_000,
         max_cost_usd_micros=reservation,
     )
 
@@ -797,13 +824,10 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
     # A secret that drifts after preflight must fail before the SDK/provider
     # dispatch linearization point and remain exact zero-cost evidence.
     Path(manifest.secret.path).chmod(0o640)
-    failed_call = runner.begin(
-        case_lease=lease,
+    failed_call = begin_attempt(
         attempt_id=f"secret-drift-{role.value.lower()}",
         logical_call_id=f"logical-secret-drift-{role.value.lower()}",
-        request=request,
         transport_binding_sha256=_sha(f"transport-drift-{role.value}".encode()),
-        deadline_monotonic_ns=time.monotonic_ns() + 5_000_000_000,
         max_cost_usd_micros=reservation,
     )
     with pytest.raises(LiveAttemptError) as secret_drift:
@@ -826,13 +850,10 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
         manifest.secret.path,
         str(Path(manifest.secret.path).with_name("late-secret-hardlink.key")),
     )
-    hardlink_call = runner.begin(
-        case_lease=lease,
+    hardlink_call = begin_attempt(
         attempt_id=f"secret-hardlink-drift-{role.value.lower()}",
         logical_call_id=f"logical-secret-hardlink-drift-{role.value.lower()}",
-        request=request,
         transport_binding_sha256=_sha(f"transport-hardlink-{role.value}".encode()),
-        deadline_monotonic_ns=time.monotonic_ns() + 5_000_000_000,
         max_cost_usd_micros=reservation,
     )
     with pytest.raises(LiveAttemptError) as hardlink_drift:

@@ -12,6 +12,9 @@ from typing import Any, cast
 import httpx
 import pytest
 
+from mobile_world.runtime.sentinel.r2_4 import (
+    production_preflight as production_preflight_module,
+)
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1,
     PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1,
@@ -49,7 +52,10 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     OpenAIResponsesStageV1,
     OpenAIRoleV1,
 )
-from mobile_world.runtime.sentinel.r2_4.production_preflight import openai_stage_sha256
+from mobile_world.runtime.sentinel.r2_4.production_preflight import (
+    openai_stage_set_sha256,
+    openai_stage_sha256,
+)
 from mobile_world.runtime.sentinel.seam import _PolicyExecutionFence
 
 
@@ -1037,6 +1043,133 @@ def test_production_completion_binds_requested_and_returned_stage_model() -> Non
     assert model_drift.value.code == "INVALID_COMPLETED_RECEIPT"
 
 
+def _retained_response_for_call(call: ProductionOpenAIAttemptCallV1) -> object | None:
+    runner = object.__new__(ProductionHistoryPolicyAttemptRunnerV1)
+    runner._constraint_lock = threading.Lock()
+    runner._attempt_calls = {call.authority.attempt_id: call}
+    return runner.response_envelope_for_attempt(call.authority.attempt_id)
+
+
+def test_usage_missing_terminal_retains_observed_provider_envelope() -> None:
+    from mobile_world.runtime.sentinel.r2_2.gpt56_policy import ResponsesEnvelopeV1
+
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(exited=True),
+    )
+    envelope = ResponsesEnvelopeV1(
+        response_id="resp-usage-missing",
+        requested_model="gpt-5.6-sol",
+        returned_model="gpt-5.6-sol",
+        status="completed",
+        service_tier=None,
+        output_text="{}",
+        input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+    )
+    connection.queue(("COMPLETED", call.authority_sha256, envelope, 0))
+
+    with pytest.raises(LiveAttemptError) as raised:
+        call()
+
+    assert raised.value.code == "PROVIDER_USAGE_MISSING"
+    receipt = call.terminal_receipt
+    assert receipt is not None
+    assert receipt.status is LiveAttemptStatusV1.FAILED
+    assert receipt.response_envelope_sha256 == envelope.sha256
+    assert receipt.requested_model == receipt.returned_model == "gpt-5.6-sol"
+    assert receipt.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+    assert all(
+        value is None
+        for value in (
+            receipt.input_tokens,
+            receipt.cached_input_tokens,
+            receipt.output_tokens,
+            receipt.total_tokens,
+        )
+    )
+    assert _retained_response_for_call(call) == envelope
+    assert sink.receipts == (receipt,)
+
+
+def test_completed_envelope_then_unreaped_worker_retains_response_in_tu() -> None:
+    from mobile_world.runtime.sentinel.r2_2.gpt56_policy import ResponsesEnvelopeV1
+
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(stoppable=False),
+    )
+    envelope = ResponsesEnvelopeV1(
+        response_id="resp-unreaped-after-complete",
+        requested_model="gpt-5.6-sol",
+        returned_model="gpt-5.6-sol",
+        status="completed",
+        service_tier=None,
+        output_text="{}",
+        input_tokens=7,
+        output_tokens=3,
+        total_tokens=10,
+    )
+    connection.queue(("COMPLETED", call.authority_sha256, envelope, 2))
+
+    with pytest.raises(LiveAttemptError) as raised:
+        call()
+
+    assert raised.value.code == "TERMINATION_UNCONFIRMED"
+    receipt = call.terminal_receipt
+    assert receipt is not None
+    assert receipt.status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+    assert receipt.response_envelope_sha256 == envelope.sha256
+    assert (receipt.input_tokens, receipt.cached_input_tokens, receipt.output_tokens) == (7, 2, 3)
+    assert receipt.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+    assert receipt.termination is LiveAttemptTerminationV1.UNCONFIRMED
+    assert not receipt.worker_reaped
+    assert _retained_response_for_call(call) == envelope
+    assert sink.receipts == (receipt,)
+
+
+def test_over_authority_terminal_retains_exact_response_and_priced_cost() -> None:
+    from mobile_world.runtime.sentinel.r2_2.gpt56_policy import ResponsesEnvelopeV1
+
+    call, sink, connection = _production_call_for_request(
+        _history_policy_request_kwargs(),
+        process=_TerminatingProcess(exited=True),
+    )
+    envelope = ResponsesEnvelopeV1(
+        response_id="resp-over-authority",
+        requested_model="gpt-5.6-sol",
+        returned_model="gpt-5.6-sol",
+        status="completed",
+        service_tier=None,
+        output_text="{}",
+        input_tokens=7,
+        output_tokens=5_000,
+        total_tokens=5_007,
+    )
+    connection.queue(("COMPLETED", call.authority_sha256, envelope, 0))
+
+    with pytest.raises(LiveAttemptError) as raised:
+        call()
+
+    assert raised.value.code == "PROVIDER_RESULT_EXCEEDS_AUTHORITY"
+    receipt = call.terminal_receipt
+    assert receipt is not None
+    assert receipt.status is LiveAttemptStatusV1.FAILED
+    assert receipt.response_envelope_sha256 == envelope.sha256
+    assert receipt.output_tokens == 5_000
+    assert receipt.cost_status is LiveAttemptCostStatusV1.EXACT
+    assert receipt.cost_usd_micros == live_attempt_cost_usd_micros(
+        _pricing(),
+        input_tokens=7,
+        cached_input_tokens=0,
+        output_tokens=5_000,
+    )
+    assert receipt.cost_usd_micros > call.authority.max_cost_usd_micros
+    assert _retained_response_for_call(call) == envelope
+    assert sink.receipts == (receipt,)
+
+
 def test_receipt_model_provenance_rejects_cpu_and_state_forgery() -> None:
     runner, _ = _runner()
     cpu_receipt = _begin(
@@ -1138,6 +1271,219 @@ def test_production_runner_rejects_every_non_post_preflight_factory() -> None:
         )
     assert raised.value.code == "UNTRUSTED_PRODUCTION_FACTORY"
     assert sink.started_count == sink.terminal_count == 0
+
+
+def test_history_constraint_registration_is_one_shot_and_call_bound() -> None:
+    runner = object.__new__(ProductionHistoryPolicyAttemptRunnerV1)
+    runner._role = LiveAttemptRoleV1.HISTORY_POLICY
+    runner._factory = cast(
+        Any,
+        type(
+            "_Factory",
+            (),
+            {"validate_case_execution_lease": staticmethod(lambda lease: lease)},
+        )(),
+    )
+    runner._constraint_lock = threading.Lock()
+    runner._pending_history_constraints = {}
+    runner._known_history_constraint_attempt_ids = set()
+    runner._attempt_deadline_bindings = {}
+    runner._attempt_requests = {}
+    runner._attempt_calls = {}
+    logical_call_id = "history-constraint-call-1"
+    lease = production_preflight_module._restore_case_execution_lease(
+        {
+            "actor_call_index": 1,
+            "case_id": "history-constraint-case-1",
+            "execution_scope": "OWNER_AUTHORIZED_LIVE",
+            "expires_at_utc": "2026-09-04T01:00:00Z",
+            "factory_binding_sha256": _digest("history-constraint-factory"),
+            "host": "QWEN3_VL",
+            "issued_at_utc": "2026-09-04T00:00:00Z",
+            "manifest_sha256": _digest("history-constraint-manifest"),
+            "mode": "SHADOW",
+            "openai_stage_set_sha256": _digest("history-constraint-stages"),
+            "preflight_report_sha256": _digest("history-constraint-preflight"),
+            "pricing_binding_sha256": _digest("history-constraint-pricing"),
+            "request_sha256": _digest("history-constraint-request"),
+            "reset_seed": None,
+            "schema_version": "mobileworld.runtime.sentinel-r2.4-case-execution-lease/v1",
+            "stage": "QWEN_LIVE_SMOKE",
+            "task_id": "history-constraint-task-1",
+            "task_parameters_sha256": None,
+        }
+    )
+    registered_ns = time.monotonic_ns()
+    case_deadline_ns = registered_ns + 2_000_000_000
+    request_timeout_ns = 1_000_000_000
+    runner.register_history_attempt_constraint(
+        case_lease=lease,
+        attempt_id="history-constraint-attempt-1",
+        logical_call_id=logical_call_id,
+        case_execution_deadline_monotonic_ns=case_deadline_ns,
+        request_timeout_ns=request_timeout_ns,
+        max_cost_usd_micros=10,
+    )
+    with pytest.raises(LiveAttemptError, match="already used"):
+        runner.register_history_attempt_constraint(
+            case_lease=lease,
+            attempt_id="history-constraint-attempt-1",
+            logical_call_id=logical_call_id,
+            case_execution_deadline_monotonic_ns=case_deadline_ns,
+            request_timeout_ns=request_timeout_ns,
+            max_cost_usd_micros=10,
+        )
+    with pytest.raises(LiveAttemptError, match="differs from its one-shot"):
+        runner._consume_history_attempt_constraint(
+            lease=lease,
+            attempt_id="history-constraint-attempt-1",
+            logical_call_id="history-constraint-other-call",
+            requested_call_deadline_monotonic_ns=(time.monotonic_ns() + request_timeout_ns),
+            max_cost_usd_micros=10,
+            begin_observed_monotonic_ns=time.monotonic_ns(),
+        )
+    assert not runner.discard_unformed_history_attempt_constraint(
+        attempt_id="history-constraint-attempt-1",
+        logical_call_id=logical_call_id,
+    )
+    with pytest.raises(LiveAttemptError, match="already used"):
+        runner.register_history_attempt_constraint(
+            case_lease=lease,
+            attempt_id="history-constraint-attempt-1",
+            logical_call_id=logical_call_id,
+            case_execution_deadline_monotonic_ns=case_deadline_ns,
+            request_timeout_ns=request_timeout_ns,
+            max_cost_usd_micros=10,
+        )
+    second_deadline_ns = time.monotonic_ns() + 2_000_000_000
+    runner.register_history_attempt_constraint(
+        case_lease=lease,
+        attempt_id="history-constraint-attempt-2",
+        logical_call_id=logical_call_id,
+        case_execution_deadline_monotonic_ns=second_deadline_ns,
+        request_timeout_ns=request_timeout_ns,
+        max_cost_usd_micros=10,
+    )
+    requested_issued_ns = time.monotonic_ns()
+    requested_deadline_ns = requested_issued_ns + request_timeout_ns
+    begin_ns = time.monotonic_ns()
+    binding = runner._consume_history_attempt_constraint(
+        lease=lease,
+        attempt_id="history-constraint-attempt-2",
+        logical_call_id=logical_call_id,
+        requested_call_deadline_monotonic_ns=requested_deadline_ns,
+        max_cost_usd_micros=10,
+        begin_observed_monotonic_ns=begin_ns,
+    )
+    assert binding.requested_deadline_issued_monotonic_ns == requested_issued_ns
+    assert binding.effective_deadline_monotonic_ns == min(requested_deadline_ns, second_deadline_ns)
+    with pytest.raises(LiveAttemptError, match="no one-shot"):
+        runner._consume_history_attempt_constraint(
+            lease=lease,
+            attempt_id="history-constraint-attempt-2",
+            logical_call_id=logical_call_id,
+            requested_call_deadline_monotonic_ns=requested_deadline_ns,
+            max_cost_usd_micros=10,
+            begin_observed_monotonic_ns=begin_ns,
+        )
+    with pytest.raises(LiveAttemptError):
+        runner.register_history_attempt_constraint(
+            case_lease=lease,
+            attempt_id="history-constraint-bool",
+            logical_call_id=logical_call_id,
+            case_execution_deadline_monotonic_ns=cast(Any, True),
+            request_timeout_ns=request_timeout_ns,
+            max_cost_usd_micros=10,
+        )
+
+
+def test_history_begin_cost_reservation_failure_retains_formed_proof_preimages() -> None:
+    request = build_canonical_history_policy_request(_history_policy_request_kwargs())
+    history_stage = _stage(LiveAttemptRoleV1.HISTORY_POLICY)
+    rubric_stage = _stage(LiveAttemptRoleV1.RUBRIC)
+    pricing = _pricing()
+    lease = production_preflight_module._restore_case_execution_lease(
+        {
+            "actor_call_index": 1,
+            "case_id": "history-cost-failure-case-1",
+            "execution_scope": "OWNER_AUTHORIZED_LIVE",
+            "expires_at_utc": "2026-09-04T01:00:00Z",
+            "factory_binding_sha256": _digest("history-cost-failure-factory"),
+            "host": "QWEN3_VL",
+            "issued_at_utc": "2026-09-04T00:00:00Z",
+            "manifest_sha256": _digest("history-cost-failure-manifest"),
+            "mode": "SHADOW",
+            "openai_stage_set_sha256": openai_stage_set_sha256((rubric_stage, history_stage)),
+            "preflight_report_sha256": _digest("history-cost-failure-preflight"),
+            "pricing_binding_sha256": live_attempt_pricing_sha256(pricing),
+            "request_sha256": _digest("history-cost-failure-actor-request"),
+            "reset_seed": None,
+            "schema_version": "mobileworld.runtime.sentinel-r2.4-case-execution-lease/v1",
+            "stage": "QWEN_LIVE_SMOKE",
+            "task_id": "history-cost-failure-task-1",
+            "task_parameters_sha256": None,
+        }
+    )
+    sink = MemoryLiveAttemptReceiptSinkV1()
+    runner = object.__new__(ProductionHistoryPolicyAttemptRunnerV1)
+    runner._role = LiveAttemptRoleV1.HISTORY_POLICY
+    runner._factory = cast(
+        Any,
+        type(
+            "_Factory",
+            (),
+            {
+                "validate_case_execution_lease": staticmethod(lambda value: value),
+                "openai_stage_sha256": staticmethod(
+                    lambda _role: openai_stage_sha256(history_stage)
+                ),
+            },
+        )(),
+    )
+    runner._stage = history_stage
+    runner._pricing = pricing
+    runner._pricing_sha256 = live_attempt_pricing_sha256(pricing)
+    runner._sink = sink
+    runner._constraint_lock = threading.Lock()
+    runner._pending_history_constraints = {}
+    runner._known_history_constraint_attempt_ids = set()
+    runner._attempt_deadline_bindings = {}
+    runner._attempt_requests = {}
+    runner._attempt_calls = {}
+    attempt_id = "history-cost-failure-attempt-1"
+    logical_call_id = "history-cost-failure-call-1"
+    now_ns = time.monotonic_ns()
+    runner.register_history_attempt_constraint(
+        case_lease=lease,
+        attempt_id=attempt_id,
+        logical_call_id=logical_call_id,
+        case_execution_deadline_monotonic_ns=now_ns + 5_000_000_000,
+        request_timeout_ns=1_000_000_000,
+        max_cost_usd_micros=1,
+    )
+
+    with pytest.raises(LiveAttemptError) as raised:
+        requested_deadline_ns = time.monotonic_ns() + 1_000_000_000
+        runner.begin(
+            case_lease=lease,
+            attempt_id=attempt_id,
+            logical_call_id=logical_call_id,
+            request=request,
+            transport_binding_sha256=_digest("history-cost-failure-transport"),
+            deadline_monotonic_ns=requested_deadline_ns,
+            max_cost_usd_micros=1,
+        )
+
+    assert raised.value.code == "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY"
+    receipt = runner.terminal_receipt_for_attempt(attempt_id)
+    authority = runner.attempt_authority_for_attempt(attempt_id)
+    assert receipt is not None and authority is not None
+    assert receipt.status is LiveAttemptStatusV1.FAILED
+    assert receipt.dispatch_count == 0
+    assert receipt.authority_sha256 == live_attempt_authority_sha256(authority)
+    assert runner.canonical_request_for_attempt(attempt_id) == request
+    assert runner.attempt_deadline_binding_for_attempt(attempt_id) is not None
+    assert runner.response_envelope_for_attempt(attempt_id) is None
 
 
 def test_seam_fence_cancels_and_reaps_the_exact_process_call() -> None:

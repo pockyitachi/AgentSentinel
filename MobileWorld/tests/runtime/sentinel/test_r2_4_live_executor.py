@@ -6,7 +6,7 @@ import os
 import stat
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -54,6 +54,12 @@ from mobile_world.runtime.sentinel.r2_5.pilot import (
     PilotTaskV1,
     PilotTopologyV1,
 )
+
+_TEST_NOW = datetime.now(UTC).replace(microsecond=0)
+
+
+def _utc(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
 def _sha(value: str) -> str:
@@ -172,8 +178,8 @@ def _manifest(tmp_path: Path) -> R24R25RunAuthorityManifestV1:
             status=RunAuthorizationStatusV1.OWNER_AUTHORIZED,
             authorization_id="cpu-owner-authority",
             authorized_by="owner",
-            issued_at_utc="2026-09-03T00:00:00Z",
-            expires_at_utc="2026-09-04T00:00:00Z",
+            issued_at_utc=_utc(_TEST_NOW - timedelta(hours=1)),
+            expires_at_utc=_utc(_TEST_NOW + timedelta(days=1)),
             network_allowed=True,
             gpu_allowed=True,
             docker_allowed=True,
@@ -270,7 +276,7 @@ def _run(
         manifest,
         executor,
         confirmed_manifest_sha256=authority_manifest_sha256(manifest),
-        now=datetime(2026, 9, 3, 12, tzinfo=UTC),
+        now=_TEST_NOW,
     )
     return executor, result
 

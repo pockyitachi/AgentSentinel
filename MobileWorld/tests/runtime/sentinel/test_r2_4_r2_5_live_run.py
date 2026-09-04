@@ -6,7 +6,7 @@ import json
 import os
 import sys
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import cast
@@ -82,6 +82,12 @@ from mobile_world.runtime.sentinel.r2_5.pilot import (
     parse_frozen_pilot_manifest,
     pilot_task_source_projection,
 )
+
+_TEST_NOW = datetime.now(UTC).replace(microsecond=0)
+
+
+def _utc(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
 def _sha(raw: bytes) -> str:
@@ -265,8 +271,8 @@ def _manifest(
             status=status,
             authorization_id="owner-approval-fixture",
             authorized_by="owner",
-            issued_at_utc="2026-09-03T00:00:00Z",
-            expires_at_utc="2026-09-04T00:00:00Z",
+            issued_at_utc=_utc(_TEST_NOW - timedelta(hours=1)),
+            expires_at_utc=_utc(_TEST_NOW + timedelta(days=1)),
             network_allowed=True,
             gpu_allowed=True,
             docker_allowed=True,
@@ -432,7 +438,7 @@ def test_secret_preflight_uses_stat_only_and_deep_hashes_nonsecret_snapshots(
         manifest,
         repo_root=tmp_path / "repo",
         deep_snapshot_hashes=True,
-        now=datetime(2026, 9, 3, 12, tzinfo=UTC),
+        now=_TEST_NOW,
     )
     assert all(check.passed for check in report.checks)
     assert report.deep_snapshot_hashes_verified is True
@@ -455,7 +461,7 @@ def test_secret_mode_symlink_and_output_inside_repo_fail_metadata_checks(
     report = inspect_local_resources(
         changed,
         repo_root=tmp_path / "repo",
-        now=datetime(2026, 9, 3, 12, tzinfo=UTC),
+        now=_TEST_NOW,
     )
     by_id = {check.check_id: check.passed for check in report.checks}
     assert by_id["openai_secret_external_regular_0600"] is False
@@ -484,7 +490,7 @@ def test_authority_preflight_rejects_legacy_hash_only_task_source(
     report = inspect_local_resources(
         manifest,
         repo_root=tmp_path / "repo",
-        now=datetime(2026, 9, 3, 12, tzinfo=UTC),
+        now=_TEST_NOW,
     )
 
     checks = {check.check_id: check.passed for check in report.checks}
@@ -557,7 +563,7 @@ def test_sequence_runs_exact_order_and_pilot_only_after_both_smokes(tmp_path: Pa
         manifest,
         executor,
         confirmed_manifest_sha256=authority_manifest_sha256(manifest),
-        now=datetime(2026, 9, 3, 12, tzinfo=UTC),
+        now=_TEST_NOW,
     )
     assert result.status is SequenceStatusV1.COMPLETE
     assert executor.calls == list(manifest.safety.stages)
@@ -573,7 +579,7 @@ def test_sequence_stops_immediately_and_never_enters_pilot_after_smoke_failure(
         manifest,
         executor,
         confirmed_manifest_sha256=authority_manifest_sha256(manifest),
-        now=datetime(2026, 9, 3, 12, tzinfo=UTC),
+        now=_TEST_NOW,
     )
     assert result.status is SequenceStatusV1.FAILED
     assert result.failed_stage is RunStageV1.QWEN_LIVE_SMOKE
@@ -589,7 +595,7 @@ def test_sequence_requires_owner_authority_current_window_and_exact_hash(tmp_pat
             draft,
             executor,
             confirmed_manifest_sha256=authority_manifest_sha256(draft),
-            now=datetime(2026, 9, 3, 12, tzinfo=UTC),
+            now=_TEST_NOW,
         )
     live = replace(
         draft,
@@ -602,14 +608,14 @@ def test_sequence_requires_owner_authority_current_window_and_exact_hash(tmp_pat
             live,
             executor,
             confirmed_manifest_sha256="0" * 64,
-            now=datetime(2026, 9, 3, 12, tzinfo=UTC),
+            now=_TEST_NOW,
         )
     with pytest.raises(LiveRunContractError, match="OWNER_AUTHORITY_EXPIRED"):
         run_authorized_sequence_with_executor(
             live,
             executor,
             confirmed_manifest_sha256=authority_manifest_sha256(live),
-            now=datetime(2026, 9, 5, 12, tzinfo=UTC),
+            now=_TEST_NOW + timedelta(days=2),
         )
     assert executor.calls == []
 
@@ -719,6 +725,10 @@ def test_cli_execute_constructs_exact_production_executor_before_dispatch(
     pricing_path.write_text(
         json.dumps(live_attempt_pricing_projection(pricing), sort_keys=True), encoding="utf-8"
     )
+    # The full suite can import this module more than five minutes before this
+    # test runs.  Take the production-preflight timestamp at the actual CLI
+    # construction boundary so the fixture exercises the intended fresh-report
+    # path instead of expiring because of test-collection time.
     preflight_now = datetime.now(UTC).replace(microsecond=0)
     report = run_production_preflight_v1(
         manifest,

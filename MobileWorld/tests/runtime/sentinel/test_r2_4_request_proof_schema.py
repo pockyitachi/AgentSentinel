@@ -29,23 +29,35 @@ from mobile_world.runtime.sentinel.r2_3.packet import RubricEvidenceSnapshotV1
 from mobile_world.runtime.sentinel.r2_4 import rubric_live as rubric_live_module
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_sha256
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    LiveAttemptAuthorityV1,
     LiveAttemptCostStatusV1,
     LiveAttemptExecutionKindV1,
+    LiveAttemptPricingV1,
     LiveAttemptReceiptV1,
     LiveAttemptRoleV1,
     LiveAttemptStatusV1,
     LiveAttemptTerminationV1,
+    live_attempt_authority_sha256,
+    live_attempt_pricing_sha256,
+)
+from mobile_world.runtime.sentinel.r2_4.live_run import OpenAIResponsesStageV1, OpenAIRoleV1
+from mobile_world.runtime.sentinel.r2_4.production_preflight import (
+    openai_stage_set_sha256,
+    openai_stage_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+    LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
     LIVE_RUBRIC_MODEL,
     LiveRubricExecutionScopeV1,
     LiveRubricOperationV1,
     LiveRubricTransportAuthorityV1,
     LiveRubricTransportKindV1,
     R24RubricBackendExtensionDescriptorV1,
+    build_live_rubric_attempt_constraint_binding_v1,
     build_live_rubric_provider_request_v1,
     live_rubric_attempt_request_proof_projection,
     live_rubric_generate_schema,
+    live_rubric_operation_prompt_sha256,
     live_rubric_prompt_bundle_sha256,
     live_rubric_track_schema,
     rubric_backend_descriptor_sha256,
@@ -53,6 +65,7 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 R24_SCHEMA_ROOT = REPO_ROOT / "mobileworld_audit_handoff/schemas/r2_4"
+R22_SCHEMA_ROOT = REPO_ROOT / "mobileworld_audit_handoff/schemas/r2_2"
 R23_TRACKING_SCHEMA_PATH = (
     REPO_ROOT / "mobileworld_audit_handoff/schemas/r2_3/tracking_packet.v1.schema.json"
 )
@@ -76,6 +89,29 @@ def _validator() -> Draft202012Validator:
     resolver = RefResolver.from_schema(
         schema,
         store={tracking_schema["$id"]: tracking_schema},
+    )
+    return Draft202012Validator(schema, resolver=resolver)
+
+
+def _history_validator() -> Draft202012Validator:
+    schema = json.loads(
+        (R24_SCHEMA_ROOT / "history_policy_request_proof.v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    rubric_schema = json.loads(
+        (R24_SCHEMA_ROOT / "rubric_request_proof.v1.schema.json").read_text(encoding="utf-8")
+    )
+    receipt_schema = json.loads(
+        (R22_SCHEMA_ROOT / "policy_receipt.v1.schema.json").read_text(encoding="utf-8")
+    )
+    Draft202012Validator.check_schema(schema)
+    resolver = RefResolver.from_schema(
+        schema,
+        store={
+            rubric_schema["$id"]: rubric_schema,
+            receipt_schema["$id"]: receipt_schema,
+        },
     )
     return Draft202012Validator(schema, resolver=resolver)
 
@@ -274,6 +310,112 @@ def _proof(operation: LiveRubricOperationV1) -> dict[str, JsonValue]:
         provider_input=provider_input,
         current_image_data_url=data_url,
     )
+    stage: dict[str, JsonValue] = {
+        "endpoint": "https://api.openai.com/v1/responses",
+        "external_network_on_call": True,
+        "max_attempts": 1,
+        "max_output_tokens": 8192,
+        "model": LIVE_RUBRIC_MODEL,
+        "model_on_call": True,
+        "openai_sdk_version": "1.106.1",
+        "role": "RUBRIC",
+        "sdk_max_retries": 0,
+        "store": False,
+        "timeout_ms": 60_000,
+        "transport_authority": "EXPLICIT_OWNER_AUTHORIZATION",
+        "transport_kind": "OPENAI_RESPONSES",
+    }
+    pricing: dict[str, JsonValue] = {
+        "cached_input_usd_micros_per_million_tokens": 0,
+        "effective_at_utc": "2026-09-01T00:00:00Z",
+        "input_usd_micros_per_million_tokens": 0,
+        "model": LIVE_RUBRIC_MODEL,
+        "output_usd_micros_per_million_tokens": 0,
+        "pricing_id": "schema-test-pricing",
+        "rounding_policy": "CEIL_PER_ATTEMPT_USD_MICRO",
+        "schema_version": "mobileworld.runtime.sentinel-r2.4-live-pricing/v1",
+        "source_sha256": _sha("pricing-source"),
+    }
+    lease: dict[str, JsonValue] = {
+        "actor_call_index": 1,
+        "case_id": "case-1",
+        "execution_scope": "OWNER_AUTHORIZED_LIVE",
+        "expires_at_utc": "2026-09-04T01:00:00Z",
+        "factory_binding_sha256": _sha("factory"),
+        "host": "QWEN3_VL",
+        "issued_at_utc": "2026-09-04T00:00:00Z",
+        "manifest_sha256": _sha("manifest"),
+        "mode": "SHADOW",
+        "openai_stage_set_sha256": _sha("stage-set"),
+        "preflight_report_sha256": _sha("preflight"),
+        "pricing_binding_sha256": canonical_sha256(cast(JsonValue, pricing)),
+        "request_sha256": _sha("actor-request"),
+        "reset_seed": None,
+        "schema_version": "mobileworld.runtime.sentinel-r2.4-case-execution-lease/v1",
+        "stage": "QWEN_LIVE_SMOKE",
+        "task_id": "task-1",
+        "task_parameters_sha256": None,
+    }
+    transport: dict[str, JsonValue] = {
+        "backend_extension_descriptor_sha256": _sha("extension"),
+        "execution_scope": "OWNER_AUTHORIZED_LIVE",
+        "factory_binding_sha256": lease["factory_binding_sha256"],
+        "input_schema_version": cast(str, provider_input["schema_version"]),
+        "manifest_sha256": lease["manifest_sha256"],
+        "model": LIVE_RUBRIC_MODEL,
+        "operation": operation.value,
+        "output_schema_sha256": _sha(f"{operation.value}-output-schema"),
+        "preflight_sha256": lease["preflight_report_sha256"],
+        "pricing_binding_sha256": lease["pricing_binding_sha256"],
+        "prompt_sha256": _sha(f"{operation.value}-prompt"),
+        "role": "RUBRIC",
+        "stage_sha256": canonical_sha256(cast(JsonValue, stage)),
+    }
+    authority: dict[str, JsonValue] = {
+        "attempt_id": f"attempt-{operation.value.lower()}-1",
+        "actor_request_sha256": lease["request_sha256"],
+        "case_id": lease["case_id"],
+        "case_execution_lease_sha256": canonical_sha256(cast(JsonValue, lease)),
+        "deadline_monotonic_ns": 1_000_010_000_000_000,
+        "logical_call_id": "logical-call-1",
+        "manifest_sha256": lease["manifest_sha256"],
+        "max_cost_usd_micros": 1_000_000,
+        "max_output_tokens": 8192,
+        "preflight_sha256": lease["preflight_report_sha256"],
+        "pricing_binding_sha256": lease["pricing_binding_sha256"],
+        "request_sha256": request.request_sha256,
+        "role": "RUBRIC",
+        "schema_version": "mobileworld.runtime.sentinel-r2.4-live-attempt-authority/v1",
+        "stage_sha256": transport["stage_sha256"],
+        "transport_binding_sha256": canonical_sha256(cast(JsonValue, transport)),
+    }
+    history_stage: dict[str, JsonValue] = {
+        **stage,
+        "max_output_tokens": 4096,
+        "role": "HISTORY_POLICY",
+    }
+    constraint: dict[str, JsonValue] = {
+        "attempt_max_cost_usd_micros": 1_000_000,
+        "case_execution_deadline_monotonic_ns": 1_000_010_000_000_000,
+        "case_host": lease["host"],
+        "case_id": lease["case_id"],
+        "case_max_cost_usd_micros": 3_000_000,
+        "case_mode": lease["mode"],
+        "case_stage": lease["stage"],
+        "effective_deadline_monotonic_ns": 1_000_010_000_000_000,
+        "history_stage": history_stage,
+        "issued_monotonic_ns": 1_000_000_000_000_000,
+        "max_actor_calls": 1,
+        "max_openai_calls": 3,
+        "max_wall_time_seconds": 60,
+        "requested_call_deadline_monotonic_ns": 1_000_060_000_000_000,
+        "reset_seed": lease["reset_seed"],
+        "rubric_stage_sha256": canonical_sha256(cast(JsonValue, stage)),
+        "rubric_stage_timeout_ms": 60_000,
+        "schema_version": ("mobileworld.runtime.sentinel-r2.4-live-rubric-attempt-constraint/v1"),
+        "task_id": lease["task_id"],
+        "task_parameters_sha256": lease["task_parameters_sha256"],
+    }
     return {
         "schema_version": "mobileworld.runtime.sentinel-r2.4-live-rubric-request-proof/v1",
         "operation": operation.value,
@@ -285,6 +427,13 @@ def _proof(operation: LiveRubricOperationV1) -> dict[str, JsonValue]:
         "attempt_status": "COMPLETED",
         "attempt_dispatch_count": 1,
         "attempt_receipt_sha256": _sha(f"attempt-{operation.value}"),
+        "attempt_authority": authority,
+        "attempt_authority_sha256": canonical_sha256(cast(JsonValue, authority)),
+        "attempt_constraint_binding": constraint,
+        "case_execution_lease": lease,
+        "openai_stage": stage,
+        "pricing": pricing,
+        "transport_binding": transport,
         "backend_extension_descriptor_sha256": _sha("extension"),
         "r23_compatibility_descriptor_sha256": _sha("r23 descriptor"),
         "collector_stimulus": stimulus,
@@ -396,12 +545,128 @@ def _real_generate_projection() -> dict[str, JsonValue]:
         provider_input=provider_input,
         current_image_data_url=None,
     )
+    stage = OpenAIResponsesStageV1(
+        role=OpenAIRoleV1.RUBRIC,
+        model=LIVE_RUBRIC_MODEL,
+        endpoint="https://api.openai.com/v1/responses",
+        transport_kind="OPENAI_RESPONSES",
+        transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+        openai_sdk_version="1.106.1",
+        sdk_max_retries=0,
+        external_network_on_call=True,
+        model_on_call=True,
+        max_output_tokens=8192,
+        timeout_ms=60_000,
+        max_attempts=1,
+        store=False,
+    )
+    pricing = LiveAttemptPricingV1(
+        pricing_id="schema-real-pricing",
+        model=LIVE_RUBRIC_MODEL,
+        input_usd_micros_per_million_tokens=0,
+        cached_input_usd_micros_per_million_tokens=0,
+        output_usd_micros_per_million_tokens=0,
+        source_sha256=_sha("schema-real-pricing-source"),
+        effective_at_utc="2026-09-01T00:00:00Z",
+    )
+    pricing_sha256 = live_attempt_pricing_sha256(pricing)
+    lease: dict[str, JsonValue] = {
+        "actor_call_index": 1,
+        "case_id": "case-1",
+        "execution_scope": "OWNER_AUTHORIZED_LIVE",
+        "expires_at_utc": "2026-09-04T01:00:00Z",
+        "factory_binding_sha256": _sha("factory"),
+        "host": "QWEN3_VL",
+        "issued_at_utc": "2026-09-04T00:00:00Z",
+        "manifest_sha256": _sha("manifest"),
+        "mode": "SHADOW",
+        "openai_stage_set_sha256": _sha("stage-set"),
+        "preflight_report_sha256": _sha("preflight"),
+        "pricing_binding_sha256": pricing_sha256,
+        "request_sha256": _sha("actor-request"),
+        "reset_seed": None,
+        "schema_version": "mobileworld.runtime.sentinel-r2.4-case-execution-lease/v1",
+        "stage": "QWEN_LIVE_SMOKE",
+        "task_id": "task-1",
+        "task_parameters_sha256": None,
+    }
+    transport: dict[str, JsonValue] = {
+        "execution_scope": "OWNER_AUTHORIZED_LIVE",
+        "factory_binding_sha256": lease["factory_binding_sha256"],
+        "manifest_sha256": lease["manifest_sha256"],
+        "model": stage.model,
+        "preflight_sha256": lease["preflight_report_sha256"],
+        "pricing_binding_sha256": pricing_sha256,
+        "role": "RUBRIC",
+        "stage_sha256": openai_stage_sha256(stage),
+        "backend_extension_descriptor_sha256": extension.sha256,
+        "input_schema_version": LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
+        "operation": "GENERATE",
+        "output_schema_sha256": extension.generate_output_schema_sha256,
+        "prompt_sha256": live_rubric_operation_prompt_sha256(LiveRubricOperationV1.GENERATE),
+    }
+    history_stage = OpenAIResponsesStageV1(
+        role=OpenAIRoleV1.HISTORY_POLICY,
+        model=LIVE_RUBRIC_MODEL,
+        endpoint="https://api.openai.com/v1/responses",
+        transport_kind="OPENAI_RESPONSES",
+        transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+        openai_sdk_version="1.106.1",
+        sdk_max_retries=0,
+        external_network_on_call=True,
+        model_on_call=True,
+        max_output_tokens=4096,
+        timeout_ms=60_000,
+        max_attempts=1,
+        store=False,
+    )
+    lease["openai_stage_set_sha256"] = openai_stage_set_sha256((stage, history_stage))
+    constraint = build_live_rubric_attempt_constraint_binding_v1(
+        issued_monotonic_ns=1_000_000_000_000_000,
+        case_execution_deadline_monotonic_ns=1_000_010_000_000_000,
+        history_stage=history_stage,
+        rubric_stage=stage,
+        case_stage=cast(str, lease["stage"]),
+        case_host=cast(str, lease["host"]),
+        case_mode=cast(str, lease["mode"]),
+        case_id=cast(str, lease["case_id"]),
+        task_id=cast(str, lease["task_id"]),
+        task_parameters_sha256=cast(str | None, lease["task_parameters_sha256"]),
+        reset_seed=cast(int | None, lease["reset_seed"]),
+        max_actor_calls=1,
+        max_openai_calls=3,
+        max_wall_time_seconds=60,
+        case_max_cost_usd_micros=3_000_000,
+    )
+    authority = LiveAttemptAuthorityV1(
+        attempt_id="attempt-generate-1",
+        role=LiveAttemptRoleV1.RUBRIC,
+        manifest_sha256=cast(str, lease["manifest_sha256"]),
+        preflight_sha256=cast(str, lease["preflight_report_sha256"]),
+        case_execution_lease_sha256=canonical_sha256(cast(JsonValue, lease)),
+        stage_sha256=openai_stage_sha256(stage),
+        case_id="case-1",
+        logical_call_id="logical-call-1",
+        actor_request_sha256=cast(str, lease["request_sha256"]),
+        request_sha256=provider_request.request_sha256,
+        transport_binding_sha256=canonical_sha256(cast(JsonValue, transport)),
+        pricing_binding_sha256=pricing_sha256,
+        deadline_monotonic_ns=constraint.effective_deadline_monotonic_ns,
+        max_cost_usd_micros=constraint.attempt_max_cost_usd_micros,
+        max_output_tokens=8192,
+    )
     anchor = rubric_live_module._build_live_rubric_attempt_request_anchor(
         operation=LiveRubricOperationV1.GENERATE,
         task_run_id=stimulus.task_run_id,
         logical_call_id="logical-call-1",
         attempt_id="attempt-generate-1",
         attempt_order=1,
+        attempt_authority=authority,
+        constraint_binding=constraint,
+        case_execution_lease=lease,
+        openai_stage=stage,
+        pricing=pricing,
+        transport_binding=transport,
         collector_stimulus=stimulus,
         current_image=None,
         provider_input=provider_input,
@@ -410,17 +675,17 @@ def _real_generate_projection() -> dict[str, JsonValue]:
     receipt = LiveAttemptReceiptV1(
         attempt_id="attempt-generate-1",
         role=LiveAttemptRoleV1.RUBRIC,
-        authority_sha256=_sha("authority"),
-        manifest_sha256=_sha("manifest"),
-        preflight_sha256=_sha("preflight"),
-        case_execution_lease_sha256=_sha("lease"),
-        stage_sha256=_sha("stage"),
+        authority_sha256=live_attempt_authority_sha256(authority),
+        manifest_sha256=authority.manifest_sha256,
+        preflight_sha256=authority.preflight_sha256,
+        case_execution_lease_sha256=authority.case_execution_lease_sha256,
+        stage_sha256=authority.stage_sha256,
         case_id="case-1",
         logical_call_id="logical-call-1",
-        actor_request_sha256=_sha("actor-request"),
+        actor_request_sha256=authority.actor_request_sha256,
         request_sha256=provider_request.request_sha256,
-        transport_binding_sha256=_sha("transport"),
-        pricing_binding_sha256=_sha("pricing"),
+        transport_binding_sha256=authority.transport_binding_sha256,
+        pricing_binding_sha256=authority.pricing_binding_sha256,
         execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
         status=LiveAttemptStatusV1.COMPLETED,
         dispatch_count=1,
@@ -432,7 +697,7 @@ def _real_generate_projection() -> dict[str, JsonValue]:
         output_tokens=1,
         total_tokens=2,
         cost_status=LiveAttemptCostStatusV1.EXACT,
-        cost_usd_micros=1,
+        cost_usd_micros=0,
         cancellation_requested=False,
         termination=LiveAttemptTerminationV1.NONE,
         worker_pid=1234,
@@ -461,6 +726,25 @@ def test_checked_in_request_proof_schema_matches_real_projection() -> None:
 
     _validator().validate(projection)
     assert projection["tracking_packet_sha256"] is None
+
+
+def test_checked_in_history_request_proof_schema_is_closed_and_type_exact() -> None:
+    validator = _history_validator()
+    schema = cast(dict[str, Any], validator.schema)
+    assert schema["additionalProperties"] is False
+    authority_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": schema["$defs"],
+        "$ref": "#/$defs/attemptAuthority",
+    }
+    authority = cast(dict[str, Any], deepcopy(_real_generate_projection()["attempt_authority"]))
+    authority["role"] = "HISTORY_POLICY"
+    authority["max_output_tokens"] = 4096
+    Draft202012Validator(authority_schema).validate(authority)
+    bool_confused = deepcopy(authority)
+    bool_confused["deadline_monotonic_ns"] = True
+    with pytest.raises(ValidationError):
+        Draft202012Validator(authority_schema).validate(bool_confused)
 
 
 @pytest.mark.parametrize(

@@ -19,7 +19,7 @@ import re
 import signal
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from multiprocessing.connection import Connection
@@ -45,6 +45,9 @@ LIVE_ATTEMPT_RECEIPT_ROOT_SCHEMA_VERSION = (
 OPENAI_REQUEST_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-openai-provider-request/v1"
 HISTORY_POLICY_REQUEST_SCHEMA_VERSION = OPENAI_REQUEST_SCHEMA_VERSION
 LIVE_ATTEMPT_PRICING_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-live-pricing/v1"
+LIVE_ATTEMPT_DEADLINE_BINDING_SCHEMA_VERSION = (
+    "mobileworld.runtime.sentinel-r2.4-live-attempt-deadline-binding/v1"
+)
 
 # The sealed production runner may first allow one cooperative wait, then waits
 # the same grace after TERM, and finally waits at least the KILL-reap interval
@@ -71,6 +74,7 @@ _CPU_COST_USD_MICROS: Final[int] = 1
 _MAX_DURATION_NS: Final[int] = 7 * 24 * 60 * 60 * 1_000_000_000
 _MAX_PROVIDER_REQUEST_BYTES: Final[int] = 8 * 1024 * 1024
 _REQUEST_SEAL: Final[object] = object()
+_DEADLINE_BINDING_SEAL: Final[object] = object()
 _RESPONSES_REQUEST_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "input",
@@ -725,6 +729,280 @@ def live_attempt_authority_sha256(value: LiveAttemptAuthorityV1) -> str:
     return _canonical_sha256(live_attempt_authority_projection(value))
 
 
+def parse_live_attempt_authority_projection(value: object) -> LiveAttemptAuthorityV1:
+    """Rebuild an exact authority preimage from owner-only durable JSON."""
+
+    expected_fields = {
+        "actor_request_sha256",
+        "attempt_id",
+        "case_id",
+        "case_execution_lease_sha256",
+        "deadline_monotonic_ns",
+        "logical_call_id",
+        "manifest_sha256",
+        "max_cost_usd_micros",
+        "max_output_tokens",
+        "preflight_sha256",
+        "pricing_binding_sha256",
+        "request_sha256",
+        "role",
+        "schema_version",
+        "stage_sha256",
+        "transport_binding_sha256",
+    }
+    if type(value) is not dict or set(value) != expected_fields:
+        raise LiveAttemptError(
+            "INVALID_ATTEMPT_AUTHORITY", "attempt authority projection fields differ"
+        )
+    projection = cast(dict[str, object], value)
+    try:
+        authority = LiveAttemptAuthorityV1(
+            attempt_id=cast(str, projection["attempt_id"]),
+            role=LiveAttemptRoleV1(cast(str, projection["role"])),
+            manifest_sha256=cast(str, projection["manifest_sha256"]),
+            preflight_sha256=cast(str, projection["preflight_sha256"]),
+            case_execution_lease_sha256=cast(str, projection["case_execution_lease_sha256"]),
+            stage_sha256=cast(str, projection["stage_sha256"]),
+            case_id=cast(str, projection["case_id"]),
+            logical_call_id=cast(str, projection["logical_call_id"]),
+            actor_request_sha256=cast(str, projection["actor_request_sha256"]),
+            request_sha256=cast(str, projection["request_sha256"]),
+            transport_binding_sha256=cast(str, projection["transport_binding_sha256"]),
+            pricing_binding_sha256=cast(str, projection["pricing_binding_sha256"]),
+            deadline_monotonic_ns=cast(int, projection["deadline_monotonic_ns"]),
+            max_cost_usd_micros=cast(int, projection["max_cost_usd_micros"]),
+            max_output_tokens=cast(int, projection["max_output_tokens"]),
+            schema_version=cast(str, projection["schema_version"]),
+        )
+    except (KeyError, TypeError, ValueError, LiveAttemptError) as exc:
+        raise LiveAttemptError(
+            "INVALID_ATTEMPT_AUTHORITY", "attempt authority projection is invalid"
+        ) from exc
+    if _canonical_bytes(projection) != _canonical_bytes(
+        live_attempt_authority_projection(authority)
+    ):
+        raise LiveAttemptError(
+            "INVALID_ATTEMPT_AUTHORITY", "attempt authority projection is non-canonical"
+        )
+    return authority
+
+
+@dataclass(frozen=True, slots=True)
+class LiveAttemptDeadlineBindingV1:
+    """Module-issued source proof for a clamped production attempt deadline.
+
+    The R2.2 transport supplies its own requested call deadline.  Production
+    orchestration separately registers the enclosing case/owner ceiling before
+    that transport can prepare a child.  The runner consumes that registration
+    exactly once and records the deterministic minimum used by the authority.
+    """
+
+    attempt_id: str
+    logical_call_id: str
+    case_id: str
+    case_execution_lease_sha256: str
+    constraint_registered_monotonic_ns: int
+    requested_deadline_issued_monotonic_ns: int
+    requested_call_deadline_monotonic_ns: int
+    request_timeout_ns: int
+    begin_observed_monotonic_ns: int
+    case_execution_deadline_monotonic_ns: int
+    effective_deadline_monotonic_ns: int
+    max_cost_usd_micros: int
+    schema_version: str = LIVE_ATTEMPT_DEADLINE_BINDING_SCHEMA_VERSION
+    _seal: InitVar[object | None] = None
+
+    def __post_init__(self, _seal: object | None) -> None:
+        if _seal is not _DEADLINE_BINDING_SEAL:
+            raise LiveAttemptError(
+                "UNTRUSTED_DEADLINE_BINDING",
+                "attempt deadline binding was not issued by the production runner",
+            )
+        if self.schema_version != LIVE_ATTEMPT_DEADLINE_BINDING_SCHEMA_VERSION:
+            raise LiveAttemptError(
+                "UNKNOWN_SCHEMA_VERSION", "attempt deadline binding schema differs"
+            )
+        _require_id(self.attempt_id, "attempt_id")
+        _require_id(self.logical_call_id, "logical_call_id")
+        _require_id(self.case_id, "case_id")
+        _require_sha256(self.case_execution_lease_sha256, "case_execution_lease_sha256")
+        for name in (
+            "requested_deadline_issued_monotonic_ns",
+            "requested_call_deadline_monotonic_ns",
+            "request_timeout_ns",
+            "constraint_registered_monotonic_ns",
+            "begin_observed_monotonic_ns",
+            "case_execution_deadline_monotonic_ns",
+            "effective_deadline_monotonic_ns",
+        ):
+            _require_int(getattr(self, name), name, 1, (1 << 63) - 1)
+        _require_int(
+            self.max_cost_usd_micros,
+            "max_cost_usd_micros",
+            0,
+            100_000_000_000,
+        )
+        requested = self.requested_deadline_issued_monotonic_ns + self.request_timeout_ns
+        effective = min(
+            requested,
+            self.case_execution_deadline_monotonic_ns,
+        )
+        if (
+            requested > (1 << 63) - 1
+            or self.requested_call_deadline_monotonic_ns != requested
+            or self.effective_deadline_monotonic_ns != effective
+            or self.constraint_registered_monotonic_ns > self.requested_deadline_issued_monotonic_ns
+            or self.requested_deadline_issued_monotonic_ns > self.begin_observed_monotonic_ns
+        ):
+            raise LiveAttemptError(
+                "INVALID_DEADLINE_BINDING",
+                "attempt deadline is not deterministically derived",
+            )
+
+
+def _build_live_attempt_deadline_binding(
+    *,
+    attempt_id: str,
+    logical_call_id: str,
+    case_id: str,
+    case_execution_lease_sha256: str,
+    constraint_registered_monotonic_ns: int,
+    requested_call_deadline_monotonic_ns: int,
+    request_timeout_ns: int,
+    begin_observed_monotonic_ns: int,
+    case_execution_deadline_monotonic_ns: int,
+    max_cost_usd_micros: int,
+) -> LiveAttemptDeadlineBindingV1:
+    if type(requested_call_deadline_monotonic_ns) is not int or type(request_timeout_ns) is not int:
+        raise LiveAttemptError("INVALID_DEADLINE_BINDING", "requested deadline source is invalid")
+    issued_ns = requested_call_deadline_monotonic_ns - request_timeout_ns
+    return LiveAttemptDeadlineBindingV1(
+        attempt_id=attempt_id,
+        logical_call_id=logical_call_id,
+        case_id=case_id,
+        case_execution_lease_sha256=case_execution_lease_sha256,
+        constraint_registered_monotonic_ns=constraint_registered_monotonic_ns,
+        requested_deadline_issued_monotonic_ns=issued_ns,
+        requested_call_deadline_monotonic_ns=requested_call_deadline_monotonic_ns,
+        request_timeout_ns=request_timeout_ns,
+        begin_observed_monotonic_ns=begin_observed_monotonic_ns,
+        case_execution_deadline_monotonic_ns=case_execution_deadline_monotonic_ns,
+        effective_deadline_monotonic_ns=min(
+            requested_call_deadline_monotonic_ns,
+            case_execution_deadline_monotonic_ns,
+        ),
+        max_cost_usd_micros=max_cost_usd_micros,
+        _seal=_DEADLINE_BINDING_SEAL,
+    )
+
+
+def snapshot_live_attempt_deadline_binding(
+    value: LiveAttemptDeadlineBindingV1,
+) -> LiveAttemptDeadlineBindingV1:
+    if type(value) is not LiveAttemptDeadlineBindingV1:
+        raise LiveAttemptError(
+            "UNTRUSTED_DEADLINE_BINDING", "attempt deadline binding type differs"
+        )
+    return LiveAttemptDeadlineBindingV1(
+        attempt_id=value.attempt_id,
+        logical_call_id=value.logical_call_id,
+        case_id=value.case_id,
+        case_execution_lease_sha256=value.case_execution_lease_sha256,
+        constraint_registered_monotonic_ns=(value.constraint_registered_monotonic_ns),
+        requested_deadline_issued_monotonic_ns=(value.requested_deadline_issued_monotonic_ns),
+        requested_call_deadline_monotonic_ns=(value.requested_call_deadline_monotonic_ns),
+        request_timeout_ns=value.request_timeout_ns,
+        begin_observed_monotonic_ns=value.begin_observed_monotonic_ns,
+        case_execution_deadline_monotonic_ns=(value.case_execution_deadline_monotonic_ns),
+        effective_deadline_monotonic_ns=value.effective_deadline_monotonic_ns,
+        max_cost_usd_micros=value.max_cost_usd_micros,
+        schema_version=value.schema_version,
+        _seal=_DEADLINE_BINDING_SEAL,
+    )
+
+
+def live_attempt_deadline_binding_projection(
+    value: LiveAttemptDeadlineBindingV1,
+) -> dict[str, object]:
+    trusted = snapshot_live_attempt_deadline_binding(value)
+    return {
+        "attempt_id": trusted.attempt_id,
+        "case_execution_deadline_monotonic_ns": (trusted.case_execution_deadline_monotonic_ns),
+        "case_execution_lease_sha256": trusted.case_execution_lease_sha256,
+        "case_id": trusted.case_id,
+        "constraint_registered_monotonic_ns": (trusted.constraint_registered_monotonic_ns),
+        "begin_observed_monotonic_ns": trusted.begin_observed_monotonic_ns,
+        "effective_deadline_monotonic_ns": trusted.effective_deadline_monotonic_ns,
+        "logical_call_id": trusted.logical_call_id,
+        "max_cost_usd_micros": trusted.max_cost_usd_micros,
+        "request_timeout_ns": trusted.request_timeout_ns,
+        "requested_call_deadline_monotonic_ns": (trusted.requested_call_deadline_monotonic_ns),
+        "requested_deadline_issued_monotonic_ns": (trusted.requested_deadline_issued_monotonic_ns),
+        "schema_version": trusted.schema_version,
+    }
+
+
+def parse_live_attempt_deadline_binding_projection(
+    value: object,
+) -> LiveAttemptDeadlineBindingV1:
+    expected_fields = {
+        "attempt_id",
+        "case_execution_deadline_monotonic_ns",
+        "case_execution_lease_sha256",
+        "case_id",
+        "constraint_registered_monotonic_ns",
+        "begin_observed_monotonic_ns",
+        "effective_deadline_monotonic_ns",
+        "logical_call_id",
+        "max_cost_usd_micros",
+        "request_timeout_ns",
+        "requested_call_deadline_monotonic_ns",
+        "requested_deadline_issued_monotonic_ns",
+        "schema_version",
+    }
+    if type(value) is not dict or set(value) != expected_fields:
+        raise LiveAttemptError("INVALID_DEADLINE_BINDING", "attempt deadline binding fields differ")
+    projection = cast(dict[str, object], value)
+    try:
+        trusted = LiveAttemptDeadlineBindingV1(
+            attempt_id=cast(str, projection["attempt_id"]),
+            logical_call_id=cast(str, projection["logical_call_id"]),
+            case_id=cast(str, projection["case_id"]),
+            case_execution_lease_sha256=cast(str, projection["case_execution_lease_sha256"]),
+            constraint_registered_monotonic_ns=cast(
+                int, projection["constraint_registered_monotonic_ns"]
+            ),
+            requested_deadline_issued_monotonic_ns=cast(
+                int, projection["requested_deadline_issued_monotonic_ns"]
+            ),
+            requested_call_deadline_monotonic_ns=cast(
+                int, projection["requested_call_deadline_monotonic_ns"]
+            ),
+            request_timeout_ns=cast(int, projection["request_timeout_ns"]),
+            begin_observed_monotonic_ns=cast(int, projection["begin_observed_monotonic_ns"]),
+            case_execution_deadline_monotonic_ns=cast(
+                int, projection["case_execution_deadline_monotonic_ns"]
+            ),
+            effective_deadline_monotonic_ns=cast(
+                int, projection["effective_deadline_monotonic_ns"]
+            ),
+            max_cost_usd_micros=cast(int, projection["max_cost_usd_micros"]),
+            schema_version=cast(str, projection["schema_version"]),
+            _seal=_DEADLINE_BINDING_SEAL,
+        )
+    except (KeyError, TypeError, ValueError, LiveAttemptError) as exc:
+        raise LiveAttemptError(
+            "INVALID_DEADLINE_BINDING", "attempt deadline binding is invalid"
+        ) from exc
+    if _canonical_bytes(projection) != _canonical_bytes(
+        live_attempt_deadline_binding_projection(trusted)
+    ):
+        raise LiveAttemptError(
+            "INVALID_DEADLINE_BINDING", "attempt deadline binding is non-canonical"
+        )
+    return trusted
+
+
 @dataclass(frozen=True, slots=True)
 class LiveAttemptReceiptV1:
     """Terminal, content-free proof for one bounded provider attempt."""
@@ -850,6 +1128,9 @@ class LiveAttemptReceiptV1:
             and self.cost_status is LiveAttemptCostStatusV1.EXACT
             and self.cost_usd_micros is not None
         )
+        observed_response = self.response_envelope_sha256 is not None and (
+            all(value is None for value in tokens) or all(value is not None for value in tokens)
+        )
         model_values = (self.requested_model, self.returned_model)
         if self.execution_kind is LiveAttemptExecutionKindV1.CPU_FIXED_SUBPROCESS:
             if any(value is not None for value in model_values):
@@ -905,6 +1186,16 @@ class LiveAttemptReceiptV1:
                 raise LiveAttemptError(
                     "INVALID_MODEL_PROVENANCE", "invalid provider model proof is inconsistent"
                 )
+        elif self.response_envelope_sha256 is not None:
+            if (
+                self.requested_model != "gpt-5.6-sol"
+                or self.returned_model != self.requested_model
+                or self.dispatch_count != 1
+            ):
+                raise LiveAttemptError(
+                    "INVALID_MODEL_PROVENANCE",
+                    "observed provider response model proof is incomplete",
+                )
         elif any(value is not None for value in model_values):
             raise LiveAttemptError(
                 "INVALID_MODEL_PROVENANCE", "attempt state cannot carry provider model IDs"
@@ -952,17 +1243,52 @@ class LiveAttemptReceiptV1:
                     "INVALID_COMPLETED_RECEIPT", "completed receipt is incomplete"
                 )
             return
+        response_allowed = (
+            (
+                self.status is LiveAttemptStatusV1.FAILED
+                and self.failure_code == "PROVIDER_RESULT_EXCEEDS_AUTHORITY"
+                and complete_response_accounting
+                and self.dispatch_count == 1
+                and not self.cancellation_requested
+                and self.termination is LiveAttemptTerminationV1.NONE
+                and self.worker_reaped
+            )
+            or (
+                self.status is LiveAttemptStatusV1.FAILED
+                and self.failure_code == "PROVIDER_USAGE_MISSING"
+                and observed_response
+                and all(value is None for value in tokens)
+                and self.dispatch_count == 1
+                and self.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+                and not self.cancellation_requested
+                and self.termination is LiveAttemptTerminationV1.NONE
+                and self.worker_reaped
+            )
+            or (
+                self.status is LiveAttemptStatusV1.FAILED
+                and self.failure_code == "PROVIDER_CHILD_DID_NOT_EXIT"
+                and observed_response
+                and self.dispatch_count == 1
+                and self.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+                and not self.cancellation_requested
+                and self.termination
+                in {LiveAttemptTerminationV1.TERM, LiveAttemptTerminationV1.KILL}
+                and self.worker_reaped
+            )
+            or (
+                self.status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+                and self.failure_code == "TERMINATION_UNCONFIRMED"
+                and observed_response
+                and self.dispatch_count == 1
+                and self.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+                and self.cancellation_requested
+                and self.termination is LiveAttemptTerminationV1.UNCONFIRMED
+                and not self.worker_reaped
+            )
+        )
         if (
             self.response_envelope_sha256 is not None or any(value is not None for value in tokens)
-        ) and not (
-            self.status is LiveAttemptStatusV1.FAILED
-            and self.failure_code == "PROVIDER_RESULT_EXCEEDS_AUTHORITY"
-            and complete_response_accounting
-            and self.dispatch_count == 1
-            and not self.cancellation_requested
-            and self.termination is LiveAttemptTerminationV1.NONE
-            and self.worker_reaped
-        ):
+        ) and not response_allowed:
             raise LiveAttemptError(
                 "INVALID_NONCOMPLETED_RECEIPT", "failed attempt claims a response"
             )
@@ -1224,6 +1550,14 @@ class MemoryLiveAttemptReceiptSinkV1:
         with self._lock:
             value = self._terminal.get(attempt_id)
             return None if value is None else snapshot_live_attempt_receipt(value)
+
+    def authority_for(self, attempt_id: str) -> LiveAttemptAuthorityV1 | None:
+        """Return a detached admitted authority without exposing mutable sink state."""
+
+        _require_id(attempt_id, "attempt_id")
+        with self._lock:
+            value = self._started.get(attempt_id)
+            return None if value is None else snapshot_live_attempt_authority(value)
 
 
 def _cpu_response_sha256(authority_sha256: str, request_sha256: str) -> str:
@@ -2011,6 +2345,10 @@ class ProductionOpenAIAttemptCallV1:
         return self._authority_sha256
 
     @property
+    def authority(self) -> LiveAttemptAuthorityV1:
+        return snapshot_live_attempt_authority(self._authority)
+
+    @property
     def dispatch_count(self) -> int:
         with self._state_lock:
             return self._dispatch_count
@@ -2496,6 +2834,8 @@ class ProductionOpenAIAttemptCallV1:
                     terminal = self.terminal_receipt
                     if terminal is not None:
                         raise LiveAttemptError("LIVE_ATTEMPT_CANCELLED", "attempt is terminal")
+                    with self._state_lock:
+                        self._result = envelope
                     self._process.join(self._cancel_grace_seconds)
                     if self._process.is_alive():
                         stop = self._stop_worker(cooperative=False)
@@ -2516,7 +2856,18 @@ class ProductionOpenAIAttemptCallV1:
                                 cost_status=LiveAttemptCostStatusV1.UNKNOWN,
                                 cost_usd_micros=None,
                                 cancellation_requested=not stop.worker_reaped,
+                                response_envelope_sha256=envelope.sha256,
+                                input_tokens=envelope.input_tokens,
+                                cached_input_tokens=(
+                                    cached_input_tokens
+                                    if envelope.input_tokens is not None
+                                    else None
+                                ),
+                                output_tokens=envelope.output_tokens,
+                                total_tokens=envelope.total_tokens,
                                 failure_code=failure_code,
+                                requested_model=completion_stage.model,
+                                returned_model=envelope.returned_model,
                             )
                         )
                         raise LiveAttemptError(failure_code, "child remained alive")
@@ -2538,7 +2889,10 @@ class ProductionOpenAIAttemptCallV1:
                                 cost_status=LiveAttemptCostStatusV1.UNKNOWN,
                                 cost_usd_micros=None,
                                 cancellation_requested=False,
+                                response_envelope_sha256=envelope.sha256,
                                 failure_code="PROVIDER_USAGE_MISSING",
+                                requested_model=completion_stage.model,
+                                returned_model=envelope.returned_model,
                             )
                         )
                         raise LiveAttemptError(
@@ -2569,12 +2923,13 @@ class ProductionOpenAIAttemptCallV1:
                                 output_tokens=envelope.output_tokens,
                                 total_tokens=envelope.total_tokens,
                                 failure_code="PROVIDER_RESULT_EXCEEDS_AUTHORITY",
+                                requested_model=completion_stage.model,
+                                returned_model=envelope.returned_model,
                             )
                         )
                         raise LiveAttemptError(
                             "PROVIDER_RESULT_EXCEEDS_AUTHORITY", "provider result exceeds authority"
                         )
-                    self._result = envelope
                     self._publish(
                         self._make_receipt(
                             status=LiveAttemptStatusV1.COMPLETED,
@@ -2595,6 +2950,18 @@ class ProductionOpenAIAttemptCallV1:
                     return _detach_envelope(envelope)
             self._failed("PROVIDER_CHILD_PROTOCOL_VIOLATION")
             raise LiveAttemptError("PROVIDER_CHILD_PROTOCOL_VIOLATION", "child protocol differs")
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingHistoryAttemptConstraintV1:
+    attempt_id: str
+    logical_call_id: str
+    case_id: str
+    case_execution_lease_sha256: str
+    constraint_registered_monotonic_ns: int
+    case_execution_deadline_monotonic_ns: int
+    request_timeout_ns: int
+    max_cost_usd_micros: int
 
 
 class ProductionOpenAIAttemptRunnerV1:
@@ -2650,6 +3017,12 @@ class ProductionOpenAIAttemptRunnerV1:
         self._pricing_sha256 = pricing_sha256
         self._startup_timeout_ns = startup_timeout_ms * 1_000_000
         self._cancel_grace_seconds = cancel_grace_ms / 1_000
+        self._constraint_lock = threading.Lock()
+        self._pending_history_constraints: dict[str, _PendingHistoryAttemptConstraintV1] = {}
+        self._known_history_constraint_attempt_ids: set[str] = set()
+        self._attempt_deadline_bindings: dict[str, LiveAttemptDeadlineBindingV1] = {}
+        self._attempt_requests: dict[str, CanonicalHistoryPolicyRequestV1] = {}
+        self._attempt_calls: dict[str, ProductionOpenAIAttemptCallV1] = {}
 
     @property
     def factory_binding_sha256(self) -> str:
@@ -2658,6 +3031,10 @@ class ProductionOpenAIAttemptRunnerV1:
     @property
     def pricing_binding_sha256(self) -> str:
         return self._pricing_sha256
+
+    @property
+    def pricing(self) -> LiveAttemptPricingV1:
+        return snapshot_live_attempt_pricing(self._pricing)
 
     @property
     def manifest_sha256(self) -> str:
@@ -2709,6 +3086,189 @@ class ProductionOpenAIAttemptRunnerV1:
 
         return self._sink.receipt_for(attempt_id)
 
+    def attempt_authority_for_attempt(self, attempt_id: str) -> LiveAttemptAuthorityV1 | None:
+        """Return the detached start authority paired with a sink attempt ID."""
+
+        return self._sink.authority_for(attempt_id)
+
+    def register_history_attempt_constraint(
+        self,
+        *,
+        case_lease: CaseExecutionLeaseV1,
+        attempt_id: str,
+        logical_call_id: str,
+        case_execution_deadline_monotonic_ns: int,
+        request_timeout_ns: int,
+        max_cost_usd_micros: int,
+    ) -> None:
+        """Register one independently issued case ceiling before R2.2 prepares.
+
+        Registrations are attempt-ID bound and one-shot.  Releasing an unused
+        registration does not make its ID reusable, preventing a later logical
+        call from inheriting stale authority.
+        """
+
+        if self._role is not LiveAttemptRoleV1.HISTORY_POLICY:
+            raise LiveAttemptError(
+                "HISTORY_CONSTRAINT_ROLE_MISMATCH",
+                "only the history-policy runner accepts this registration",
+            )
+        lease = self._factory.validate_case_execution_lease(case_lease)
+        _require_id(attempt_id, "attempt_id")
+        _require_id(logical_call_id, "logical_call_id")
+        _require_int(
+            case_execution_deadline_monotonic_ns,
+            "case_execution_deadline_monotonic_ns",
+            1,
+            (1 << 63) - 1,
+        )
+        _require_int(request_timeout_ns, "request_timeout_ns", 1, (1 << 63) - 1)
+        _require_int(
+            max_cost_usd_micros,
+            "max_cost_usd_micros",
+            0,
+            100_000_000_000,
+        )
+        registered_ns = time.monotonic_ns()
+        if case_execution_deadline_monotonic_ns <= registered_ns:
+            raise LiveAttemptError(
+                "ATTEMPT_DEADLINE_ELAPSED", "case attempt deadline already elapsed"
+            )
+        pending = _PendingHistoryAttemptConstraintV1(
+            attempt_id=attempt_id,
+            logical_call_id=logical_call_id,
+            case_id=lease.case_id,
+            case_execution_lease_sha256=case_execution_lease_sha256(lease),
+            constraint_registered_monotonic_ns=registered_ns,
+            case_execution_deadline_monotonic_ns=(case_execution_deadline_monotonic_ns),
+            request_timeout_ns=request_timeout_ns,
+            max_cost_usd_micros=max_cost_usd_micros,
+        )
+        with self._constraint_lock:
+            if attempt_id in self._known_history_constraint_attempt_ids:
+                raise LiveAttemptError(
+                    "DUPLICATE_ATTEMPT_ID", "history constraint attempt ID was already used"
+                )
+            self._known_history_constraint_attempt_ids.add(attempt_id)
+            self._pending_history_constraints[attempt_id] = pending
+
+    def discard_unformed_history_attempt_constraint(
+        self, *, attempt_id: str, logical_call_id: str
+    ) -> bool:
+        """Discard an unused registration without permitting ID reuse."""
+
+        _require_id(attempt_id, "attempt_id")
+        _require_id(logical_call_id, "logical_call_id")
+        with self._constraint_lock:
+            pending = self._pending_history_constraints.get(attempt_id)
+            if pending is None:
+                return False
+            if pending.logical_call_id != logical_call_id:
+                raise LiveAttemptError(
+                    "HISTORY_CONSTRAINT_BINDING_MISMATCH",
+                    "unused history constraint belongs to another logical call",
+                )
+            del self._pending_history_constraints[attempt_id]
+            return True
+
+    def attempt_deadline_binding_for_attempt(
+        self, attempt_id: str
+    ) -> LiveAttemptDeadlineBindingV1 | None:
+        _require_id(attempt_id, "attempt_id")
+        with self._constraint_lock:
+            value = self._attempt_deadline_bindings.get(attempt_id)
+        return None if value is None else snapshot_live_attempt_deadline_binding(value)
+
+    def canonical_request_for_attempt(
+        self, attempt_id: str
+    ) -> CanonicalHistoryPolicyRequestV1 | None:
+        _require_id(attempt_id, "attempt_id")
+        with self._constraint_lock:
+            value = self._attempt_requests.get(attempt_id)
+        return None if value is None else snapshot_canonical_history_policy_request(value)
+
+    def response_envelope_for_attempt(self, attempt_id: str) -> object | None:
+        """Return only an observed envelope bound by the terminal receipt."""
+
+        _require_id(attempt_id, "attempt_id")
+        with self._constraint_lock:
+            call = self._attempt_calls.get(attempt_id)
+        if call is None:
+            return None
+        with call._state_lock:
+            result = call._result
+            terminal = call._terminal_receipt
+        if result is None:
+            return None
+        if terminal is None or terminal.response_envelope_sha256 is None:
+            return None
+        from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+            ResponsesEnvelopeV1,
+        )
+
+        if type(result) is not ResponsesEnvelopeV1:
+            raise LiveAttemptError(
+                "PROVIDER_CHILD_PROTOCOL_VIOLATION",
+                "retained provider response envelope type differs",
+            )
+        if result.sha256 != terminal.response_envelope_sha256:
+            raise LiveAttemptError(
+                "PROVIDER_CHILD_PROTOCOL_VIOLATION",
+                "retained provider response differs from terminal receipt",
+            )
+        return ResponsesEnvelopeV1(
+            response_id=result.response_id,
+            requested_model=result.requested_model,
+            returned_model=result.returned_model,
+            status=result.status,
+            service_tier=result.service_tier,
+            output_text=result.output_text,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            total_tokens=result.total_tokens,
+            schema_version=result.schema_version,
+        )
+
+    def _consume_history_attempt_constraint(
+        self,
+        *,
+        lease: CaseExecutionLeaseV1,
+        attempt_id: str,
+        logical_call_id: str,
+        requested_call_deadline_monotonic_ns: int,
+        max_cost_usd_micros: int,
+        begin_observed_monotonic_ns: int,
+    ) -> LiveAttemptDeadlineBindingV1:
+        with self._constraint_lock:
+            pending = self._pending_history_constraints.pop(attempt_id, None)
+        if pending is None:
+            raise LiveAttemptError(
+                "HISTORY_ATTEMPT_CONSTRAINT_REQUIRED",
+                "history attempt has no one-shot case constraint",
+            )
+        if (
+            pending.logical_call_id != logical_call_id
+            or pending.case_id != lease.case_id
+            or pending.case_execution_lease_sha256 != case_execution_lease_sha256(lease)
+            or pending.max_cost_usd_micros != max_cost_usd_micros
+        ):
+            raise LiveAttemptError(
+                "HISTORY_CONSTRAINT_BINDING_MISMATCH",
+                "history attempt differs from its one-shot case constraint",
+            )
+        return _build_live_attempt_deadline_binding(
+            attempt_id=attempt_id,
+            logical_call_id=logical_call_id,
+            case_id=lease.case_id,
+            case_execution_lease_sha256=pending.case_execution_lease_sha256,
+            constraint_registered_monotonic_ns=(pending.constraint_registered_monotonic_ns),
+            requested_call_deadline_monotonic_ns=(requested_call_deadline_monotonic_ns),
+            request_timeout_ns=pending.request_timeout_ns,
+            begin_observed_monotonic_ns=begin_observed_monotonic_ns,
+            case_execution_deadline_monotonic_ns=(pending.case_execution_deadline_monotonic_ns),
+            max_cost_usd_micros=pending.max_cost_usd_micros,
+        )
+
     def begin(
         self,
         *,
@@ -2724,6 +3284,19 @@ class ProductionOpenAIAttemptRunnerV1:
         if lease.execution_scope is not CaseExecutionScopeV1.OWNER_AUTHORIZED_LIVE:
             raise LiveAttemptError("LIVE_SCOPE_REQUIRED", "case lease is not live")
         trusted_request = snapshot_canonical_history_policy_request(request)
+        begin_observed_ns = time.monotonic_ns()
+        deadline_binding: LiveAttemptDeadlineBindingV1 | None = None
+        effective_deadline_ns = deadline_monotonic_ns
+        if self._role is LiveAttemptRoleV1.HISTORY_POLICY:
+            deadline_binding = self._consume_history_attempt_constraint(
+                lease=lease,
+                attempt_id=attempt_id,
+                logical_call_id=logical_call_id,
+                requested_call_deadline_monotonic_ns=deadline_monotonic_ns,
+                max_cost_usd_micros=max_cost_usd_micros,
+                begin_observed_monotonic_ns=begin_observed_ns,
+            )
+            effective_deadline_ns = deadline_binding.effective_deadline_monotonic_ns
         authority = LiveAttemptAuthorityV1(
             attempt_id=attempt_id,
             role=self._role,
@@ -2739,19 +3312,73 @@ class ProductionOpenAIAttemptRunnerV1:
                 transport_binding_sha256, "transport_binding_sha256"
             ),
             pricing_binding_sha256=lease.pricing_binding_sha256,
-            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_monotonic_ns=effective_deadline_ns,
             max_cost_usd_micros=max_cost_usd_micros,
             max_output_tokens=self._stage.max_output_tokens,
         )
         started_ns = time.monotonic_ns()
-        if started_ns >= authority.deadline_monotonic_ns:
-            raise LiveAttemptError("ATTEMPT_DEADLINE_ELAPSED", "attempt deadline elapsed")
         reserved_cost = live_attempt_worst_case_cost_usd_micros(
             self._pricing,
             request_byte_count=trusted_request.byte_count,
             max_output_tokens=authority.max_output_tokens,
         )
         self._sink._reserve(authority)
+        if deadline_binding is not None:
+            with self._constraint_lock:
+                if (
+                    attempt_id in self._attempt_deadline_bindings
+                    or attempt_id in self._attempt_requests
+                ):
+                    raise LiveAttemptError(
+                        "DUPLICATE_ATTEMPT_ID",
+                        "history attempt proof was already retained",
+                    )
+                self._attempt_deadline_bindings[attempt_id] = (
+                    snapshot_live_attempt_deadline_binding(deadline_binding)
+                )
+                self._attempt_requests[attempt_id] = snapshot_canonical_history_policy_request(
+                    trusted_request
+                )
+        if started_ns >= authority.deadline_monotonic_ns:
+            self._sink._commit(
+                LiveAttemptReceiptV1(
+                    attempt_id=authority.attempt_id,
+                    role=authority.role,
+                    authority_sha256=live_attempt_authority_sha256(authority),
+                    manifest_sha256=authority.manifest_sha256,
+                    preflight_sha256=authority.preflight_sha256,
+                    case_execution_lease_sha256=authority.case_execution_lease_sha256,
+                    stage_sha256=authority.stage_sha256,
+                    case_id=authority.case_id,
+                    logical_call_id=authority.logical_call_id,
+                    actor_request_sha256=authority.actor_request_sha256,
+                    request_sha256=authority.request_sha256,
+                    transport_binding_sha256=authority.transport_binding_sha256,
+                    pricing_binding_sha256=authority.pricing_binding_sha256,
+                    execution_kind=(LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS),
+                    status=LiveAttemptStatusV1.FAILED,
+                    dispatch_count=0,
+                    response_envelope_sha256=None,
+                    input_tokens=None,
+                    cached_input_tokens=None,
+                    output_tokens=None,
+                    total_tokens=None,
+                    cost_status=LiveAttemptCostStatusV1.EXACT,
+                    cost_usd_micros=0,
+                    cancellation_requested=False,
+                    termination=LiveAttemptTerminationV1.NONE,
+                    worker_pid=None,
+                    worker_exit_code=None,
+                    worker_reaped=False,
+                    late_output_detected=False,
+                    duration_ns=min(
+                        _MAX_DURATION_NS,
+                        max(0, time.monotonic_ns() - started_ns),
+                    ),
+                    failure_code="ATTEMPT_DEADLINE_ELAPSED",
+                )
+            )
+            raise LiveAttemptError("ATTEMPT_DEADLINE_ELAPSED", "attempt deadline elapsed")
         if reserved_cost > authority.max_cost_usd_micros:
             self._sink._commit(
                 LiveAttemptReceiptV1(
@@ -2876,6 +3503,9 @@ class ProductionOpenAIAttemptRunnerV1:
             request=trusted_request,
             stage=self._stage,
         )
+        if deadline_binding is not None:
+            with self._constraint_lock:
+                self._attempt_calls[attempt_id] = call
         ready_deadline_ns = min(
             authority.deadline_monotonic_ns,
             time.monotonic_ns() + self._startup_timeout_ns,
@@ -3001,11 +3631,13 @@ __all__ = [
     "PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1",
     "PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1",
     "LIVE_ATTEMPT_AUTHORITY_SCHEMA_VERSION",
+    "LIVE_ATTEMPT_DEADLINE_BINDING_SCHEMA_VERSION",
     "LIVE_ATTEMPT_RECEIPT_ROOT_SCHEMA_VERSION",
     "LIVE_ATTEMPT_RECEIPT_SCHEMA_VERSION",
     "LIVE_ATTEMPT_PRICING_SCHEMA_VERSION",
     "LiveAttemptAuthorityV1",
     "LiveAttemptCostStatusV1",
+    "LiveAttemptDeadlineBindingV1",
     "LiveAttemptError",
     "LiveAttemptExecutionKindV1",
     "LiveAttemptPricingV1",
@@ -3021,6 +3653,7 @@ __all__ = [
     "live_attempt_authority_projection",
     "live_attempt_authority_sha256",
     "live_attempt_cost_usd_micros",
+    "live_attempt_deadline_binding_projection",
     "live_attempt_worst_case_cost_usd_micros",
     "live_attempt_pricing_projection",
     "live_attempt_pricing_sha256",
@@ -3029,11 +3662,14 @@ __all__ = [
     "live_attempt_receipt_sha256",
     "production_live_attempt_runner_available_v1",
     "production_attempt_termination_upper_bound_ns_v1",
+    "parse_live_attempt_authority_projection",
+    "parse_live_attempt_deadline_binding_projection",
     "build_canonical_history_policy_request",
     "build_canonical_openai_request",
     "snapshot_canonical_openai_request",
     "snapshot_canonical_history_policy_request",
     "snapshot_live_attempt_authority",
+    "snapshot_live_attempt_deadline_binding",
     "snapshot_live_attempt_pricing",
     "snapshot_live_attempt_receipt",
 ]

@@ -13,6 +13,8 @@ output from a live evaluation is rejected rather than silently mislabelled.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -20,11 +22,16 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import InitVar, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from functools import lru_cache
+from pathlib import Path
 from threading import Lock
 from time import monotonic_ns, perf_counter_ns
 from typing import Any, cast
+
+from jsonschema import Draft202012Validator, RefResolver  # type: ignore[import-untyped]
 
 from mobile_world.offline.causal_replay.contracts import (
     HistoryIR,
@@ -43,16 +50,25 @@ from mobile_world.runtime.sentinel.r2_2.contracts import (
     RuntimeAdmissionBundleV1,
     RuntimeExecutionScope,
     RuntimeSentinelPolicyOutputV1,
+    evidence_packet_sha256,
     runtime_policy_output_sha256,
 )
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+    GPT56_MAX_OUTPUT_TOKENS,
+    GPT56_OUTPUT_SCHEMA_NAME,
+    GPT56_POLICY_INSTRUCTIONS,
+    GPT56_REASONING_EFFORT,
+    GPT56_REQUESTED_MODEL,
     SUPPORTED_OPENAI_SDK_VERSION,
+    GPT56PolicyError,
     GPT56SentinelPolicy,
     OpenAIResponsesTransportBindingV1,
     PolicyCallProvenanceV1,
     ProposalSchemaSnapshotV1,
+    ResponsesEnvelopeV1,
     TransportDescriptorV1,
     build_owner_authorized_openai_responses_transport,
+    openai_responses_transport_binding_projection,
     openai_responses_transport_binding_sha256,
     responses_envelope_hash_projection,
     transport_descriptor_sha256,
@@ -63,7 +79,13 @@ from mobile_world.runtime.sentinel.r2_2.runtime_overlay import (
     bind_policy_receipt,
     proposal_admission,
 )
-from mobile_world.runtime.sentinel.r2_2.sidecar import MemoryR22PolicyReceiptSink
+from mobile_world.runtime.sentinel.r2_2.sidecar import (
+    MemoryR22PolicyReceiptSink,
+    PolicyEvaluationStatus,
+    R22PolicyReceiptV1,
+    detach_r22_policy_receipt,
+    r22_policy_receipt_dict,
+)
 from mobile_world.runtime.sentinel.r2_3.contracts import TaskInstructionV1
 from mobile_world.runtime.sentinel.r2_3.session import RubricTaskSession
 from mobile_world.runtime.sentinel.r2_4.contracts import (
@@ -81,14 +103,31 @@ from mobile_world.runtime.sentinel.r2_4.evidence import (
     rubric_evidence_snapshot_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    CanonicalHistoryPolicyRequestV1,
+    LiveAttemptAuthorityV1,
+    LiveAttemptCostStatusV1,
+    LiveAttemptDeadlineBindingV1,
     LiveAttemptPricingV1,
     LiveAttemptReceiptV1,
     LiveAttemptRoleV1,
     LiveAttemptStatusV1,
     MemoryLiveAttemptReceiptSinkV1,
     ProductionOpenAIAttemptRunnerV1,
+    build_canonical_history_policy_request,
+    live_attempt_authority_projection,
+    live_attempt_authority_sha256,
+    live_attempt_cost_usd_micros,
+    live_attempt_deadline_binding_projection,
+    live_attempt_pricing_projection,
     live_attempt_pricing_sha256,
     live_attempt_receipt_sha256,
+    live_attempt_worst_case_cost_usd_micros,
+    parse_live_attempt_authority_projection,
+    parse_live_attempt_deadline_binding_projection,
+    snapshot_canonical_history_policy_request,
+    snapshot_live_attempt_authority,
+    snapshot_live_attempt_deadline_binding,
+    snapshot_live_attempt_pricing,
     snapshot_live_attempt_receipt,
 )
 from mobile_world.runtime.sentinel.r2_4.live_run import (
@@ -110,13 +149,18 @@ from mobile_world.runtime.sentinel.r2_4.policy import promote_r22_policy_output
 from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     CaseExecutionLeaseV1,
     ProductionPostPreflightFactoryV1,
+    case_execution_lease_projection,
     case_execution_lease_sha256,
+    openai_stage_projection,
+    openai_stage_set_sha256,
+    openai_stage_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
     LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
     BoundCollectorCurrentImageV1,
     LiveOpenAIRubricBackendV1,
+    LiveRubricAttemptConstraintBindingV1,
     LiveRubricAttemptRequestAnchorV1,
     LiveRubricCallReceiptV1,
     LiveRubricCallTrustAnchorV1,
@@ -125,13 +169,22 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     ProductionRubricProviderPortV1,
     R24RubricBackendExtensionDescriptorV1,
     bind_current_collector_image_projection,
+    build_live_rubric_attempt_constraint_binding_v1,
+    live_rubric_attempt_constraint_binding_projection,
     live_rubric_call_receipt_sha256,
     live_rubric_operation_prompt_sha256,
     live_rubric_prompt_bundle_sha256,
+    parse_durable_attempt_pricing_projection_v1,
+    parse_durable_case_execution_lease_projection_v1,
+    parse_durable_live_attempt_receipt_projection_v1,
+    parse_durable_openai_stage_projection_v1,
+    parse_live_rubric_attempt_constraint_binding_projection_v1,
+    snapshot_live_rubric_attempt_constraint_binding,
     snapshot_live_rubric_attempt_request_anchor,
     snapshot_live_rubric_call_receipt,
     snapshot_live_rubric_call_trust_anchor,
     snapshot_r24_rubric_backend_extension_descriptor,
+    validate_live_rubric_attempt_receipt_authority_v1,
     validate_live_rubric_attempt_request_anchor_v1,
     validate_live_rubric_request_anchor_v1,
 )
@@ -141,18 +194,15 @@ OWNER_AUTHORIZED_LIVE_POLICY_AUTHORITY_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-owner-authorized-live-policy-authority/v1"
 )
 OWNER_AUTHORIZED_LIVE_ACTIVE_SCOPE_VALUE = "OWNER_AUTHORIZED_LIVE_ACTIVE"
+LIVE_HISTORY_POLICY_REQUEST_PROOF_SCHEMA_VERSION = (
+    "mobileworld.runtime.sentinel-r2.4-history-policy-request-proof/v1"
+)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _GIT_SHA1 = re.compile(r"[0-9a-f]{40}")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}")
 _UTC_SECOND = re.compile(r"20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
-_BEGIN_FAILURE_CODES_WITHOUT_REQUEST_ANCHOR = frozenset(
-    {
-        "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
-        "PROVIDER_CHILD_START_FAILED",
-        "PROVIDER_CHILD_READY_FAILED",
-    }
-)
+_HISTORY_DATA_IMAGE = re.compile(r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]*={0,2})")
 _LIVE_PROMOTION_CHECKS = (
     "R24_R22_EXACT_OUTPUT_BOUND",
     "R24_R22_RECEIPT_HASH_RETAINED",
@@ -167,6 +217,84 @@ _LIVE_PROMOTION_CHECKS = (
 )
 _PER_CALL_POLICY_SEAL = object()
 _LIVE_BUDGET_LEDGER_SEAL = object()
+_HISTORY_REQUEST_PROOF_SEAL = object()
+_R22_RECEIPT_PUBLICATION_FAILURE_CODES = frozenset(
+    {
+        "POLICY_RECEIPT_PREPARE_FAILED",
+        "POLICY_RECEIPT_PREPARE_MUTATED",
+        "POLICY_RECEIPT_PUBLISH_FAILED",
+        "POLICY_RECEIPT_PUBLISH_MUTATED",
+        "POLICY_DEADLINE_EXCEEDED",
+    }
+)
+
+
+class LiveHistoryPolicyReceiptStateV1(StrEnum):
+    R22_RECEIPT_COMMITTED = "R22_RECEIPT_COMMITTED"
+    R22_RECEIPT_ABSENT_PRE_DISPATCH = "R22_RECEIPT_ABSENT_PRE_DISPATCH"
+    R22_RECEIPT_ABSENT_POST_DISPATCH = "R22_RECEIPT_ABSENT_POST_DISPATCH"
+
+
+@lru_cache(maxsize=1)
+def _history_request_proof_validator() -> Draft202012Validator:
+    schema_root = Path(__file__).resolve().parents[6] / "mobileworld_audit_handoff" / "schemas"
+    paths = {
+        "history": schema_root / "r2_4/history_policy_request_proof.v1.schema.json",
+        "rubric": schema_root / "r2_4/rubric_request_proof.v1.schema.json",
+        "receipt": schema_root / "r2_2/policy_receipt.v1.schema.json",
+        "proposal": schema_root / "r2_2/policy_proposal.v1.schema.json",
+        "evidence": schema_root / "r2_2/evidence_packet.v1.schema.json",
+    }
+    schemas: dict[str, dict[str, JsonValue]] = {}
+    for name, path in paths.items():
+        try:
+            decoded = json.loads(path.read_bytes())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise R24ContractError(
+                "INVALID_HISTORY_REQUEST_PROOF_SCHEMA",
+                "checked-in history request proof schema is unavailable",
+            ) from exc
+        if type(decoded) is not dict or type(decoded.get("$id")) is not str:
+            raise R24ContractError(
+                "INVALID_HISTORY_REQUEST_PROOF_SCHEMA",
+                "checked-in history request proof schema set differs",
+            )
+        schemas[name] = cast(dict[str, JsonValue], decoded)
+    primary = schemas["history"]
+    try:
+        Draft202012Validator.check_schema(primary)
+    except Exception as exc:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF_SCHEMA",
+            "checked-in history request proof schema is invalid",
+        ) from exc
+    resolver = RefResolver.from_schema(
+        primary,
+        store={cast(str, value["$id"]): value for value in schemas.values()},
+    )
+    return Draft202012Validator(primary, resolver=resolver)
+
+
+@lru_cache(maxsize=1)
+def _history_evidence_packet_validator() -> Draft202012Validator:
+    path = (
+        Path(__file__).resolve().parents[6]
+        / "mobileworld_audit_handoff"
+        / "schemas"
+        / "r2_2"
+        / "evidence_packet.v1.schema.json"
+    )
+    try:
+        decoded = json.loads(path.read_bytes())
+        if type(decoded) is not dict:
+            raise TypeError("evidence packet schema root differs")
+        Draft202012Validator.check_schema(decoded)
+    except Exception as exc:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF_SCHEMA",
+            "checked-in evidence packet schema is unavailable or invalid",
+        ) from exc
+    return Draft202012Validator(cast(dict[str, JsonValue], decoded))
 
 
 def _require_sha256(value: object, name: str) -> str:
@@ -1068,6 +1196,1090 @@ def resolved_live_policy_call_binding_sha256(
     return canonical_sha256(cast(JsonValue, resolved_live_policy_call_binding_projection(value)))
 
 
+def _snapshot_history_transport_binding(
+    value: OpenAIResponsesTransportBindingV1,
+) -> OpenAIResponsesTransportBindingV1:
+    if type(value) is not OpenAIResponsesTransportBindingV1:
+        raise R24ContractError(
+            "UNTRUSTED_HISTORY_REQUEST_PROOF", "history transport binding type differs"
+        )
+    try:
+        return OpenAIResponsesTransportBindingV1(
+            **{name: getattr(value, name) for name in value.__dataclass_fields__}
+        )
+    except Exception as exc:
+        raise R24ContractError(
+            "UNTRUSTED_HISTORY_REQUEST_PROOF",
+            "history transport binding could not be detached",
+        ) from exc
+
+
+def _snapshot_history_response_envelope(
+    value: ResponsesEnvelopeV1,
+) -> ResponsesEnvelopeV1:
+    if type(value) is not ResponsesEnvelopeV1:
+        raise R24ContractError(
+            "UNTRUSTED_HISTORY_REQUEST_PROOF", "history response envelope type differs"
+        )
+    try:
+        return ResponsesEnvelopeV1(
+            response_id=value.response_id,
+            requested_model=value.requested_model,
+            returned_model=value.returned_model,
+            status=value.status,
+            service_tier=value.service_tier,
+            output_text=value.output_text,
+            input_tokens=value.input_tokens,
+            output_tokens=value.output_tokens,
+            total_tokens=value.total_tokens,
+            schema_version=value.schema_version,
+        )
+    except Exception as exc:
+        raise R24ContractError(
+            "UNTRUSTED_HISTORY_REQUEST_PROOF",
+            "history response envelope could not be detached",
+        ) from exc
+
+
+def _history_provider_request_projection(
+    value: CanonicalHistoryPolicyRequestV1,
+) -> dict[str, JsonValue]:
+    trusted = snapshot_canonical_history_policy_request(value)
+    try:
+        projection = json.loads(trusted.canonical_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history provider request is invalid"
+        ) from exc
+    if (
+        type(projection) is not dict
+        or canonical_json_bytes(cast(JsonValue, projection)) != trusted.canonical_bytes
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history provider request is not canonical"
+        )
+    return cast(dict[str, JsonValue], projection)
+
+
+def _history_response_envelope_projection(
+    value: ResponsesEnvelopeV1,
+) -> dict[str, JsonValue]:
+    trusted = _snapshot_history_response_envelope(value)
+    return {
+        "input_tokens": trusted.input_tokens,
+        "output_text": trusted.output_text,
+        "output_tokens": trusted.output_tokens,
+        "requested_model": trusted.requested_model,
+        "response_id": trusted.response_id,
+        "returned_model": trusted.returned_model,
+        "schema_version": trusted.schema_version,
+        "service_tier": trusted.service_tier,
+        "status": trusted.status,
+        "total_tokens": trusted.total_tokens,
+    }
+
+
+def _parse_history_transport_binding_projection(
+    value: object,
+) -> OpenAIResponsesTransportBindingV1:
+    expected = set(OpenAIResponsesTransportBindingV1.__dataclass_fields__)
+    if type(value) is not dict or set(value) != expected:
+        raise R24ContractError("INVALID_HISTORY_REQUEST_PROOF", "history transport fields differ")
+    projection = cast(dict[str, object], value)
+    try:
+        trusted: OpenAIResponsesTransportBindingV1 = cast(Any, OpenAIResponsesTransportBindingV1)(
+            **{name: projection[name] for name in expected}
+        )
+    except Exception as exc:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history transport binding is invalid"
+        ) from exc
+    if canonical_json_bytes(cast(JsonValue, projection)) != canonical_json_bytes(
+        cast(JsonValue, openai_responses_transport_binding_projection(trusted))
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history transport binding is non-canonical"
+        )
+    return trusted
+
+
+def _parse_history_response_envelope_projection(
+    value: object,
+) -> ResponsesEnvelopeV1:
+    expected = {
+        "input_tokens",
+        "output_text",
+        "output_tokens",
+        "requested_model",
+        "response_id",
+        "returned_model",
+        "schema_version",
+        "service_tier",
+        "status",
+        "total_tokens",
+    }
+    if type(value) is not dict or set(value) != expected:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history response envelope fields differ"
+        )
+    projection = cast(dict[str, object], value)
+    try:
+        envelope = ResponsesEnvelopeV1(
+            response_id=cast(str, projection["response_id"]),
+            requested_model=cast(str, projection["requested_model"]),
+            returned_model=cast(str, projection["returned_model"]),
+            status=cast(str, projection["status"]),
+            service_tier=cast(str | None, projection["service_tier"]),
+            output_text=cast(str, projection["output_text"]),
+            input_tokens=cast(int | None, projection["input_tokens"]),
+            output_tokens=cast(int | None, projection["output_tokens"]),
+            total_tokens=cast(int | None, projection["total_tokens"]),
+            schema_version=cast(str, projection["schema_version"]),
+        )
+    except Exception as exc:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history response envelope is invalid"
+        ) from exc
+    if canonical_json_bytes(cast(JsonValue, projection)) != canonical_json_bytes(
+        cast(JsonValue, _history_response_envelope_projection(envelope))
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history response envelope is non-canonical"
+        )
+    return envelope
+
+
+def _parse_r22_policy_receipt_projection(value: object) -> R22PolicyReceiptV1:
+    expected = set(R22PolicyReceiptV1.__dataclass_fields__)
+    if type(value) is not dict or set(value) != expected:
+        raise R24ContractError("INVALID_HISTORY_REQUEST_PROOF", "R2.2 policy receipt fields differ")
+    projection = cast(dict[str, object], value)
+    arguments = dict(projection)
+    try:
+        arguments["evaluation_status"] = PolicyEvaluationStatus(
+            cast(str, arguments["evaluation_status"])
+        )
+        checks = arguments["validation_checks"]
+        if type(checks) is not list or any(type(item) is not str for item in checks):
+            raise TypeError("R2.2 validation checks differ")
+        arguments["validation_checks"] = tuple(checks)
+        receipt: R22PolicyReceiptV1 = cast(Any, R22PolicyReceiptV1)(**arguments)
+    except Exception as exc:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "R2.2 policy receipt is invalid"
+        ) from exc
+    if canonical_json_bytes(cast(JsonValue, projection)) != canonical_json_bytes(
+        cast(JsonValue, r22_policy_receipt_dict(receipt))
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "R2.2 policy receipt is non-canonical"
+        )
+    return receipt
+
+
+def _history_receipt_exact_cost_matches_pricing(
+    receipt: LiveAttemptReceiptV1,
+    pricing: LiveAttemptPricingV1,
+) -> bool:
+    if receipt.cost_status is not LiveAttemptCostStatusV1.EXACT:
+        return receipt.cost_usd_micros is None
+    if receipt.dispatch_count == 0:
+        return receipt.cost_usd_micros == 0
+    if any(
+        value is None
+        for value in (
+            receipt.input_tokens,
+            receipt.cached_input_tokens,
+            receipt.output_tokens,
+        )
+    ):
+        return False
+    return receipt.cost_usd_micros == live_attempt_cost_usd_micros(
+        pricing,
+        input_tokens=cast(int, receipt.input_tokens),
+        cached_input_tokens=cast(int, receipt.cached_input_tokens),
+        output_tokens=cast(int, receipt.output_tokens),
+    )
+
+
+def _history_receipt_authority_limits_are_valid(
+    receipt: LiveAttemptReceiptV1,
+    authority: LiveAttemptAuthorityV1,
+) -> bool:
+    exceeds = (
+        receipt.cost_usd_micros is not None
+        and receipt.cost_usd_micros > authority.max_cost_usd_micros
+    ) or (receipt.output_tokens is not None and receipt.output_tokens > authority.max_output_tokens)
+    if receipt.failure_code == "PROVIDER_RESULT_EXCEEDS_AUTHORITY":
+        return receipt.status is LiveAttemptStatusV1.FAILED and exceeds
+    return not exceeds
+
+
+@dataclass(frozen=True, slots=True)
+class LiveHistoryPolicyAttemptRequestAnchorV1:
+    """Module-sealed full preimage for one HISTORY_POLICY attempt."""
+
+    attempt_id: str
+    logical_call_id: str
+    actor_request_sha256: str
+    coordinator_evidence_packet_sha256: str
+    attempt_authority: LiveAttemptAuthorityV1 = field(repr=False)
+    deadline_binding: LiveAttemptDeadlineBindingV1 = field(repr=False)
+    constraint_binding: LiveRubricAttemptConstraintBindingV1 = field(repr=False)
+    case_execution_lease: dict[str, JsonValue] = field(repr=False)
+    openai_stage: OpenAIResponsesStageV1 = field(repr=False)
+    rubric_openai_stage: OpenAIResponsesStageV1 = field(repr=False)
+    pricing: LiveAttemptPricingV1 = field(repr=False)
+    transport_binding: OpenAIResponsesTransportBindingV1 = field(repr=False)
+    provider_request: CanonicalHistoryPolicyRequestV1 = field(repr=False)
+    response_envelope: ResponsesEnvelopeV1 | None = field(repr=False)
+    r22_policy_receipt: R22PolicyReceiptV1 | None = field(repr=False)
+    r22_receipt_state: LiveHistoryPolicyReceiptStateV1
+    r22_receipt_failure_code: str | None
+    _seal: InitVar[object | None] = None
+
+    def __post_init__(self, _seal: object | None) -> None:
+        if _seal is not _HISTORY_REQUEST_PROOF_SEAL:
+            raise R24ContractError(
+                "UNTRUSTED_HISTORY_REQUEST_PROOF",
+                "history request proof was not issued by production orchestration",
+            )
+        _require_id(self.attempt_id, "attempt_id")
+        _require_id(self.logical_call_id, "logical_call_id")
+        _require_sha256(self.actor_request_sha256, "actor_request_sha256")
+        _require_sha256(
+            self.coordinator_evidence_packet_sha256,
+            "coordinator_evidence_packet_sha256",
+        )
+        if type(self.r22_receipt_state) is not LiveHistoryPolicyReceiptStateV1:
+            raise R24ContractError(
+                "UNTRUSTED_HISTORY_REQUEST_PROOF", "R2.2 receipt state type differs"
+            )
+        if self.r22_receipt_failure_code is not None and (
+            type(self.r22_receipt_failure_code) is not str
+            or self.r22_receipt_failure_code not in _R22_RECEIPT_PUBLICATION_FAILURE_CODES
+        ):
+            raise R24ContractError(
+                "UNTRUSTED_HISTORY_REQUEST_PROOF",
+                "history R2.2 receipt failure code is not a closed publication failure",
+            )
+        try:
+            authority = snapshot_live_attempt_authority(self.attempt_authority)
+            deadline = snapshot_live_attempt_deadline_binding(self.deadline_binding)
+            constraint = snapshot_live_rubric_attempt_constraint_binding(self.constraint_binding)
+            lease = parse_durable_case_execution_lease_projection_v1(self.case_execution_lease)
+            stage = parse_durable_openai_stage_projection_v1(
+                openai_stage_projection(self.openai_stage)
+            )
+            rubric_stage = parse_durable_openai_stage_projection_v1(
+                openai_stage_projection(self.rubric_openai_stage)
+            )
+            pricing = snapshot_live_attempt_pricing(self.pricing)
+            transport = _snapshot_history_transport_binding(self.transport_binding)
+            request = snapshot_canonical_history_policy_request(self.provider_request)
+            envelope = (
+                None
+                if self.response_envelope is None
+                else _snapshot_history_response_envelope(self.response_envelope)
+            )
+            r22_receipt = (
+                None
+                if self.r22_policy_receipt is None
+                else detach_r22_policy_receipt(self.r22_policy_receipt)
+            )
+        except Exception as exc:
+            raise R24ContractError(
+                "UNTRUSTED_HISTORY_REQUEST_PROOF",
+                "history request proof preimages could not be detached",
+            ) from exc
+        committed = self.r22_receipt_state is LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_COMMITTED
+        if committed != (r22_receipt is not None):
+            raise R24ContractError(
+                "UNTRUSTED_HISTORY_REQUEST_PROOF",
+                "history R2.2 receipt state differs from its preimage",
+            )
+        if committed and self.r22_receipt_failure_code is not None:
+            raise R24ContractError(
+                "UNTRUSTED_HISTORY_REQUEST_PROOF",
+                "a committed history R2.2 receipt cannot also be publication-failed",
+            )
+        object.__setattr__(self, "attempt_authority", authority)
+        object.__setattr__(self, "deadline_binding", deadline)
+        object.__setattr__(self, "constraint_binding", constraint)
+        object.__setattr__(self, "case_execution_lease", lease)
+        object.__setattr__(self, "openai_stage", stage)
+        object.__setattr__(self, "rubric_openai_stage", rubric_stage)
+        object.__setattr__(self, "pricing", pricing)
+        object.__setattr__(self, "transport_binding", transport)
+        object.__setattr__(self, "provider_request", request)
+        object.__setattr__(self, "response_envelope", envelope)
+        object.__setattr__(self, "r22_policy_receipt", r22_receipt)
+
+
+def _build_live_history_policy_attempt_request_anchor_v1(
+    *,
+    attempt_id: str,
+    logical_call_id: str,
+    actor_request_sha256: str,
+    coordinator_evidence_packet_sha256: str,
+    attempt_authority: LiveAttemptAuthorityV1,
+    deadline_binding: LiveAttemptDeadlineBindingV1,
+    constraint_binding: LiveRubricAttemptConstraintBindingV1,
+    case_execution_lease: CaseExecutionLeaseV1,
+    openai_stage: OpenAIResponsesStageV1,
+    rubric_openai_stage: OpenAIResponsesStageV1,
+    pricing: LiveAttemptPricingV1,
+    transport_binding: OpenAIResponsesTransportBindingV1,
+    provider_request: CanonicalHistoryPolicyRequestV1,
+    response_envelope: ResponsesEnvelopeV1 | None,
+    r22_policy_receipt: R22PolicyReceiptV1 | None,
+    r22_receipt_state: LiveHistoryPolicyReceiptStateV1,
+    r22_receipt_failure_code: str | None = None,
+) -> LiveHistoryPolicyAttemptRequestAnchorV1:
+    return LiveHistoryPolicyAttemptRequestAnchorV1(
+        attempt_id=attempt_id,
+        logical_call_id=logical_call_id,
+        actor_request_sha256=actor_request_sha256,
+        coordinator_evidence_packet_sha256=coordinator_evidence_packet_sha256,
+        attempt_authority=attempt_authority,
+        deadline_binding=deadline_binding,
+        constraint_binding=constraint_binding,
+        case_execution_lease=case_execution_lease_projection(case_execution_lease),
+        openai_stage=openai_stage,
+        rubric_openai_stage=rubric_openai_stage,
+        pricing=pricing,
+        transport_binding=transport_binding,
+        provider_request=provider_request,
+        response_envelope=response_envelope,
+        r22_policy_receipt=r22_policy_receipt,
+        r22_receipt_state=r22_receipt_state,
+        r22_receipt_failure_code=r22_receipt_failure_code,
+        _seal=_HISTORY_REQUEST_PROOF_SEAL,
+    )
+
+
+def snapshot_live_history_policy_attempt_request_anchor(
+    value: LiveHistoryPolicyAttemptRequestAnchorV1,
+) -> LiveHistoryPolicyAttemptRequestAnchorV1:
+    if type(value) is not LiveHistoryPolicyAttemptRequestAnchorV1:
+        raise R24ContractError(
+            "UNTRUSTED_HISTORY_REQUEST_PROOF", "history request anchor type differs"
+        )
+    return LiveHistoryPolicyAttemptRequestAnchorV1(
+        attempt_id=value.attempt_id,
+        logical_call_id=value.logical_call_id,
+        actor_request_sha256=value.actor_request_sha256,
+        coordinator_evidence_packet_sha256=(value.coordinator_evidence_packet_sha256),
+        attempt_authority=value.attempt_authority,
+        deadline_binding=value.deadline_binding,
+        constraint_binding=value.constraint_binding,
+        case_execution_lease=value.case_execution_lease,
+        openai_stage=value.openai_stage,
+        rubric_openai_stage=value.rubric_openai_stage,
+        pricing=value.pricing,
+        transport_binding=value.transport_binding,
+        provider_request=value.provider_request,
+        response_envelope=value.response_envelope,
+        r22_policy_receipt=value.r22_policy_receipt,
+        r22_receipt_state=value.r22_receipt_state,
+        r22_receipt_failure_code=value.r22_receipt_failure_code,
+        _seal=_HISTORY_REQUEST_PROOF_SEAL,
+    )
+
+
+def _validate_history_provider_request_v1(
+    request: CanonicalHistoryPolicyRequestV1,
+    *,
+    transport_binding: OpenAIResponsesTransportBindingV1,
+    logical_call_id: str,
+    actor_request_sha256: str,
+) -> tuple[str, str, str, str, str]:
+    """Rebuild exact R2.2 semantic/image/config provenance from request bytes."""
+
+    projection = _history_provider_request_projection(request)
+    expected_fields = {
+        "input",
+        "instructions",
+        "max_output_tokens",
+        "model",
+        "parallel_tool_calls",
+        "reasoning",
+        "store",
+        "stream",
+        "text",
+        "tool_choice",
+        "tools",
+        "truncation",
+    }
+    input_value = projection.get("input")
+    if type(input_value) is not list or len(input_value) != 1:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history provider input envelope differs"
+        )
+    message = input_value[0]
+    if type(message) is not dict or set(message) != {"content", "role"}:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history provider input message differs"
+        )
+    content = message.get("content")
+    if (
+        message.get("role") != "user"
+        or type(message.get("role")) is not str
+        or type(content) is not list
+        or len(content) != 2
+    ):
+        raise R24ContractError("INVALID_HISTORY_REQUEST_PROOF", "history provider content differs")
+    text_part, image_part = content
+    if (
+        type(text_part) is not dict
+        or set(text_part) != {"text", "type"}
+        or text_part.get("type") != "input_text"
+        or type(text_part.get("text")) is not str
+        or type(image_part) is not dict
+        or set(image_part) != {"detail", "image_url", "type"}
+        or image_part.get("type") != "input_image"
+        or image_part.get("detail") != "high"
+        or type(image_part.get("image_url")) is not str
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history provider semantic content differs"
+        )
+    packet_text = cast(str, text_part["text"])
+    try:
+        packet = json.loads(packet_text)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history evidence packet is invalid JSON"
+        ) from exc
+    if (
+        type(packet) is not dict
+        or canonical_json_bytes(cast(JsonValue, packet)).decode("utf-8") != packet_text
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history evidence packet is not canonical"
+        )
+    if tuple(_history_evidence_packet_validator().iter_errors(packet)):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF",
+            "history evidence packet does not match the accepted R2.2 schema",
+        )
+    packet_id = packet.get("packet_id")
+    packet_host_id = packet.get("host_id")
+    if (
+        type(packet_id) is not str
+        or type(packet_host_id) is not str
+        or packet.get("logical_call_id") != logical_call_id
+        or packet.get("raw_request_sha256") != actor_request_sha256
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF",
+            "history evidence packet differs from its actor call",
+        )
+    packet_sha256 = hashlib.sha256(packet_text.encode("utf-8")).hexdigest()
+    image_url = cast(str, image_part["image_url"])
+    match = _HISTORY_DATA_IMAGE.fullmatch(image_url)
+    if match is None:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history current image URL is invalid"
+        )
+    try:
+        image_bytes = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history current image is invalid"
+        ) from exc
+    if not image_bytes:
+        raise R24ContractError("INVALID_HISTORY_REQUEST_PROOF", "history current image is empty")
+    image_sha256 = hashlib.sha256(image_bytes).hexdigest()
+    current = packet.get("current_observation")
+    if (
+        type(current) is not dict
+        or current.get("screenshot_content_sha256") != image_sha256
+        or current.get("media_type") != match.group(1)
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF",
+            "history image differs from its evidence-packet current observation",
+        )
+    checked_schema = ProposalSchemaSnapshotV1.from_checked_in()
+    expected_request: dict[str, JsonValue] = {
+        "input": cast(JsonValue, input_value),
+        "instructions": GPT56_POLICY_INSTRUCTIONS,
+        "max_output_tokens": GPT56_MAX_OUTPUT_TOKENS,
+        "model": GPT56_REQUESTED_MODEL,
+        "parallel_tool_calls": False,
+        "reasoning": {"effort": GPT56_REASONING_EFFORT},
+        "store": False,
+        "stream": False,
+        "text": {
+            "format": {
+                "name": GPT56_OUTPUT_SCHEMA_NAME,
+                "schema": checked_schema.as_dict(),
+                "strict": True,
+                "type": "json_schema",
+            },
+            "verbosity": "low",
+        },
+        "tool_choice": "none",
+        "tools": [],
+        "truncation": "disabled",
+    }
+    if set(projection) != expected_fields or canonical_json_bytes(
+        cast(JsonValue, projection)
+    ) != canonical_json_bytes(cast(JsonValue, expected_request)):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF",
+            "history provider request differs from the fixed R2.2 request",
+        )
+    config: dict[str, JsonValue] = {
+        "schema_version": "mobileworld.runtime.sentinel-gpt56-request/v1",
+        "model": GPT56_REQUESTED_MODEL,
+        "prompt_sha256": hashlib.sha256(GPT56_POLICY_INSTRUCTIONS.encode("utf-8")).hexdigest(),
+        "reasoning_effort": GPT56_REASONING_EFFORT,
+        "output_schema_name": GPT56_OUTPUT_SCHEMA_NAME,
+        "output_schema_sha256": checked_schema.sha256,
+        "text_verbosity": "low",
+        "tools": [],
+        "tool_choice": "none",
+        "parallel_tool_calls": False,
+        "store": False,
+        "stream": False,
+        "truncation": "disabled",
+        "max_output_tokens": GPT56_MAX_OUTPUT_TOKENS,
+        "image_detail": "high",
+        "temperature_supplied": False,
+        "reasoning_summary_requested": False,
+        "transport_timeout_ns": transport_binding.transport_timeout_ns,
+        "seam_policy_deadline_ns": transport_binding.seam_policy_deadline_ns,
+        "sdk_max_retries": 0,
+        "openai_sdk_version": SUPPORTED_OPENAI_SDK_VERSION,
+    }
+    return (
+        packet_sha256,
+        image_sha256,
+        canonical_sha256(config),
+        packet_id,
+        packet_host_id,
+    )
+
+
+def validate_live_history_policy_attempt_request_anchor_v1(
+    value: LiveHistoryPolicyAttemptRequestAnchorV1,
+    *,
+    attempt_receipt: LiveAttemptReceiptV1,
+) -> None:
+    """Cross-bind one history authority to every independent request source."""
+
+    anchor = snapshot_live_history_policy_attempt_request_anchor(value)
+    receipt = snapshot_live_attempt_receipt(attempt_receipt)
+    authority = anchor.attempt_authority
+    deadline = anchor.deadline_binding
+    constraint = anchor.constraint_binding
+    lease = anchor.case_execution_lease
+    stage = anchor.openai_stage
+    rubric_stage = anchor.rubric_openai_stage
+    pricing = anchor.pricing
+    transport = anchor.transport_binding
+    request = anchor.provider_request
+    (
+        packet_sha256,
+        image_sha256,
+        request_config_sha256,
+        packet_id,
+        packet_host_id,
+    ) = _validate_history_provider_request_v1(
+        request,
+        transport_binding=transport,
+        logical_call_id=anchor.logical_call_id,
+        actor_request_sha256=anchor.actor_request_sha256,
+    )
+    authority_sha256 = live_attempt_authority_sha256(authority)
+    lease_sha256 = canonical_sha256(cast(JsonValue, lease))
+    stage_sha256 = openai_stage_sha256(stage)
+    pricing_sha256 = live_attempt_pricing_sha256(pricing)
+    transport_sha256 = openai_responses_transport_binding_sha256(transport)
+    cost_reservation_failure = (
+        receipt.status is LiveAttemptStatusV1.FAILED
+        and receipt.dispatch_count == 0
+        and receipt.failure_code == "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY"
+    )
+    if (
+        receipt.role is not LiveAttemptRoleV1.HISTORY_POLICY
+        or authority.role is not LiveAttemptRoleV1.HISTORY_POLICY
+        or stage.role is not OpenAIRoleV1.HISTORY_POLICY
+        or rubric_stage.role is not OpenAIRoleV1.RUBRIC
+        or receipt.attempt_id != anchor.attempt_id
+        or authority.attempt_id != anchor.attempt_id
+        or deadline.attempt_id != anchor.attempt_id
+        or receipt.logical_call_id != anchor.logical_call_id
+        or authority.logical_call_id != anchor.logical_call_id
+        or deadline.logical_call_id != anchor.logical_call_id
+        or receipt.actor_request_sha256 != anchor.actor_request_sha256
+        or authority.actor_request_sha256 != anchor.actor_request_sha256
+        or lease.get("request_sha256") != anchor.actor_request_sha256
+        or receipt.authority_sha256 != authority_sha256
+        or receipt.manifest_sha256 != authority.manifest_sha256
+        or lease.get("manifest_sha256") != authority.manifest_sha256
+        or receipt.preflight_sha256 != authority.preflight_sha256
+        or lease.get("preflight_report_sha256") != authority.preflight_sha256
+        or receipt.case_execution_lease_sha256 != lease_sha256
+        or authority.case_execution_lease_sha256 != lease_sha256
+        or deadline.case_execution_lease_sha256 != lease_sha256
+        or receipt.case_id != authority.case_id
+        or deadline.case_id != authority.case_id
+        or lease.get("case_id") != authority.case_id
+        or receipt.stage_sha256 != stage_sha256
+        or authority.stage_sha256 != stage_sha256
+        or receipt.pricing_binding_sha256 != pricing_sha256
+        or authority.pricing_binding_sha256 != pricing_sha256
+        or lease.get("pricing_binding_sha256") != pricing_sha256
+        or receipt.transport_binding_sha256 != transport_sha256
+        or authority.transport_binding_sha256 != transport_sha256
+        or receipt.request_sha256 != request.request_sha256
+        or authority.request_sha256 != request.request_sha256
+        or authority.deadline_monotonic_ns != deadline.effective_deadline_monotonic_ns
+        or authority.max_cost_usd_micros != deadline.max_cost_usd_micros
+        or authority.max_cost_usd_micros != constraint.attempt_max_cost_usd_micros
+        or deadline.case_execution_deadline_monotonic_ns
+        != constraint.effective_deadline_monotonic_ns
+        or deadline.request_timeout_ns != transport.transport_timeout_ns
+        or deadline.constraint_registered_monotonic_ns < constraint.issued_monotonic_ns
+        or authority.max_output_tokens != GPT56_MAX_OUTPUT_TOKENS
+        or stage.max_output_tokens != GPT56_MAX_OUTPUT_TOKENS
+        or transport.max_output_tokens != GPT56_MAX_OUTPUT_TOKENS
+        or stage != constraint.history_stage
+        or constraint.rubric_stage_sha256 != openai_stage_sha256(rubric_stage)
+        or constraint.rubric_stage_timeout_ms != rubric_stage.timeout_ms
+        or lease.get("openai_stage_set_sha256") != openai_stage_set_sha256((rubric_stage, stage))
+        or lease.get("stage") != constraint.case_stage
+        or lease.get("host") != constraint.case_host
+        or lease.get("mode") != constraint.case_mode
+        or lease.get("case_id") != constraint.case_id
+        or lease.get("task_id") != constraint.task_id
+        or lease.get("task_parameters_sha256") != constraint.task_parameters_sha256
+        or lease.get("reset_seed") != constraint.reset_seed
+        or type(lease.get("actor_call_index")) is not int
+        or cast(int, lease["actor_call_index"]) > constraint.max_actor_calls
+        or stage.max_attempts != 1
+        or receipt.dispatch_count > stage.max_attempts
+        or not _history_receipt_exact_cost_matches_pricing(receipt, pricing)
+        or not _history_receipt_authority_limits_are_valid(receipt, authority)
+        or transport.case_execution_lease_sha256 != lease_sha256
+        or transport.history_policy_stage_sha256 != stage_sha256
+        or transport.authority_manifest_sha256 != authority.manifest_sha256
+        or transport.preflight_report_sha256 != authority.preflight_sha256
+        or transport.actor_request_sha256 != anchor.actor_request_sha256
+        or transport.pricing_binding_sha256 != pricing_sha256
+        or transport.factory_binding_sha256 != lease.get("factory_binding_sha256")
+        or transport.descriptor_sha256
+        != transport_descriptor_sha256(
+            TransportDescriptorV1(
+                transport_kind="OPENAI_RESPONSES",
+                transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+                openai_sdk_version=SUPPORTED_OPENAI_SDK_VERSION,
+                sdk_max_retries=0,
+                external_network_on_call=True,
+                model_on_call=True,
+            )
+        )
+        or (
+            live_attempt_worst_case_cost_usd_micros(
+                pricing,
+                request_byte_count=request.byte_count,
+                max_output_tokens=authority.max_output_tokens,
+            )
+            > authority.max_cost_usd_micros
+        )
+        is not cost_reservation_failure
+        or packet_sha256 != anchor.coordinator_evidence_packet_sha256
+    ):
+        raise R24ContractError(
+            "HISTORY_REQUEST_PROOF_MISMATCH",
+            "history authority differs from deadline, request, lease, stage, pricing, or transport",
+        )
+    envelope = anchor.response_envelope
+    if (receipt.response_envelope_sha256 is None) != (envelope is None):
+        raise R24ContractError(
+            "HISTORY_REQUEST_PROOF_MISMATCH",
+            "history response-envelope presence differs from the attempt",
+        )
+    if receipt.status is LiveAttemptStatusV1.COMPLETED and envelope is None:
+        raise R24ContractError(
+            "HISTORY_REQUEST_PROOF_MISMATCH",
+            "completed history attempt lacks its provider response",
+        )
+    if envelope is not None and (
+        receipt.response_envelope_sha256
+        != canonical_sha256(cast(JsonValue, responses_envelope_hash_projection(envelope)))
+        or receipt.requested_model != envelope.requested_model
+        or receipt.returned_model != envelope.returned_model
+        or receipt.input_tokens != envelope.input_tokens
+        or receipt.output_tokens != envelope.output_tokens
+        or receipt.total_tokens != envelope.total_tokens
+    ):
+        raise R24ContractError(
+            "HISTORY_REQUEST_PROOF_MISMATCH",
+            "history provider response differs from the attempt receipt",
+        )
+    r22 = anchor.r22_policy_receipt
+    if r22 is None:
+        if receipt.status is LiveAttemptStatusV1.COMPLETED and (
+            receipt.dispatch_count != 1
+            or anchor.r22_receipt_failure_code not in _R22_RECEIPT_PUBLICATION_FAILURE_CODES
+        ):
+            raise R24ContractError(
+                "HISTORY_REQUEST_PROOF_MISMATCH",
+                "completed history attempt lacks both an R2.2 receipt and a publication failure",
+            )
+        expected_state = (
+            LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_ABSENT_PRE_DISPATCH
+            if receipt.dispatch_count == 0
+            else LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_ABSENT_POST_DISPATCH
+        )
+        if anchor.r22_receipt_state is not expected_state:
+            raise R24ContractError(
+                "HISTORY_REQUEST_PROOF_MISMATCH",
+                "history missing-receipt state differs from dispatch state",
+            )
+        return
+    if (
+        anchor.r22_receipt_state is not LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_COMMITTED
+        or r22.logical_call_id != anchor.logical_call_id
+        or r22.packet_id != packet_id
+        or r22.host_id != packet_host_id
+        or r22.requested_model != GPT56_REQUESTED_MODEL
+        or r22.openai_sdk_version != SUPPORTED_OPENAI_SDK_VERSION
+        or r22.sdk_max_retries != 0
+        or r22.transport_kind != "OPENAI_RESPONSES"
+        or r22.transport_authority != "EXPLICIT_OWNER_AUTHORIZATION"
+        or r22.prompt_sha256
+        != hashlib.sha256(GPT56_POLICY_INSTRUCTIONS.encode("utf-8")).hexdigest()
+        or r22.output_schema_sha256 != ProposalSchemaSnapshotV1.from_checked_in().sha256
+        or r22.request_config_sha256 != request_config_sha256
+        or r22.evidence_packet_sha256 != packet_sha256
+        or r22.current_image_sha256 != image_sha256
+        or r22.transport_calls != receipt.dispatch_count
+        or r22.external_network_attempted != (receipt.dispatch_count == 1)
+        or r22.model_call_attempted != (receipt.dispatch_count == 1)
+    ):
+        raise R24ContractError(
+            "HISTORY_REQUEST_PROOF_MISMATCH",
+            "R2.2 receipt differs from the canonical history provider request",
+        )
+    if r22.response_envelope_sha256 is not None and (
+        envelope is None
+        or r22.response_envelope_sha256
+        != canonical_sha256(cast(JsonValue, responses_envelope_hash_projection(envelope)))
+        or r22.provider_output_sha256 != envelope.output_text_sha256
+        or r22.returned_model != envelope.returned_model
+        or r22.input_tokens != envelope.input_tokens
+        or r22.output_tokens != envelope.output_tokens
+        or r22.total_tokens != envelope.total_tokens
+    ):
+        raise R24ContractError(
+            "HISTORY_REQUEST_PROOF_MISMATCH",
+            "R2.2 provider-output provenance differs from its envelope",
+        )
+    if r22.response_envelope_sha256 is None and any(
+        value is not None
+        for value in (
+            r22.provider_output_sha256,
+            r22.returned_model,
+            r22.input_tokens,
+            r22.output_tokens,
+            r22.total_tokens,
+        )
+    ):
+        raise R24ContractError(
+            "HISTORY_REQUEST_PROOF_MISMATCH",
+            "R2.2 receipt contains partial provider-output provenance",
+        )
+
+
+def live_history_policy_attempt_request_proof_projection(
+    value: LiveHistoryPolicyAttemptRequestAnchorV1,
+    *,
+    attempt_receipt: LiveAttemptReceiptV1,
+) -> dict[str, JsonValue]:
+    """Project the complete owner-only durable history attempt proof."""
+
+    anchor = snapshot_live_history_policy_attempt_request_anchor(value)
+    receipt = snapshot_live_attempt_receipt(attempt_receipt)
+    validate_live_history_policy_attempt_request_anchor_v1(anchor, attempt_receipt=receipt)
+    proof: dict[str, JsonValue] = {
+        "actor_request_sha256": anchor.actor_request_sha256,
+        "attempt_authority": cast(
+            JsonValue, live_attempt_authority_projection(anchor.attempt_authority)
+        ),
+        "attempt_authority_sha256": live_attempt_authority_sha256(anchor.attempt_authority),
+        "attempt_dispatch_count": receipt.dispatch_count,
+        "attempt_id": anchor.attempt_id,
+        "attempt_receipt_sha256": live_attempt_receipt_sha256(receipt),
+        "attempt_role": receipt.role.value,
+        "attempt_status": receipt.status.value,
+        "case_execution_lease": cast(JsonValue, anchor.case_execution_lease),
+        "constraint_binding": cast(
+            JsonValue,
+            live_rubric_attempt_constraint_binding_projection(anchor.constraint_binding),
+        ),
+        "coordinator_evidence_packet_sha256": (anchor.coordinator_evidence_packet_sha256),
+        "deadline_binding": cast(
+            JsonValue,
+            live_attempt_deadline_binding_projection(anchor.deadline_binding),
+        ),
+        "logical_call_id": anchor.logical_call_id,
+        "openai_stage": cast(JsonValue, openai_stage_projection(anchor.openai_stage)),
+        "rubric_openai_stage": cast(JsonValue, openai_stage_projection(anchor.rubric_openai_stage)),
+        "pricing": cast(JsonValue, live_attempt_pricing_projection(anchor.pricing)),
+        "provider_request": cast(
+            JsonValue, _history_provider_request_projection(anchor.provider_request)
+        ),
+        "provider_request_byte_count": anchor.provider_request.byte_count,
+        "provider_request_sha256": anchor.provider_request.request_sha256,
+        "r22_policy_receipt": (
+            None
+            if anchor.r22_policy_receipt is None
+            else cast(JsonValue, r22_policy_receipt_dict(anchor.r22_policy_receipt))
+        ),
+        "r22_policy_receipt_sha256": (
+            None if anchor.r22_policy_receipt is None else anchor.r22_policy_receipt.sha256
+        ),
+        "r22_receipt_failure_code": anchor.r22_receipt_failure_code,
+        "r22_receipt_state": anchor.r22_receipt_state.value,
+        "response_envelope": (
+            None
+            if anchor.response_envelope is None
+            else cast(
+                JsonValue,
+                _history_response_envelope_projection(anchor.response_envelope),
+            )
+        ),
+        "schema_version": LIVE_HISTORY_POLICY_REQUEST_PROOF_SCHEMA_VERSION,
+        "transport_binding": cast(
+            JsonValue,
+            openai_responses_transport_binding_projection(anchor.transport_binding),
+        ),
+    }
+    validate_live_history_policy_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=receipt,
+        expected_attempt_authority_sha256=live_attempt_authority_sha256(anchor.attempt_authority),
+        expected_constraint_binding_sha256=canonical_sha256(
+            cast(
+                JsonValue,
+                live_rubric_attempt_constraint_binding_projection(anchor.constraint_binding),
+            )
+        ),
+        expected_manifest_sha256=anchor.attempt_authority.manifest_sha256,
+        expected_preflight_sha256=anchor.attempt_authority.preflight_sha256,
+        expected_case_execution_lease_sha256=(anchor.attempt_authority.case_execution_lease_sha256),
+        expected_stage_sha256=anchor.attempt_authority.stage_sha256,
+        expected_pricing_binding_sha256=anchor.attempt_authority.pricing_binding_sha256,
+        expected_transport_binding_sha256=(anchor.attempt_authority.transport_binding_sha256),
+        expected_request_sha256=anchor.attempt_authority.request_sha256,
+    )
+    return proof
+
+
+def validate_live_history_policy_request_proof_projection_v1(
+    value: JsonValue,
+    *,
+    attempt_receipt: LiveAttemptReceiptV1 | dict[str, JsonValue],
+    expected_attempt_authority_sha256: str,
+    expected_constraint_binding_sha256: str,
+    expected_manifest_sha256: str,
+    expected_preflight_sha256: str,
+    expected_case_execution_lease_sha256: str,
+    expected_stage_sha256: str,
+    expected_pricing_binding_sha256: str,
+    expected_transport_binding_sha256: str,
+    expected_request_sha256: str,
+) -> None:
+    """Independently rebuild a durable HISTORY_POLICY proof graph."""
+
+    try:
+        schema_errors = tuple(_history_request_proof_validator().iter_errors(value))
+    except Exception as exc:
+        if isinstance(exc, R24ContractError):
+            raise
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF",
+            "durable history proof schema evaluation failed",
+        ) from exc
+    if schema_errors:
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF",
+            "durable history proof does not match its checked-in schema",
+        )
+
+    expected_fields = {
+        "actor_request_sha256",
+        "attempt_authority",
+        "attempt_authority_sha256",
+        "attempt_dispatch_count",
+        "attempt_id",
+        "attempt_receipt_sha256",
+        "attempt_role",
+        "attempt_status",
+        "case_execution_lease",
+        "constraint_binding",
+        "coordinator_evidence_packet_sha256",
+        "deadline_binding",
+        "logical_call_id",
+        "openai_stage",
+        "rubric_openai_stage",
+        "pricing",
+        "provider_request",
+        "provider_request_byte_count",
+        "provider_request_sha256",
+        "r22_policy_receipt",
+        "r22_policy_receipt_sha256",
+        "r22_receipt_failure_code",
+        "r22_receipt_state",
+        "response_envelope",
+        "schema_version",
+        "transport_binding",
+    }
+    if (
+        type(value) is not dict
+        or set(value) != expected_fields
+        or value.get("schema_version") != LIVE_HISTORY_POLICY_REQUEST_PROOF_SCHEMA_VERSION
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "durable history proof fields differ"
+        )
+    proof = value
+    try:
+        authority = parse_live_attempt_authority_projection(proof["attempt_authority"])
+        deadline = parse_live_attempt_deadline_binding_projection(proof["deadline_binding"])
+        constraint = parse_live_rubric_attempt_constraint_binding_projection_v1(
+            proof["constraint_binding"]
+        )
+        lease = parse_durable_case_execution_lease_projection_v1(proof["case_execution_lease"])
+        stage = parse_durable_openai_stage_projection_v1(proof["openai_stage"])
+        rubric_stage = parse_durable_openai_stage_projection_v1(proof["rubric_openai_stage"])
+        pricing = parse_durable_attempt_pricing_projection_v1(proof["pricing"])
+        transport = _parse_history_transport_binding_projection(proof["transport_binding"])
+        request_projection = proof["provider_request"]
+        if type(request_projection) is not dict:
+            raise TypeError("provider request projection differs")
+        request = build_canonical_history_policy_request(
+            cast(dict[str, object], request_projection)
+        )
+        envelope = (
+            None
+            if proof["response_envelope"] is None
+            else _parse_history_response_envelope_projection(proof["response_envelope"])
+        )
+        r22 = (
+            None
+            if proof["r22_policy_receipt"] is None
+            else _parse_r22_policy_receipt_projection(proof["r22_policy_receipt"])
+        )
+        receipt_state = LiveHistoryPolicyReceiptStateV1(cast(str, proof["r22_receipt_state"]))
+        receipt_failure_code = cast(str | None, proof["r22_receipt_failure_code"])
+        if type(attempt_receipt) is LiveAttemptReceiptV1:
+            receipt = snapshot_live_attempt_receipt(attempt_receipt)
+        else:
+            receipt = parse_durable_live_attempt_receipt_projection_v1(
+                cast(dict[str, JsonValue], attempt_receipt)
+            )
+        anchor = LiveHistoryPolicyAttemptRequestAnchorV1(
+            attempt_id=cast(str, proof["attempt_id"]),
+            logical_call_id=cast(str, proof["logical_call_id"]),
+            actor_request_sha256=cast(str, proof["actor_request_sha256"]),
+            coordinator_evidence_packet_sha256=cast(
+                str, proof["coordinator_evidence_packet_sha256"]
+            ),
+            attempt_authority=authority,
+            deadline_binding=deadline,
+            constraint_binding=constraint,
+            case_execution_lease=lease,
+            openai_stage=stage,
+            rubric_openai_stage=rubric_stage,
+            pricing=pricing,
+            transport_binding=transport,
+            provider_request=request,
+            response_envelope=envelope,
+            r22_policy_receipt=r22,
+            r22_receipt_state=receipt_state,
+            r22_receipt_failure_code=receipt_failure_code,
+            _seal=_HISTORY_REQUEST_PROOF_SEAL,
+        )
+    except Exception as exc:
+        if isinstance(exc, R24ContractError):
+            raise
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "durable history proof is invalid"
+        ) from exc
+    if (
+        proof["attempt_role"] != LiveAttemptRoleV1.HISTORY_POLICY.value
+        or proof["attempt_status"] != receipt.status.value
+        or type(proof["attempt_dispatch_count"]) is not int
+        or proof["attempt_dispatch_count"] != receipt.dispatch_count
+        or proof["attempt_receipt_sha256"] != live_attempt_receipt_sha256(receipt)
+        or proof["attempt_authority_sha256"] != live_attempt_authority_sha256(authority)
+        or proof["provider_request_sha256"] != request.request_sha256
+        or type(proof["provider_request_byte_count"]) is not int
+        or proof["provider_request_byte_count"] != request.byte_count
+        or proof["r22_policy_receipt_sha256"] != (None if r22 is None else r22.sha256)
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF",
+            "durable history proof hashes or terminal state differ",
+        )
+    expected_bindings = (
+        (
+            "attempt authority",
+            expected_attempt_authority_sha256,
+            live_attempt_authority_sha256(authority),
+        ),
+        (
+            "attempt constraint",
+            expected_constraint_binding_sha256,
+            canonical_sha256(
+                cast(
+                    JsonValue,
+                    live_rubric_attempt_constraint_binding_projection(constraint),
+                )
+            ),
+        ),
+        ("manifest", expected_manifest_sha256, authority.manifest_sha256),
+        ("preflight", expected_preflight_sha256, authority.preflight_sha256),
+        (
+            "case execution lease",
+            expected_case_execution_lease_sha256,
+            authority.case_execution_lease_sha256,
+        ),
+        ("stage", expected_stage_sha256, authority.stage_sha256),
+        (
+            "pricing",
+            expected_pricing_binding_sha256,
+            authority.pricing_binding_sha256,
+        ),
+        (
+            "transport",
+            expected_transport_binding_sha256,
+            authority.transport_binding_sha256,
+        ),
+        ("request", expected_request_sha256, authority.request_sha256),
+    )
+    for label, expected, observed in expected_bindings:
+        try:
+            trusted_expected = _require_sha256(expected, f"expected {label} SHA-256")
+        except Exception as exc:
+            raise R24ContractError(
+                "INVALID_HISTORY_REQUEST_PROOF",
+                f"caller-known expected {label} binding is invalid",
+            ) from exc
+        if trusted_expected != observed:
+            raise R24ContractError(
+                "INVALID_HISTORY_REQUEST_PROOF",
+                f"history proof differs from caller-known expected {label} binding",
+            )
+    validate_live_history_policy_attempt_request_anchor_v1(anchor, attempt_receipt=receipt)
+
+
 def validate_live_rubric_cross_bindings_v1(
     *,
     logical_call_id: str,
@@ -1083,6 +2295,7 @@ def validate_live_rubric_cross_bindings_v1(
     actor_call_index: int | None,
     expect_history_policy: bool | None,
     allow_incomplete: bool,
+    history_policy_attempt_request_anchor: (LiveHistoryPolicyAttemptRequestAnchorV1 | None) = None,
 ) -> None:
     """Validate one exact ordered R2.4 rubric/attempt/binding proof graph.
 
@@ -1168,6 +2381,13 @@ def validate_live_rubric_cross_bindings_v1(
                 **{name: getattr(binding, name) for name in binding.__dataclass_fields__}
             )
         )
+        trusted_history_anchor = (
+            None
+            if history_policy_attempt_request_anchor is None
+            else snapshot_live_history_policy_attempt_request_anchor(
+                history_policy_attempt_request_anchor
+            )
+        )
     except Exception as exc:
         raise R24ContractError(
             "RUBRIC_CROSS_BINDING_MISMATCH", "rubric proof snapshot failed"
@@ -1203,6 +2423,7 @@ def validate_live_rubric_cross_bindings_v1(
             or expected_tracking_packet_sha256 is not None
             or trusted_binding is not None
             or actor_call_index is not None
+            or trusted_history_anchor is not None
         ):
             raise R24ContractError(
                 "RUBRIC_CROSS_BINDING_MISMATCH",
@@ -1242,6 +2463,46 @@ def validate_live_rubric_cross_bindings_v1(
     rubric_attempts = tuple(
         item for item in trusted_attempts if item.role is LiveAttemptRoleV1.RUBRIC
     )
+    history_attempts = tuple(
+        item for item in trusted_attempts if item.role is LiveAttemptRoleV1.HISTORY_POLICY
+    )
+    if trusted_attempt_anchors:
+        constraint = trusted_attempt_anchors[0].constraint_binding
+        if (
+            any(item.constraint_binding != constraint for item in trusted_attempt_anchors[1:])
+            or len(trusted_attempts) > constraint.max_openai_calls
+            or (actor_call_index is not None and actor_call_index > constraint.max_actor_calls)
+        ):
+            raise R24ContractError(
+                "RUBRIC_CROSS_BINDING_MISMATCH",
+                "attempt census differs from the sealed case constraint",
+            )
+    if len(history_attempts) > 1 or (
+        bool(history_attempts) != (trusted_history_anchor is not None)
+    ):
+        raise R24ContractError(
+            "RUBRIC_CROSS_BINDING_MISMATCH",
+            "history attempt/request-proof census differs",
+        )
+    if trusted_history_anchor is not None:
+        try:
+            validate_live_history_policy_attempt_request_anchor_v1(
+                trusted_history_anchor,
+                attempt_receipt=history_attempts[0],
+            )
+        except Exception as exc:
+            raise R24ContractError(
+                "RUBRIC_CROSS_BINDING_MISMATCH",
+                "history attempt differs from its complete request proof",
+            ) from exc
+        if trusted_attempt_anchors and (
+            trusted_history_anchor.constraint_binding
+            != trusted_attempt_anchors[0].constraint_binding
+        ):
+            raise R24ContractError(
+                "RUBRIC_CROSS_BINDING_MISMATCH",
+                "history and rubric attempts use different case constraints",
+            )
     proof_complete = not allow_incomplete or trusted_binding is not None
     if trusted_attempts and (actor_call_index is None or expect_history_policy is None):
         raise R24ContractError(
@@ -1308,6 +2569,11 @@ def validate_live_rubric_cross_bindings_v1(
             anchored_request_sha256 = validate_live_rubric_attempt_request_anchor_v1(
                 request_anchor,
                 backend_extension=trusted_extension,
+                attempt_receipt=attempt,
+            )
+            validate_live_rubric_attempt_receipt_authority_v1(
+                request_anchor,
+                attempt,
             )
         except Exception as exc:
             raise R24ContractError(
@@ -1343,18 +2609,10 @@ def validate_live_rubric_cross_bindings_v1(
                 "rubric attempt differs from its request preimage or coordinator root",
             )
     unanchored_attempts = rubric_attempts[len(trusted_attempt_anchors) :]
-    if any(
-        item.dispatch_count != 0
-        or (
-            item.status is LiveAttemptStatusV1.FAILED
-            and item.failure_code not in _BEGIN_FAILURE_CODES_WITHOUT_REQUEST_ANCHOR
-        )
-        or item.status is not LiveAttemptStatusV1.FAILED
-        for item in unanchored_attempts
-    ):
+    if unanchored_attempts:
         raise R24ContractError(
             "RUBRIC_CROSS_BINDING_MISMATCH",
-            "begin-success rubric attempt lacks its pre-transport request anchor",
+            "formed rubric attempt lacks its pre-transport request anchor",
         )
     if not proof_complete and len(trusted_rubric_calls) < len(rubric_attempts):
         first_unmatched = tuple(
@@ -1563,6 +2821,11 @@ class _PerCallAdmissionBridgeV1:
         self._packet: EvidencePacketV1 | None = None
         self._request: JsonValue | None = None
         self._history_ir: HistoryIR | None = None
+
+    @property
+    def evidence_packet_sha256(self) -> str | None:
+        packet = self._packet
+        return None if packet is None else evidence_packet_sha256(deepcopy(packet))
 
     def evidence(
         self,
@@ -1948,6 +3211,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
         self._authority = authority
         self._case = descriptor
         self._history_stage = history_stage
+        self._rubric_stage = factory.openai_stage(OpenAIRoleV1.RUBRIC)
         self._descriptor_sha256 = transport_descriptor_sha256(live_descriptor)
         self._attempt_cost_ceiling = budget_ledger.attempt_ceiling(descriptor)
         self._attempt_sink = MemoryLiveAttemptReceiptSinkV1()
@@ -1978,6 +3242,9 @@ class OwnerAuthorizedLivePerCallPolicyV1:
         self._call_indices: dict[str, int] = {}
         self._outputs: dict[str, RuntimeVerticalPolicyOutputV1] = {}
         self._bindings: dict[str, ResolvedLivePolicyCallBindingV1] = {}
+        self._history_attempt_request_anchors: dict[
+            str, LiveHistoryPolicyAttemptRequestAnchorV1
+        ] = {}
         self._failures: dict[str, str] = {}
         self._case_deadline_ns = case_deadline_monotonic_ns
         self._lock = Lock()
@@ -2151,13 +3418,33 @@ class OwnerAuthorizedLivePerCallPolicyV1:
             )
         )
 
-    def _current_deadline_ns(self) -> int:
-        now = monotonic_ns()
-        call_deadline = now + self._history_stage.timeout_ms * 1_000_000
-        deadline = min(self._case_deadline_ns, call_deadline)
-        if deadline <= now:
+    def _current_attempt_constraint(self) -> LiveRubricAttemptConstraintBindingV1:
+        issued_ns = monotonic_ns()
+        if self._case_deadline_ns <= issued_ns:
             raise R24ContractError("CASE_DEADLINE_EXCEEDED", "case wall deadline elapsed")
-        return deadline
+        try:
+            return build_live_rubric_attempt_constraint_binding_v1(
+                issued_monotonic_ns=issued_ns,
+                case_execution_deadline_monotonic_ns=self._case_deadline_ns,
+                history_stage=self._history_stage,
+                rubric_stage=self._rubric_stage,
+                case_stage=self._case.stage.value,
+                case_host=self._case.host.value,
+                case_mode=self._case.mode.value,
+                case_id=self._case.case_id,
+                task_id=self._case.task_id,
+                task_parameters_sha256=self._case.task_parameters_sha256,
+                reset_seed=self._case.reset_seed,
+                max_actor_calls=self._case.max_actor_calls,
+                max_openai_calls=self._case.max_openai_calls,
+                max_wall_time_seconds=self._case.max_wall_time_seconds,
+                case_max_cost_usd_micros=self._case.max_cost_usd_micros,
+            )
+        except Exception as exc:
+            raise R24ContractError(
+                "INVALID_ATTEMPT_CONSTRAINT",
+                "live attempt deadline/cost authority could not be sealed",
+            ) from exc
 
     def _require_case_context(
         self,
@@ -2317,6 +3604,141 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 snapshot_live_rubric_attempt_request_anchor(value)
                 for value in backend.attempt_request_anchors_for_call(logical_call_id)
             )
+
+    def history_policy_attempt_request_anchor_for_call(
+        self,
+        logical_call_id: str,
+    ) -> LiveHistoryPolicyAttemptRequestAnchorV1 | None:
+        """Return a detached full history attempt proof when one was formed."""
+
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            if logical_call_id not in self._call_inputs:
+                raise R24ContractError(
+                    "PER_CALL_ATTEMPTS_UNAVAILABLE", "logical call was never registered"
+                )
+            value = self._history_attempt_request_anchors.get(logical_call_id)
+            return (
+                None
+                if value is None
+                else snapshot_live_history_policy_attempt_request_anchor(value)
+            )
+
+    def history_evidence_packet_sha256_for_call(
+        self,
+        logical_call_id: str,
+    ) -> str | None:
+        """Return the Coordinator-owned R2.2 evidence root independently."""
+
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            if logical_call_id not in self._call_inputs:
+                raise R24ContractError(
+                    "PER_CALL_ATTEMPTS_UNAVAILABLE", "logical call was never registered"
+                )
+            record = self._coordinator.record_for(logical_call_id)
+            anchor = self._history_attempt_request_anchors.get(logical_call_id)
+            root = None if record is None else record.gpt56_evidence_packet_sha256
+            if anchor is not None and root is None:
+                raise R24ContractError(
+                    "HISTORY_EVIDENCE_ROOT_UNAVAILABLE",
+                    "formed history attempt lacks its Coordinator evidence root",
+                )
+            return None if root is None else _require_sha256(root, "evidence_packet_sha256")
+
+    def _close_history_attempt_proof(
+        self,
+        *,
+        attempt_id: str,
+        logical_call_id: str,
+        actor_request_sha256: str,
+        constraint_binding: LiveRubricAttemptConstraintBindingV1,
+        case_lease: CaseExecutionLeaseV1,
+        transport_binding: OpenAIResponsesTransportBindingV1 | None,
+        bridge: _PerCallAdmissionBridgeV1,
+        r22_receipt_start_index: int,
+        r22_receipt_failure_code: str | None,
+    ) -> None:
+        """Close a formed history attempt, or discard an unused registration."""
+
+        receipt = self._history_runner.terminal_receipt_for_attempt(attempt_id)
+        if receipt is None:
+            discarded = self._history_runner.discard_unformed_history_attempt_constraint(
+                attempt_id=attempt_id,
+                logical_call_id=logical_call_id,
+            )
+            if not discarded and (
+                self._history_runner.attempt_authority_for_attempt(attempt_id) is not None
+                or self._history_runner.canonical_request_for_attempt(attempt_id) is not None
+                or self._history_runner.attempt_deadline_binding_for_attempt(attempt_id) is not None
+            ):
+                raise R24ContractError(
+                    "INCOMPLETE_HISTORY_ATTEMPT_PROOF",
+                    "formed history attempt has no terminal receipt",
+                )
+            return
+        authority = self._history_runner.attempt_authority_for_attempt(attempt_id)
+        request = self._history_runner.canonical_request_for_attempt(attempt_id)
+        deadline = self._history_runner.attempt_deadline_binding_for_attempt(attempt_id)
+        evidence_sha256 = bridge.evidence_packet_sha256
+        response = self._history_runner.response_envelope_for_attempt(attempt_id)
+        r22_receipts = tuple(
+            item
+            for item in self._r22_receipts.receipts[r22_receipt_start_index:]
+            if item.logical_call_id == logical_call_id
+        )
+        if (
+            type(authority) is not LiveAttemptAuthorityV1
+            or type(request) is not CanonicalHistoryPolicyRequestV1
+            or type(deadline) is not LiveAttemptDeadlineBindingV1
+            or type(transport_binding) is not OpenAIResponsesTransportBindingV1
+            or type(evidence_sha256) is not str
+            or response is not None
+            and type(response) is not ResponsesEnvelopeV1
+            or len(r22_receipts) > 1
+        ):
+            raise R24ContractError(
+                "INCOMPLETE_HISTORY_ATTEMPT_PROOF",
+                "formed history attempt lacks an exact proof preimage",
+            )
+        r22_receipt = None if not r22_receipts else r22_receipts[0]
+        if r22_receipt is not None:
+            r22_receipt_failure_code = None
+        receipt_state = (
+            LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_COMMITTED
+            if r22_receipt is not None
+            else (
+                LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_ABSENT_PRE_DISPATCH
+                if receipt.dispatch_count == 0
+                else LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_ABSENT_POST_DISPATCH
+            )
+        )
+        anchor = _build_live_history_policy_attempt_request_anchor_v1(
+            attempt_id=attempt_id,
+            logical_call_id=logical_call_id,
+            actor_request_sha256=actor_request_sha256,
+            coordinator_evidence_packet_sha256=evidence_sha256,
+            attempt_authority=authority,
+            deadline_binding=deadline,
+            constraint_binding=constraint_binding,
+            case_execution_lease=case_lease,
+            openai_stage=self._history_stage,
+            rubric_openai_stage=self._rubric_stage,
+            pricing=self._pricing,
+            transport_binding=transport_binding,
+            provider_request=request,
+            response_envelope=response,
+            r22_policy_receipt=r22_receipt,
+            r22_receipt_state=receipt_state,
+            r22_receipt_failure_code=r22_receipt_failure_code,
+        )
+        validate_live_history_policy_attempt_request_anchor_v1(anchor, attempt_receipt=receipt)
+        if logical_call_id in self._history_attempt_request_anchors:
+            raise R24ContractError(
+                "DUPLICATE_HISTORY_ATTEMPT_PROOF",
+                "logical call already has a history attempt proof",
+            )
+        self._history_attempt_request_anchors[logical_call_id] = anchor
 
     def rubric_collector_stimulus_sha256_for_call(
         self,
@@ -2517,7 +3939,8 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     actor_call_index=actor_call_index,
                     attempt_count=expected_rubric,
                 )
-                deadline_ns = self._current_deadline_ns()
+                constraint_binding = self._current_attempt_constraint()
+                deadline_ns = constraint_binding.effective_deadline_monotonic_ns
                 case_lease = self._factory.issue_case_execution_lease(
                     stage=self._case.stage,
                     host=self._case.host,
@@ -2550,6 +3973,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     actor_request_sha256=actor_request_sha256,
                     deadline_monotonic_ns=deadline_ns,
                     max_cost_usd_micros=self._attempt_cost_ceiling,
+                    constraint_binding=constraint_binding,
                     execution_control=execution_control,
                 )
                 record = self._coordinator.prepare_no_history(request, context)
@@ -2684,7 +4108,8 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     actor_call_index=actor_call_index,
                     attempt_count=expected_attempt_count,
                 )
-                deadline_ns = self._current_deadline_ns()
+                constraint_binding = self._current_attempt_constraint()
+                deadline_ns = constraint_binding.effective_deadline_monotonic_ns
                 case_lease = self._factory.issue_case_execution_lease(
                     stage=self._case.stage,
                     host=self._case.host,
@@ -2717,6 +4142,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     actor_request_sha256=actor_request_sha256,
                     deadline_monotonic_ns=deadline_ns,
                     max_cost_usd_micros=self._attempt_cost_ceiling,
+                    constraint_binding=constraint_binding,
                     execution_control=execution_control,
                 )
                 timeout_seconds = self._history_stage.timeout_ms / 1_000
@@ -2729,44 +4155,83 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                         ).encode()
                     ).hexdigest()[:32]
                 )
-                transport = build_owner_authorized_openai_responses_transport(
-                    attempt_runner=self._history_runner,
-                    case_execution_lease=case_lease,
+                bridge = _PerCallAdmissionBridgeV1(self._coordinator, seal=_PER_CALL_POLICY_SEAL)
+                if self._attempt_cost_ceiling != constraint_binding.attempt_max_cost_usd_micros:
+                    raise R24ContractError(
+                        "ATTEMPT_COST_AUTHORITY_MISMATCH",
+                        "budget ledger and sealed case constraint differ",
+                    )
+                self._history_runner.register_history_attempt_constraint(
+                    case_lease=case_lease,
                     attempt_id=attempt_id,
                     logical_call_id=context.logical_call_id,
-                    max_cost_usd_micros=self._attempt_cost_ceiling,
-                    seam_policy_deadline_seconds=timeout_seconds,
-                    client_timeout_seconds=client_timeout_seconds,
+                    case_execution_deadline_monotonic_ns=(
+                        constraint_binding.effective_deadline_monotonic_ns
+                    ),
+                    request_timeout_ns=round(client_timeout_seconds * 1_000_000_000),
+                    max_cost_usd_micros=(constraint_binding.attempt_max_cost_usd_micros),
                 )
-                bridge = _PerCallAdmissionBridgeV1(self._coordinator, seal=_PER_CALL_POLICY_SEAL)
-                source = GPT56SentinelPolicy(
-                    transport=transport,
-                    evidence_packet_factory=bridge.evidence,
-                    proposal_admission=bridge.admit,
-                    admission_receipt_projector=admission_receipt_projector,
-                    bind_policy_receipt=bind_policy_receipt,
-                    receipt_sink=self._r22_receipts,
-                    metrics=self._metrics,
-                    output_schema=ProposalSchemaSnapshotV1.from_checked_in(),
-                    timeout_seconds=client_timeout_seconds,
-                    seam_policy_deadline_seconds=timeout_seconds,
-                    policy_id=f"{self._policy_id}.r22",
-                )
-                adapter = R22OwnerAuthorizedLivePolicyAdapter(
-                    source,
-                    authority=self._authority,
-                    _per_call_policy_id=self._policy_id,
-                    _per_call_seal=_PER_CALL_POLICY_SEAL,
-                )
+                transport = None
+                history_transport_binding = None
+                r22_receipt_start_index = len(self._r22_receipts.receipts)
+                r22_receipt_failure_code: str | None = None
                 try:
-                    output = adapter.evaluate_with_control(
-                        request=request,
-                        context=context,
-                        history_ir=history_ir,
-                        execution_control=execution_control,
+                    transport = build_owner_authorized_openai_responses_transport(
+                        attempt_runner=self._history_runner,
+                        case_execution_lease=case_lease,
+                        attempt_id=attempt_id,
+                        logical_call_id=context.logical_call_id,
+                        max_cost_usd_micros=(constraint_binding.attempt_max_cost_usd_micros),
+                        seam_policy_deadline_seconds=timeout_seconds,
+                        client_timeout_seconds=client_timeout_seconds,
                     )
+                    source = GPT56SentinelPolicy(
+                        transport=transport,
+                        evidence_packet_factory=bridge.evidence,
+                        proposal_admission=bridge.admit,
+                        admission_receipt_projector=admission_receipt_projector,
+                        bind_policy_receipt=bind_policy_receipt,
+                        receipt_sink=self._r22_receipts,
+                        metrics=self._metrics,
+                        output_schema=ProposalSchemaSnapshotV1.from_checked_in(),
+                        timeout_seconds=client_timeout_seconds,
+                        seam_policy_deadline_seconds=timeout_seconds,
+                        policy_id=f"{self._policy_id}.r22",
+                    )
+                    history_transport_binding = source.assert_live_transport_binding()
+                    adapter = R22OwnerAuthorizedLivePolicyAdapter(
+                        source,
+                        authority=self._authority,
+                        _per_call_policy_id=self._policy_id,
+                        _per_call_seal=_PER_CALL_POLICY_SEAL,
+                    )
+                    try:
+                        output = adapter.evaluate_with_control(
+                            request=request,
+                            context=context,
+                            history_ir=history_ir,
+                            execution_control=execution_control,
+                        )
+                    except GPT56PolicyError as exc:
+                        if exc.code in _R22_RECEIPT_PUBLICATION_FAILURE_CODES:
+                            r22_receipt_failure_code = exc.code
+                        raise
                 finally:
-                    transport.close()
+                    try:
+                        if transport is not None:
+                            transport.close()
+                    finally:
+                        self._close_history_attempt_proof(
+                            attempt_id=attempt_id,
+                            logical_call_id=context.logical_call_id,
+                            actor_request_sha256=actor_request_sha256,
+                            constraint_binding=constraint_binding,
+                            case_lease=case_lease,
+                            transport_binding=history_transport_binding,
+                            bridge=bridge,
+                            r22_receipt_start_index=r22_receipt_start_index,
+                            r22_receipt_failure_code=r22_receipt_failure_code,
+                        )
                 receipts = self._attempt_sink.receipts[before_receipts:]
                 coordinated_record = self._coordinator.record_for(context.logical_call_id)
                 if coordinated_record is None or coordinated_record.task_run_id != task_run_id:
@@ -2787,6 +4252,22 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 if len(history_receipts) != 1:
                     raise R24ContractError(
                         "OPENAI_ROLE_CENSUS_MISMATCH", "rubric/history attempt census differs"
+                    )
+                history_request_anchor = self._history_attempt_request_anchors.get(
+                    context.logical_call_id
+                )
+                if history_request_anchor is None:
+                    raise R24ContractError(
+                        "INCOMPLETE_HISTORY_ATTEMPT_PROOF",
+                        "history attempt lacks its full request proof",
+                    )
+                if (
+                    coordinated_record.gpt56_evidence_packet_sha256
+                    != history_request_anchor.coordinator_evidence_packet_sha256
+                ):
+                    raise R24ContractError(
+                        "HISTORY_REQUEST_PROOF_MISMATCH",
+                        "history request differs from the Coordinator evidence root",
                     )
                 rubric_attempt_hashes = tuple(
                     live_attempt_receipt_sha256(value) for value in rubric_receipts
@@ -2843,6 +4324,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     actor_call_index=actor_call_index,
                     expect_history_policy=True,
                     allow_incomplete=False,
+                    history_policy_attempt_request_anchor=history_request_anchor,
                 )
                 self._budget_ledger.settle_call(
                     reservation,
@@ -2906,8 +4388,11 @@ def build_owner_authorized_live_per_call_policy_v1(
 
 
 __all__ = [
+    "LIVE_HISTORY_POLICY_REQUEST_PROOF_SCHEMA_VERSION",
     "OWNER_AUTHORIZED_LIVE_ACTIVE_SCOPE_VALUE",
     "OWNER_AUTHORIZED_LIVE_POLICY_AUTHORITY_SCHEMA_VERSION",
+    "LiveHistoryPolicyAttemptRequestAnchorV1",
+    "LiveHistoryPolicyReceiptStateV1",
     "OwnerAuthorizedLiveCaseDescriptorV1",
     "OwnerAuthorizedLivePerCallPolicyV1",
     "OwnerAuthorizedLivePolicyAuthorityV1",
@@ -2918,10 +4403,14 @@ __all__ = [
     "build_owner_authorized_live_per_call_policy_v1",
     "history_policy_stage_sha256",
     "issue_owner_authorized_live_policy_authority",
+    "live_history_policy_attempt_request_proof_projection",
     "owner_authorized_live_policy_authority_projection",
     "owner_authorized_live_policy_authority_sha256",
     "promote_owner_authorized_live_policy_output",
     "resolved_live_policy_call_binding_projection",
     "resolved_live_policy_call_binding_sha256",
+    "snapshot_live_history_policy_attempt_request_anchor",
+    "validate_live_history_policy_attempt_request_anchor_v1",
+    "validate_live_history_policy_request_proof_projection_v1",
     "validate_live_rubric_cross_bindings_v1",
 ]

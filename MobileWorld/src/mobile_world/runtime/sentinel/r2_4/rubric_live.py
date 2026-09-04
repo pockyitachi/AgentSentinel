@@ -22,6 +22,7 @@ import re
 import threading
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
@@ -78,24 +79,41 @@ from mobile_world.runtime.sentinel.r2_4.evidence import (
 )
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     CanonicalHistoryPolicyRequestV1,
+    LiveAttemptAuthorityV1,
     LiveAttemptCostStatusV1,
     LiveAttemptError,
     LiveAttemptExecutionKindV1,
+    LiveAttemptPricingV1,
     LiveAttemptReceiptV1,
     LiveAttemptRoleV1,
     LiveAttemptStatusV1,
     LiveAttemptTerminationV1,
     ProductionOpenAIAttemptRunnerV1,
     build_canonical_history_policy_request,
+    live_attempt_authority_projection,
+    live_attempt_authority_sha256,
+    live_attempt_cost_usd_micros,
+    live_attempt_pricing_projection,
+    live_attempt_pricing_sha256,
     live_attempt_receipt_projection,
     live_attempt_receipt_sha256,
+    live_attempt_worst_case_cost_usd_micros,
+    parse_live_attempt_authority_projection,
     snapshot_canonical_history_policy_request,
+    snapshot_live_attempt_authority,
+    snapshot_live_attempt_pricing,
     snapshot_live_attempt_receipt,
 )
-from mobile_world.runtime.sentinel.r2_4.live_run import OpenAIRoleV1
+from mobile_world.runtime.sentinel.r2_4.live_run import OpenAIResponsesStageV1, OpenAIRoleV1
 from mobile_world.runtime.sentinel.r2_4.production_preflight import (
+    CASE_EXECUTION_LEASE_SCHEMA_VERSION,
     CaseExecutionLeaseV1,
+    CaseExecutionScopeV1,
+    case_execution_lease_projection,
     case_execution_lease_sha256,
+    openai_stage_projection,
+    openai_stage_set_sha256,
+    openai_stage_sha256,
 )
 
 LIVE_RUBRIC_CALL_RECEIPT_SCHEMA_VERSION = (
@@ -113,8 +131,12 @@ LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION = (
 LIVE_RUBRIC_BACKEND_VERSION = "r2.4-v1"
 LIVE_RUBRIC_MODEL = "gpt-5.6-sol"
 LIVE_RUBRIC_REASONING_EFFORT = "low"
+LIVE_RUBRIC_MAX_OUTPUT_TOKENS = 8192
 LIVE_RUBRIC_REQUEST_PROOF_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-live-rubric-request-proof/v1"
+)
+LIVE_RUBRIC_ATTEMPT_CONSTRAINT_SCHEMA_VERSION = (
+    "mobileworld.runtime.sentinel-r2.4-live-rubric-attempt-constraint/v1"
 )
 
 _SHA256: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
@@ -823,7 +845,7 @@ def _live_rubric_responses_kwargs(
         "store": False,
         "stream": False,
         "truncation": "disabled",
-        "max_output_tokens": 8192,
+        "max_output_tokens": LIVE_RUBRIC_MAX_OUTPUT_TOKENS,
     }
 
 
@@ -842,6 +864,116 @@ def build_live_rubric_provider_request_v1(
             current_image_data_url=current_image_data_url,
         )
     )
+
+
+def _snapshot_live_rubric_openai_stage(
+    value: OpenAIResponsesStageV1,
+) -> OpenAIResponsesStageV1:
+    if type(value) is not OpenAIResponsesStageV1:
+        raise LiveRubricError("UNTRUSTED_OPENAI_STAGE", "rubric OpenAI stage type differs")
+    try:
+        return OpenAIResponsesStageV1(
+            role=value.role,
+            model=value.model,
+            endpoint=value.endpoint,
+            transport_kind=value.transport_kind,
+            transport_authority=value.transport_authority,
+            openai_sdk_version=value.openai_sdk_version,
+            sdk_max_retries=value.sdk_max_retries,
+            external_network_on_call=value.external_network_on_call,
+            model_on_call=value.model_on_call,
+            max_output_tokens=value.max_output_tokens,
+            timeout_ms=value.timeout_ms,
+            max_attempts=value.max_attempts,
+            store=value.store,
+        )
+    except Exception as exc:
+        raise LiveRubricError("UNTRUSTED_OPENAI_STAGE", "rubric OpenAI stage is invalid") from exc
+
+
+def _validate_durable_case_execution_lease_projection(
+    value: object,
+) -> dict[str, JsonValue]:
+    """Validate the complete detached lease preimage without recreating its seal."""
+
+    lease = _snapshot_canonical_object(
+        value,
+        maximum_bytes=_MAX_PROVIDER_REQUEST_BYTES,
+        code="INVALID_CASE_EXECUTION_LEASE",
+        label="case execution lease",
+    )
+    expected_fields = {
+        "actor_call_index",
+        "case_id",
+        "execution_scope",
+        "expires_at_utc",
+        "factory_binding_sha256",
+        "host",
+        "issued_at_utc",
+        "manifest_sha256",
+        "mode",
+        "openai_stage_set_sha256",
+        "preflight_report_sha256",
+        "pricing_binding_sha256",
+        "request_sha256",
+        "reset_seed",
+        "schema_version",
+        "stage",
+        "task_id",
+        "task_parameters_sha256",
+    }
+    if set(lease) != expected_fields:
+        raise LiveRubricError("INVALID_CASE_EXECUTION_LEASE", "case execution lease fields differ")
+    for name in (
+        "factory_binding_sha256",
+        "manifest_sha256",
+        "openai_stage_set_sha256",
+        "preflight_report_sha256",
+        "pricing_binding_sha256",
+        "request_sha256",
+    ):
+        _require_sha256(lease[name], name)
+    _require_id(lease["case_id"], "case_id")
+    _require_id(lease["task_id"], "task_id")
+    actor_call_index = lease["actor_call_index"]
+    reset_seed = lease["reset_seed"]
+    task_parameters_sha256 = lease["task_parameters_sha256"]
+    if (
+        lease["schema_version"] != CASE_EXECUTION_LEASE_SCHEMA_VERSION
+        or lease["execution_scope"] != CaseExecutionScopeV1.OWNER_AUTHORIZED_LIVE.value
+        or lease["stage"] not in {"QWEN_LIVE_SMOKE", "MAI_LIVE_SMOKE", "R25_PILOT"}
+        or lease["host"] not in {"QWEN3_VL", "MAI_UI"}
+        or lease["mode"] not in {"OFF", "SHADOW", "ACTIVE"}
+        or type(actor_call_index) is not int
+        or actor_call_index < 1
+        or (task_parameters_sha256 is None) != (reset_seed is None)
+        or (
+            task_parameters_sha256 is not None
+            and _require_sha256(task_parameters_sha256, "task_parameters_sha256")
+            != task_parameters_sha256
+        )
+        or (
+            reset_seed is not None
+            and (type(reset_seed) is not int or not 0 <= reset_seed <= 2_147_483_647)
+        )
+    ):
+        raise LiveRubricError("INVALID_CASE_EXECUTION_LEASE", "case execution lease state differs")
+    issued = lease["issued_at_utc"]
+    expires = lease["expires_at_utc"]
+    if type(issued) is not str or type(expires) is not str:
+        raise LiveRubricError(
+            "INVALID_CASE_EXECUTION_LEASE", "case execution lease timestamps differ"
+        )
+    try:
+        issued_at = datetime.strptime(issued, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        expires_at = datetime.strptime(expires, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError as exc:
+        raise LiveRubricError(
+            "INVALID_CASE_EXECUTION_LEASE", "case execution lease timestamp is invalid"
+        ) from exc
+    if expires_at <= issued_at:
+        raise LiveRubricError("INVALID_CASE_EXECUTION_LEASE", "case execution lease expiry differs")
+    return lease
 
 
 def _snapshot_live_rubric_request_material(
@@ -915,6 +1047,222 @@ def _snapshot_live_rubric_request_material(
 
 
 @dataclass(frozen=True, slots=True)
+class LiveRubricAttemptConstraintBindingV1:
+    """Module-sealed origin for one call's deadline and cost ceilings."""
+
+    issued_monotonic_ns: int
+    requested_call_deadline_monotonic_ns: int
+    case_execution_deadline_monotonic_ns: int
+    effective_deadline_monotonic_ns: int
+    history_stage: OpenAIResponsesStageV1 = field(repr=False)
+    rubric_stage_sha256: str
+    rubric_stage_timeout_ms: int
+    case_stage: str
+    case_host: str
+    case_mode: str
+    case_id: str
+    task_id: str
+    task_parameters_sha256: str | None
+    reset_seed: int | None
+    max_actor_calls: int
+    max_openai_calls: int
+    max_wall_time_seconds: int
+    case_max_cost_usd_micros: int
+    attempt_max_cost_usd_micros: int
+    schema_version: str = LIVE_RUBRIC_ATTEMPT_CONSTRAINT_SCHEMA_VERSION
+    _seal: InitVar[object | None] = None
+
+    def __post_init__(self, _seal: object | None) -> None:
+        if _seal is not _TRUST_ANCHOR_SEAL:
+            raise LiveRubricError(
+                "UNTRUSTED_ATTEMPT_CONSTRAINT",
+                "rubric attempt constraint was not issued by this module",
+            )
+        if self.schema_version != LIVE_RUBRIC_ATTEMPT_CONSTRAINT_SCHEMA_VERSION:
+            raise LiveRubricError(
+                "UNTRUSTED_ATTEMPT_CONSTRAINT", "attempt constraint version differs"
+            )
+        history_stage = _snapshot_live_rubric_openai_stage(self.history_stage)
+        for name in (
+            "issued_monotonic_ns",
+            "requested_call_deadline_monotonic_ns",
+            "case_execution_deadline_monotonic_ns",
+            "effective_deadline_monotonic_ns",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= (1 << 63) - 1:
+                raise LiveRubricError("UNTRUSTED_ATTEMPT_CONSTRAINT", f"{name} is invalid")
+        for name, maximum in (
+            ("rubric_stage_timeout_ms", 86_400_000),
+            ("max_actor_calls", 1_000_000),
+            ("max_openai_calls", 2_000_001),
+            ("max_wall_time_seconds", 31_536_000),
+            ("case_max_cost_usd_micros", 100_000_000_000),
+            ("attempt_max_cost_usd_micros", 100_000_000_000),
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise LiveRubricError("UNTRUSTED_ATTEMPT_CONSTRAINT", f"{name} is invalid")
+        _require_sha256(self.rubric_stage_sha256, "rubric_stage_sha256")
+        _require_id(self.case_id, "case_id")
+        _require_id(self.task_id, "task_id")
+        if self.task_parameters_sha256 is not None:
+            _require_sha256(self.task_parameters_sha256, "task_parameters_sha256")
+        if self.reset_seed is not None and (
+            type(self.reset_seed) is not int or not 0 <= self.reset_seed <= 2_147_483_647
+        ):
+            raise LiveRubricError("UNTRUSTED_ATTEMPT_CONSTRAINT", "reset_seed is invalid")
+        if (self.task_parameters_sha256 is None) != (self.reset_seed is None):
+            raise LiveRubricError(
+                "UNTRUSTED_ATTEMPT_CONSTRAINT", "task parameter authority is partial"
+            )
+        if (
+            history_stage.role is not OpenAIRoleV1.HISTORY_POLICY
+            or self.case_stage not in {"QWEN_LIVE_SMOKE", "MAI_LIVE_SMOKE", "R25_PILOT"}
+            or self.case_host not in {"QWEN3_VL", "MAI_UI"}
+            or self.case_mode not in {"SHADOW", "ACTIVE"}
+        ):
+            raise LiveRubricError(
+                "UNTRUSTED_ATTEMPT_CONSTRAINT", "constraint source authority differs"
+            )
+        timeout_ms = min(history_stage.timeout_ms, self.rubric_stage_timeout_ms)
+        requested_deadline = self.issued_monotonic_ns + timeout_ms * 1_000_000
+        effective_deadline = min(requested_deadline, self.case_execution_deadline_monotonic_ns)
+        attempt_ceiling = self.case_max_cost_usd_micros // self.max_openai_calls
+        if (
+            requested_deadline > (1 << 63) - 1
+            or self.requested_call_deadline_monotonic_ns != requested_deadline
+            or self.case_execution_deadline_monotonic_ns <= self.issued_monotonic_ns
+            or self.case_execution_deadline_monotonic_ns
+            > self.issued_monotonic_ns + self.max_wall_time_seconds * 1_000_000_000
+            or self.effective_deadline_monotonic_ns != effective_deadline
+            or effective_deadline <= self.issued_monotonic_ns
+            or attempt_ceiling <= 0
+            or self.attempt_max_cost_usd_micros != attempt_ceiling
+        ):
+            raise LiveRubricError(
+                "UNTRUSTED_ATTEMPT_CONSTRAINT",
+                "deadline or budget constraint is not deterministically derived",
+            )
+        object.__setattr__(self, "history_stage", history_stage)
+
+
+def build_live_rubric_attempt_constraint_binding_v1(
+    *,
+    issued_monotonic_ns: int,
+    case_execution_deadline_monotonic_ns: int,
+    history_stage: OpenAIResponsesStageV1,
+    rubric_stage: OpenAIResponsesStageV1,
+    case_stage: str,
+    case_host: str,
+    case_mode: str,
+    case_id: str,
+    task_id: str,
+    task_parameters_sha256: str | None,
+    reset_seed: int | None,
+    max_actor_calls: int,
+    max_openai_calls: int,
+    max_wall_time_seconds: int,
+    case_max_cost_usd_micros: int,
+) -> LiveRubricAttemptConstraintBindingV1:
+    """Seal the independently reconstructable deadline/cost source preimage."""
+
+    history = _snapshot_live_rubric_openai_stage(history_stage)
+    rubric = _snapshot_live_rubric_openai_stage(rubric_stage)
+    if rubric.role is not OpenAIRoleV1.RUBRIC:
+        raise LiveRubricError("UNTRUSTED_ATTEMPT_CONSTRAINT", "rubric deadline stage role differs")
+    if type(issued_monotonic_ns) is not int:
+        raise LiveRubricError("UNTRUSTED_ATTEMPT_CONSTRAINT", "deadline issuance is invalid")
+    requested_deadline = (
+        issued_monotonic_ns + min(history.timeout_ms, rubric.timeout_ms) * 1_000_000
+    )
+    effective_deadline = min(requested_deadline, case_execution_deadline_monotonic_ns)
+    if type(case_max_cost_usd_micros) is not int or type(max_openai_calls) is not int:
+        raise LiveRubricError("UNTRUSTED_ATTEMPT_CONSTRAINT", "attempt cost source is invalid")
+    attempt_ceiling = case_max_cost_usd_micros // max_openai_calls if max_openai_calls else 0
+    return LiveRubricAttemptConstraintBindingV1(
+        issued_monotonic_ns=issued_monotonic_ns,
+        requested_call_deadline_monotonic_ns=requested_deadline,
+        case_execution_deadline_monotonic_ns=case_execution_deadline_monotonic_ns,
+        effective_deadline_monotonic_ns=effective_deadline,
+        history_stage=history,
+        rubric_stage_sha256=openai_stage_sha256(rubric),
+        rubric_stage_timeout_ms=rubric.timeout_ms,
+        case_stage=case_stage,
+        case_host=case_host,
+        case_mode=case_mode,
+        case_id=case_id,
+        task_id=task_id,
+        task_parameters_sha256=task_parameters_sha256,
+        reset_seed=reset_seed,
+        max_actor_calls=max_actor_calls,
+        max_openai_calls=max_openai_calls,
+        max_wall_time_seconds=max_wall_time_seconds,
+        case_max_cost_usd_micros=case_max_cost_usd_micros,
+        attempt_max_cost_usd_micros=attempt_ceiling,
+        _seal=_TRUST_ANCHOR_SEAL,
+    )
+
+
+def live_rubric_attempt_constraint_binding_projection(
+    value: LiveRubricAttemptConstraintBindingV1,
+) -> dict[str, JsonValue]:
+    trusted = snapshot_live_rubric_attempt_constraint_binding(value)
+    return {
+        "attempt_max_cost_usd_micros": trusted.attempt_max_cost_usd_micros,
+        "case_execution_deadline_monotonic_ns": (trusted.case_execution_deadline_monotonic_ns),
+        "case_host": trusted.case_host,
+        "case_id": trusted.case_id,
+        "case_max_cost_usd_micros": trusted.case_max_cost_usd_micros,
+        "case_mode": trusted.case_mode,
+        "case_stage": trusted.case_stage,
+        "effective_deadline_monotonic_ns": trusted.effective_deadline_monotonic_ns,
+        "history_stage": cast(JsonValue, openai_stage_projection(trusted.history_stage)),
+        "issued_monotonic_ns": trusted.issued_monotonic_ns,
+        "max_actor_calls": trusted.max_actor_calls,
+        "max_openai_calls": trusted.max_openai_calls,
+        "max_wall_time_seconds": trusted.max_wall_time_seconds,
+        "requested_call_deadline_monotonic_ns": (trusted.requested_call_deadline_monotonic_ns),
+        "reset_seed": trusted.reset_seed,
+        "rubric_stage_sha256": trusted.rubric_stage_sha256,
+        "rubric_stage_timeout_ms": trusted.rubric_stage_timeout_ms,
+        "schema_version": trusted.schema_version,
+        "task_id": trusted.task_id,
+        "task_parameters_sha256": trusted.task_parameters_sha256,
+    }
+
+
+def snapshot_live_rubric_attempt_constraint_binding(
+    value: LiveRubricAttemptConstraintBindingV1,
+) -> LiveRubricAttemptConstraintBindingV1:
+    if type(value) is not LiveRubricAttemptConstraintBindingV1:
+        raise LiveRubricError("UNTRUSTED_ATTEMPT_CONSTRAINT", "attempt constraint type differs")
+    return LiveRubricAttemptConstraintBindingV1(
+        issued_monotonic_ns=value.issued_monotonic_ns,
+        requested_call_deadline_monotonic_ns=(value.requested_call_deadline_monotonic_ns),
+        case_execution_deadline_monotonic_ns=(value.case_execution_deadline_monotonic_ns),
+        effective_deadline_monotonic_ns=value.effective_deadline_monotonic_ns,
+        history_stage=value.history_stage,
+        rubric_stage_sha256=value.rubric_stage_sha256,
+        rubric_stage_timeout_ms=value.rubric_stage_timeout_ms,
+        case_stage=value.case_stage,
+        case_host=value.case_host,
+        case_mode=value.case_mode,
+        case_id=value.case_id,
+        task_id=value.task_id,
+        task_parameters_sha256=value.task_parameters_sha256,
+        reset_seed=value.reset_seed,
+        max_actor_calls=value.max_actor_calls,
+        max_openai_calls=value.max_openai_calls,
+        max_wall_time_seconds=value.max_wall_time_seconds,
+        case_max_cost_usd_micros=value.case_max_cost_usd_micros,
+        attempt_max_cost_usd_micros=value.attempt_max_cost_usd_micros,
+        schema_version=value.schema_version,
+        _seal=_TRUST_ANCHOR_SEAL,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class LiveRubricAttemptRequestAnchorV1:
     """Module-sealed request preimages registered before one live dispatch."""
 
@@ -923,6 +1271,12 @@ class LiveRubricAttemptRequestAnchorV1:
     logical_call_id: str
     attempt_id: str
     attempt_order: int
+    attempt_authority: LiveAttemptAuthorityV1 = field(repr=False)
+    constraint_binding: LiveRubricAttemptConstraintBindingV1 = field(repr=False)
+    case_execution_lease: dict[str, JsonValue] = field(repr=False)
+    openai_stage: OpenAIResponsesStageV1 = field(repr=False)
+    pricing: LiveAttemptPricingV1 = field(repr=False)
+    transport_binding: dict[str, JsonValue] = field(repr=False)
     collector_stimulus: RubricEvidenceSnapshotV1 = field(repr=False)
     current_image: BoundCollectorCurrentImageV1 | None = field(repr=False)
     provider_input: dict[str, JsonValue] = field(repr=False)
@@ -949,6 +1303,33 @@ class LiveRubricAttemptRequestAnchorV1:
             provider_input=self.provider_input,
             provider_request=self.provider_request,
         )
+        try:
+            attempt_authority = snapshot_live_attempt_authority(self.attempt_authority)
+            constraint_binding = snapshot_live_rubric_attempt_constraint_binding(
+                self.constraint_binding
+            )
+            case_execution_lease = _validate_durable_case_execution_lease_projection(
+                self.case_execution_lease
+            )
+            openai_stage = _snapshot_live_rubric_openai_stage(self.openai_stage)
+            pricing = snapshot_live_attempt_pricing(self.pricing)
+            transport_binding = _snapshot_canonical_object(
+                self.transport_binding,
+                maximum_bytes=_MAX_PROVIDER_REQUEST_BYTES,
+                code="UNTRUSTED_TRANSPORT_BINDING",
+                label="rubric transport binding",
+            )
+        except Exception as exc:
+            raise LiveRubricError(
+                "UNTRUSTED_ATTEMPT_AUTHORITY",
+                "rubric request authority material could not be detached",
+            ) from exc
+        object.__setattr__(self, "attempt_authority", attempt_authority)
+        object.__setattr__(self, "constraint_binding", constraint_binding)
+        object.__setattr__(self, "case_execution_lease", case_execution_lease)
+        object.__setattr__(self, "openai_stage", openai_stage)
+        object.__setattr__(self, "pricing", pricing)
+        object.__setattr__(self, "transport_binding", transport_binding)
         object.__setattr__(self, "collector_stimulus", stimulus)
         object.__setattr__(self, "current_image", image)
         object.__setattr__(self, "provider_input", provider_input)
@@ -962,6 +1343,12 @@ def _build_live_rubric_attempt_request_anchor(
     logical_call_id: str,
     attempt_id: str,
     attempt_order: int,
+    attempt_authority: LiveAttemptAuthorityV1,
+    constraint_binding: LiveRubricAttemptConstraintBindingV1,
+    case_execution_lease: dict[str, JsonValue],
+    openai_stage: OpenAIResponsesStageV1,
+    pricing: LiveAttemptPricingV1,
+    transport_binding: dict[str, JsonValue],
     collector_stimulus: RubricEvidenceSnapshotV1,
     current_image: BoundCollectorCurrentImageV1 | None,
     provider_input: dict[str, JsonValue],
@@ -973,6 +1360,12 @@ def _build_live_rubric_attempt_request_anchor(
         logical_call_id=logical_call_id,
         attempt_id=attempt_id,
         attempt_order=attempt_order,
+        attempt_authority=attempt_authority,
+        constraint_binding=constraint_binding,
+        case_execution_lease=case_execution_lease,
+        openai_stage=openai_stage,
+        pricing=pricing,
+        transport_binding=transport_binding,
         collector_stimulus=collector_stimulus,
         current_image=current_image,
         provider_input=provider_input,
@@ -994,6 +1387,12 @@ def snapshot_live_rubric_attempt_request_anchor(
         logical_call_id=value.logical_call_id,
         attempt_id=value.attempt_id,
         attempt_order=value.attempt_order,
+        attempt_authority=value.attempt_authority,
+        constraint_binding=value.constraint_binding,
+        case_execution_lease=value.case_execution_lease,
+        openai_stage=value.openai_stage,
+        pricing=value.pricing,
+        transport_binding=value.transport_binding,
         collector_stimulus=value.collector_stimulus,
         current_image=value.current_image,
         provider_input=value.provider_input,
@@ -1302,21 +1701,451 @@ def _validate_live_rubric_request_material_v1(
     return expected.request_sha256
 
 
+def _parse_durable_openai_stage_projection(value: object) -> OpenAIResponsesStageV1:
+    projection = _snapshot_canonical_object(
+        value,
+        maximum_bytes=_MAX_PROVIDER_REQUEST_BYTES,
+        code="INVALID_REQUEST_PROOF",
+        label="OpenAI stage",
+    )
+    expected_fields = {
+        "endpoint",
+        "external_network_on_call",
+        "max_attempts",
+        "max_output_tokens",
+        "model",
+        "model_on_call",
+        "openai_sdk_version",
+        "role",
+        "sdk_max_retries",
+        "store",
+        "timeout_ms",
+        "transport_authority",
+        "transport_kind",
+    }
+    if set(projection) != expected_fields:
+        raise LiveRubricError("INVALID_REQUEST_PROOF", "OpenAI stage fields differ")
+    try:
+        stage = OpenAIResponsesStageV1(
+            role=OpenAIRoleV1(cast(str, projection["role"])),
+            model=cast(str, projection["model"]),
+            endpoint=cast(str, projection["endpoint"]),
+            transport_kind=cast(str, projection["transport_kind"]),
+            transport_authority=cast(str, projection["transport_authority"]),
+            openai_sdk_version=cast(str, projection["openai_sdk_version"]),
+            sdk_max_retries=cast(int, projection["sdk_max_retries"]),
+            external_network_on_call=cast(bool, projection["external_network_on_call"]),
+            model_on_call=cast(bool, projection["model_on_call"]),
+            max_output_tokens=cast(int, projection["max_output_tokens"]),
+            timeout_ms=cast(int, projection["timeout_ms"]),
+            max_attempts=cast(int, projection["max_attempts"]),
+            store=cast(bool, projection["store"]),
+        )
+    except Exception as exc:
+        raise LiveRubricError("INVALID_REQUEST_PROOF", "OpenAI stage is invalid") from exc
+    if not _canonical_json_equal(
+        cast(JsonValue, projection),
+        cast(JsonValue, openai_stage_projection(stage)),
+    ):
+        raise LiveRubricError("INVALID_REQUEST_PROOF", "OpenAI stage is non-canonical")
+    return stage
+
+
+def _parse_durable_attempt_pricing_projection(value: object) -> LiveAttemptPricingV1:
+    projection = _snapshot_canonical_object(
+        value,
+        maximum_bytes=_MAX_PROVIDER_REQUEST_BYTES,
+        code="INVALID_REQUEST_PROOF",
+        label="attempt pricing",
+    )
+    expected_fields = {
+        "cached_input_usd_micros_per_million_tokens",
+        "effective_at_utc",
+        "input_usd_micros_per_million_tokens",
+        "model",
+        "output_usd_micros_per_million_tokens",
+        "pricing_id",
+        "rounding_policy",
+        "schema_version",
+        "source_sha256",
+    }
+    if set(projection) != expected_fields:
+        raise LiveRubricError("INVALID_REQUEST_PROOF", "attempt pricing fields differ")
+    try:
+        pricing = LiveAttemptPricingV1(
+            pricing_id=cast(str, projection["pricing_id"]),
+            model=cast(str, projection["model"]),
+            input_usd_micros_per_million_tokens=cast(
+                int, projection["input_usd_micros_per_million_tokens"]
+            ),
+            cached_input_usd_micros_per_million_tokens=cast(
+                int, projection["cached_input_usd_micros_per_million_tokens"]
+            ),
+            output_usd_micros_per_million_tokens=cast(
+                int, projection["output_usd_micros_per_million_tokens"]
+            ),
+            source_sha256=cast(str, projection["source_sha256"]),
+            effective_at_utc=cast(str, projection["effective_at_utc"]),
+            rounding_policy=cast(str, projection["rounding_policy"]),
+            schema_version=cast(str, projection["schema_version"]),
+        )
+    except Exception as exc:
+        raise LiveRubricError("INVALID_REQUEST_PROOF", "attempt pricing is invalid") from exc
+    if not _canonical_json_equal(
+        cast(JsonValue, projection),
+        cast(JsonValue, live_attempt_pricing_projection(pricing)),
+    ):
+        raise LiveRubricError("INVALID_REQUEST_PROOF", "attempt pricing is non-canonical")
+    return pricing
+
+
+def _parse_live_rubric_attempt_constraint_binding_projection(
+    value: object,
+) -> LiveRubricAttemptConstraintBindingV1:
+    projection = _snapshot_canonical_object(
+        value,
+        maximum_bytes=_MAX_PROVIDER_REQUEST_BYTES,
+        code="INVALID_REQUEST_PROOF",
+        label="rubric attempt constraint binding",
+    )
+    expected_fields = {
+        "attempt_max_cost_usd_micros",
+        "case_execution_deadline_monotonic_ns",
+        "case_host",
+        "case_id",
+        "case_max_cost_usd_micros",
+        "case_mode",
+        "case_stage",
+        "effective_deadline_monotonic_ns",
+        "history_stage",
+        "issued_monotonic_ns",
+        "max_actor_calls",
+        "max_openai_calls",
+        "max_wall_time_seconds",
+        "requested_call_deadline_monotonic_ns",
+        "reset_seed",
+        "rubric_stage_sha256",
+        "rubric_stage_timeout_ms",
+        "schema_version",
+        "task_id",
+        "task_parameters_sha256",
+    }
+    if set(projection) != expected_fields:
+        raise LiveRubricError("INVALID_REQUEST_PROOF", "attempt constraint fields differ")
+    history_stage = _parse_durable_openai_stage_projection(projection["history_stage"])
+    try:
+        trusted = LiveRubricAttemptConstraintBindingV1(
+            issued_monotonic_ns=cast(int, projection["issued_monotonic_ns"]),
+            requested_call_deadline_monotonic_ns=cast(
+                int, projection["requested_call_deadline_monotonic_ns"]
+            ),
+            case_execution_deadline_monotonic_ns=cast(
+                int, projection["case_execution_deadline_monotonic_ns"]
+            ),
+            effective_deadline_monotonic_ns=cast(
+                int, projection["effective_deadline_monotonic_ns"]
+            ),
+            history_stage=history_stage,
+            rubric_stage_sha256=cast(str, projection["rubric_stage_sha256"]),
+            rubric_stage_timeout_ms=cast(int, projection["rubric_stage_timeout_ms"]),
+            case_stage=cast(str, projection["case_stage"]),
+            case_host=cast(str, projection["case_host"]),
+            case_mode=cast(str, projection["case_mode"]),
+            case_id=cast(str, projection["case_id"]),
+            task_id=cast(str, projection["task_id"]),
+            task_parameters_sha256=cast(str | None, projection["task_parameters_sha256"]),
+            reset_seed=cast(int | None, projection["reset_seed"]),
+            max_actor_calls=cast(int, projection["max_actor_calls"]),
+            max_openai_calls=cast(int, projection["max_openai_calls"]),
+            max_wall_time_seconds=cast(int, projection["max_wall_time_seconds"]),
+            case_max_cost_usd_micros=cast(int, projection["case_max_cost_usd_micros"]),
+            attempt_max_cost_usd_micros=cast(int, projection["attempt_max_cost_usd_micros"]),
+            schema_version=cast(str, projection["schema_version"]),
+            _seal=_TRUST_ANCHOR_SEAL,
+        )
+    except (KeyError, TypeError, ValueError, LiveRubricError) as exc:
+        raise LiveRubricError("INVALID_REQUEST_PROOF", "attempt constraint is invalid") from exc
+    if not _canonical_json_equal(
+        cast(JsonValue, projection),
+        cast(JsonValue, live_rubric_attempt_constraint_binding_projection(trusted)),
+    ):
+        raise LiveRubricError("INVALID_REQUEST_PROOF", "attempt constraint is non-canonical")
+    return trusted
+
+
+def _live_rubric_transport_binding_projection(
+    *,
+    operation: LiveRubricOperationV1,
+    authority: LiveAttemptAuthorityV1,
+    case_execution_lease: dict[str, JsonValue],
+    openai_stage: OpenAIResponsesStageV1,
+    backend_extension: R24RubricBackendExtensionDescriptorV1,
+) -> dict[str, JsonValue]:
+    generate = operation is LiveRubricOperationV1.GENERATE
+    return {
+        "execution_scope": LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE.value,
+        "factory_binding_sha256": case_execution_lease["factory_binding_sha256"],
+        "manifest_sha256": authority.manifest_sha256,
+        "model": openai_stage.model,
+        "preflight_sha256": authority.preflight_sha256,
+        "pricing_binding_sha256": authority.pricing_binding_sha256,
+        "role": authority.role.value,
+        "stage_sha256": authority.stage_sha256,
+        "backend_extension_descriptor_sha256": backend_extension.sha256,
+        "input_schema_version": (
+            LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION
+            if generate
+            else LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION
+        ),
+        "operation": operation.value,
+        "output_schema_sha256": (
+            backend_extension.generate_output_schema_sha256
+            if generate
+            else backend_extension.track_output_schema_sha256
+        ),
+        "prompt_sha256": live_rubric_operation_prompt_sha256(operation),
+    }
+
+
+def _validate_live_rubric_attempt_authority_components_v1(
+    *,
+    operation: LiveRubricOperationV1,
+    attempt_id: str,
+    attempt_order: int,
+    logical_call_id: str,
+    authority: LiveAttemptAuthorityV1,
+    constraint_binding: LiveRubricAttemptConstraintBindingV1,
+    case_execution_lease: dict[str, JsonValue],
+    openai_stage: OpenAIResponsesStageV1,
+    pricing: LiveAttemptPricingV1,
+    transport_binding: dict[str, JsonValue],
+    provider_request: CanonicalHistoryPolicyRequestV1,
+    expected_transport_binding: dict[str, JsonValue],
+    request_sha256: str,
+    allow_cost_reservation_failure: bool = False,
+) -> None:
+    if type(allow_cost_reservation_failure) is not bool:
+        raise LiveRubricError(
+            "ATTEMPT_AUTHORITY_BINDING_MISMATCH",
+            "cost-reservation failure declaration is untrusted",
+        )
+    authority = snapshot_live_attempt_authority(authority)
+    constraint = snapshot_live_rubric_attempt_constraint_binding(constraint_binding)
+    lease = _validate_durable_case_execution_lease_projection(case_execution_lease)
+    stage = _snapshot_live_rubric_openai_stage(openai_stage)
+    pricing = snapshot_live_attempt_pricing(pricing)
+    transport = _snapshot_canonical_object(
+        transport_binding,
+        maximum_bytes=_MAX_PROVIDER_REQUEST_BYTES,
+        code="INVALID_REQUEST_PROOF",
+        label="rubric transport binding",
+    )
+    expected_transport = _snapshot_canonical_object(
+        expected_transport_binding,
+        maximum_bytes=_MAX_PROVIDER_REQUEST_BYTES,
+        code="INVALID_REQUEST_PROOF",
+        label="expected rubric transport binding",
+    )
+    request = _provider_request_object(provider_request.canonical_bytes)
+    request_max_output_tokens = request.get("max_output_tokens")
+    worst_case_cost = live_attempt_worst_case_cost_usd_micros(
+        pricing,
+        request_byte_count=provider_request.byte_count,
+        max_output_tokens=authority.max_output_tokens,
+    )
+    if (
+        authority.attempt_id != attempt_id
+        or authority.role is not LiveAttemptRoleV1.RUBRIC
+        or authority.logical_call_id != logical_call_id
+        or authority.request_sha256 != request_sha256
+        or authority.deadline_monotonic_ns != constraint.effective_deadline_monotonic_ns
+        or authority.max_cost_usd_micros != constraint.attempt_max_cost_usd_micros
+        or authority.case_execution_lease_sha256 != canonical_sha256(cast(JsonValue, lease))
+        or authority.stage_sha256 != openai_stage_sha256(stage)
+        or authority.case_id != lease["case_id"]
+        or constraint.case_id != lease["case_id"]
+        or constraint.task_id != lease["task_id"]
+        or constraint.case_stage != lease["stage"]
+        or constraint.case_host != lease["host"]
+        or constraint.case_mode != lease["mode"]
+        or constraint.task_parameters_sha256 != lease["task_parameters_sha256"]
+        or not _canonical_json_equal(constraint.reset_seed, lease["reset_seed"])
+        or cast(int, lease["actor_call_index"]) > constraint.max_actor_calls
+        or attempt_order > constraint.max_openai_calls
+        or authority.actor_request_sha256 != lease["request_sha256"]
+        or authority.manifest_sha256 != lease["manifest_sha256"]
+        or authority.preflight_sha256 != lease["preflight_report_sha256"]
+        or authority.pricing_binding_sha256 != lease["pricing_binding_sha256"]
+        or authority.pricing_binding_sha256 != live_attempt_pricing_sha256(pricing)
+        or authority.transport_binding_sha256 != canonical_sha256(cast(JsonValue, transport))
+        or not _canonical_json_equal(
+            cast(JsonValue, transport), cast(JsonValue, expected_transport)
+        )
+        or stage.role is not OpenAIRoleV1.RUBRIC
+        or constraint.rubric_stage_sha256 != openai_stage_sha256(stage)
+        or constraint.rubric_stage_timeout_ms != stage.timeout_ms
+        or lease["openai_stage_set_sha256"]
+        != openai_stage_set_sha256((stage, constraint.history_stage))
+        or stage.model != pricing.model
+        or request.get("model") != stage.model
+        or request.get("store") is not stage.store
+        or type(request_max_output_tokens) is not int
+        or request_max_output_tokens != LIVE_RUBRIC_MAX_OUTPUT_TOKENS
+        or request_max_output_tokens != stage.max_output_tokens
+        or request_max_output_tokens != authority.max_output_tokens
+        or stage.max_attempts != 1
+        or (worst_case_cost > authority.max_cost_usd_micros) is not allow_cost_reservation_failure
+    ):
+        raise LiveRubricError(
+            "ATTEMPT_AUTHORITY_BINDING_MISMATCH",
+            "rubric attempt authority differs from request, stage, lease, pricing, or transport",
+        )
+
+
 def validate_live_rubric_attempt_request_anchor_v1(
     value: LiveRubricAttemptRequestAnchorV1,
     *,
     backend_extension: R24RubricBackendExtensionDescriptorV1,
+    attempt_receipt: LiveAttemptReceiptV1 | None = None,
 ) -> str:
     """Verify an attempt request anchor without requiring a provider response."""
 
     trusted = snapshot_live_rubric_attempt_request_anchor(value)
-    return _validate_live_rubric_request_material_v1(
+    receipt = None if attempt_receipt is None else snapshot_live_attempt_receipt(attempt_receipt)
+    cost_reservation_failure = receipt is not None and (
+        receipt.status is LiveAttemptStatusV1.FAILED
+        and receipt.dispatch_count == 0
+        and receipt.failure_code == "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY"
+    )
+    request_sha256 = _validate_live_rubric_request_material_v1(
         operation=trusted.operation,
         current_image=trusted.current_image,
         provider_input=trusted.provider_input,
         provider_request=trusted.provider_request,
         backend_extension=backend_extension,
     )
+    _validate_live_rubric_attempt_authority_components_v1(
+        operation=trusted.operation,
+        attempt_id=trusted.attempt_id,
+        attempt_order=trusted.attempt_order,
+        logical_call_id=trusted.logical_call_id,
+        authority=trusted.attempt_authority,
+        constraint_binding=trusted.constraint_binding,
+        case_execution_lease=trusted.case_execution_lease,
+        openai_stage=trusted.openai_stage,
+        pricing=trusted.pricing,
+        transport_binding=trusted.transport_binding,
+        provider_request=trusted.provider_request,
+        expected_transport_binding=_live_rubric_transport_binding_projection(
+            operation=trusted.operation,
+            authority=trusted.attempt_authority,
+            case_execution_lease=trusted.case_execution_lease,
+            openai_stage=trusted.openai_stage,
+            backend_extension=snapshot_r24_rubric_backend_extension_descriptor(backend_extension),
+        ),
+        request_sha256=request_sha256,
+        allow_cost_reservation_failure=cost_reservation_failure,
+    )
+    if receipt is not None:
+        validate_live_rubric_attempt_receipt_authority_v1(trusted, receipt)
+    return request_sha256
+
+
+def _receipt_result_exceeds_authority(
+    receipt: LiveAttemptReceiptV1,
+    authority: LiveAttemptAuthorityV1,
+) -> bool:
+    return (
+        receipt.cost_usd_micros is not None
+        and receipt.cost_usd_micros > authority.max_cost_usd_micros
+    ) or (receipt.output_tokens is not None and receipt.output_tokens > authority.max_output_tokens)
+
+
+def _receipt_authority_limit_state_is_valid(
+    receipt: LiveAttemptReceiptV1,
+    authority: LiveAttemptAuthorityV1,
+) -> bool:
+    exceeds = _receipt_result_exceeds_authority(receipt, authority)
+    if receipt.failure_code == "PROVIDER_RESULT_EXCEEDS_AUTHORITY":
+        return receipt.status is LiveAttemptStatusV1.FAILED and exceeds
+    return not exceeds
+
+
+def _receipt_exact_cost_matches_pricing(
+    receipt: LiveAttemptReceiptV1,
+    pricing: LiveAttemptPricingV1,
+) -> bool:
+    if receipt.cost_status is not LiveAttemptCostStatusV1.EXACT:
+        return receipt.cost_usd_micros is None
+    if receipt.dispatch_count == 0:
+        return receipt.cost_usd_micros == 0
+    if any(
+        value is None
+        for value in (
+            receipt.input_tokens,
+            receipt.cached_input_tokens,
+            receipt.output_tokens,
+        )
+    ):
+        return False
+    return receipt.cost_usd_micros == live_attempt_cost_usd_micros(
+        pricing,
+        input_tokens=cast(int, receipt.input_tokens),
+        cached_input_tokens=cast(int, receipt.cached_input_tokens),
+        output_tokens=cast(int, receipt.output_tokens),
+    )
+
+
+def validate_live_rubric_attempt_receipt_authority_v1(
+    value: LiveRubricAttemptRequestAnchorV1,
+    receipt: LiveAttemptReceiptV1,
+) -> None:
+    """Cross-bind every receipt authority copy to its complete sealed preimage."""
+
+    trusted = snapshot_live_rubric_attempt_request_anchor(value)
+    attempt = snapshot_live_attempt_receipt(receipt)
+    authority = trusted.attempt_authority
+    stage = trusted.openai_stage
+    authority_fields = (
+        authority.attempt_id,
+        authority.role,
+        authority.manifest_sha256,
+        authority.preflight_sha256,
+        authority.case_execution_lease_sha256,
+        authority.stage_sha256,
+        authority.case_id,
+        authority.logical_call_id,
+        authority.actor_request_sha256,
+        authority.request_sha256,
+        authority.transport_binding_sha256,
+        authority.pricing_binding_sha256,
+    )
+    receipt_fields = (
+        attempt.attempt_id,
+        attempt.role,
+        attempt.manifest_sha256,
+        attempt.preflight_sha256,
+        attempt.case_execution_lease_sha256,
+        attempt.stage_sha256,
+        attempt.case_id,
+        attempt.logical_call_id,
+        attempt.actor_request_sha256,
+        attempt.request_sha256,
+        attempt.transport_binding_sha256,
+        attempt.pricing_binding_sha256,
+    )
+    if (
+        attempt.authority_sha256 != live_attempt_authority_sha256(authority)
+        or authority_fields != receipt_fields
+        or attempt.dispatch_count > stage.max_attempts
+        or not _receipt_exact_cost_matches_pricing(attempt, trusted.pricing)
+        or not _receipt_authority_limit_state_is_valid(attempt, authority)
+        or (attempt.requested_model is not None and attempt.requested_model != stage.model)
+    ):
+        raise LiveRubricError(
+            "ATTEMPT_AUTHORITY_BINDING_MISMATCH",
+            "attempt receipt differs from its complete authority preimage",
+        )
 
 
 def validate_live_rubric_request_anchor_v1(
@@ -1442,8 +2271,17 @@ def validate_live_rubric_request_proof_projection_v1(
     *,
     attempt_receipt: LiveAttemptReceiptV1 | dict[str, JsonValue] | None = None,
     expected_attempt_order: int | None = None,
+    expected_attempt_authority_sha256: str,
+    expected_constraint_binding_sha256: str,
+    expected_manifest_sha256: str,
+    expected_preflight_sha256: str,
+    expected_case_execution_lease_sha256: str,
+    expected_stage_sha256: str,
+    expected_pricing_binding_sha256: str,
+    expected_transport_binding_sha256: str,
+    expected_request_sha256: str,
 ) -> None:
-    """Validate a durable request proof and, when supplied, its receipt preimage."""
+    """Validate a durable request proof against caller-known owner roots."""
 
     proof = _snapshot_request_proof(value)
     if tuple(_request_proof_validator().iter_errors(proof)):
@@ -1461,6 +2299,13 @@ def validate_live_rubric_request_proof_projection_v1(
         "attempt_status",
         "attempt_dispatch_count",
         "attempt_receipt_sha256",
+        "attempt_authority",
+        "attempt_authority_sha256",
+        "attempt_constraint_binding",
+        "case_execution_lease",
+        "openai_stage",
+        "pricing",
+        "transport_binding",
         "backend_extension_descriptor_sha256",
         "r23_compatibility_descriptor_sha256",
         "collector_stimulus",
@@ -1514,6 +2359,16 @@ def validate_live_rubric_request_proof_projection_v1(
     attempt_receipt_sha256 = _require_sha256(
         proof["attempt_receipt_sha256"], "attempt_receipt_sha256"
     )
+    receipt: LiveAttemptReceiptV1 | None = None
+    if attempt_receipt is not None:
+        if type(attempt_receipt) is LiveAttemptReceiptV1:
+            receipt = snapshot_live_attempt_receipt(attempt_receipt)
+        elif type(attempt_receipt) is dict:
+            receipt = _parse_durable_live_attempt_receipt_projection(attempt_receipt)
+        else:
+            raise LiveRubricError(
+                "INVALID_REQUEST_PROOF", "matching attempt receipt has an untrusted type"
+            )
     extension_sha256 = _require_sha256(
         proof["backend_extension_descriptor_sha256"],
         "backend_extension_descriptor_sha256",
@@ -1629,24 +2484,138 @@ def validate_live_rubric_request_proof_projection_v1(
             "INVALID_REQUEST_PROOF", "canonical provider request differs from its reconstruction"
         )
 
-    if attempt_receipt is not None:
-        receipt: LiveAttemptReceiptV1
-        if type(attempt_receipt) is LiveAttemptReceiptV1:
-            receipt = snapshot_live_attempt_receipt(attempt_receipt)
-        elif type(attempt_receipt) is dict:
-            receipt = _parse_durable_live_attempt_receipt_projection(attempt_receipt)
-        else:
+    try:
+        authority = parse_live_attempt_authority_projection(proof["attempt_authority"])
+        authority_sha256 = _require_sha256(
+            proof["attempt_authority_sha256"], "attempt_authority_sha256"
+        )
+        constraint_binding = _parse_live_rubric_attempt_constraint_binding_projection(
+            proof["attempt_constraint_binding"]
+        )
+        lease = _validate_durable_case_execution_lease_projection(proof["case_execution_lease"])
+        stage = _parse_durable_openai_stage_projection(proof["openai_stage"])
+        pricing = _parse_durable_attempt_pricing_projection(proof["pricing"])
+        transport = _snapshot_canonical_object(
+            proof["transport_binding"],
+            maximum_bytes=_MAX_PROVIDER_REQUEST_BYTES,
+            code="INVALID_REQUEST_PROOF",
+            label="rubric transport binding",
+        )
+        if live_attempt_authority_sha256(authority) != authority_sha256:
             raise LiveRubricError(
-                "INVALID_REQUEST_PROOF", "matching attempt receipt has an untrusted type"
+                "INVALID_REQUEST_PROOF", "attempt authority hash differs from its preimage"
             )
+        _validate_live_rubric_attempt_authority_components_v1(
+            operation=operation,
+            attempt_id=attempt_id,
+            attempt_order=attempt_order,
+            logical_call_id=logical_call_id,
+            authority=authority,
+            constraint_binding=constraint_binding,
+            case_execution_lease=lease,
+            openai_stage=stage,
+            pricing=pricing,
+            transport_binding=transport,
+            provider_request=expected_request,
+            expected_transport_binding={
+                "execution_scope": LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE.value,
+                "factory_binding_sha256": lease["factory_binding_sha256"],
+                "manifest_sha256": authority.manifest_sha256,
+                "model": stage.model,
+                "preflight_sha256": authority.preflight_sha256,
+                "pricing_binding_sha256": authority.pricing_binding_sha256,
+                "role": authority.role.value,
+                "stage_sha256": authority.stage_sha256,
+                "backend_extension_descriptor_sha256": extension_sha256,
+                "input_schema_version": (
+                    LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION
+                    if operation is LiveRubricOperationV1.GENERATE
+                    else LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION
+                ),
+                "operation": operation.value,
+                "output_schema_sha256": (
+                    live_rubric_generate_schema().sha256
+                    if operation is LiveRubricOperationV1.GENERATE
+                    else live_rubric_track_schema().sha256
+                ),
+                "prompt_sha256": live_rubric_operation_prompt_sha256(operation),
+            },
+            request_sha256=expected_request.request_sha256,
+            allow_cost_reservation_failure=(
+                receipt is not None
+                and receipt.status is LiveAttemptStatusV1.FAILED
+                and receipt.dispatch_count == 0
+                and receipt.failure_code == "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY"
+            ),
+        )
+        independently_rebuilt_bindings = (
+            ("attempt authority", expected_attempt_authority_sha256, authority_sha256),
+            (
+                "attempt constraint",
+                expected_constraint_binding_sha256,
+                canonical_sha256(
+                    cast(
+                        JsonValue,
+                        live_rubric_attempt_constraint_binding_projection(constraint_binding),
+                    )
+                ),
+            ),
+            ("manifest", expected_manifest_sha256, authority.manifest_sha256),
+            ("preflight", expected_preflight_sha256, authority.preflight_sha256),
+            (
+                "case execution lease",
+                expected_case_execution_lease_sha256,
+                canonical_sha256(cast(JsonValue, lease)),
+            ),
+            ("stage", expected_stage_sha256, openai_stage_sha256(stage)),
+            (
+                "pricing",
+                expected_pricing_binding_sha256,
+                live_attempt_pricing_sha256(pricing),
+            ),
+            (
+                "transport",
+                expected_transport_binding_sha256,
+                canonical_sha256(cast(JsonValue, transport)),
+            ),
+            ("request", expected_request_sha256, expected_request.request_sha256),
+        )
+        for label, externally_expected, observed in independently_rebuilt_bindings:
+            if _require_sha256(externally_expected, f"expected {label} SHA-256") != observed:
+                raise LiveRubricError(
+                    "INVALID_REQUEST_PROOF",
+                    f"rubric proof differs from caller-known expected {label} binding",
+                )
+    except (KeyError, TypeError, ValueError, LiveAttemptError, LiveRubricError) as exc:
+        if type(exc) is LiveRubricError and exc.code == "INVALID_REQUEST_PROOF":
+            raise
+        raise LiveRubricError(
+            "INVALID_REQUEST_PROOF",
+            "attempt authority differs from request, stage, lease, pricing, or transport",
+        ) from exc
+
+    if receipt is not None:
         if (
             live_attempt_receipt_sha256(receipt) != attempt_receipt_sha256
             or receipt.attempt_id != attempt_id
             or receipt.role is not LiveAttemptRoleV1.RUBRIC
             or receipt.logical_call_id != logical_call_id
+            or receipt.authority_sha256 != authority_sha256
+            or receipt.manifest_sha256 != authority.manifest_sha256
+            or receipt.preflight_sha256 != authority.preflight_sha256
+            or receipt.case_execution_lease_sha256 != authority.case_execution_lease_sha256
+            or receipt.stage_sha256 != authority.stage_sha256
+            or receipt.case_id != authority.case_id
+            or receipt.actor_request_sha256 != authority.actor_request_sha256
             or receipt.request_sha256 != expected_request.request_sha256
+            or receipt.transport_binding_sha256 != authority.transport_binding_sha256
+            or receipt.pricing_binding_sha256 != authority.pricing_binding_sha256
             or receipt.status is not attempt_status
             or receipt.dispatch_count != dispatch_count
+            or receipt.dispatch_count > stage.max_attempts
+            or not _receipt_exact_cost_matches_pricing(receipt, pricing)
+            or not _receipt_authority_limit_state_is_valid(receipt, authority)
+            or (receipt.requested_model is not None and receipt.requested_model != stage.model)
         ):
             raise LiveRubricError(
                 "INVALID_REQUEST_PROOF", "request proof differs from its attempt receipt"
@@ -1756,6 +2725,39 @@ def _parse_durable_live_attempt_receipt_projection(
     return receipt
 
 
+# These exact rebuilders are shared by the owner-only HISTORY_POLICY proof.
+# Keeping one implementation prevents the two role-specific durable validators
+# from accepting different Python/JSON type semantics for the same preimages.
+def parse_durable_case_execution_lease_projection_v1(
+    value: object,
+) -> dict[str, JsonValue]:
+    return _validate_durable_case_execution_lease_projection(value)
+
+
+def parse_durable_openai_stage_projection_v1(
+    value: object,
+) -> OpenAIResponsesStageV1:
+    return _parse_durable_openai_stage_projection(value)
+
+
+def parse_durable_attempt_pricing_projection_v1(
+    value: object,
+) -> LiveAttemptPricingV1:
+    return _parse_durable_attempt_pricing_projection(value)
+
+
+def parse_durable_live_attempt_receipt_projection_v1(
+    value: dict[str, JsonValue],
+) -> LiveAttemptReceiptV1:
+    return _parse_durable_live_attempt_receipt_projection(value)
+
+
+def parse_live_rubric_attempt_constraint_binding_projection_v1(
+    value: object,
+) -> LiveRubricAttemptConstraintBindingV1:
+    return _parse_live_rubric_attempt_constraint_binding_projection(value)
+
+
 def live_rubric_attempt_request_proof_projection(
     value: LiveRubricAttemptRequestAnchorV1,
     *,
@@ -1768,8 +2770,11 @@ def live_rubric_attempt_request_proof_projection(
     receipt = snapshot_live_attempt_receipt(attempt_receipt)
     extension = snapshot_r24_rubric_backend_extension_descriptor(backend_extension)
     request_sha256 = validate_live_rubric_attempt_request_anchor_v1(
-        trusted, backend_extension=extension
+        trusted,
+        backend_extension=extension,
+        attempt_receipt=receipt,
     )
+    validate_live_rubric_attempt_receipt_authority_v1(trusted, receipt)
     if (
         receipt.role is not LiveAttemptRoleV1.RUBRIC
         or receipt.attempt_id != trusted.attempt_id
@@ -1793,6 +2798,18 @@ def live_rubric_attempt_request_proof_projection(
         "attempt_status": receipt.status.value,
         "attempt_dispatch_count": receipt.dispatch_count,
         "attempt_receipt_sha256": live_attempt_receipt_sha256(receipt),
+        "attempt_authority": cast(
+            JsonValue, live_attempt_authority_projection(trusted.attempt_authority)
+        ),
+        "attempt_authority_sha256": live_attempt_authority_sha256(trusted.attempt_authority),
+        "attempt_constraint_binding": cast(
+            JsonValue,
+            live_rubric_attempt_constraint_binding_projection(trusted.constraint_binding),
+        ),
+        "case_execution_lease": cast(JsonValue, trusted.case_execution_lease),
+        "openai_stage": cast(JsonValue, openai_stage_projection(trusted.openai_stage)),
+        "pricing": cast(JsonValue, live_attempt_pricing_projection(trusted.pricing)),
+        "transport_binding": cast(JsonValue, trusted.transport_binding),
         "backend_extension_descriptor_sha256": extension.sha256,
         "r23_compatibility_descriptor_sha256": extension.r23_compatibility_descriptor_sha256,
         "collector_stimulus": stimulus,
@@ -1817,6 +2834,22 @@ def live_rubric_attempt_request_proof_projection(
         cast(JsonValue, proof),
         attempt_receipt=receipt,
         expected_attempt_order=trusted.attempt_order,
+        expected_attempt_authority_sha256=live_attempt_authority_sha256(trusted.attempt_authority),
+        expected_constraint_binding_sha256=canonical_sha256(
+            cast(
+                JsonValue,
+                live_rubric_attempt_constraint_binding_projection(trusted.constraint_binding),
+            )
+        ),
+        expected_manifest_sha256=trusted.attempt_authority.manifest_sha256,
+        expected_preflight_sha256=trusted.attempt_authority.preflight_sha256,
+        expected_case_execution_lease_sha256=(
+            trusted.attempt_authority.case_execution_lease_sha256
+        ),
+        expected_stage_sha256=trusted.attempt_authority.stage_sha256,
+        expected_pricing_binding_sha256=trusted.attempt_authority.pricing_binding_sha256,
+        expected_transport_binding_sha256=trusted.attempt_authority.transport_binding_sha256,
+        expected_request_sha256=trusted.attempt_authority.request_sha256,
     )
     return proof
 
@@ -2047,6 +3080,7 @@ class _RubricCallContextV1:
     actor_request_sha256: str
     deadline_monotonic_ns: int
     max_cost_usd_micros: int
+    constraint_binding: LiveRubricAttemptConstraintBindingV1 | None
     stimulus: RubricEvidenceSnapshotV1
     image: BoundCollectorCurrentImageV1
     case_lease: CaseExecutionLeaseV1 | None
@@ -2063,6 +3097,16 @@ class _RubricCallContextV1:
             or not 0 <= self.max_cost_usd_micros <= 100_000_000_000
         ):
             raise LiveRubricError("INVALID_COST_BOUND", "rubric cost bound is invalid")
+        if self.constraint_binding is not None:
+            constraint = snapshot_live_rubric_attempt_constraint_binding(self.constraint_binding)
+            if (
+                constraint.effective_deadline_monotonic_ns != self.deadline_monotonic_ns
+                or constraint.attempt_max_cost_usd_micros != self.max_cost_usd_micros
+            ):
+                raise LiveRubricError(
+                    "ATTEMPT_CONSTRAINT_BINDING_MISMATCH",
+                    "rubric context differs from its deadline/cost constraint",
+                )
         if type(self.image) is not BoundCollectorCurrentImageV1:
             raise LiveRubricError("UNTRUSTED_IMAGE", "current image type differs")
         stimulus = _snapshot_rubric_stimulus(self.stimulus)
@@ -2081,6 +3125,7 @@ class _ProductionCaseAuthorityV1:
     actor_request_sha256: str
     deadline_monotonic_ns: int
     max_cost_usd_micros: int
+    constraint_binding: LiveRubricAttemptConstraintBindingV1
     case_lease: CaseExecutionLeaseV1
     execution_control: PolicyExecutionControlV1
 
@@ -2094,6 +3139,15 @@ class _ProductionCaseAuthorityV1:
             or not 0 <= self.max_cost_usd_micros <= 100_000_000_000
         ):
             raise LiveRubricError("INVALID_COST_BOUND", "rubric cost bound is invalid")
+        constraint = snapshot_live_rubric_attempt_constraint_binding(self.constraint_binding)
+        if (
+            constraint.effective_deadline_monotonic_ns != self.deadline_monotonic_ns
+            or constraint.attempt_max_cost_usd_micros != self.max_cost_usd_micros
+        ):
+            raise LiveRubricError(
+                "ATTEMPT_CONSTRAINT_BINDING_MISMATCH",
+                "case authority differs from its deadline/cost constraint",
+            )
         if type(self.case_lease) is not CaseExecutionLeaseV1:
             raise LiveRubricError("CASE_LEASE_REQUIRED", "production authority lacks a lease")
         if not isinstance(self.execution_control, PolicyExecutionControlV1):
@@ -2177,12 +3231,22 @@ class _BaseRubricProviderPortV1:
         task_run_id: str,
         logical_call_id: str,
         attempt_id: str,
+        attempt_authority: LiveAttemptAuthorityV1,
+        constraint_binding: LiveRubricAttemptConstraintBindingV1,
+        case_execution_lease: CaseExecutionLeaseV1,
+        openai_stage: OpenAIResponsesStageV1,
+        pricing: LiveAttemptPricingV1,
+        transport_binding: dict[str, JsonValue],
+        backend_extension: R24RubricBackendExtensionDescriptorV1,
+        expected_deadline_monotonic_ns: int,
+        expected_max_cost_usd_micros: int,
         collector_stimulus: RubricEvidenceSnapshotV1,
         current_image: BoundCollectorCurrentImageV1 | None,
         provider_input: dict[str, JsonValue],
         provider_request: CanonicalHistoryPolicyRequestV1,
+        begin_failure_receipt: LiveAttemptReceiptV1 | None = None,
     ) -> None:
-        """Linearize one request proof before transport or for a confirmed begin-TU."""
+        """Linearize one request proof before transport or for a formed begin failure."""
 
         with self._receipt_lock:
             if any(value.attempt_id == attempt_id for value in self._attempt_request_anchors):
@@ -2198,10 +3262,29 @@ class _BaseRubricProviderPortV1:
                 logical_call_id=logical_call_id,
                 attempt_id=attempt_id,
                 attempt_order=attempt_order,
+                attempt_authority=attempt_authority,
+                constraint_binding=constraint_binding,
+                case_execution_lease=case_execution_lease_projection(case_execution_lease),
+                openai_stage=openai_stage,
+                pricing=pricing,
+                transport_binding=transport_binding,
                 collector_stimulus=collector_stimulus,
                 current_image=current_image,
                 provider_input=provider_input,
                 provider_request=provider_request,
+            )
+            if (
+                anchor.attempt_authority.deadline_monotonic_ns != expected_deadline_monotonic_ns
+                or anchor.attempt_authority.max_cost_usd_micros != expected_max_cost_usd_micros
+            ):
+                raise LiveRubricError(
+                    "ATTEMPT_AUTHORITY_BINDING_MISMATCH",
+                    "attempt authority differs from the bound call deadline or cost limit",
+                )
+            validate_live_rubric_attempt_request_anchor_v1(
+                anchor,
+                backend_extension=backend_extension,
+                attempt_receipt=begin_failure_receipt,
             )
             self._attempt_request_anchors.append(anchor)
 
@@ -2305,8 +3388,9 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
         max_cost_usd_micros: int,
         case_lease: CaseExecutionLeaseV1 | None,
         execution_control: PolicyExecutionControlV1 | None = None,
+        constraint_binding: LiveRubricAttemptConstraintBindingV1 | None = None,
     ) -> None:
-        if case_lease is not None:
+        if case_lease is not None or constraint_binding is not None:
             raise LiveRubricError("CPU_LIVE_AUTHORITY_FORBIDDEN", "CPU fake rejects case leases")
         image = bind_current_collector_image(bundle, logical_call_id=logical_call_id)
         self._contexts.bind(
@@ -2316,6 +3400,7 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
                 actor_request_sha256=actor_request_sha256,
                 deadline_monotonic_ns=deadline_monotonic_ns,
                 max_cost_usd_micros=max_cost_usd_micros,
+                constraint_binding=None,
                 stimulus=_snapshot_rubric_stimulus(bundle.r23_snapshot),
                 image=image,
                 case_lease=None,
@@ -2345,6 +3430,7 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
                 actor_request_sha256=actor_request_sha256,
                 deadline_monotonic_ns=(1 << 63) - 1,
                 max_cost_usd_micros=0,
+                constraint_binding=None,
                 stimulus=_snapshot_rubric_stimulus(stimulus),
                 image=image,
                 case_lease=None,
@@ -2459,27 +3545,29 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
             "stage_sha256": self._runner.openai_stage_sha256,
         }
 
-    def _register_begin_termination_unconfirmed_request_anchor(
+    def _register_formed_begin_failure_request_anchor(
         self,
         *,
         operation: LiveRubricOperationV1,
         context: _RubricCallContextV1,
         attempt_id: str,
-        transport_binding_sha256: str,
+        transport_binding: dict[str, JsonValue],
+        backend_extension: R24RubricBackendExtensionDescriptorV1,
         provider_input: dict[str, JsonValue],
         provider_request: CanonicalHistoryPolicyRequestV1,
     ) -> bool:
-        """Retain a request only when ``begin`` published an exact TU terminal.
-
-        Ordinary pre-admission failures have no callable provider attempt and
-        remain outside the request-anchor census.  An unreaped START/READY
-        child is different: the exact sink terminal proves that a worker may
-        still exist, so its already sealed request must survive fallback audit.
-        """
+        """Retain every request whose ``begin`` formed authority and a terminal."""
 
         receipt = self._runner.terminal_receipt_for_attempt(attempt_id)
-        if receipt is None or receipt.status is not LiveAttemptStatusV1.TERMINATION_UNCONFIRMED:
+        if receipt is None:
             return False
+        authority = self._runner.attempt_authority_for_attempt(attempt_id)
+        if authority is None:
+            raise LiveRubricError(
+                "ATTEMPT_AUTHORITY_BINDING_MISMATCH",
+                "begin failure terminal has no admitted authority preimage",
+            )
+        transport_binding_sha256 = canonical_sha256(cast(JsonValue, transport_binding))
         if (
             receipt.attempt_id != attempt_id
             or receipt.role is not LiveAttemptRoleV1.RUBRIC
@@ -2493,12 +3581,25 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
             or receipt.request_sha256 != provider_request.request_sha256
             or receipt.transport_binding_sha256 != transport_binding_sha256
             or receipt.pricing_binding_sha256 != self._runner.pricing_binding_sha256
+            or receipt.dispatch_count != 0
+            or receipt.status
+            not in {
+                LiveAttemptStatusV1.FAILED,
+                LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+            }
             or receipt.response_envelope_sha256 is not None
+            or any(
+                value is not None
+                for value in (
+                    receipt.input_tokens,
+                    receipt.cached_input_tokens,
+                    receipt.output_tokens,
+                    receipt.total_tokens,
+                )
+            )
             or receipt.requested_model is not None
             or receipt.returned_model is not None
-            or receipt.worker_reaped
-            or receipt.termination is not LiveAttemptTerminationV1.UNCONFIRMED
-            or receipt.failure_code != "TERMINATION_UNCONFIRMED"
+            or receipt.authority_sha256 != live_attempt_authority_sha256(authority)
         ):
             raise LiveRubricError(
                 "ATTEMPT_RECEIPT_DRIFT",
@@ -2509,10 +3610,22 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
             task_run_id=context.task_run_id,
             logical_call_id=context.logical_call_id,
             attempt_id=attempt_id,
+            attempt_authority=authority,
+            constraint_binding=cast(
+                LiveRubricAttemptConstraintBindingV1, context.constraint_binding
+            ),
+            case_execution_lease=cast(CaseExecutionLeaseV1, context.case_lease),
+            openai_stage=self._runner.openai_stage,
+            pricing=self._runner.pricing,
+            transport_binding=transport_binding,
+            backend_extension=backend_extension,
+            expected_deadline_monotonic_ns=context.deadline_monotonic_ns,
+            expected_max_cost_usd_micros=context.max_cost_usd_micros,
             collector_stimulus=context.stimulus,
             current_image=(None if operation is LiveRubricOperationV1.GENERATE else context.image),
             provider_input=provider_input,
             provider_request=provider_request,
+            begin_failure_receipt=receipt,
         )
         return True
 
@@ -2524,6 +3637,7 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
         actor_request_sha256: str,
         deadline_monotonic_ns: int,
         max_cost_usd_micros: int,
+        constraint_binding: LiveRubricAttemptConstraintBindingV1,
         case_lease: CaseExecutionLeaseV1 | None,
         execution_control: PolicyExecutionControlV1 | None = None,
     ) -> None:
@@ -2539,6 +3653,7 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
             actor_request_sha256=actor_request_sha256,
             deadline_monotonic_ns=deadline_monotonic_ns,
             max_cost_usd_micros=max_cost_usd_micros,
+            constraint_binding=constraint_binding,
             execution_control=execution_control,
         )
         self.bind_collector_projection(
@@ -2557,6 +3672,7 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
         actor_request_sha256: str,
         deadline_monotonic_ns: int,
         max_cost_usd_micros: int,
+        constraint_binding: LiveRubricAttemptConstraintBindingV1,
         execution_control: PolicyExecutionControlV1,
     ) -> None:
         """Pre-register the driver's exact lease before Collector is read."""
@@ -2565,17 +3681,35 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
             raise LiveRubricError("CASE_LEASE_REQUIRED", "production rubric needs a case lease")
         try:
             trusted_lease = self._runner.attest_case_execution_lease(case_lease)
+            trusted_constraint = snapshot_live_rubric_attempt_constraint_binding(constraint_binding)
         except Exception as exc:
-            raise LiveRubricError("CASE_LEASE_REJECTED", "case lease failed attestation") from exc
+            raise LiveRubricError(
+                "CASE_LEASE_REJECTED", "case lease or constraint failed attestation"
+            ) from exc
         if trusted_lease.request_sha256 != _require_sha256(
             actor_request_sha256, "actor_request_sha256"
+        ) or (
+            trusted_constraint.case_id != trusted_lease.case_id
+            or trusted_constraint.task_id != trusted_lease.task_id
+            or trusted_constraint.case_stage != trusted_lease.stage.value
+            or trusted_constraint.case_host != trusted_lease.host.value
+            or trusted_constraint.case_mode != trusted_lease.mode.value
+            or trusted_constraint.task_parameters_sha256 != trusted_lease.task_parameters_sha256
+            or trusted_constraint.reset_seed != trusted_lease.reset_seed
+            or trusted_lease.actor_call_index > trusted_constraint.max_actor_calls
+            or trusted_constraint.rubric_stage_sha256 != self._runner.openai_stage_sha256
+            or trusted_constraint.rubric_stage_timeout_ms != self._runner.openai_stage.timeout_ms
         ):
-            raise LiveRubricError("CASE_LEASE_BINDING_MISMATCH", "case lease binds another request")
+            raise LiveRubricError(
+                "CASE_LEASE_BINDING_MISMATCH",
+                "case lease or attempt constraint binds another request/case",
+            )
         authority = _ProductionCaseAuthorityV1(
             logical_call_id=logical_call_id,
             actor_request_sha256=actor_request_sha256,
             deadline_monotonic_ns=deadline_monotonic_ns,
             max_cost_usd_micros=max_cost_usd_micros,
+            constraint_binding=trusted_constraint,
             case_lease=trusted_lease,
             execution_control=execution_control,
         )
@@ -2619,6 +3753,7 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
                 actor_request_sha256=authority.actor_request_sha256,
                 deadline_monotonic_ns=authority.deadline_monotonic_ns,
                 max_cost_usd_micros=authority.max_cost_usd_micros,
+                constraint_binding=authority.constraint_binding,
                 stimulus=_snapshot_rubric_stimulus(stimulus),
                 image=image,
                 case_lease=authority.case_lease,
@@ -2648,19 +3783,15 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
         extension = self._attest_extension(backend_extension)
         key = (context.task_run_id, context.logical_call_id, operation)
         self._reserve(key)
-        transport_sha256 = canonical_sha256(
-            cast(
-                JsonValue,
-                {
-                    **self.config_projection,
-                    "backend_extension_descriptor_sha256": extension.sha256,
-                    "input_schema_version": input_schema_version,
-                    "operation": operation.value,
-                    "output_schema_sha256": output_schema_sha256,
-                    "prompt_sha256": prompt_sha256,
-                },
-            )
-        )
+        transport_binding: dict[str, JsonValue] = {
+            **self.config_projection,
+            "backend_extension_descriptor_sha256": extension.sha256,
+            "input_schema_version": input_schema_version,
+            "operation": operation.value,
+            "output_schema_sha256": output_schema_sha256,
+            "prompt_sha256": prompt_sha256,
+        }
+        transport_sha256 = canonical_sha256(cast(JsonValue, transport_binding))
         attempt_id = (
             f"r24-rubric-{operation.value.lower()}-"
             f"{hashlib.sha256((context.logical_call_id + request.request_sha256).encode()).hexdigest()[:32]}"
@@ -2681,11 +3812,12 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
             # Preserve that exact request after confirming its sink terminal;
             # ordinary, proved-reaped admission failures remain unanchored.
             try:
-                self._register_begin_termination_unconfirmed_request_anchor(
+                self._register_formed_begin_failure_request_anchor(
                     operation=operation,
                     context=context,
                     attempt_id=attempt_id,
-                    transport_binding_sha256=transport_sha256,
+                    transport_binding=transport_binding,
+                    backend_extension=extension,
                     provider_input=provider_input,
                     provider_request=request,
                 )
@@ -2703,6 +3835,17 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
                 task_run_id=context.task_run_id,
                 logical_call_id=context.logical_call_id,
                 attempt_id=attempt_id,
+                attempt_authority=call.authority,
+                constraint_binding=cast(
+                    LiveRubricAttemptConstraintBindingV1, context.constraint_binding
+                ),
+                case_execution_lease=context.case_lease,
+                openai_stage=self._runner.openai_stage,
+                pricing=self._runner.pricing,
+                transport_binding=transport_binding,
+                backend_extension=extension,
+                expected_deadline_monotonic_ns=context.deadline_monotonic_ns,
+                expected_max_cost_usd_micros=context.max_cost_usd_micros,
                 collector_stimulus=context.stimulus,
                 current_image=(
                     None if operation is LiveRubricOperationV1.GENERATE else context.image
@@ -2943,8 +4086,27 @@ class LiveOpenAIRubricBackendV1:
         max_cost_usd_micros: int,
         case_lease: CaseExecutionLeaseV1 | None = None,
         execution_control: PolicyExecutionControlV1 | None = None,
+        constraint_binding: LiveRubricAttemptConstraintBindingV1 | None = None,
     ) -> None:
-        self._provider.bind_collector_call(
+        if type(self._provider) is ProductionRubricProviderPortV1:
+            if type(constraint_binding) is not LiveRubricAttemptConstraintBindingV1:
+                raise LiveRubricError(
+                    "ATTEMPT_CONSTRAINT_REQUIRED",
+                    "production rubric collector binding needs the sealed case constraint",
+                )
+            self._provider.bind_collector_call(
+                bundle=bundle,
+                logical_call_id=logical_call_id,
+                actor_request_sha256=actor_request_sha256,
+                deadline_monotonic_ns=deadline_monotonic_ns,
+                max_cost_usd_micros=max_cost_usd_micros,
+                case_lease=case_lease,
+                execution_control=execution_control,
+                constraint_binding=constraint_binding,
+            )
+            return
+        cpu_provider = cast(CpuFakeRubricProviderPortV1, self._provider)
+        cpu_provider.bind_collector_call(
             bundle=bundle,
             logical_call_id=logical_call_id,
             actor_request_sha256=actor_request_sha256,
@@ -2952,6 +4114,7 @@ class LiveOpenAIRubricBackendV1:
             max_cost_usd_micros=max_cost_usd_micros,
             case_lease=case_lease,
             execution_control=execution_control,
+            constraint_binding=constraint_binding,
         )
 
     def bind_case_authority(
@@ -2962,6 +4125,7 @@ class LiveOpenAIRubricBackendV1:
         actor_request_sha256: str,
         deadline_monotonic_ns: int,
         max_cost_usd_micros: int,
+        constraint_binding: LiveRubricAttemptConstraintBindingV1,
         execution_control: PolicyExecutionControlV1,
     ) -> None:
         """Register production lease authority without exposing it to Coordinator."""
@@ -2976,6 +4140,7 @@ class LiveOpenAIRubricBackendV1:
             actor_request_sha256=actor_request_sha256,
             deadline_monotonic_ns=deadline_monotonic_ns,
             max_cost_usd_micros=max_cost_usd_micros,
+            constraint_binding=constraint_binding,
             execution_control=execution_control,
         )
 
@@ -3362,6 +4527,7 @@ __all__ = [
     "ProductionRubricProviderPortV1",
     "R24RubricBackendExtensionDescriptorV1",
     "bind_current_collector_image",
+    "build_live_rubric_attempt_constraint_binding_v1",
     "build_live_rubric_provider_request_v1",
     "live_rubric_attempt_request_proof_projection",
     "live_rubric_call_receipt_projection",
@@ -3372,11 +4538,17 @@ __all__ = [
     "live_rubric_track_schema",
     "r24_rubric_backend_extension_descriptor_projection",
     "r24_rubric_backend_extension_descriptor_sha256",
+    "parse_durable_attempt_pricing_projection_v1",
+    "parse_durable_case_execution_lease_projection_v1",
+    "parse_durable_live_attempt_receipt_projection_v1",
+    "parse_durable_openai_stage_projection_v1",
+    "parse_live_rubric_attempt_constraint_binding_projection_v1",
     "rubric_backend_descriptor_projection",
     "snapshot_live_rubric_call_trust_anchor",
     "snapshot_live_rubric_attempt_request_anchor",
     "rubric_backend_descriptor_sha256",
     "snapshot_live_rubric_call_receipt",
+    "snapshot_live_rubric_attempt_constraint_binding",
     "snapshot_r24_rubric_backend_extension_descriptor",
     "validate_live_rubric_request_anchor_v1",
     "validate_live_rubric_attempt_request_anchor_v1",

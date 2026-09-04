@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+import secrets
 import signal
 import socket
 import stat
@@ -112,12 +113,15 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
 )
 from mobile_world.runtime.sentinel.r2_4.production_audit import (
     ExternalProductionRuntimeAuditSinkV1,
+    ProductionRuntimeAuditAdmissionFailureReceiptV1,
     ProductionRuntimeAuditCommitFailureReceiptV1,
     ProductionRuntimeAuditFailureReceiptV1,
     ProductionRuntimeAuditPreProviderOutcomeV1,
     ProductionRuntimeAuditPreProviderStatusV1,
     ProductionRuntimeAuditReceiptV1,
     ProductionRuntimeAuditV1,
+    production_runtime_audit_admission_failure_receipt_projection,
+    production_runtime_audit_admission_failure_receipt_sha256,
     production_runtime_audit_commit_failure_receipt_projection,
     production_runtime_audit_commit_failure_receipt_sha256,
     production_runtime_audit_failure_receipt_projection,
@@ -197,6 +201,12 @@ _NVIDIA_GPU_UUID: Final[re.Pattern[str]] = re.compile(
 )
 _DOCKER_NETWORK: Final[str] = "mwnet"
 _MAX_HEALTH_RESPONSE_BYTES: Final[int] = 1_048_576
+_MAX_INLINE_UNIT_EVIDENCE_JOURNAL_BYTES: Final[int] = 4 * 1024 * 1024
+_UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.4-production-unit-evidence-blob-reference/v1"
+)
+_UNIT_EVIDENCE_BLOB_STORAGE_KIND: Final[str] = "OWNER_ONLY_CONTENT_ADDRESSED_BLOB"
+_UNIT_EVIDENCE_BLOB_SUFFIX: Final[str] = ".production-unit-evidence-blob.v1.json"
 _PILOT_GUI_ACTION_TYPES: Final[frozenset[str]] = frozenset(
     {
         ANSWER,
@@ -4879,6 +4889,37 @@ class _ProductionUnitStateV1:
     cleanup_recovery_outcome: dict[str, JsonValue] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _UnpublishedUnitEvidenceV1:
+    """Exact in-memory recovery preimage retained only after publication failure."""
+
+    unit_id: str
+    raw: bytes
+    raw_sha256: str
+    byte_count: int
+    publication_failure_code: str
+    durably_republished: bool = False
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.unit_id) is not str
+            or not self.unit_id
+            or type(self.raw) is not bytes
+            or type(self.byte_count) is not int
+            or self.byte_count != len(self.raw)
+            or self.byte_count <= _MAX_INLINE_UNIT_EVIDENCE_JOURNAL_BYTES
+            or _SHA256.fullmatch(self.raw_sha256) is None
+            or hashlib.sha256(self.raw).hexdigest() != self.raw_sha256
+            or type(self.publication_failure_code) is not str
+            or not self.publication_failure_code
+            or type(self.durably_republished) is not bool
+        ):
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_RECOVERY_INVALID",
+                "unpublished unit evidence recovery state differs",
+            )
+
+
 def _pil_png_bytes(image: object) -> bytes:
     if not isinstance(image, Image.Image):
         raise ProductionDriverError("INVALID_OBSERVATION", "observation screenshot is not PIL")
@@ -4907,6 +4948,7 @@ class _ProductionFixedExecutionPortV1:
         "_run_fatal_latch",
         "_sentinel_receipt_sink",
         "_unit_journals",
+        "_unpublished_unit_evidence",
         "_units",
     )
 
@@ -4953,6 +4995,7 @@ class _ProductionFixedExecutionPortV1:
         self._sentinel_receipt_sink: ExternalSentinelReceiptSink | None = None
         self._units: dict[str, _ProductionUnitStateV1] = {}
         self._unit_journals: dict[str, bytes] = {}
+        self._unpublished_unit_evidence: dict[str, _UnpublishedUnitEvidenceV1] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -5387,6 +5430,33 @@ class _ProductionFixedExecutionPortV1:
             None,
         )
 
+    def _journal_latest_admission_failure_terminal(self, state: _ProductionUnitStateV1) -> None:
+        audit = state.runtime_audit
+        if audit is None:
+            return
+        receipt = getattr(audit, "latest_admission_failure_receipt", None)
+        if type(receipt) is not ProductionRuntimeAuditAdmissionFailureReceiptV1:
+            return
+        receipt_sha256 = production_runtime_audit_admission_failure_receipt_sha256(receipt)
+        if receipt_sha256 in state.terminal_audit_sha256s:
+            return
+        attempts, attempt_sha256s, attempt_failure = self._attempt_journal_for_call(
+            state, receipt.logical_call_id
+        )
+        entry: dict[str, JsonValue] = {
+            "attempt_journal_failure_code": attempt_failure,
+            "kind": "ADMISSION_OUTCOME_UNKNOWN",
+            "live_attempt_receipt_sha256s": cast(JsonValue, attempt_sha256s),
+            "live_attempt_receipts": cast(JsonValue, attempts),
+            "receipt": production_runtime_audit_admission_failure_receipt_projection(receipt),
+            "receipt_sha256": receipt_sha256,
+        }
+        entry["canonical_evidence_sha256"] = _hash_projection(
+            "production-unit-terminal-audit", cast(JsonValue, entry)
+        )
+        state.terminal_audit_sha256s.add(receipt_sha256)
+        state.terminal_audit_journal.append(entry)
+
     def _journal_completed_audit_terminal(
         self,
         state: _ProductionUnitStateV1,
@@ -5470,13 +5540,377 @@ class _ProductionFixedExecutionPortV1:
         audit = state.runtime_audit
         if audit is None:
             return
+        self._journal_latest_admission_failure_terminal(state)
         completed = audit.latest_completed_receipt
         if type(completed) is ProductionRuntimeAuditReceiptV1:
             self._journal_completed_audit_terminal(state, completed)
         self._journal_latest_failure_terminal(state)
         self._journal_latest_commit_failure_terminal(state)
 
-    def _unit_journal_snapshot(self, state: _ProductionUnitStateV1) -> bytes:
+    @staticmethod
+    def _unit_evidence_blob_name(content_sha256: str) -> str:
+        if _SHA256.fullmatch(content_sha256) is None:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_REFERENCE_INVALID",
+                "unit evidence content digest is invalid",
+            )
+        return f"{content_sha256}{_UNIT_EVIDENCE_BLOB_SUFFIX}"
+
+    @staticmethod
+    def _unit_evidence_blob_reference(*, unit_id: str, raw: bytes) -> dict[str, JsonValue]:
+        content_sha256 = hashlib.sha256(raw).hexdigest()
+        projection: dict[str, JsonValue] = {
+            "blob": {
+                "algorithm": "sha256",
+                "byte_count": len(raw),
+                "safe_locator": (
+                    _ProductionFixedExecutionPortV1._unit_evidence_blob_name(content_sha256)
+                ),
+                "sha256": content_sha256,
+            },
+            "schema_version": _UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION,
+            "storage": _UNIT_EVIDENCE_BLOB_STORAGE_KIND,
+            "unit_id": unit_id,
+        }
+        projection["reference_sha256"] = canonical_sha256(cast(JsonValue, projection))
+        return projection
+
+    def _open_unit_evidence_blob_root(self) -> int:
+        sink = getattr(self, "_audit_sink", None)
+        if type(sink) is not ExternalProductionRuntimeAuditSinkV1:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_SINK_UNAVAILABLE",
+                "the exact owner-only production audit root is unavailable",
+            )
+        try:
+            return sink._open_root()
+        except Exception as exc:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_ROOT_INVALID",
+                "the owner-only production audit root failed re-attestation",
+            ) from exc
+
+    def _read_unit_evidence_blob(
+        self,
+        *,
+        directory_fd: int,
+        safe_locator: str,
+        expected_byte_count: int,
+        expected_sha256: str,
+        missing_ok: bool = False,
+    ) -> bytes | None:
+        if (
+            type(safe_locator) is not str
+            or safe_locator != self._unit_evidence_blob_name(expected_sha256)
+            or type(expected_byte_count) is not int
+            or expected_byte_count <= _MAX_INLINE_UNIT_EVIDENCE_JOURNAL_BYTES
+        ):
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_REFERENCE_INVALID",
+                "unit evidence blob locator or size differs",
+            )
+        sink = self._audit_sink
+        descriptor = -1
+        try:
+            sink._validate_open_root(directory_fd)
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            try:
+                descriptor = os.open(safe_locator, flags, dir_fd=directory_fd)
+            except FileNotFoundError:
+                if missing_ok:
+                    return None
+                raise ProductionDriverError(
+                    "UNIT_EVIDENCE_BLOB_MISSING",
+                    "referenced unit evidence blob is absent",
+                ) from None
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != os.geteuid()
+                or info.st_gid != os.getegid()
+                or info.st_nlink != 1
+                or info.st_size != expected_byte_count
+            ):
+                raise ProductionDriverError(
+                    "UNIT_EVIDENCE_BLOB_INVALID",
+                    "unit evidence blob metadata differs",
+                )
+            chunks: list[bytes] = []
+            bytes_read = 0
+            while True:
+                chunk = os.read(descriptor, min(1_048_576, expected_byte_count - bytes_read + 1))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                bytes_read += len(chunk)
+                if bytes_read > expected_byte_count:
+                    raise ProductionDriverError(
+                        "UNIT_EVIDENCE_BLOB_INVALID",
+                        "unit evidence blob grew during readback",
+                    )
+            raw = b"".join(chunks)
+            if (
+                len(raw) != expected_byte_count
+                or hashlib.sha256(raw).hexdigest() != expected_sha256
+            ):
+                raise ProductionDriverError(
+                    "UNIT_EVIDENCE_BLOB_INVALID",
+                    "unit evidence blob content differs from its reference",
+                )
+            sink._validate_open_root(directory_fd)
+            return raw
+        except ProductionDriverError:
+            raise
+        except Exception as exc:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_READ_FAILED",
+                "unit evidence blob could not be read safely",
+            ) from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    @staticmethod
+    def _write_unit_evidence_blob(descriptor: int, raw: bytes) -> None:
+        remaining = memoryview(raw)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("short unit evidence blob write")
+            remaining = remaining[written:]
+
+    def _persist_unit_evidence_blob(self, *, unit_id: str, raw: bytes) -> bytes:
+        reference = self._unit_evidence_blob_reference(unit_id=unit_id, raw=raw)
+        blob = cast(dict[str, JsonValue], reference["blob"])
+        content_sha256 = cast(str, blob["sha256"])
+        safe_locator = cast(str, blob["safe_locator"])
+        byte_count = cast(int, blob["byte_count"])
+        directory_fd = self._open_unit_evidence_blob_root()
+        temporary = f".{content_sha256}.{secrets.token_hex(12)}.unit-evidence.tmp"
+        temporary_fd = -1
+        try:
+            try:
+                existing = self._read_unit_evidence_blob(
+                    directory_fd=directory_fd,
+                    safe_locator=safe_locator,
+                    expected_byte_count=byte_count,
+                    expected_sha256=content_sha256,
+                    missing_ok=True,
+                )
+            except ProductionDriverError as exc:
+                raise ProductionDriverError(
+                    "UNIT_EVIDENCE_BLOB_COLLISION",
+                    "an existing content-addressed unit evidence blob differs",
+                ) from exc
+            if existing is not None:
+                os.fsync(directory_fd)
+                return canonical_json_bytes(cast(JsonValue, reference))
+
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            temporary_fd = os.open(temporary, flags, 0o600, dir_fd=directory_fd)
+            self._write_unit_evidence_blob(temporary_fd, raw)
+            os.fsync(temporary_fd)
+            info = os.fstat(temporary_fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != os.geteuid()
+                or info.st_gid != os.getegid()
+                or info.st_nlink != 1
+                or info.st_size != byte_count
+            ):
+                raise OSError("unit evidence blob staging metadata changed")
+            self._audit_sink._validate_open_root(directory_fd)
+            try:
+                # Link publication is atomic and, unlike replace/rename, cannot
+                # overwrite a colliding content-addressed destination.
+                os.link(
+                    temporary,
+                    safe_locator,
+                    src_dir_fd=directory_fd,
+                    dst_dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+            except FileExistsError:
+                try:
+                    concurrent = self._read_unit_evidence_blob(
+                        directory_fd=directory_fd,
+                        safe_locator=safe_locator,
+                        expected_byte_count=byte_count,
+                        expected_sha256=content_sha256,
+                    )
+                except ProductionDriverError as exc:
+                    raise ProductionDriverError(
+                        "UNIT_EVIDENCE_BLOB_COLLISION",
+                        "a concurrent content-addressed unit evidence blob differs",
+                    ) from exc
+                if concurrent != raw:
+                    raise ProductionDriverError(
+                        "UNIT_EVIDENCE_BLOB_COLLISION",
+                        "a concurrent content-addressed unit evidence blob differs",
+                    )
+            os.unlink(temporary, dir_fd=directory_fd)
+            temporary = ""
+            os.fsync(directory_fd)
+            published = self._read_unit_evidence_blob(
+                directory_fd=directory_fd,
+                safe_locator=safe_locator,
+                expected_byte_count=byte_count,
+                expected_sha256=content_sha256,
+            )
+            if published != raw:
+                raise ProductionDriverError(
+                    "UNIT_EVIDENCE_BLOB_INVALID",
+                    "published unit evidence blob differs on exact readback",
+                )
+            return canonical_json_bytes(cast(JsonValue, reference))
+        except ProductionDriverError:
+            raise
+        except Exception as exc:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_PERSIST_FAILED",
+                "unit evidence blob could not be durably published",
+            ) from exc
+        finally:
+            if temporary_fd >= 0:
+                try:
+                    os.close(temporary_fd)
+                except OSError:
+                    pass
+            if temporary:
+                try:
+                    os.unlink(temporary, dir_fd=directory_fd)
+                    os.fsync(directory_fd)
+                except OSError:
+                    pass
+            os.close(directory_fd)
+
+    def _decode_unit_journal_snapshot(
+        self, journal_raw: bytes, *, expected_unit_id: str
+    ) -> dict[str, JsonValue]:
+        if type(journal_raw) is not bytes or not journal_raw:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_JOURNAL_INVALID",
+                "sealed per-unit terminal evidence is absent",
+            )
+        if len(journal_raw) > _MAX_INLINE_UNIT_EVIDENCE_JOURNAL_BYTES:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_JOURNAL_TOO_LARGE",
+                "inline per-unit terminal evidence exceeds the sealed bound",
+            )
+        try:
+            decoded = json.loads(journal_raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_JOURNAL_INVALID",
+                "sealed per-unit terminal evidence is invalid",
+            ) from exc
+        if type(decoded) is not dict:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_JOURNAL_INVALID",
+                "sealed per-unit terminal evidence is not an object",
+            )
+        projection = cast(dict[str, JsonValue], decoded)
+        if projection.get("schema_version") != _UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION:
+            return self._decode_full_unit_journal_raw(
+                journal_raw, expected_unit_id=expected_unit_id
+            )
+        if (
+            set(projection) != {"blob", "reference_sha256", "schema_version", "storage", "unit_id"}
+            or projection.get("storage") != _UNIT_EVIDENCE_BLOB_STORAGE_KIND
+            or projection.get("unit_id") != expected_unit_id
+            or type(projection.get("reference_sha256")) is not str
+            or canonical_json_bytes(cast(JsonValue, projection)) != journal_raw
+        ):
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_REFERENCE_INVALID",
+                "unit evidence blob reference differs",
+            )
+        reference_preimage = dict(projection)
+        claimed_reference_sha256 = reference_preimage.pop("reference_sha256")
+        if canonical_sha256(cast(JsonValue, reference_preimage)) != claimed_reference_sha256:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_REFERENCE_INVALID",
+                "unit evidence blob reference hash differs",
+            )
+        blob_value = projection.get("blob")
+        if type(blob_value) is not dict or set(blob_value) != {
+            "algorithm",
+            "byte_count",
+            "safe_locator",
+            "sha256",
+        }:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_REFERENCE_INVALID",
+                "unit evidence blob binding differs",
+            )
+        blob = blob_value
+        algorithm = blob.get("algorithm")
+        byte_count = blob.get("byte_count")
+        safe_locator = blob.get("safe_locator")
+        content_sha256 = blob.get("sha256")
+        if (
+            algorithm != "sha256"
+            or type(byte_count) is not int
+            or type(safe_locator) is not str
+            or type(content_sha256) is not str
+        ):
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_REFERENCE_INVALID",
+                "unit evidence blob binding types differ",
+            )
+        directory_fd = self._open_unit_evidence_blob_root()
+        try:
+            blob_raw = self._read_unit_evidence_blob(
+                directory_fd=directory_fd,
+                safe_locator=safe_locator,
+                expected_byte_count=byte_count,
+                expected_sha256=content_sha256,
+            )
+        finally:
+            os.close(directory_fd)
+        if blob_raw is None:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_MISSING",
+                "referenced unit evidence blob is absent",
+            )
+        return self._decode_full_unit_journal_raw(blob_raw, expected_unit_id=expected_unit_id)
+
+    @staticmethod
+    def _decode_full_unit_journal_raw(raw: bytes, *, expected_unit_id: str) -> dict[str, JsonValue]:
+        """Validate a complete canonical in-memory or blob-backed journal."""
+
+        if type(raw) is not bytes or not raw:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_JOURNAL_INVALID",
+                "full per-unit terminal evidence is absent",
+            )
+        try:
+            restored = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_JOURNAL_INVALID",
+                "full per-unit terminal evidence is not valid JSON",
+            ) from exc
+        if (
+            type(restored) is not dict
+            or restored.get("unit_id") != expected_unit_id
+            or canonical_json_bytes(cast(JsonValue, restored)) != raw
+        ):
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_JOURNAL_INVALID",
+                "full per-unit terminal evidence is not its canonical unit projection",
+            )
+        return cast(dict[str, JsonValue], restored)
+
+    def _unit_journal_full_snapshot(self, state: _ProductionUnitStateV1) -> bytes:
+        """Build the complete canonical unit projection without external I/O."""
+
         self._journal_latest_audit_terminals(state)
         decisions = [_decision_projection(item) for item in state.decision_journal]
         terminals = [dict(item) for item in state.terminal_audit_journal]
@@ -5531,12 +5965,58 @@ class _ProductionFixedExecutionPortV1:
                 },
             )
         )
-        if len(raw) > 4 * 1024 * 1024:
-            raise ProductionDriverError(
-                "UNIT_EVIDENCE_JOURNAL_TOO_LARGE",
-                "per-unit terminal evidence exceeds the sealed bound",
-            )
         return raw
+
+    def _retain_unpublished_unit_evidence(
+        self,
+        *,
+        state: _ProductionUnitStateV1,
+        raw: bytes,
+        publication_failure_code: str,
+        durably_republished: bool = False,
+    ) -> _UnpublishedUnitEvidenceV1:
+        recovery = _UnpublishedUnitEvidenceV1(
+            unit_id=state.unit_id,
+            raw=raw,
+            raw_sha256=hashlib.sha256(raw).hexdigest(),
+            byte_count=len(raw),
+            publication_failure_code=publication_failure_code,
+            durably_republished=durably_republished,
+        )
+        with self._lock:
+            self._unpublished_unit_evidence[state.unit_id] = recovery
+        return recovery
+
+    def _unit_journal_snapshot(self, state: _ProductionUnitStateV1) -> bytes:
+        raw = self._unit_journal_full_snapshot(state)
+        if len(raw) <= _MAX_INLINE_UNIT_EVIDENCE_JOURNAL_BYTES:
+            return raw
+        try:
+            reference = self._persist_unit_evidence_blob(unit_id=state.unit_id, raw=raw)
+        except Exception as exc:
+            prior_recovery = self._unpublished_unit_evidence_for(state.unit_id)
+            self._retain_unpublished_unit_evidence(
+                state=state,
+                raw=raw,
+                publication_failure_code=(
+                    prior_recovery.publication_failure_code
+                    if prior_recovery is not None
+                    else _exception_code(exc, "UNIT_EVIDENCE_PUBLICATION_FAILED")
+                ),
+            )
+            raise
+        prior_recovery = self._unpublished_unit_evidence_for(state.unit_id)
+        if prior_recovery is not None:
+            # A retry may run after cleanup has enriched the unit projection.
+            # Bind the exact newly published projection while retaining the
+            # original typed publication fault for the outer failure record.
+            self._retain_unpublished_unit_evidence(
+                state=state,
+                raw=raw,
+                publication_failure_code=prior_recovery.publication_failure_code,
+                durably_republished=True,
+            )
+        return reference
 
     def _receipt_for_action(
         self,
@@ -6199,6 +6679,60 @@ class _ProductionFixedExecutionPortV1:
         state.completed = True
         return _PilotPortResultV1(decisions=tuple(decisions), official_result=official)
 
+    def _unpublished_unit_evidence_for(self, unit_id: str) -> _UnpublishedUnitEvidenceV1 | None:
+        archive = getattr(self, "_unpublished_unit_evidence", None)
+        if archive is None:
+            return None
+        if type(archive) is not dict:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_RECOVERY_INVALID",
+                "unpublished unit evidence archive type differs",
+            )
+        with self._lock:
+            recovery = archive.get(unit_id)
+        if recovery is None:
+            return None
+        if (
+            type(recovery) is not _UnpublishedUnitEvidenceV1
+            or recovery.unit_id != unit_id
+            or hashlib.sha256(recovery.raw).hexdigest() != recovery.raw_sha256
+            or len(recovery.raw) != recovery.byte_count
+            or type(recovery.durably_republished) is not bool
+        ):
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_RECOVERY_INVALID",
+                "unpublished unit evidence recovery binding differs",
+            )
+        return recovery
+
+    def _release_unpublished_unit_evidence(
+        self, invocation: _SmokeInvocationV1 | _PilotInvocationV1
+    ) -> None:
+        with self._lock:
+            self._unpublished_unit_evidence.pop(self._unit_id(invocation), None)
+
+    @staticmethod
+    def _bind_evidence_publication_failure(
+        evidence: dict[str, JsonValue],
+        recovery: _UnpublishedUnitEvidenceV1,
+    ) -> None:
+        binding: dict[str, JsonValue] = {
+            "full_unit_evidence_byte_count": recovery.byte_count,
+            "full_unit_evidence_sha256": recovery.raw_sha256,
+            "publication_failure_code": recovery.publication_failure_code,
+            "status": (
+                "PUBLICATION_FAILURE_DURABLY_RECOVERED"
+                if recovery.durably_republished
+                else "PUBLICATION_FAILED_IN_MEMORY_RECOVERED"
+            ),
+            "unit_id": recovery.unit_id,
+        }
+        binding["binding_sha256"] = _hash_projection(
+            "production-unit-evidence-publication-failure", cast(JsonValue, binding)
+        )
+        evidence["evidence_publication_failure"] = cast(JsonValue, binding)
+        evidence["evidence_publication_failure_code"] = recovery.publication_failure_code
+
     def failure_evidence_for_unit(
         self,
         invocation: _SmokeInvocationV1 | _PilotInvocationV1,
@@ -6213,27 +6747,53 @@ class _ProductionFixedExecutionPortV1:
             state = self._units.get(unit_id)
             archived = self._unit_journals.get(unit_id)
         audit = None if state is None else state.runtime_audit
-        journal_raw = self._unit_journal_snapshot(state) if state is not None else archived
-        if journal_raw is None:
-            return None
-        try:
-            decoded = json.loads(journal_raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ProductionDriverError(
-                "UNIT_EVIDENCE_JOURNAL_INVALID",
-                "sealed per-unit terminal evidence is invalid",
-            ) from exc
-        if type(decoded) is not dict:
-            raise ProductionDriverError(
-                "UNIT_EVIDENCE_JOURNAL_INVALID",
-                "sealed per-unit terminal evidence is not an object",
+        publication_recovery: _UnpublishedUnitEvidenceV1 | None = None
+        if state is not None:
+            try:
+                journal_raw = self._unit_journal_snapshot(state)
+            except Exception:
+                publication_recovery = self._unpublished_unit_evidence_for(unit_id)
+                if publication_recovery is None:
+                    raise
+                evidence = self._decode_full_unit_journal_raw(
+                    publication_recovery.raw, expected_unit_id=unit_id
+                )
+            else:
+                evidence = self._decode_unit_journal_snapshot(journal_raw, expected_unit_id=unit_id)
+                publication_recovery = self._unpublished_unit_evidence_for(unit_id)
+        elif archived is not None:
+            evidence = self._decode_unit_journal_snapshot(archived, expected_unit_id=unit_id)
+            publication_recovery = self._unpublished_unit_evidence_for(unit_id)
+        else:
+            publication_recovery = self._unpublished_unit_evidence_for(unit_id)
+            if publication_recovery is None:
+                return None
+            evidence = self._decode_full_unit_journal_raw(
+                publication_recovery.raw, expected_unit_id=unit_id
             )
-        evidence = cast(dict[str, JsonValue], decoded)
         evidence["failure_code"] = failure_code
         evidence["failure_phase"] = failure_phase
+        if publication_recovery is not None:
+            self._bind_evidence_publication_failure(evidence, publication_recovery)
         if audit is None:
             return cast(JsonValue, evidence)
         assert state is not None
+        admission_failure = getattr(audit, "latest_admission_failure_receipt", None)
+        if type(admission_failure) is ProductionRuntimeAuditAdmissionFailureReceiptV1:
+            attempts, attempt_sha256s, attempt_failure = self._attempt_journal_for_call(
+                state, admission_failure.logical_call_id
+            )
+            evidence["actor_admission_failure_receipt"] = cast(
+                JsonValue,
+                production_runtime_audit_admission_failure_receipt_projection(admission_failure),
+            )
+            evidence["actor_admission_failure_receipt_sha256"] = (
+                production_runtime_audit_admission_failure_receipt_sha256(admission_failure)
+            )
+            evidence["attempt_journal_failure_code"] = attempt_failure
+            evidence["live_attempt_receipts"] = cast(JsonValue, attempts)
+            evidence["live_attempt_receipt_sha256s"] = cast(JsonValue, attempt_sha256s)
+            return cast(JsonValue, evidence)
         commit_failure = audit.latest_commit_failure_receipt
         if type(commit_failure) is ProductionRuntimeAuditCommitFailureReceiptV1:
             attempts, attempt_sha256s, attempt_failure = self._attempt_journal_for_call(
@@ -6283,6 +6843,37 @@ class _ProductionFixedExecutionPortV1:
         evidence["live_attempt_receipt_sha256s"] = cast(JsonValue, attempt_sha256s)
         return cast(JsonValue, evidence)
 
+    def _recoverable_failure_evidence_for_unit(
+        self,
+        invocation: _SmokeInvocationV1 | _PilotInvocationV1,
+        *,
+        failure_phase: str,
+        failure_code: str,
+    ) -> JsonValue:
+        """Keep evidence-storage faults from pre-empting bounded cleanup."""
+
+        try:
+            return self.failure_evidence_for_unit(
+                invocation,
+                failure_phase=failure_phase,
+                failure_code=failure_code,
+            )
+        except Exception as exc:
+            projection: dict[str, JsonValue] = {
+                "evidence_publication_failure_code": _exception_code(
+                    exc, "UNIT_EVIDENCE_PUBLICATION_FAILED"
+                ),
+                "failure_code": failure_code,
+                "failure_phase": failure_phase,
+                "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
+                "status": "UNIT_EVIDENCE_RECOVERY_FAILED",
+                "unit_id": self._unit_id(invocation),
+            }
+            projection["canonical_evidence_sha256"] = _hash_projection(
+                "production-unit-evidence-recovery-failure", cast(JsonValue, projection)
+            )
+            return cast(JsonValue, projection)
+
     def cleanup_unit(self, invocation: _SmokeInvocationV1 | _PilotInvocationV1) -> _CleanupResultV1:
         unit_id = self._unit_id(invocation)
         with self._lock:
@@ -6300,19 +6891,28 @@ class _ProductionFixedExecutionPortV1:
                 "UNIT_DEADLINE_BINDING_MISMATCH",
                 "unit cleanup invocation differs from its frozen deadlines",
             )
-        journal_raw = self._unit_journal_snapshot(state)
-        with self._lock:
-            prior_journal = self._unit_journals.setdefault(unit_id, journal_raw)
-        if prior_journal != journal_raw:
-            raise ProductionDriverError(
-                "UNIT_EVIDENCE_JOURNAL_DRIFT",
-                "per-unit terminal evidence changed across cleanup retry",
-            )
+        journal_failure_code: str | None = None
+        try:
+            journal_raw = self._unit_journal_snapshot(state)
+            with self._lock:
+                prior_journal = self._unit_journals.setdefault(unit_id, journal_raw)
+            if prior_journal != journal_raw:
+                raise ProductionDriverError(
+                    "UNIT_EVIDENCE_JOURNAL_DRIFT",
+                    "per-unit terminal evidence changed across cleanup retry",
+                )
+        except Exception as exc:
+            # Evidence publication is fail-closed for the unit result, but it
+            # must never consume the bounded cleanup opportunity. Teardown,
+            # process close, and Collector finalization continue below.
+            journal_failure_code = _exception_code(exc, "UNIT_EVIDENCE_PUBLICATION_FAILED")
         cleanup_deadline_expired = time.monotonic_ns() >= state.cleanup_deadline_monotonic_ns
         cleanup_dispatch_failure_code: str | None = (
             "CLEANUP_DEADLINE_EXCEEDED" if cleanup_deadline_expired else None
         )
         failures: list[str] = ["CLEANUP_DEADLINE_EXCEEDED"] if cleanup_deadline_expired else []
+        if journal_failure_code is not None:
+            failures.append(journal_failure_code)
         teardown_result: object = None
         teardown_result_sha256: str | None = None
         teardown_attempted = False
@@ -6483,7 +7083,7 @@ class _ProductionFixedExecutionPortV1:
                 with self._lock:
                     self._units.pop(unit_id, None)
             raise ProductionDriverError(
-                cleanup_dispatch_failure_code or "UNIT_CLEANUP_FAILED",
+                cleanup_dispatch_failure_code or journal_failure_code or "UNIT_CLEANUP_FAILED",
                 "production unit cleanup failed: " + ",".join(failures),
             )
         with self._lock:
@@ -6713,7 +7313,7 @@ class FixedLiveSmokeAdapterV1:
                 except Exception as exc:
                     dispatch_error = exc
                     if type(self._port) is _ProductionFixedExecutionPortV1:
-                        unit_failure_evidence = self._port.failure_evidence_for_unit(
+                        unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
                             failure_phase="DISPATCH",
                             failure_code=_exception_code(exc, "SMOKE_CASE_EXECUTION_FAILED"),
@@ -6733,7 +7333,7 @@ class FixedLiveSmokeAdapterV1:
                 if cleanup_error is not None:
                     cleanup_failure_code = _exception_code(cleanup_error, "UNIT_CLEANUP_FAILED")
                     if type(self._port) is _ProductionFixedExecutionPortV1:
-                        unit_failure_evidence = self._port.failure_evidence_for_unit(
+                        unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
                             failure_phase="CLEANUP",
                             failure_code=cleanup_failure_code,
@@ -6752,10 +7352,18 @@ class FixedLiveSmokeAdapterV1:
                         failure_code=cleanup_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
+                    if type(self._port) is _ProductionFixedExecutionPortV1:
+                        self._port._release_unpublished_unit_evidence(invocation)
                     raise ProductionDriverError(
                         cleanup_failure_code, "smoke unit cleanup failed closed"
                     ) from None
                 if dispatch_error is not None or port_result is None:
+                    if type(self._port) is _ProductionFixedExecutionPortV1:
+                        unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
+                            invocation,
+                            failure_phase="DISPATCH",
+                            failure_code="SMOKE_CASE_EXECUTION_FAILED",
+                        )
                     self._failure_evidence[stage] = _smoke_unit_failure_preimage(
                         context=trusted_context,
                         stage=stage,
@@ -6770,6 +7378,8 @@ class FixedLiveSmokeAdapterV1:
                         failure_code="SMOKE_CASE_EXECUTION_FAILED",
                         unit_failure_evidence=unit_failure_evidence,
                     )
+                    if type(self._port) is _ProductionFixedExecutionPortV1:
+                        self._port._release_unpublished_unit_evidence(invocation)
                     raise ProductionDriverError(
                         "SMOKE_CASE_EXECUTION_FAILED", "smoke case failed closed"
                     ) from None
@@ -6815,7 +7425,7 @@ class FixedLiveSmokeAdapterV1:
                 except Exception as exc:
                     failure_code = _exception_code(exc, "SMOKE_POST_DISPATCH_ADMISSION_FAILED")
                     if type(self._port) is _ProductionFixedExecutionPortV1:
-                        unit_failure_evidence = self._port.failure_evidence_for_unit(
+                        unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
                             failure_phase="POST_DISPATCH_ADMISSION",
                             failure_code=failure_code,
@@ -6834,6 +7444,8 @@ class FixedLiveSmokeAdapterV1:
                         failure_code=failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
+                    if type(self._port) is _ProductionFixedExecutionPortV1:
+                        self._port._release_unpublished_unit_evidence(invocation)
                     if isinstance(exc, ProductionDriverError):
                         raise
                     raise ProductionDriverError(
@@ -7024,7 +7636,7 @@ class FixedPilotAdapterV1:
                 except Exception as exc:
                     dispatch_error = exc
                     if type(self._port) is _ProductionFixedExecutionPortV1:
-                        unit_failure_evidence = self._port.failure_evidence_for_unit(
+                        unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
                             failure_phase="DISPATCH",
                             failure_code=_exception_code(exc, "PILOT_CELL_EXECUTION_FAILED"),
@@ -7044,7 +7656,7 @@ class FixedPilotAdapterV1:
                 if cleanup_error is not None:
                     cleanup_failure_code = _exception_code(cleanup_error, "UNIT_CLEANUP_FAILED")
                     if type(self._port) is _ProductionFixedExecutionPortV1:
-                        unit_failure_evidence = self._port.failure_evidence_for_unit(
+                        unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
                             failure_phase="CLEANUP",
                             failure_code=cleanup_failure_code,
@@ -7063,10 +7675,18 @@ class FixedPilotAdapterV1:
                         failure_code=cleanup_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
+                    if type(self._port) is _ProductionFixedExecutionPortV1:
+                        self._port._release_unpublished_unit_evidence(invocation)
                     raise ProductionDriverError(
                         cleanup_failure_code, "pilot unit cleanup failed closed"
                     ) from None
                 if dispatch_error is not None or reset is None or port_result is None:
+                    if type(self._port) is _ProductionFixedExecutionPortV1:
+                        unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
+                            invocation,
+                            failure_phase="DISPATCH",
+                            failure_code="PILOT_CELL_EXECUTION_FAILED",
+                        )
                     self._failure_evidence = _pilot_unit_failure_preimage(
                         context=trusted_context,
                         records=records,
@@ -7081,6 +7701,8 @@ class FixedPilotAdapterV1:
                         failure_code="PILOT_CELL_EXECUTION_FAILED",
                         unit_failure_evidence=unit_failure_evidence,
                     )
+                    if type(self._port) is _ProductionFixedExecutionPortV1:
+                        self._port._release_unpublished_unit_evidence(invocation)
                     raise ProductionDriverError(
                         "PILOT_CELL_EXECUTION_FAILED", "pilot cell failed closed"
                     ) from None
@@ -7154,7 +7776,7 @@ class FixedPilotAdapterV1:
                 except Exception as exc:
                     failure_code = _exception_code(exc, "PILOT_POST_DISPATCH_ADMISSION_FAILED")
                     if type(self._port) is _ProductionFixedExecutionPortV1:
-                        unit_failure_evidence = self._port.failure_evidence_for_unit(
+                        unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
                             failure_phase="POST_DISPATCH_ADMISSION",
                             failure_code=failure_code,
@@ -7173,6 +7795,8 @@ class FixedPilotAdapterV1:
                         failure_code=failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
+                    if type(self._port) is _ProductionFixedExecutionPortV1:
+                        self._port._release_unpublished_unit_evidence(invocation)
                     if isinstance(exc, ProductionDriverError):
                         raise
                     raise ProductionDriverError(

@@ -39,16 +39,31 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelValidationStatus,
 )
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+    GPT56_MAX_OUTPUT_TOKENS,
+    GPT56_POLICY_INSTRUCTIONS,
+    GPT56_REASONING_EFFORT,
     GPT56_REQUESTED_MODEL,
+    OPENAI_RESPONSES_TRANSPORT_BINDING_SCHEMA_VERSION,
+    SUPPORTED_OPENAI_SDK_VERSION,
     GPT56PolicyError,
     GPT56SentinelPolicy,
+    OpenAIResponsesTransportBindingV1,
     ProposalSchemaSnapshotV1,
     ResponsesEnvelopeV1,
     ResponsesRequestV1,
     TransportDescriptorV1,
+    openai_responses_transport_binding_sha256,
+    responses_create_kwargs,
+    responses_envelope_hash_projection,
+    responses_request_config_dict,
+    transport_descriptor_sha256,
 )
 from mobile_world.runtime.sentinel.r2_2.metrics import R22PolicyMetrics
-from mobile_world.runtime.sentinel.r2_2.sidecar import MemoryR22PolicyReceiptSink
+from mobile_world.runtime.sentinel.r2_2.sidecar import (
+    MemoryR22PolicyReceiptSink,
+    PolicyEvaluationStatus,
+    R22PolicyReceiptV1,
+)
 from mobile_world.runtime.sentinel.r2_3.contracts import (
     GraphRefKind,
     GraphRefV1,
@@ -87,7 +102,12 @@ from mobile_world.runtime.sentinel.r2_3.session import (
     RubricSessionStatus,
     RubricTaskSession,
 )
+from mobile_world.runtime.sentinel.r2_4 import live_attempt as live_attempt_module
+from mobile_world.runtime.sentinel.r2_4 import live_policy as live_policy_module
 from mobile_world.runtime.sentinel.r2_4 import production_audit as production_audit_module
+from mobile_world.runtime.sentinel.r2_4 import (
+    production_preflight as production_preflight_module,
+)
 from mobile_world.runtime.sentinel.r2_4 import rubric_live as rubric_live_module
 from mobile_world.runtime.sentinel.r2_4.capabilities import (
     build_runtime_history_codec_resolver,
@@ -99,21 +119,30 @@ from mobile_world.runtime.sentinel.r2_4.evidence import (
 )
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     CanonicalHistoryPolicyRequestV1,
+    LiveAttemptAuthorityV1,
     LiveAttemptCostStatusV1,
     LiveAttemptExecutionKindV1,
+    LiveAttemptPricingV1,
     LiveAttemptReceiptV1,
     LiveAttemptRoleV1,
     LiveAttemptStatusV1,
     LiveAttemptTerminationV1,
     ProductionOpenAIAttemptRunnerV1,
+    build_canonical_history_policy_request,
+    live_attempt_authority_sha256,
+    live_attempt_pricing_sha256,
     live_attempt_receipt_projection,
     live_attempt_receipt_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.live_policy import (
+    LiveHistoryPolicyReceiptStateV1,
     OwnerAuthorizedLivePerCallPolicyV1,
     ResolvedLivePolicyCallBindingV1,
+    live_history_policy_attempt_request_proof_projection,
+    validate_live_history_policy_request_proof_projection_v1,
     validate_live_rubric_cross_bindings_v1,
 )
+from mobile_world.runtime.sentinel.r2_4.live_run import OpenAIResponsesStageV1, OpenAIRoleV1
 from mobile_world.runtime.sentinel.r2_4.orchestration import (
     R24OrchestrationError,
     R24RuntimeCoordinatorV1,
@@ -129,10 +158,16 @@ from mobile_world.runtime.sentinel.r2_4.production_audit import (
     production_runtime_audit_detail_projection,
     production_runtime_audit_pre_provider_sha256,
 )
+from mobile_world.runtime.sentinel.r2_4.production_preflight import (
+    openai_stage_set_sha256,
+    openai_stage_sha256,
+)
 from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION,
+    LIVE_RUBRIC_MAX_OUTPUT_TOKENS,
     LIVE_RUBRIC_MODEL,
     LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION,
+    LiveRubricAttemptConstraintBindingV1,
     LiveRubricAttemptRequestAnchorV1,
     LiveRubricCallReceiptV1,
     LiveRubricCallTrustAnchorV1,
@@ -144,6 +179,7 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     R24RubricBackendExtensionDescriptorV1,
     bind_current_collector_image,
     bind_current_collector_image_projection,
+    build_live_rubric_attempt_constraint_binding_v1,
     build_live_rubric_provider_request_v1,
     live_rubric_attempt_request_proof_projection,
     live_rubric_call_receipt_sha256,
@@ -164,6 +200,64 @@ QWEN_FIXTURE = (
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _expected_request_proof_roots(
+    attempt: LiveAttemptReceiptV1 | dict[str, JsonValue] | None,
+    proof: JsonValue | None = None,
+) -> dict[str, str]:
+    """Model caller-known roots independently of a durable proof projection."""
+
+    proof_projection = proof if type(proof) is dict else {}
+    constraint_projection = proof_projection.get(
+        "attempt_constraint_binding",
+        proof_projection.get("constraint_binding"),
+    )
+    constraint_sha256 = (
+        canonical_sha256(cast(JsonValue, constraint_projection))
+        if type(constraint_projection) is dict
+        else _sha("caller-known-attempt-constraint")
+    )
+    if type(attempt) is LiveAttemptReceiptV1:
+        return {
+            "expected_attempt_authority_sha256": attempt.authority_sha256,
+            "expected_constraint_binding_sha256": constraint_sha256,
+            "expected_manifest_sha256": attempt.manifest_sha256,
+            "expected_preflight_sha256": attempt.preflight_sha256,
+            "expected_case_execution_lease_sha256": attempt.case_execution_lease_sha256,
+            "expected_stage_sha256": attempt.stage_sha256,
+            "expected_pricing_binding_sha256": attempt.pricing_binding_sha256,
+            "expected_transport_binding_sha256": attempt.transport_binding_sha256,
+            "expected_request_sha256": attempt.request_sha256,
+        }
+    if type(attempt) is dict:
+        return {
+            "expected_attempt_authority_sha256": cast(str, attempt["authority_sha256"]),
+            "expected_constraint_binding_sha256": constraint_sha256,
+            "expected_manifest_sha256": cast(str, attempt["manifest_sha256"]),
+            "expected_preflight_sha256": cast(str, attempt["preflight_sha256"]),
+            "expected_case_execution_lease_sha256": cast(
+                str, attempt["case_execution_lease_sha256"]
+            ),
+            "expected_stage_sha256": cast(str, attempt["stage_sha256"]),
+            "expected_pricing_binding_sha256": cast(str, attempt["pricing_binding_sha256"]),
+            "expected_transport_binding_sha256": cast(str, attempt["transport_binding_sha256"]),
+            "expected_request_sha256": cast(str, attempt["request_sha256"]),
+        }
+    return {
+        f"expected_{label}_sha256": _sha(f"caller-known-{label}")
+        for label in (
+            "attempt_authority",
+            "constraint_binding",
+            "manifest",
+            "preflight",
+            "case_execution_lease",
+            "stage",
+            "pricing_binding",
+            "transport_binding",
+            "request",
+        )
+    }
 
 
 def _checked_in_r23_schema_hash(filename: str) -> str:
@@ -248,6 +342,250 @@ def _live_rubric_request_material(
     return extension, inputs, requests
 
 
+def _proof_openai_stage() -> OpenAIResponsesStageV1:
+    return OpenAIResponsesStageV1(
+        role=OpenAIRoleV1.RUBRIC,
+        model=LIVE_RUBRIC_MODEL,
+        endpoint="https://api.openai.com/v1/responses",
+        transport_kind="OPENAI_RESPONSES",
+        transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+        openai_sdk_version="1.106.1",
+        sdk_max_retries=0,
+        external_network_on_call=True,
+        model_on_call=True,
+        max_output_tokens=LIVE_RUBRIC_MAX_OUTPUT_TOKENS,
+        timeout_ms=60_000,
+        max_attempts=1,
+        store=False,
+    )
+
+
+def _proof_history_stage() -> OpenAIResponsesStageV1:
+    return OpenAIResponsesStageV1(
+        role=OpenAIRoleV1.HISTORY_POLICY,
+        model=LIVE_RUBRIC_MODEL,
+        endpoint="https://api.openai.com/v1/responses",
+        transport_kind="OPENAI_RESPONSES",
+        transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+        openai_sdk_version="1.106.1",
+        sdk_max_retries=0,
+        external_network_on_call=True,
+        model_on_call=True,
+        max_output_tokens=4096,
+        timeout_ms=60_000,
+        max_attempts=1,
+        store=False,
+    )
+
+
+def _proof_pricing() -> LiveAttemptPricingV1:
+    return LiveAttemptPricingV1(
+        pricing_id="r24-cross-binding-price",
+        model=LIVE_RUBRIC_MODEL,
+        input_usd_micros_per_million_tokens=0,
+        cached_input_usd_micros_per_million_tokens=0,
+        output_usd_micros_per_million_tokens=0,
+        source_sha256=_sha("r24-cross-binding-price-source"),
+        effective_at_utc="2026-09-01T00:00:00Z",
+    )
+
+
+def _proof_case_execution_lease(
+    *,
+    manifest_sha256: str,
+    preflight_sha256: str,
+    pricing_sha256: str,
+    actor_request_sha256: str,
+    case_id: str = "r24-cross-binding-case",
+) -> dict[str, JsonValue]:
+    return {
+        "actor_call_index": 1,
+        "case_id": case_id,
+        "execution_scope": "OWNER_AUTHORIZED_LIVE",
+        "expires_at_utc": "2026-09-04T01:00:00Z",
+        "factory_binding_sha256": _sha("cross-binding-factory"),
+        "host": "QWEN3_VL",
+        "issued_at_utc": "2026-09-04T00:00:00Z",
+        "manifest_sha256": manifest_sha256,
+        "mode": "SHADOW",
+        "openai_stage_set_sha256": openai_stage_set_sha256(
+            (_proof_openai_stage(), _proof_history_stage())
+        ),
+        "preflight_report_sha256": preflight_sha256,
+        "pricing_binding_sha256": pricing_sha256,
+        "request_sha256": actor_request_sha256,
+        "reset_seed": None,
+        "schema_version": "mobileworld.runtime.sentinel-r2.4-case-execution-lease/v1",
+        "stage": "QWEN_LIVE_SMOKE",
+        "task_id": "r24-cross-binding-task",
+        "task_parameters_sha256": None,
+    }
+
+
+def _proof_transport_binding(
+    *,
+    operation: LiveRubricOperationV1,
+    attempt: LiveAttemptReceiptV1,
+    backend_extension_descriptor_sha256: str,
+    stage: OpenAIResponsesStageV1,
+    lease: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    return {
+        "execution_scope": "OWNER_AUTHORIZED_LIVE",
+        "factory_binding_sha256": lease["factory_binding_sha256"],
+        "manifest_sha256": attempt.manifest_sha256,
+        "model": stage.model,
+        "preflight_sha256": attempt.preflight_sha256,
+        "pricing_binding_sha256": attempt.pricing_binding_sha256,
+        "role": attempt.role.value,
+        "stage_sha256": attempt.stage_sha256,
+        "backend_extension_descriptor_sha256": backend_extension_descriptor_sha256,
+        "input_schema_version": (
+            LIVE_RUBRIC_GENERATE_INPUT_SCHEMA_VERSION
+            if operation is LiveRubricOperationV1.GENERATE
+            else LIVE_RUBRIC_TRACK_INPUT_SCHEMA_VERSION
+        ),
+        "operation": operation.value,
+        "output_schema_sha256": (
+            live_rubric_generate_schema().sha256
+            if operation is LiveRubricOperationV1.GENERATE
+            else live_rubric_track_schema().sha256
+        ),
+        "prompt_sha256": live_rubric_operation_prompt_sha256(operation),
+    }
+
+
+def _proof_attempt_authority(
+    *,
+    attempt: LiveAttemptReceiptV1,
+    lease: dict[str, JsonValue],
+    stage: OpenAIResponsesStageV1,
+    transport: dict[str, JsonValue],
+    constraint: LiveRubricAttemptConstraintBindingV1,
+) -> LiveAttemptAuthorityV1:
+    return LiveAttemptAuthorityV1(
+        attempt_id=attempt.attempt_id,
+        role=attempt.role,
+        manifest_sha256=attempt.manifest_sha256,
+        preflight_sha256=attempt.preflight_sha256,
+        case_execution_lease_sha256=canonical_sha256(cast(JsonValue, lease)),
+        stage_sha256=openai_stage_sha256(stage),
+        case_id=attempt.case_id,
+        logical_call_id=attempt.logical_call_id,
+        actor_request_sha256=attempt.actor_request_sha256,
+        request_sha256=attempt.request_sha256,
+        transport_binding_sha256=canonical_sha256(cast(JsonValue, transport)),
+        pricing_binding_sha256=attempt.pricing_binding_sha256,
+        deadline_monotonic_ns=constraint.effective_deadline_monotonic_ns,
+        max_cost_usd_micros=constraint.attempt_max_cost_usd_micros,
+        max_output_tokens=LIVE_RUBRIC_MAX_OUTPUT_TOKENS,
+    )
+
+
+def _proof_attempt_constraint(
+    *,
+    lease: dict[str, JsonValue],
+    rubric_stage: OpenAIResponsesStageV1,
+) -> LiveRubricAttemptConstraintBindingV1:
+    issued_ns = 1_000_000_000_000_000
+    return build_live_rubric_attempt_constraint_binding_v1(
+        issued_monotonic_ns=issued_ns,
+        case_execution_deadline_monotonic_ns=issued_ns + 10_000_000_000,
+        history_stage=_proof_history_stage(),
+        rubric_stage=rubric_stage,
+        case_stage=cast(str, lease["stage"]),
+        case_host=cast(str, lease["host"]),
+        case_mode=cast(str, lease["mode"]),
+        case_id=cast(str, lease["case_id"]),
+        task_id=cast(str, lease["task_id"]),
+        task_parameters_sha256=cast(str | None, lease["task_parameters_sha256"]),
+        reset_seed=cast(int | None, lease["reset_seed"]),
+        max_actor_calls=1,
+        max_openai_calls=3,
+        max_wall_time_seconds=60,
+        case_max_cost_usd_micros=3_000_000,
+    )
+
+
+def _rebind_attempt_authorities(
+    attempts: tuple[LiveAttemptReceiptV1, ...],
+    call_anchors: tuple[LiveRubricCallTrustAnchorV1, ...],
+) -> tuple[LiveAttemptReceiptV1, ...]:
+    """Recreate the synthetic sealed inputs after authority-bound fixture edits."""
+
+    rubric_attempts = tuple(value for value in attempts if value.role is LiveAttemptRoleV1.RUBRIC)
+    if len(rubric_attempts) != len(attempts) or len(attempts) != len(call_anchors):
+        raise AssertionError("authority fixture needs one call anchor per rubric attempt")
+    stage = _proof_openai_stage()
+    pricing = _proof_pricing()
+    rebound: list[LiveAttemptReceiptV1] = []
+    for attempt, call_anchor in zip(attempts, call_anchors, strict=True):
+        lease = _proof_case_execution_lease(
+            manifest_sha256=attempt.manifest_sha256,
+            preflight_sha256=attempt.preflight_sha256,
+            pricing_sha256=live_attempt_pricing_sha256(pricing),
+            actor_request_sha256=attempt.actor_request_sha256,
+            case_id=attempt.case_id,
+        )
+        staged = replace(
+            attempt,
+            case_execution_lease_sha256=canonical_sha256(cast(JsonValue, lease)),
+            stage_sha256=openai_stage_sha256(stage),
+            pricing_binding_sha256=live_attempt_pricing_sha256(pricing),
+        )
+        transport = _proof_transport_binding(
+            operation=call_anchor.operation,
+            attempt=staged,
+            backend_extension_descriptor_sha256=cast(
+                str,
+                call_anchor.provider_input["backend_extension_descriptor_sha256"],
+            ),
+            stage=stage,
+            lease=lease,
+        )
+        constraint = _proof_attempt_constraint(lease=lease, rubric_stage=stage)
+        authority = _proof_attempt_authority(
+            attempt=staged,
+            lease=lease,
+            stage=stage,
+            transport=transport,
+            constraint=constraint,
+        )
+        rebound.append(
+            replace(
+                staged,
+                authority_sha256=live_attempt_authority_sha256(authority),
+                transport_binding_sha256=canonical_sha256(cast(JsonValue, transport)),
+            )
+        )
+    return tuple(rebound)
+
+
+def _rebind_call_receipt_to_attempt(
+    receipt: LiveRubricCallReceiptV1,
+    attempt: LiveAttemptReceiptV1,
+) -> LiveRubricCallReceiptV1:
+    return replace(
+        receipt,
+        provider_request_sha256=attempt.request_sha256,
+        transport_binding_sha256=attempt.transport_binding_sha256,
+        pricing_binding_sha256=attempt.pricing_binding_sha256,
+        manifest_sha256=attempt.manifest_sha256,
+        preflight_sha256=attempt.preflight_sha256,
+        case_execution_lease_sha256=attempt.case_execution_lease_sha256,
+        stage_sha256=attempt.stage_sha256,
+        attempt_authority_sha256=attempt.authority_sha256,
+        attempt_receipt_sha256=live_attempt_receipt_sha256(attempt),
+        requested_model=attempt.requested_model,
+        returned_model=attempt.returned_model,
+        dispatch_count=attempt.dispatch_count,
+        input_tokens=attempt.input_tokens,
+        output_tokens=attempt.output_tokens,
+        total_tokens=attempt.total_tokens,
+        cost_usd_micros=attempt.cost_usd_micros,
+    )
+
+
 def _complete_live_rubric_cross_binding_proof(
     tmp_path: Path,
 ) -> tuple[
@@ -261,9 +599,17 @@ def _complete_live_rubric_cross_binding_proof(
     actor_request_sha256 = _sha("cross-binding-actor-request")
     manifest_sha256 = _sha("cross-binding-manifest")
     preflight_sha256 = _sha("cross-binding-preflight")
-    lease_sha256 = _sha("cross-binding-lease")
-    stage_sha256 = _sha("cross-binding-rubric-stage")
-    pricing_sha256 = _sha("cross-binding-pricing")
+    stage = _proof_openai_stage()
+    pricing = _proof_pricing()
+    pricing_sha256 = live_attempt_pricing_sha256(pricing)
+    lease = _proof_case_execution_lease(
+        manifest_sha256=manifest_sha256,
+        preflight_sha256=preflight_sha256,
+        pricing_sha256=pricing_sha256,
+        actor_request_sha256=actor_request_sha256,
+    )
+    lease_sha256 = canonical_sha256(cast(JsonValue, lease))
+    stage_sha256 = openai_stage_sha256(stage)
     runtime = _runtime_case(tmp_path)
     cross_context = SentinelContext(
         logical_call_id=logical_call_id,
@@ -336,7 +682,7 @@ def _complete_live_rubric_cross_binding_proof(
             output_tokens=1,
             total_tokens=3 + index,
             cost_status=LiveAttemptCostStatusV1.EXACT,
-            cost_usd_micros=index,
+            cost_usd_micros=0,
             cancellation_requested=False,
             termination=LiveAttemptTerminationV1.NONE,
             worker_pid=20_000 + index,
@@ -350,6 +696,31 @@ def _complete_live_rubric_cross_binding_proof(
             zip(envelopes, provider_requests, strict=True), start=1
         )
     )
+    rebound_attempts: list[LiveAttemptReceiptV1] = []
+    for operation, attempt in zip(operations, attempts, strict=True):
+        transport = _proof_transport_binding(
+            operation=operation,
+            attempt=attempt,
+            backend_extension_descriptor_sha256=extension.sha256,
+            stage=stage,
+            lease=lease,
+        )
+        constraint = _proof_attempt_constraint(lease=lease, rubric_stage=stage)
+        authority = _proof_attempt_authority(
+            attempt=attempt,
+            lease=lease,
+            stage=stage,
+            transport=transport,
+            constraint=constraint,
+        )
+        rebound_attempts.append(
+            replace(
+                attempt,
+                authority_sha256=live_attempt_authority_sha256(authority),
+                transport_binding_sha256=canonical_sha256(cast(JsonValue, transport)),
+            )
+        )
+    attempts = tuple(rebound_attempts)
     attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
     receipts = tuple(
         LiveRubricCallReceiptV1(
@@ -440,7 +811,7 @@ def _complete_live_rubric_cross_binding_proof(
         history_policy_attempt_receipt_sha256=None,
         output_sha256=None,
         openai_calls=2,
-        cost_usd_micros=3,
+        cost_usd_micros=0,
     )
     return extension, attempts, receipts, anchors, binding
 
@@ -460,22 +831,411 @@ def _attempt_request_anchors(
     call_anchors: tuple[LiveRubricCallTrustAnchorV1, ...],
 ) -> tuple[LiveRubricAttemptRequestAnchorV1, ...]:
     rubric_attempts = tuple(value for value in attempts if value.role is LiveAttemptRoleV1.RUBRIC)
-    return tuple(
-        rubric_live_module._build_live_rubric_attempt_request_anchor(
+    values: list[LiveRubricAttemptRequestAnchorV1] = []
+    for index, (attempt, call_anchor) in enumerate(
+        zip(rubric_attempts, call_anchors, strict=False),
+        start=1,
+    ):
+        stage = _proof_openai_stage()
+        pricing = _proof_pricing()
+        lease = _proof_case_execution_lease(
+            manifest_sha256=attempt.manifest_sha256,
+            preflight_sha256=attempt.preflight_sha256,
+            pricing_sha256=attempt.pricing_binding_sha256,
+            actor_request_sha256=attempt.actor_request_sha256,
+            case_id=attempt.case_id,
+        )
+        transport = _proof_transport_binding(
             operation=call_anchor.operation,
-            task_run_id=call_anchor.task_run_id,
-            logical_call_id=call_anchor.logical_call_id,
-            attempt_id=attempt.attempt_id,
-            attempt_order=index,
-            collector_stimulus=call_anchor.collector_stimulus,
-            current_image=call_anchor.current_image,
-            provider_input=call_anchor.provider_input,
-            provider_request=call_anchor.provider_request,
+            attempt=attempt,
+            backend_extension_descriptor_sha256=cast(
+                str,
+                call_anchor.provider_input["backend_extension_descriptor_sha256"],
+            ),
+            stage=stage,
+            lease=lease,
         )
-        for index, (attempt, call_anchor) in enumerate(
-            zip(rubric_attempts, call_anchors, strict=False),
-            start=1,
+        constraint = _proof_attempt_constraint(lease=lease, rubric_stage=stage)
+        authority = _proof_attempt_authority(
+            attempt=attempt,
+            lease=lease,
+            stage=stage,
+            transport=transport,
+            constraint=constraint,
         )
+        assert attempt.authority_sha256 == live_attempt_authority_sha256(authority)
+        values.append(
+            rubric_live_module._build_live_rubric_attempt_request_anchor(
+                operation=call_anchor.operation,
+                task_run_id=call_anchor.task_run_id,
+                logical_call_id=call_anchor.logical_call_id,
+                attempt_id=attempt.attempt_id,
+                attempt_order=index,
+                attempt_authority=authority,
+                constraint_binding=constraint,
+                case_execution_lease=lease,
+                openai_stage=stage,
+                pricing=pricing,
+                transport_binding=transport,
+                collector_stimulus=call_anchor.collector_stimulus,
+                current_image=call_anchor.current_image,
+                provider_input=call_anchor.provider_input,
+                provider_request=call_anchor.provider_request,
+            )
+        )
+    return tuple(values)
+
+
+def _complete_live_history_request_proof(
+    tmp_path: Path,
+) -> tuple[
+    LiveAttemptReceiptV1,
+    live_policy_module.LiveHistoryPolicyAttemptRequestAnchorV1,
+    dict[str, JsonValue],
+]:
+    """Build one fully closed CPU-only durable HISTORY_POLICY proof."""
+
+    runtime = _runtime_case(tmp_path)
+    logical_call_id = "r24-history-proof-call-1"
+    context = SentinelContext(
+        logical_call_id=logical_call_id,
+        host_id=runtime.context.host_id,
+    )
+    actor_request_sha256 = canonical_sha256(cast(JsonValue, runtime.request))
+    try:
+        with bind_audit_context(runtime.audit_context):
+            bundle = CollectorEvidenceFactoryV1().bundle_for_call(
+                request=cast(JsonValue, runtime.request),
+                context=context,
+                history_ir=runtime.history_ir,
+            )
+    finally:
+        runtime.run.close()
+
+    schema = ProposalSchemaSnapshotV1.from_checked_in()
+    responses_request = ResponsesRequestV1(
+        evidence=bundle.gpt56_input,
+        output_schema=schema,
+    )
+    provider_request = build_canonical_history_policy_request(
+        responses_create_kwargs(responses_request)
+    )
+    stage = _proof_history_stage()
+    rubric_stage = _proof_openai_stage()
+    pricing = _proof_pricing()
+    manifest_sha256 = _sha("history-proof-manifest")
+    preflight_sha256 = _sha("history-proof-preflight")
+    lease_projection = _proof_case_execution_lease(
+        manifest_sha256=manifest_sha256,
+        preflight_sha256=preflight_sha256,
+        pricing_sha256=live_attempt_pricing_sha256(pricing),
+        actor_request_sha256=actor_request_sha256,
+        case_id="r24-history-proof-case",
+    )
+    case_lease = production_preflight_module._restore_case_execution_lease(lease_projection)
+    constraint = _proof_attempt_constraint(
+        lease=lease_projection,
+        rubric_stage=rubric_stage,
+    )
+    lease_sha256 = canonical_sha256(cast(JsonValue, lease_projection))
+    history_stage_sha256 = openai_stage_sha256(stage)
+    descriptor = TransportDescriptorV1(
+        transport_kind="OPENAI_RESPONSES",
+        transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+        openai_sdk_version=SUPPORTED_OPENAI_SDK_VERSION,
+        sdk_max_retries=0,
+        external_network_on_call=True,
+        model_on_call=True,
+    )
+    transport = OpenAIResponsesTransportBindingV1(
+        schema_version=OPENAI_RESPONSES_TRANSPORT_BINDING_SCHEMA_VERSION,
+        descriptor_sha256=transport_descriptor_sha256(descriptor),
+        responses_endpoint="https://api.openai.com/v1/responses",
+        responses_endpoint_sha256=_sha("https://api.openai.com/v1/responses"),
+        requested_model=GPT56_REQUESTED_MODEL,
+        max_output_tokens=GPT56_MAX_OUTPUT_TOKENS,
+        transport_timeout_ns=30_000_000_000,
+        seam_policy_deadline_ns=60_000_000_000,
+        client_timeout_ceiling_ns=30_000_000_000,
+        client_origin="MODULE_OWNED_PRODUCTION",
+        authority_manifest_sha256=manifest_sha256,
+        preflight_report_sha256=preflight_sha256,
+        factory_binding_sha256=cast(str, lease_projection["factory_binding_sha256"]),
+        case_execution_lease_sha256=lease_sha256,
+        history_policy_stage_sha256=history_stage_sha256,
+        actor_request_sha256=actor_request_sha256,
+        pricing_binding_sha256=live_attempt_pricing_sha256(pricing),
+        child_process_isolated=True,
+        environment_proxy_disabled=True,
+    )
+    attempt_id = "r24-history-proof-attempt-1"
+    deadline = live_attempt_module._build_live_attempt_deadline_binding(
+        attempt_id=attempt_id,
+        logical_call_id=logical_call_id,
+        case_id=case_lease.case_id,
+        case_execution_lease_sha256=lease_sha256,
+        constraint_registered_monotonic_ns=constraint.issued_monotonic_ns + 1,
+        requested_call_deadline_monotonic_ns=(
+            constraint.issued_monotonic_ns + 2 + transport.transport_timeout_ns
+        ),
+        request_timeout_ns=transport.transport_timeout_ns,
+        begin_observed_monotonic_ns=constraint.issued_monotonic_ns + 3,
+        case_execution_deadline_monotonic_ns=(constraint.effective_deadline_monotonic_ns),
+        max_cost_usd_micros=constraint.attempt_max_cost_usd_micros,
+    )
+    authority = LiveAttemptAuthorityV1(
+        attempt_id=attempt_id,
+        role=LiveAttemptRoleV1.HISTORY_POLICY,
+        manifest_sha256=manifest_sha256,
+        preflight_sha256=preflight_sha256,
+        case_execution_lease_sha256=lease_sha256,
+        stage_sha256=history_stage_sha256,
+        case_id=case_lease.case_id,
+        logical_call_id=logical_call_id,
+        actor_request_sha256=actor_request_sha256,
+        request_sha256=provider_request.request_sha256,
+        transport_binding_sha256=openai_responses_transport_binding_sha256(transport),
+        pricing_binding_sha256=live_attempt_pricing_sha256(pricing),
+        deadline_monotonic_ns=deadline.effective_deadline_monotonic_ns,
+        max_cost_usd_micros=constraint.attempt_max_cost_usd_micros,
+        max_output_tokens=GPT56_MAX_OUTPUT_TOKENS,
+    )
+    envelope = ResponsesEnvelopeV1(
+        response_id="r24-history-proof-response-1",
+        requested_model=GPT56_REQUESTED_MODEL,
+        returned_model=GPT56_REQUESTED_MODEL,
+        status="completed",
+        service_tier="default",
+        output_text='{"status":"ABSTAIN"}',
+        input_tokens=11,
+        output_tokens=7,
+        total_tokens=18,
+    )
+    packet = bundle.r22_packet
+    config = responses_request_config_dict(responses_request)
+    config.update(
+        {
+            "transport_timeout_ns": transport.transport_timeout_ns,
+            "seam_policy_deadline_ns": transport.seam_policy_deadline_ns,
+            "sdk_max_retries": 0,
+            "openai_sdk_version": SUPPORTED_OPENAI_SDK_VERSION,
+        }
+    )
+    target_count = len(packet.targets)
+    r22_receipt = R22PolicyReceiptV1(
+        logical_call_id=logical_call_id,
+        host_id=packet.host_id,
+        packet_id=packet.packet_id,
+        policy_id="mobileworld.runtime.sentinel-policy.history-proof/v1",
+        execution_scope="SHADOW_ONLY",
+        mode="SHADOW",
+        requested_model=GPT56_REQUESTED_MODEL,
+        returned_model=GPT56_REQUESTED_MODEL,
+        api_method="responses.create",
+        openai_sdk_version=SUPPORTED_OPENAI_SDK_VERSION,
+        reasoning_effort=GPT56_REASONING_EFFORT,
+        sdk_max_retries=0,
+        transport_kind="OPENAI_RESPONSES",
+        transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+        prompt_sha256=_sha(GPT56_POLICY_INSTRUCTIONS),
+        output_schema_sha256=schema.sha256,
+        request_config_sha256=canonical_sha256(cast(JsonValue, config)),
+        evidence_packet_sha256=bundle.gpt56_input.packet_sha256,
+        current_image_sha256=bundle.gpt56_input.current_image_sha256,
+        response_id=envelope.response_id,
+        response_status=envelope.status,
+        service_tier=envelope.service_tier,
+        response_envelope_sha256=canonical_sha256(
+            cast(JsonValue, responses_envelope_hash_projection(envelope))
+        ),
+        provider_output_sha256=envelope.output_text_sha256,
+        parsed_proposal_sha256=_sha("history-proof-parsed-proposal"),
+        admitted_plan_sha256=_sha("history-proof-admitted-plan"),
+        evaluation_status=PolicyEvaluationStatus.ADMITTED,
+        failure_code=None,
+        validation_checks=("OUTPUT_ADMITTED",),
+        input_tokens=envelope.input_tokens,
+        output_tokens=envelope.output_tokens,
+        total_tokens=envelope.total_tokens,
+        transport_calls=1,
+        packet_build_latency_ns=1,
+        transport_latency_ns=1,
+        parse_latency_ns=1,
+        admission_latency_ns=1,
+        total_latency_ns=4,
+        target_count=target_count,
+        decision_count=target_count,
+        keep_count=target_count,
+        drop_count=0,
+        replace_count=0,
+        keep_uncertain_count=0,
+        material_decision_count=0,
+        abstain_decision_count=0,
+        external_network_attempted=True,
+        model_call_attempted=True,
+        local_gpu_used=False,
+        mobileworld_action_executed=False,
+    )
+    attempt = LiveAttemptReceiptV1(
+        attempt_id=attempt_id,
+        role=LiveAttemptRoleV1.HISTORY_POLICY,
+        authority_sha256=live_attempt_authority_sha256(authority),
+        manifest_sha256=manifest_sha256,
+        preflight_sha256=preflight_sha256,
+        case_execution_lease_sha256=lease_sha256,
+        stage_sha256=history_stage_sha256,
+        case_id=case_lease.case_id,
+        logical_call_id=logical_call_id,
+        actor_request_sha256=actor_request_sha256,
+        request_sha256=provider_request.request_sha256,
+        transport_binding_sha256=openai_responses_transport_binding_sha256(transport),
+        pricing_binding_sha256=live_attempt_pricing_sha256(pricing),
+        execution_kind=(LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS),
+        status=LiveAttemptStatusV1.COMPLETED,
+        dispatch_count=1,
+        response_envelope_sha256=envelope.sha256,
+        requested_model=GPT56_REQUESTED_MODEL,
+        returned_model=GPT56_REQUESTED_MODEL,
+        input_tokens=envelope.input_tokens,
+        cached_input_tokens=0,
+        output_tokens=envelope.output_tokens,
+        total_tokens=envelope.total_tokens,
+        cost_status=LiveAttemptCostStatusV1.EXACT,
+        cost_usd_micros=0,
+        cancellation_requested=False,
+        termination=LiveAttemptTerminationV1.NONE,
+        worker_pid=22_001,
+        worker_exit_code=0,
+        worker_reaped=True,
+        late_output_detected=False,
+        duration_ns=4,
+        failure_code=None,
+    )
+    anchor = live_policy_module._build_live_history_policy_attempt_request_anchor_v1(
+        attempt_id=attempt_id,
+        logical_call_id=logical_call_id,
+        actor_request_sha256=actor_request_sha256,
+        coordinator_evidence_packet_sha256=bundle.gpt56_input.packet_sha256,
+        attempt_authority=authority,
+        deadline_binding=deadline,
+        constraint_binding=constraint,
+        case_execution_lease=case_lease,
+        openai_stage=stage,
+        rubric_openai_stage=rubric_stage,
+        pricing=pricing,
+        transport_binding=transport,
+        provider_request=provider_request,
+        response_envelope=envelope,
+        r22_policy_receipt=r22_receipt,
+        r22_receipt_state=(LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_COMMITTED),
+    )
+    proof = live_history_policy_attempt_request_proof_projection(
+        anchor,
+        attempt_receipt=attempt,
+    )
+    return attempt, anchor, proof
+
+
+def _terminal_live_history_request_proof(
+    tmp_path: Path,
+    *,
+    status: LiveAttemptStatusV1,
+    dispatch_count: int,
+) -> tuple[LiveAttemptReceiptV1, dict[str, JsonValue]]:
+    completed, source_anchor, _ = _complete_live_history_request_proof(tmp_path)
+    if status is LiveAttemptStatusV1.FAILED:
+        termination = LiveAttemptTerminationV1.NONE
+        cancellation_requested = False
+        worker_pid = None if dispatch_count == 0 else completed.worker_pid
+        worker_exit_code = None if dispatch_count == 0 else 0
+        worker_reaped = dispatch_count == 1
+        cost_status = (
+            LiveAttemptCostStatusV1.EXACT
+            if dispatch_count == 0
+            else LiveAttemptCostStatusV1.UNKNOWN
+        )
+        cost_usd_micros = 0 if dispatch_count == 0 else None
+        failure_code = (
+            "PROVIDER_CHILD_START_FAILED"
+            if dispatch_count == 0
+            else "PROVIDER_CHILD_PROTOCOL_VIOLATION"
+        )
+    elif status is LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH:
+        termination = LiveAttemptTerminationV1.COOPERATIVE
+        cancellation_requested = True
+        worker_pid = completed.worker_pid
+        worker_exit_code = 0
+        worker_reaped = True
+        cost_status = LiveAttemptCostStatusV1.EXACT
+        cost_usd_micros = 0
+        failure_code = None
+    elif status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH:
+        termination = LiveAttemptTerminationV1.TERM
+        cancellation_requested = True
+        worker_pid = completed.worker_pid
+        worker_exit_code = -15
+        worker_reaped = True
+        cost_status = LiveAttemptCostStatusV1.UNKNOWN
+        cost_usd_micros = None
+        failure_code = None
+    elif status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED:
+        termination = LiveAttemptTerminationV1.UNCONFIRMED
+        cancellation_requested = True
+        worker_pid = completed.worker_pid
+        worker_exit_code = None
+        worker_reaped = False
+        cost_status = LiveAttemptCostStatusV1.UNKNOWN
+        cost_usd_micros = None
+        failure_code = "TERMINATION_UNCONFIRMED"
+    else:
+        raise AssertionError(f"unsupported synthetic terminal state: {status}")
+    receipt = replace(
+        completed,
+        status=status,
+        dispatch_count=dispatch_count,
+        response_envelope_sha256=None,
+        requested_model=None,
+        returned_model=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=cost_status,
+        cost_usd_micros=cost_usd_micros,
+        cancellation_requested=cancellation_requested,
+        termination=termination,
+        worker_pid=worker_pid,
+        worker_exit_code=worker_exit_code,
+        worker_reaped=worker_reaped,
+        failure_code=failure_code,
+    )
+    anchor = live_policy_module._build_live_history_policy_attempt_request_anchor_v1(
+        attempt_id=source_anchor.attempt_id,
+        logical_call_id=source_anchor.logical_call_id,
+        actor_request_sha256=source_anchor.actor_request_sha256,
+        coordinator_evidence_packet_sha256=(source_anchor.coordinator_evidence_packet_sha256),
+        attempt_authority=source_anchor.attempt_authority,
+        deadline_binding=source_anchor.deadline_binding,
+        constraint_binding=source_anchor.constraint_binding,
+        case_execution_lease=production_preflight_module._restore_case_execution_lease(
+            source_anchor.case_execution_lease
+        ),
+        openai_stage=source_anchor.openai_stage,
+        rubric_openai_stage=source_anchor.rubric_openai_stage,
+        pricing=source_anchor.pricing,
+        transport_binding=source_anchor.transport_binding,
+        provider_request=source_anchor.provider_request,
+        response_envelope=None,
+        r22_policy_receipt=None,
+        r22_receipt_state=(
+            LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_ABSENT_PRE_DISPATCH
+            if dispatch_count == 0
+            else LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_ABSENT_POST_DISPATCH
+        ),
+    )
+    return receipt, live_history_policy_attempt_request_proof_projection(
+        anchor,
+        attempt_receipt=receipt,
     )
 
 
@@ -537,11 +1297,12 @@ def test_live_rubric_cross_binding_rejects_every_field_drift(
     logical_call_id = binding.logical_call_id
     actor_request_sha256 = binding.actor_request_sha256
     collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
+    attempt_anchors = _attempt_request_anchors(attempts, anchors)
     validate_live_rubric_cross_bindings_v1(
         logical_call_id=logical_call_id,
         actor_request_sha256=actor_request_sha256,
         attempts=attempts,
-        rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
+        rubric_attempt_request_anchors=attempt_anchors,
         rubric_call_receipts=receipts,
         rubric_call_trust_anchors=anchors,
         expected_collector_stimulus_sha256=collector_stimulus_sha256,
@@ -688,7 +1449,7 @@ def test_live_rubric_cross_binding_rejects_every_field_drift(
             logical_call_id=logical_call_id,
             actor_request_sha256=actor_request_sha256,
             attempts=attempts,
-            rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
+            rubric_attempt_request_anchors=attempt_anchors,
             rubric_call_receipts=receipts,
             rubric_call_trust_anchors=anchors,
             expected_collector_stimulus_sha256=collector_stimulus_sha256,
@@ -711,6 +1472,7 @@ def test_live_rubric_anchor_rejects_joint_request_hash_and_root_rewrite(
     extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
         tmp_path
     )
+    attempt_anchors = _attempt_request_anchors(attempts, anchors)
     expect_history_policy = proof_path == "success"
     if expect_history_policy:
         history_attempt = replace(
@@ -763,7 +1525,7 @@ def test_live_rubric_anchor_rejects_joint_request_hash_and_root_rewrite(
             logical_call_id=binding.logical_call_id,
             actor_request_sha256=binding.actor_request_sha256,
             attempts=attempts,
-            rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
+            rubric_attempt_request_anchors=attempt_anchors,
             rubric_call_receipts=receipts,
             rubric_call_trust_anchors=anchors,
             expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
@@ -782,6 +1544,7 @@ def test_live_rubric_anchor_binds_complete_coordinator_tracking_packet(tmp_path:
     extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
         tmp_path
     )
+    attempt_anchors = _attempt_request_anchors(attempts, anchors)
     expected_tracking_packet_sha256 = _anchored_tracking_packet_sha256(anchors)
     changed_input = deepcopy(anchors[1].provider_input)
     packet = cast(dict[str, JsonValue], changed_input["packet"])
@@ -826,7 +1589,7 @@ def test_live_rubric_anchor_binds_complete_coordinator_tracking_packet(tmp_path:
             logical_call_id=binding.logical_call_id,
             actor_request_sha256=binding.actor_request_sha256,
             attempts=attempts,
-            rubric_attempt_request_anchors=_attempt_request_anchors(attempts, anchors),
+            rubric_attempt_request_anchors=attempt_anchors,
             rubric_call_receipts=receipts,
             rubric_call_trust_anchors=anchors,
             expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
@@ -859,6 +1622,7 @@ def test_durable_live_rubric_request_proof_is_independently_reconstructable(
             cast(JsonValue, proof),
             attempt_receipt=attempt,
             expected_attempt_order=index,
+            **_expected_request_proof_roots(attempt, cast(JsonValue, proof)),
         )
         request = cast(dict[str, JsonValue], proof["provider_request"])
         assert request["model"] == LIVE_RUBRIC_MODEL
@@ -869,8 +1633,912 @@ def test_durable_live_rubric_request_proof_is_independently_reconstructable(
     assert proofs[1]["tracking_packet_sha256"] == _anchored_tracking_packet_sha256(anchors)
 
 
+def test_durable_live_rubric_request_proof_rejects_authority_below_request_token_limit(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    attempt = attempts[0]
+    proof = live_rubric_attempt_request_proof_projection(
+        _attempt_request_anchors((attempt,), anchors)[0],
+        attempt_receipt=attempt,
+        backend_extension=extension,
+    )
+    authority = cast(dict[str, JsonValue], proof["attempt_authority"])
+    authority["max_output_tokens"] = 1
+    proof["attempt_authority_sha256"] = canonical_sha256(cast(JsonValue, authority))
+    forged_attempt = replace(
+        attempt,
+        authority_sha256=cast(str, proof["attempt_authority_sha256"]),
+    )
+    proof["attempt_receipt_sha256"] = live_attempt_receipt_sha256(forged_attempt)
+
+    with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
+        validate_live_rubric_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            attempt_receipt=forged_attempt,
+            **_expected_request_proof_roots(attempt, cast(JsonValue, proof)),
+        )
+
+
+def test_durable_rubric_cost_reservation_failure_retains_complete_authority(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    attempt = attempts[0]
+    proof = live_rubric_attempt_request_proof_projection(
+        _attempt_request_anchors((attempt,), anchors)[0],
+        attempt_receipt=attempt,
+        backend_extension=extension,
+    )
+    receipt = live_attempt_receipt_projection(attempt)
+    authority = cast(dict[str, JsonValue], proof["attempt_authority"])
+    constraint = cast(dict[str, JsonValue], proof["attempt_constraint_binding"])
+    lease = cast(dict[str, JsonValue], proof["case_execution_lease"])
+    pricing = cast(dict[str, JsonValue], proof["pricing"])
+    transport = cast(dict[str, JsonValue], proof["transport_binding"])
+    pricing["input_usd_micros_per_million_tokens"] = 1_000_000
+    pricing["output_usd_micros_per_million_tokens"] = 2_000_000
+    pricing_sha256 = canonical_sha256(cast(JsonValue, pricing))
+    lease["pricing_binding_sha256"] = pricing_sha256
+    transport["pricing_binding_sha256"] = pricing_sha256
+    authority["pricing_binding_sha256"] = pricing_sha256
+    receipt["pricing_binding_sha256"] = pricing_sha256
+    constraint["attempt_max_cost_usd_micros"] = 1
+    constraint["case_max_cost_usd_micros"] = cast(int, constraint["max_openai_calls"])
+    authority["max_cost_usd_micros"] = 1
+    lease_sha256 = canonical_sha256(cast(JsonValue, lease))
+    authority["case_execution_lease_sha256"] = lease_sha256
+    receipt["case_execution_lease_sha256"] = lease_sha256
+    transport_sha256 = canonical_sha256(cast(JsonValue, transport))
+    authority["transport_binding_sha256"] = transport_sha256
+    receipt["transport_binding_sha256"] = transport_sha256
+    receipt.update(
+        {
+            "status": "FAILED",
+            "dispatch_count": 0,
+            "response_envelope_sha256": None,
+            "requested_model": None,
+            "returned_model": None,
+            "input_tokens": None,
+            "cached_input_tokens": None,
+            "output_tokens": None,
+            "total_tokens": None,
+            "cost_status": "EXACT",
+            "cost_usd_micros": 0,
+            "cancellation_requested": False,
+            "termination": "NONE",
+            "worker_pid": None,
+            "worker_exit_code": None,
+            "worker_reaped": False,
+            "late_output_detected": False,
+            "failure_code": "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
+        }
+    )
+    proof["attempt_status"] = "FAILED"
+    proof["attempt_dispatch_count"] = 0
+    proof["attempt_authority_sha256"] = canonical_sha256(cast(JsonValue, authority))
+    receipt["authority_sha256"] = proof["attempt_authority_sha256"]
+    proof["attempt_receipt_sha256"] = canonical_sha256(cast(JsonValue, receipt))
+
+    validate_live_rubric_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=receipt,
+        expected_attempt_order=1,
+        **_expected_request_proof_roots(receipt, cast(JsonValue, proof)),
+    )
+
+
+def test_durable_rubric_over_authority_failure_retains_exact_accounting(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    attempt = attempts[0]
+    proof = live_rubric_attempt_request_proof_projection(
+        _attempt_request_anchors((attempt,), anchors)[0],
+        attempt_receipt=attempt,
+        backend_extension=extension,
+    )
+    over_limit = replace(
+        attempt,
+        status=LiveAttemptStatusV1.FAILED,
+        output_tokens=LIVE_RUBRIC_MAX_OUTPUT_TOKENS + 1,
+        total_tokens=cast(int, attempt.input_tokens) + LIVE_RUBRIC_MAX_OUTPUT_TOKENS + 1,
+        failure_code="PROVIDER_RESULT_EXCEEDS_AUTHORITY",
+    )
+    proof["attempt_status"] = "FAILED"
+    proof["attempt_receipt_sha256"] = live_attempt_receipt_sha256(over_limit)
+
+    validate_live_rubric_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=over_limit,
+        expected_attempt_order=1,
+        **_expected_request_proof_roots(over_limit, cast(JsonValue, proof)),
+    )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "authority_cost",
+        "authority_and_constraint_cost",
+        "authority_deadline",
+        "authority_and_constraint_effective_deadline",
+        "constraint_requested_deadline",
+        "constraint_case_deadline",
+        "authority_cost_bool",
+        "constraint_issued_bool",
+        "lease_actor_index_bool",
+        "stage_timeout_bool",
+        "pricing_output_rate_bool",
+        "synchronized_pricing_cost_ceiling",
+        "lease_stage_set_rehashed",
+        "receipt_exact_cost_rehashed",
+        "all_owner_roots_rehashed",
+    ),
+)
+def test_durable_live_rubric_request_proof_rejects_authority_constraint_drift(
+    drift: str,
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    attempt = attempts[0]
+    proof = live_rubric_attempt_request_proof_projection(
+        _attempt_request_anchors((attempt,), anchors)[0],
+        attempt_receipt=attempt,
+        backend_extension=extension,
+    )
+    receipt = live_attempt_receipt_projection(attempt)
+    authority = cast(dict[str, JsonValue], proof["attempt_authority"])
+    constraint = cast(dict[str, JsonValue], proof["attempt_constraint_binding"])
+    lease = cast(dict[str, JsonValue], proof["case_execution_lease"])
+    stage = cast(dict[str, JsonValue], proof["openai_stage"])
+    pricing = cast(dict[str, JsonValue], proof["pricing"])
+    transport = cast(dict[str, JsonValue], proof["transport_binding"])
+
+    if drift == "authority_cost":
+        authority["max_cost_usd_micros"] = cast(int, authority["max_cost_usd_micros"]) - 1
+    elif drift == "authority_and_constraint_cost":
+        changed = cast(int, authority["max_cost_usd_micros"]) - 1
+        authority["max_cost_usd_micros"] = changed
+        constraint["attempt_max_cost_usd_micros"] = changed
+    elif drift == "authority_deadline":
+        authority["deadline_monotonic_ns"] = cast(int, authority["deadline_monotonic_ns"]) + 1
+    elif drift == "authority_and_constraint_effective_deadline":
+        changed = cast(int, authority["deadline_monotonic_ns"]) + 1
+        authority["deadline_monotonic_ns"] = changed
+        constraint["effective_deadline_monotonic_ns"] = changed
+    elif drift == "constraint_requested_deadline":
+        constraint["requested_call_deadline_monotonic_ns"] = (
+            cast(int, constraint["requested_call_deadline_monotonic_ns"]) + 1
+        )
+    elif drift == "constraint_case_deadline":
+        constraint["case_execution_deadline_monotonic_ns"] = constraint["issued_monotonic_ns"]
+    elif drift == "authority_cost_bool":
+        authority["max_cost_usd_micros"] = True
+    elif drift == "constraint_issued_bool":
+        constraint["issued_monotonic_ns"] = True
+    elif drift == "lease_actor_index_bool":
+        lease["actor_call_index"] = True
+    elif drift == "stage_timeout_bool":
+        stage["timeout_ms"] = True
+    elif drift == "pricing_output_rate_bool":
+        pricing["output_usd_micros_per_million_tokens"] = True
+    elif drift == "synchronized_pricing_cost_ceiling":
+        pricing["output_usd_micros_per_million_tokens"] = 1_000_000_000_000
+        pricing_sha256 = canonical_sha256(cast(JsonValue, pricing))
+        authority["pricing_binding_sha256"] = pricing_sha256
+        receipt["pricing_binding_sha256"] = pricing_sha256
+        lease["pricing_binding_sha256"] = pricing_sha256
+        authority["case_execution_lease_sha256"] = canonical_sha256(cast(JsonValue, lease))
+        receipt["case_execution_lease_sha256"] = authority["case_execution_lease_sha256"]
+        transport["pricing_binding_sha256"] = pricing_sha256
+        authority["transport_binding_sha256"] = canonical_sha256(cast(JsonValue, transport))
+        receipt["transport_binding_sha256"] = authority["transport_binding_sha256"]
+    elif drift == "lease_stage_set_rehashed":
+        lease["openai_stage_set_sha256"] = _sha("different-synchronized-stage-set")
+        lease_sha256 = canonical_sha256(cast(JsonValue, lease))
+        authority["case_execution_lease_sha256"] = lease_sha256
+        receipt["case_execution_lease_sha256"] = lease_sha256
+    elif drift == "receipt_exact_cost_rehashed":
+        receipt["cost_usd_micros"] = 1
+    elif drift == "all_owner_roots_rehashed":
+        manifest_sha256 = _sha("rewritten-rubric-manifest")
+        preflight_sha256 = _sha("rewritten-rubric-preflight")
+        lease["manifest_sha256"] = manifest_sha256
+        lease["preflight_report_sha256"] = preflight_sha256
+        lease_sha256 = canonical_sha256(cast(JsonValue, lease))
+        transport["manifest_sha256"] = manifest_sha256
+        transport["preflight_sha256"] = preflight_sha256
+        authority["manifest_sha256"] = manifest_sha256
+        authority["preflight_sha256"] = preflight_sha256
+        receipt["manifest_sha256"] = manifest_sha256
+        receipt["preflight_sha256"] = preflight_sha256
+        authority["case_execution_lease_sha256"] = lease_sha256
+        receipt["case_execution_lease_sha256"] = lease_sha256
+        transport_sha256 = canonical_sha256(cast(JsonValue, transport))
+        authority["transport_binding_sha256"] = transport_sha256
+        receipt["transport_binding_sha256"] = transport_sha256
+    else:
+        raise AssertionError(f"unknown rubric authority drift: {drift}")
+
+    proof["attempt_authority_sha256"] = canonical_sha256(cast(JsonValue, authority))
+    receipt["authority_sha256"] = proof["attempt_authority_sha256"]
+    proof["attempt_receipt_sha256"] = canonical_sha256(cast(JsonValue, receipt))
+    with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
+        validate_live_rubric_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            attempt_receipt=receipt,
+            **_expected_request_proof_roots(attempt, cast(JsonValue, proof)),
+        )
+
+
+def test_durable_live_rubric_request_proof_accepts_caller_known_owner_bindings(
+    tmp_path: Path,
+) -> None:
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    attempt = attempts[0]
+    anchor = _attempt_request_anchors((attempt,), anchors)[0]
+    proof = live_rubric_attempt_request_proof_projection(
+        anchor,
+        attempt_receipt=attempt,
+        backend_extension=extension,
+    )
+    validate_live_rubric_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=attempt,
+        expected_attempt_order=anchor.attempt_order,
+        expected_attempt_authority_sha256=live_attempt_authority_sha256(anchor.attempt_authority),
+        expected_constraint_binding_sha256=canonical_sha256(
+            cast(JsonValue, proof["attempt_constraint_binding"])
+        ),
+        expected_manifest_sha256=anchor.attempt_authority.manifest_sha256,
+        expected_preflight_sha256=anchor.attempt_authority.preflight_sha256,
+        expected_case_execution_lease_sha256=(anchor.attempt_authority.case_execution_lease_sha256),
+        expected_stage_sha256=anchor.attempt_authority.stage_sha256,
+        expected_pricing_binding_sha256=(anchor.attempt_authority.pricing_binding_sha256),
+        expected_transport_binding_sha256=(anchor.attempt_authority.transport_binding_sha256),
+        expected_request_sha256=anchor.attempt_authority.request_sha256,
+    )
+    for argument in (
+        "expected_attempt_authority_sha256",
+        "expected_constraint_binding_sha256",
+        "expected_manifest_sha256",
+        "expected_preflight_sha256",
+        "expected_case_execution_lease_sha256",
+        "expected_stage_sha256",
+        "expected_pricing_binding_sha256",
+        "expected_transport_binding_sha256",
+        "expected_request_sha256",
+    ):
+        with pytest.raises(LiveRubricError, match="caller-known expected"):
+            validate_live_rubric_request_proof_projection_v1(
+                cast(JsonValue, proof),
+                attempt_receipt=attempt,
+                **(
+                    _expected_request_proof_roots(attempt, cast(JsonValue, proof))
+                    | {argument: _sha(f"different-owner-binding:{argument}")}
+                ),
+            )
+
+
+def test_durable_history_policy_request_proof_is_independently_reconstructable(
+    tmp_path: Path,
+) -> None:
+    attempt, anchor, proof = _complete_live_history_request_proof(tmp_path)
+
+    validate_live_policy = live_policy_module.validate_live_history_policy_attempt_request_anchor_v1
+    validate_live_policy(anchor, attempt_receipt=attempt)
+    validate_live_history_policy_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=live_attempt_receipt_projection(attempt),
+        expected_attempt_authority_sha256=live_attempt_authority_sha256(anchor.attempt_authority),
+        expected_constraint_binding_sha256=canonical_sha256(
+            cast(JsonValue, proof["constraint_binding"])
+        ),
+        expected_manifest_sha256=anchor.attempt_authority.manifest_sha256,
+        expected_preflight_sha256=anchor.attempt_authority.preflight_sha256,
+        expected_case_execution_lease_sha256=(anchor.attempt_authority.case_execution_lease_sha256),
+        expected_stage_sha256=anchor.attempt_authority.stage_sha256,
+        expected_pricing_binding_sha256=(anchor.attempt_authority.pricing_binding_sha256),
+        expected_transport_binding_sha256=(anchor.attempt_authority.transport_binding_sha256),
+        expected_request_sha256=anchor.attempt_authority.request_sha256,
+    )
+    assert proof["attempt_role"] == "HISTORY_POLICY"
+    assert proof["attempt_status"] == "COMPLETED"
+    assert proof["provider_request_sha256"] == attempt.request_sha256
+    assert (
+        cast(dict[str, JsonValue], proof["attempt_authority"])["max_output_tokens"]
+        == GPT56_MAX_OUTPUT_TOKENS
+    )
+    assert (
+        cast(dict[str, JsonValue], proof["provider_request"])["max_output_tokens"]
+        == GPT56_MAX_OUTPUT_TOKENS
+    )
+    assert proof["r22_receipt_state"] == "R22_RECEIPT_COMMITTED"
+
+    for argument in (
+        "expected_attempt_authority_sha256",
+        "expected_constraint_binding_sha256",
+        "expected_manifest_sha256",
+        "expected_preflight_sha256",
+        "expected_case_execution_lease_sha256",
+        "expected_stage_sha256",
+        "expected_pricing_binding_sha256",
+        "expected_transport_binding_sha256",
+        "expected_request_sha256",
+    ):
+        with pytest.raises(R24ContractError, match="caller-known expected"):
+            validate_live_history_policy_request_proof_projection_v1(
+                cast(JsonValue, proof),
+                attempt_receipt=live_attempt_receipt_projection(attempt),
+                **(
+                    _expected_request_proof_roots(attempt, cast(JsonValue, proof))
+                    | {argument: _sha(f"different-owner-binding:{argument}")}
+                ),
+            )
+
+    durable = production_audit_module._history_request_proof_detail_projection(
+        anchor,
+        (attempt,),
+        anchor.coordinator_evidence_packet_sha256,
+    )
+    assert durable == proof
+    with pytest.raises(
+        production_audit_module.ProductionRuntimeAuditError,
+        match="HISTORY_REQUEST_PROOF_MISMATCH",
+    ):
+        production_audit_module._history_request_proof_detail_projection(
+            anchor,
+            (attempt,),
+            _sha("wrong-coordinator-history-root"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("status", "dispatch_count"),
+    (
+        (LiveAttemptStatusV1.FAILED, 0),
+        (LiveAttemptStatusV1.FAILED, 1),
+        (LiveAttemptStatusV1.CANCELLED_PRE_DISPATCH, 0),
+        (LiveAttemptStatusV1.CANCELLED_POST_DISPATCH, 1),
+        (LiveAttemptStatusV1.TERMINATION_UNCONFIRMED, 1),
+    ),
+)
+def test_durable_history_policy_request_proof_closes_every_terminal_state(
+    status: LiveAttemptStatusV1,
+    dispatch_count: int,
+    tmp_path: Path,
+) -> None:
+    receipt, proof = _terminal_live_history_request_proof(
+        tmp_path,
+        status=status,
+        dispatch_count=dispatch_count,
+    )
+    validate_live_history_policy_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=receipt,
+        **_expected_request_proof_roots(receipt, cast(JsonValue, proof)),
+    )
+    assert proof["attempt_status"] == status.value
+    assert proof["attempt_dispatch_count"] == dispatch_count
+    assert proof["r22_receipt_state"] == (
+        "R22_RECEIPT_ABSENT_PRE_DISPATCH"
+        if dispatch_count == 0
+        else "R22_RECEIPT_ABSENT_POST_DISPATCH"
+    )
+
+
+@pytest.mark.parametrize(
+    "terminal_kind",
+    ("USAGE_MISSING", "TERMINATION_UNCONFIRMED", "OVER_AUTHORITY"),
+)
+def test_durable_history_terminal_proof_retains_observed_response(
+    terminal_kind: str,
+    tmp_path: Path,
+) -> None:
+    completed, source_anchor, _ = _complete_live_history_request_proof(tmp_path)
+    source_envelope = source_anchor.response_envelope
+    assert source_envelope is not None
+    if terminal_kind == "USAGE_MISSING":
+        envelope = replace(
+            source_envelope,
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+        )
+        receipt = replace(
+            completed,
+            status=LiveAttemptStatusV1.FAILED,
+            response_envelope_sha256=envelope.sha256,
+            input_tokens=None,
+            cached_input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+            cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+            cost_usd_micros=None,
+            failure_code="PROVIDER_USAGE_MISSING",
+        )
+    elif terminal_kind == "TERMINATION_UNCONFIRMED":
+        envelope = source_envelope
+        receipt = replace(
+            completed,
+            status=LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
+            cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+            cost_usd_micros=None,
+            cancellation_requested=True,
+            termination=LiveAttemptTerminationV1.UNCONFIRMED,
+            worker_exit_code=None,
+            worker_reaped=False,
+            failure_code="TERMINATION_UNCONFIRMED",
+        )
+    else:
+        envelope = replace(
+            source_envelope,
+            output_tokens=GPT56_MAX_OUTPUT_TOKENS + 1,
+            total_tokens=cast(int, source_envelope.input_tokens) + GPT56_MAX_OUTPUT_TOKENS + 1,
+        )
+        receipt = replace(
+            completed,
+            status=LiveAttemptStatusV1.FAILED,
+            response_envelope_sha256=envelope.sha256,
+            output_tokens=envelope.output_tokens,
+            total_tokens=envelope.total_tokens,
+            failure_code="PROVIDER_RESULT_EXCEEDS_AUTHORITY",
+        )
+    anchor = live_policy_module._build_live_history_policy_attempt_request_anchor_v1(
+        attempt_id=source_anchor.attempt_id,
+        logical_call_id=source_anchor.logical_call_id,
+        actor_request_sha256=source_anchor.actor_request_sha256,
+        coordinator_evidence_packet_sha256=(source_anchor.coordinator_evidence_packet_sha256),
+        attempt_authority=source_anchor.attempt_authority,
+        deadline_binding=source_anchor.deadline_binding,
+        constraint_binding=source_anchor.constraint_binding,
+        case_execution_lease=production_preflight_module._restore_case_execution_lease(
+            source_anchor.case_execution_lease
+        ),
+        openai_stage=source_anchor.openai_stage,
+        rubric_openai_stage=source_anchor.rubric_openai_stage,
+        pricing=source_anchor.pricing,
+        transport_binding=source_anchor.transport_binding,
+        provider_request=source_anchor.provider_request,
+        response_envelope=envelope,
+        r22_policy_receipt=None,
+        r22_receipt_state=(LiveHistoryPolicyReceiptStateV1.R22_RECEIPT_ABSENT_POST_DISPATCH),
+    )
+
+    proof = live_history_policy_attempt_request_proof_projection(
+        anchor,
+        attempt_receipt=receipt,
+    )
+    validate_live_history_policy_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=receipt,
+        **_expected_request_proof_roots(receipt, cast(JsonValue, proof)),
+    )
+    assert proof["response_envelope"] is not None
+    assert cast(dict[str, JsonValue], proof["response_envelope"])["response_id"] == (
+        envelope.response_id
+    )
+
+
+class _CompletedHistoryPolicyTransport:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def descriptor(self) -> TransportDescriptorV1:
+        return TransportDescriptorV1.cpu_fake()
+
+    def create(
+        self,
+        request: ResponsesRequestV1,
+        *,
+        call_role: SentinelCallRole = SentinelCallRole.SENTINEL,
+        timeout_seconds: float,
+    ) -> ResponsesEnvelopeV1:
+        del request, call_role, timeout_seconds
+        self.calls += 1
+        return ResponsesEnvelopeV1(
+            response_id="r24-r22-publication-failure-response",
+            requested_model=GPT56_REQUESTED_MODEL,
+            returned_model=GPT56_REQUESTED_MODEL,
+            status="completed",
+            service_tier="default",
+            output_text="{}",
+            input_tokens=11,
+            output_tokens=7,
+            total_tokens=18,
+        )
+
+
+class _PrepareFailureTransaction:
+    def prepare(self, _receipt: object) -> object:
+        raise RuntimeError("injected R2.2 prepare failure")
+
+    def abort(self) -> None:
+        return None
+
+
+class _PrepareFailureReceiptSink:
+    @property
+    def receipts(self) -> tuple[()]:
+        return ()
+
+    def begin(self, _logical_call_id: str) -> _PrepareFailureTransaction:
+        return _PrepareFailureTransaction()
+
+
+class _PublishFailureTransaction:
+    def __init__(self, inner: object) -> None:
+        self._inner = cast(Any, inner)
+
+    def prepare(self, receipt: object) -> object:
+        publication = self._inner.prepare(receipt)
+        self._inner.abort()
+        return publication
+
+    def abort(self) -> None:
+        self._inner.abort()
+
+
+class _PublishFailureReceiptSink:
+    def __init__(self) -> None:
+        self._inner = MemoryR22PolicyReceiptSink()
+
+    @property
+    def receipts(self) -> tuple[R22PolicyReceiptV1, ...]:
+        return self._inner.receipts
+
+    def begin(self, logical_call_id: str) -> _PublishFailureTransaction:
+        return _PublishFailureTransaction(self._inner.begin(logical_call_id))
+
+
+class _ReceiptDeadlineExecutionControl:
+    def run_transport(self, call: Any) -> Any:
+        return call()
+
+    def publish_receipt(self, _publish: Any) -> None:
+        raise TimeoutError("injected receipt publication deadline")
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_code"),
+    (
+        ("PREPARE", "POLICY_RECEIPT_PREPARE_FAILED"),
+        ("PUBLISH", "POLICY_RECEIPT_PUBLISH_FAILED"),
+        ("DEADLINE", "POLICY_DEADLINE_EXCEEDED"),
+    ),
+)
+def test_completed_history_attempt_survives_r22_receipt_publication_failure(
+    failure_kind: str,
+    expected_code: str,
+    tmp_path: Path,
+) -> None:
+    """Exercise real R2.2 prepare/publish gates, then validate the durable terminal proof."""
+
+    runtime = _runtime_case(tmp_path)
+    try:
+        with bind_audit_context(runtime.audit_context):
+            evidence = (
+                CollectorEvidenceFactoryV1()
+                .bundle_for_call(
+                    request=cast(JsonValue, runtime.request),
+                    context=runtime.context,
+                    history_ir=runtime.history_ir,
+                )
+                .gpt56_input
+            )
+        transport = _CompletedHistoryPolicyTransport()
+        sink: Any
+        if failure_kind == "PREPARE":
+            sink = _PrepareFailureReceiptSink()
+        elif failure_kind == "PUBLISH":
+            sink = _PublishFailureReceiptSink()
+        else:
+            sink = MemoryR22PolicyReceiptSink()
+        policy = GPT56SentinelPolicy(
+            transport=transport,
+            evidence_packet_factory=lambda _request, _context, _ir: evidence,
+            proposal_admission=_unreachable,
+            admission_receipt_projector=_unreachable,
+            bind_policy_receipt=_unreachable,
+            receipt_sink=sink,
+            metrics=R22PolicyMetrics(),
+            output_schema=ProposalSchemaSnapshotV1.from_checked_in(),
+            timeout_seconds=0.05,
+            seam_policy_deadline_seconds=2.0,
+        )
+        with pytest.raises(GPT56PolicyError, match=expected_code) as caught:
+            if failure_kind == "DEADLINE":
+                policy.evaluate_with_control(
+                    request=cast(JsonValue, runtime.request),
+                    context=runtime.context,
+                    history_ir=runtime.history_ir,
+                    execution_control=cast(Any, _ReceiptDeadlineExecutionControl()),
+                )
+            else:
+                policy.evaluate(
+                    request=cast(JsonValue, runtime.request),
+                    context=runtime.context,
+                    history_ir=runtime.history_ir,
+                )
+        assert caught.value.code == expected_code
+        assert transport.calls == 1
+        assert sink.receipts == ()
+    finally:
+        runtime.run.close()
+
+    attempt, source_anchor, _ = _complete_live_history_request_proof(tmp_path)
+    retained_runner = SimpleNamespace(
+        terminal_receipt_for_attempt=lambda _attempt_id: attempt,
+        discard_unformed_history_attempt_constraint=lambda **_kwargs: False,
+        attempt_authority_for_attempt=lambda _attempt_id: source_anchor.attempt_authority,
+        canonical_request_for_attempt=lambda _attempt_id: source_anchor.provider_request,
+        attempt_deadline_binding_for_attempt=lambda _attempt_id: source_anchor.deadline_binding,
+        response_envelope_for_attempt=lambda _attempt_id: source_anchor.response_envelope,
+    )
+    owner_policy = object.__new__(OwnerAuthorizedLivePerCallPolicyV1)
+    owner_policy._history_runner = retained_runner
+    owner_policy._r22_receipts = SimpleNamespace(receipts=())
+    owner_policy._history_stage = source_anchor.openai_stage
+    owner_policy._rubric_stage = source_anchor.rubric_openai_stage
+    owner_policy._pricing = source_anchor.pricing
+    owner_policy._history_attempt_request_anchors = {}
+    owner_policy._close_history_attempt_proof(
+        attempt_id=source_anchor.attempt_id,
+        logical_call_id=source_anchor.logical_call_id,
+        actor_request_sha256=source_anchor.actor_request_sha256,
+        constraint_binding=source_anchor.constraint_binding,
+        case_lease=production_preflight_module._restore_case_execution_lease(
+            source_anchor.case_execution_lease
+        ),
+        transport_binding=source_anchor.transport_binding,
+        bridge=cast(
+            Any,
+            SimpleNamespace(
+                evidence_packet_sha256=source_anchor.coordinator_evidence_packet_sha256
+            ),
+        ),
+        r22_receipt_start_index=0,
+        r22_receipt_failure_code=expected_code,
+    )
+    anchor = owner_policy._history_attempt_request_anchors[source_anchor.logical_call_id]
+    proof = live_history_policy_attempt_request_proof_projection(
+        anchor,
+        attempt_receipt=attempt,
+    )
+    validate_live_history_policy_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=attempt,
+        **_expected_request_proof_roots(attempt, cast(JsonValue, proof)),
+    )
+    assert production_audit_module._history_request_proof_detail_projection(
+        anchor,
+        (attempt,),
+        source_anchor.coordinator_evidence_packet_sha256,
+    ) == cast(JsonValue, proof)
+    assert proof["r22_policy_receipt"] is None
+    assert proof["r22_receipt_state"] == "R22_RECEIPT_ABSENT_POST_DISPATCH"
+    assert proof["r22_receipt_failure_code"] == expected_code
+
+
+def test_completed_history_attempt_without_receipt_or_publication_failure_is_rejected(
+    tmp_path: Path,
+) -> None:
+    attempt, source_anchor, source = _complete_live_history_request_proof(tmp_path)
+    proof = cast(dict[str, JsonValue], deepcopy(source))
+    proof["r22_policy_receipt"] = None
+    proof["r22_policy_receipt_sha256"] = None
+    proof["r22_receipt_state"] = "R22_RECEIPT_ABSENT_POST_DISPATCH"
+    proof["r22_receipt_failure_code"] = None
+    with pytest.raises(
+        R24ContractError,
+        match="(?:INVALID_HISTORY_REQUEST_PROOF|HISTORY_REQUEST_PROOF_MISMATCH)",
+    ):
+        validate_live_history_policy_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            attempt_receipt=attempt,
+            **_expected_request_proof_roots(attempt, cast(JsonValue, proof)),
+        )
+
+
+def test_durable_history_cost_reservation_failure_retains_complete_authority(
+    tmp_path: Path,
+) -> None:
+    attempt, _anchor, source = _complete_live_history_request_proof(tmp_path)
+    proof = cast(dict[str, JsonValue], deepcopy(source))
+    receipt = live_attempt_receipt_projection(attempt)
+    authority = cast(dict[str, JsonValue], proof["attempt_authority"])
+    deadline = cast(dict[str, JsonValue], proof["deadline_binding"])
+    constraint = cast(dict[str, JsonValue], proof["constraint_binding"])
+    lease = cast(dict[str, JsonValue], proof["case_execution_lease"])
+    pricing = cast(dict[str, JsonValue], proof["pricing"])
+    transport = cast(dict[str, JsonValue], proof["transport_binding"])
+    pricing["input_usd_micros_per_million_tokens"] = 1_000_000
+    pricing["output_usd_micros_per_million_tokens"] = 2_000_000
+    pricing_sha256 = canonical_sha256(cast(JsonValue, pricing))
+    lease["pricing_binding_sha256"] = pricing_sha256
+    transport["pricing_binding_sha256"] = pricing_sha256
+    authority["pricing_binding_sha256"] = pricing_sha256
+    receipt["pricing_binding_sha256"] = pricing_sha256
+    constraint["attempt_max_cost_usd_micros"] = 1
+    constraint["case_max_cost_usd_micros"] = cast(int, constraint["max_openai_calls"])
+    deadline["max_cost_usd_micros"] = 1
+    authority["max_cost_usd_micros"] = 1
+    lease_sha256 = canonical_sha256(cast(JsonValue, lease))
+    deadline["case_execution_lease_sha256"] = lease_sha256
+    authority["case_execution_lease_sha256"] = lease_sha256
+    receipt["case_execution_lease_sha256"] = lease_sha256
+    transport["case_execution_lease_sha256"] = lease_sha256
+    transport_sha256 = canonical_sha256(cast(JsonValue, transport))
+    authority["transport_binding_sha256"] = transport_sha256
+    receipt["transport_binding_sha256"] = transport_sha256
+    receipt.update(
+        {
+            "status": "FAILED",
+            "dispatch_count": 0,
+            "response_envelope_sha256": None,
+            "requested_model": None,
+            "returned_model": None,
+            "input_tokens": None,
+            "cached_input_tokens": None,
+            "output_tokens": None,
+            "total_tokens": None,
+            "cost_status": "EXACT",
+            "cost_usd_micros": 0,
+            "cancellation_requested": False,
+            "termination": "NONE",
+            "worker_pid": None,
+            "worker_exit_code": None,
+            "worker_reaped": False,
+            "late_output_detected": False,
+            "failure_code": "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
+        }
+    )
+    proof["attempt_status"] = "FAILED"
+    proof["attempt_dispatch_count"] = 0
+    proof["response_envelope"] = None
+    proof["r22_policy_receipt"] = None
+    proof["r22_policy_receipt_sha256"] = None
+    proof["r22_receipt_state"] = "R22_RECEIPT_ABSENT_PRE_DISPATCH"
+    proof["attempt_authority_sha256"] = canonical_sha256(cast(JsonValue, authority))
+    receipt["authority_sha256"] = proof["attempt_authority_sha256"]
+    proof["attempt_receipt_sha256"] = canonical_sha256(cast(JsonValue, receipt))
+
+    validate_live_history_policy_request_proof_projection_v1(
+        cast(JsonValue, proof),
+        attempt_receipt=receipt,
+        **_expected_request_proof_roots(receipt, cast(JsonValue, proof)),
+    )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "authority_token_one_request_8192",
+        "authority_cost",
+        "deadline_requested",
+        "deadline_case",
+        "deadline_effective",
+        "constraint_issued_bool",
+        "lease_actor_index_bool",
+        "stage_timeout_bool",
+        "pricing_input_rate_bool",
+        "transport_timeout_bool",
+        "request_store",
+        "packet_actor_request",
+        "lease_stage_set_rehashed",
+        "receipt_exact_cost_rehashed",
+        "all_owner_roots_rehashed",
+    ),
+)
+def test_durable_history_policy_request_proof_rejects_authority_and_source_drift(
+    drift: str,
+    tmp_path: Path,
+) -> None:
+    attempt, _anchor, source = _complete_live_history_request_proof(tmp_path)
+    proof = cast(dict[str, JsonValue], deepcopy(source))
+    receipt = live_attempt_receipt_projection(attempt)
+    authority = cast(dict[str, JsonValue], proof["attempt_authority"])
+    deadline = cast(dict[str, JsonValue], proof["deadline_binding"])
+    constraint = cast(dict[str, JsonValue], proof["constraint_binding"])
+    lease = cast(dict[str, JsonValue], proof["case_execution_lease"])
+    stage = cast(dict[str, JsonValue], proof["openai_stage"])
+    pricing = cast(dict[str, JsonValue], proof["pricing"])
+    transport = cast(dict[str, JsonValue], proof["transport_binding"])
+    request = cast(dict[str, JsonValue], proof["provider_request"])
+
+    if drift == "authority_token_one_request_8192":
+        authority["max_output_tokens"] = 1
+        request["max_output_tokens"] = 8192
+        request_sha256 = canonical_sha256(cast(JsonValue, request))
+        authority["request_sha256"] = request_sha256
+        receipt["request_sha256"] = request_sha256
+        proof["provider_request_sha256"] = request_sha256
+        proof["provider_request_byte_count"] = len(canonical_json_bytes(cast(JsonValue, request)))
+    elif drift == "authority_cost":
+        authority["max_cost_usd_micros"] = cast(int, authority["max_cost_usd_micros"]) - 1
+    elif drift == "deadline_requested":
+        deadline["requested_call_deadline_monotonic_ns"] = (
+            cast(int, deadline["requested_call_deadline_monotonic_ns"]) + 1
+        )
+    elif drift == "deadline_case":
+        deadline["case_execution_deadline_monotonic_ns"] = (
+            cast(int, deadline["case_execution_deadline_monotonic_ns"]) + 1
+        )
+    elif drift == "deadline_effective":
+        deadline["effective_deadline_monotonic_ns"] = (
+            cast(int, deadline["effective_deadline_monotonic_ns"]) + 1
+        )
+    elif drift == "constraint_issued_bool":
+        constraint["issued_monotonic_ns"] = True
+    elif drift == "lease_actor_index_bool":
+        lease["actor_call_index"] = True
+    elif drift == "stage_timeout_bool":
+        stage["timeout_ms"] = True
+    elif drift == "pricing_input_rate_bool":
+        pricing["input_usd_micros_per_million_tokens"] = True
+    elif drift == "transport_timeout_bool":
+        transport["transport_timeout_ns"] = True
+    elif drift == "request_store":
+        request["store"] = True
+    elif drift == "packet_actor_request":
+        messages = cast(list[JsonValue], request["input"])
+        content = cast(list[JsonValue], cast(dict[str, JsonValue], messages[0])["content"])
+        packet_part = cast(dict[str, JsonValue], content[0])
+        packet = cast(dict[str, JsonValue], json.loads(cast(str, packet_part["text"])))
+        packet["raw_request_sha256"] = _sha("wrong-history-actor-request")
+        packet_part["text"] = canonical_json_bytes(cast(JsonValue, packet)).decode()
+    elif drift == "lease_stage_set_rehashed":
+        lease["openai_stage_set_sha256"] = _sha("different-synchronized-stage-set")
+        lease_sha256 = canonical_sha256(cast(JsonValue, lease))
+        deadline["case_execution_lease_sha256"] = lease_sha256
+        authority["case_execution_lease_sha256"] = lease_sha256
+        receipt["case_execution_lease_sha256"] = lease_sha256
+        transport["case_execution_lease_sha256"] = lease_sha256
+        transport_sha256 = canonical_sha256(cast(JsonValue, transport))
+        authority["transport_binding_sha256"] = transport_sha256
+        receipt["transport_binding_sha256"] = transport_sha256
+    elif drift == "receipt_exact_cost_rehashed":
+        receipt["cost_usd_micros"] = 1
+    elif drift == "all_owner_roots_rehashed":
+        manifest_sha256 = _sha("rewritten-history-manifest")
+        preflight_sha256 = _sha("rewritten-history-preflight")
+        lease["manifest_sha256"] = manifest_sha256
+        lease["preflight_report_sha256"] = preflight_sha256
+        lease_sha256 = canonical_sha256(cast(JsonValue, lease))
+        deadline["case_execution_lease_sha256"] = lease_sha256
+        transport["authority_manifest_sha256"] = manifest_sha256
+        transport["preflight_report_sha256"] = preflight_sha256
+        transport["case_execution_lease_sha256"] = lease_sha256
+        authority["manifest_sha256"] = manifest_sha256
+        authority["preflight_sha256"] = preflight_sha256
+        authority["case_execution_lease_sha256"] = lease_sha256
+        receipt["manifest_sha256"] = manifest_sha256
+        receipt["preflight_sha256"] = preflight_sha256
+        receipt["case_execution_lease_sha256"] = lease_sha256
+        transport_sha256 = canonical_sha256(cast(JsonValue, transport))
+        authority["transport_binding_sha256"] = transport_sha256
+        receipt["transport_binding_sha256"] = transport_sha256
+    else:
+        raise AssertionError(f"unknown drift: {drift}")
+
+    proof["attempt_authority_sha256"] = canonical_sha256(cast(JsonValue, authority))
+    receipt["authority_sha256"] = proof["attempt_authority_sha256"]
+    proof["attempt_receipt_sha256"] = canonical_sha256(cast(JsonValue, receipt))
+    with pytest.raises(
+        R24ContractError,
+        match="(?:INVALID_HISTORY_REQUEST_PROOF|HISTORY_REQUEST_PROOF_MISMATCH)",
+    ):
+        validate_live_history_policy_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            attempt_receipt=receipt,
+            **_expected_request_proof_roots(attempt, cast(JsonValue, proof)),
+        )
+
+
 def test_live_rubric_request_anchor_cannot_be_publicly_fabricated(tmp_path: Path) -> None:
-    _, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
     trusted = anchors[0]
     with pytest.raises(LiveRubricError, match="UNTRUSTED_REQUEST_ANCHOR"):
         LiveRubricCallTrustAnchorV1(
@@ -891,6 +2559,12 @@ def test_live_rubric_request_anchor_cannot_be_publicly_fabricated(tmp_path: Path
             logical_call_id=trusted_attempt.logical_call_id,
             attempt_id=trusted_attempt.attempt_id,
             attempt_order=trusted_attempt.attempt_order,
+            attempt_authority=trusted_attempt.attempt_authority,
+            constraint_binding=trusted_attempt.constraint_binding,
+            case_execution_lease=trusted_attempt.case_execution_lease,
+            openai_stage=trusted_attempt.openai_stage,
+            pricing=trusted_attempt.pricing,
+            transport_binding=trusted_attempt.transport_binding,
             collector_stimulus=trusted_attempt.collector_stimulus,
             current_image=trusted_attempt.current_image,
             provider_input=trusted_attempt.provider_input,
@@ -933,7 +2607,10 @@ def test_durable_live_rubric_request_proof_uses_type_sensitive_task_binding(
             logical_call_id=anchors[0].logical_call_id,
         )
     with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
-        validate_live_rubric_request_proof_projection_v1(cast(JsonValue, proof))
+        validate_live_rubric_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            **_expected_request_proof_roots(attempts[0], cast(JsonValue, proof)),
+        )
 
 
 def test_durable_live_rubric_request_proof_rejects_boolean_byte_count(tmp_path: Path) -> None:
@@ -945,7 +2622,10 @@ def test_durable_live_rubric_request_proof_rejects_boolean_byte_count(tmp_path: 
     )
     proof["provider_request_byte_count"] = True
     with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
-        validate_live_rubric_request_proof_projection_v1(cast(JsonValue, proof))
+        validate_live_rubric_request_proof_projection_v1(
+            cast(JsonValue, proof),
+            **_expected_request_proof_roots(attempts[0], cast(JsonValue, proof)),
+        )
 
 
 def test_durable_live_rubric_request_proof_parser_is_not_limited_to_provider_output() -> None:
@@ -953,7 +2633,10 @@ def test_durable_live_rubric_request_proof_parser_is_not_limited_to_provider_out
     # provider-output cap because it contains both semantic and request preimages.
     oversized_for_output: JsonValue = {"padding": "x" * (8 * 1024 * 1024 + 1)}
     with pytest.raises(LiveRubricError) as rejected:
-        validate_live_rubric_request_proof_projection_v1(oversized_for_output)
+        validate_live_rubric_request_proof_projection_v1(
+            oversized_for_output,
+            **_expected_request_proof_roots(None, oversized_for_output),
+        )
     assert "byte count is outside bounds" not in str(rejected.value)
 
 
@@ -1053,6 +2736,7 @@ def test_incomplete_fallback_keeps_generate_proof_when_track_attempt_fails(
             proof,
             attempt_receipt=attempt,
             expected_attempt_order=index,
+            **_expected_request_proof_roots(attempt, cast(JsonValue, proof)),
         )
 
     tampered_attempts = (
@@ -1165,6 +2849,16 @@ def _patch_incomplete_audit_policy(
         "failure_for_call",
         lambda _self, _logical_call_id: "RUBRIC_TRACK_ERROR",
     )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "history_policy_attempt_request_anchor_for_call",
+        lambda _self, _logical_call_id: None,
+    )
+    monkeypatch.setattr(
+        OwnerAuthorizedLivePerCallPolicyV1,
+        "history_evidence_packet_sha256_for_call",
+        lambda _self, _logical_call_id: None,
+    )
 
     def no_binding(_self: object, _logical_call_id: str) -> object:
         raise R24ContractError(
@@ -1175,9 +2869,18 @@ def _patch_incomplete_audit_policy(
     return policy
 
 
-def test_generic_fallback_audit_retains_failed_track_attempt_request_proof(
+@pytest.mark.parametrize(
+    ("terminal_status", "terminal_failure_code"),
+    (
+        (LiveAttemptStatusV1.FAILED, "INJECTED_TRACK_PROVIDER_FAILURE"),
+        (LiveAttemptStatusV1.CANCELLED_POST_DISPATCH, None),
+    ),
+)
+def test_generic_fallback_audit_persists_unknown_cost_proof_before_fatal_block(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    terminal_status: LiveAttemptStatusV1,
+    terminal_failure_code: str | None,
 ) -> None:
     extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
         tmp_path
@@ -1189,7 +2892,7 @@ def test_generic_fallback_audit_retains_failed_track_attempt_request_proof(
     failed_track = replace(
         attempts[1],
         actor_request_sha256=raw_sha256,
-        status=LiveAttemptStatusV1.FAILED,
+        status=terminal_status,
         response_envelope_sha256=None,
         requested_model=None,
         returned_model=None,
@@ -1199,13 +2902,17 @@ def test_generic_fallback_audit_retains_failed_track_attempt_request_proof(
         total_tokens=None,
         cost_status=LiveAttemptCostStatusV1.UNKNOWN,
         cost_usd_micros=None,
-        failure_code="INJECTED_TRACK_PROVIDER_FAILURE",
+        cancellation_requested=(terminal_status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH),
+        termination=(
+            LiveAttemptTerminationV1.TERM
+            if terminal_status is LiveAttemptStatusV1.CANCELLED_POST_DISPATCH
+            else LiveAttemptTerminationV1.NONE
+        ),
+        failure_code=terminal_failure_code,
     )
-    incomplete_attempts = (completed_generate, failed_track)
-    completed_call = replace(
-        receipts[0],
-        attempt_receipt_sha256=live_attempt_receipt_sha256(completed_generate),
-    )
+    incomplete_attempts = _rebind_attempt_authorities((completed_generate, failed_track), anchors)
+    completed_generate, failed_track = incomplete_attempts
+    completed_call = _rebind_call_receipt_to_attempt(receipts[0], completed_generate)
     attempt_anchors = _attempt_request_anchors(incomplete_attempts, anchors)
     collector_root = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
     packet_root = _anchored_tracking_packet_sha256(anchors)
@@ -1251,21 +2958,39 @@ def test_generic_fallback_audit_retains_failed_track_attempt_request_proof(
     )
     sink = MemoryProductionRuntimeAuditSinkV1()
     audit = ProductionRuntimeAuditV1(policy=policy, sink=sink)
-    audit.begin_fallback_pre_provider(
-        logical_call_id=binding.logical_call_id,
-        host_id="mobileworld.qwen3vl.actor",
-        raw_request=raw,
-        result=result,
-        fallback_check="r2_4_failed_track_request_proof",
-        pre_provider_total_ns=1,
-    )
-    pending = audit._pending[binding.logical_call_id]
-    stage = cast(dict[str, JsonValue], pending.pre_provider.restricted_stage_projection)
+    with pytest.raises(
+        production_audit_module.ProductionRuntimeAuditError,
+        match="RUN_FATAL_LIVE_COST_ACCOUNTING_UNKNOWN",
+    ):
+        audit.begin_fallback_pre_provider(
+            logical_call_id=binding.logical_call_id,
+            host_id="mobileworld.qwen3vl.actor",
+            raw_request=raw,
+            result=result,
+            fallback_check="r2_4_unknown_cost_request_proof",
+            pre_provider_total_ns=1,
+        )
+
+    assert binding.logical_call_id not in audit._pending
+    fatal = audit.run_fatal_latch.state
+    assert fatal is not None
+    assert fatal.failure_code == "LIVE_COST_ACCOUNTING_UNKNOWN"
+    assert fatal.attempt_receipt_sha256 == live_attempt_receipt_sha256(failed_track)
+    terminal = audit.latest_failure_receipt
+    assert terminal is not None
+    assert terminal.provider_attempt_count == 0
+    assert terminal.live_openai_calls == sum(item.dispatch_count for item in incomplete_attempts)
+    (failure_detail,) = sink.failure_details
+    failure = cast(dict[str, JsonValue], failure_detail)
+    assert failure["actor_provider_attempts"] == []
+    pre = cast(dict[str, JsonValue], failure["pre_provider"])
+    stage = cast(dict[str, JsonValue], pre["restricted_stage_projection"])
+    assert stage["r2_4_history_policy_request_proof"] is None
     persisted_attempts = cast(list[dict[str, JsonValue]], stage["live_attempt_receipts"])
     persisted_calls = cast(list[dict[str, JsonValue]], stage["r2_4_rubric_call_receipts"])
     persisted_proofs = cast(list[JsonValue], stage["r2_4_rubric_request_proofs"])
     assert len(persisted_attempts) == 2
-    assert persisted_attempts[1]["status"] == "FAILED"
+    assert persisted_attempts[1]["status"] == terminal_status.value
     assert len(persisted_calls) == 1
     assert len(persisted_proofs) == 2
     for index, (proof, attempt) in enumerate(
@@ -1275,18 +3000,19 @@ def test_generic_fallback_audit_retains_failed_track_attempt_request_proof(
             proof,
             attempt_receipt=attempt,
             expected_attempt_order=index,
+            **_expected_request_proof_roots(attempt, proof),
         )
-    invalid_receipt = deepcopy(persisted_attempts[1])
-    invalid_receipt["worker_reaped"] = False
-    invalid_proof = cast(dict[str, JsonValue], deepcopy(persisted_proofs[1]))
-    invalid_proof["attempt_receipt_sha256"] = canonical_sha256(cast(JsonValue, invalid_receipt))
-    with pytest.raises(LiveRubricError, match="INVALID_REQUEST_PROOF"):
-        validate_live_rubric_request_proof_projection_v1(
-            cast(JsonValue, invalid_proof),
-            attempt_receipt=invalid_receipt,
-            expected_attempt_order=2,
+    with pytest.raises(
+        production_audit_module.ProductionRuntimeAuditError,
+        match="RUN_FATAL_LIVE_COST_ACCOUNTING_UNKNOWN",
+    ):
+        audit.bind_actor_sdk_arguments(
+            logical_call_id=binding.logical_call_id,
+            result=result,
+            sdk_arguments=raw,
+            collector_request_locator={},
+            stream=False,
         )
-    pending.transaction.abort()
 
 
 def test_begin_tu_fallback_commits_request_proof_before_run_fatal_rejection(
@@ -1319,7 +3045,8 @@ def test_begin_tu_fallback_commits_request_proof_before_run_fatal_rejection(
         worker_reaped=False,
         failure_code="TERMINATION_UNCONFIRMED",
     )
-    incomplete_attempts = (tu_generate,)
+    incomplete_attempts = _rebind_attempt_authorities((tu_generate,), (anchors[0],))
+    (tu_generate,) = incomplete_attempts
     request_anchors = _attempt_request_anchors(
         incomplete_attempts,
         (anchors[0],),
@@ -1405,6 +3132,7 @@ def test_begin_tu_fallback_commits_request_proof_before_run_fatal_rejection(
             proof,
             attempt_receipt=attempt,
             expected_attempt_order=index,
+            **_expected_request_proof_roots(attempt, proof),
         )
     with pytest.raises(
         production_audit_module.ProductionRuntimeAuditError,
@@ -1419,12 +3147,13 @@ def test_begin_tu_fallback_commits_request_proof_before_run_fatal_rejection(
         )
 
 
-def test_production_port_registers_sink_confirmed_begin_tu_request_anchor(
+def test_production_port_registers_sink_confirmed_formed_begin_request_anchor(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
+    extension, attempts, _, anchors, _ = _complete_live_rubric_cross_binding_proof(tmp_path)
     source = anchors[0]
+    source_attempt = _attempt_request_anchors((attempts[0],), (anchors[0],))[0]
     tu = replace(
         attempts[0],
         status=LiveAttemptStatusV1.TERMINATION_UNCONFIRMED,
@@ -1447,7 +3176,12 @@ def test_production_port_registers_sink_confirmed_begin_tu_request_anchor(
     runner = object.__new__(ProductionOpenAIAttemptRunnerV1)
     runner._sink = cast(
         Any,
-        SimpleNamespace(receipt_for=lambda attempt_id: tu if attempt_id == tu.attempt_id else None),
+        SimpleNamespace(
+            receipt_for=lambda attempt_id: (tu if attempt_id == tu.attempt_id else None),
+            authority_for=lambda attempt_id: (
+                source_attempt.attempt_authority if attempt_id == tu.attempt_id else None
+            ),
+        ),
     )
     runner._factory = cast(
         Any,
@@ -1457,22 +3191,27 @@ def test_production_port_registers_sink_confirmed_begin_tu_request_anchor(
             openai_stage_sha256=lambda _role: tu.stage_sha256,
         ),
     )
-    runner._stage = cast(Any, SimpleNamespace(role="RUBRIC"))
+    runner._stage = source_attempt.openai_stage
+    runner._pricing = source_attempt.pricing
     runner._pricing_sha256 = tu.pricing_binding_sha256
     port = object.__new__(rubric_live_module.ProductionRubricProviderPortV1)
     rubric_live_module._BaseRubricProviderPortV1.__init__(port)
     port._runner = runner
     current_image = anchors[1].current_image
     assert current_image is not None
+    case_lease = production_preflight_module._restore_case_execution_lease(
+        source_attempt.case_execution_lease
+    )
     context = rubric_live_module._RubricCallContextV1(
         logical_call_id=tu.logical_call_id,
         task_run_id=source.task_run_id,
         actor_request_sha256=tu.actor_request_sha256,
-        deadline_monotonic_ns=1,
-        max_cost_usd_micros=1,
+        deadline_monotonic_ns=(source_attempt.constraint_binding.effective_deadline_monotonic_ns),
+        max_cost_usd_micros=(source_attempt.constraint_binding.attempt_max_cost_usd_micros),
+        constraint_binding=source_attempt.constraint_binding,
         stimulus=source.collector_stimulus,
         image=current_image,
-        case_lease=cast(Any, object()),
+        case_lease=case_lease,
         execution_control=cast(
             Any,
             SimpleNamespace(
@@ -1487,11 +3226,12 @@ def test_production_port_registers_sink_confirmed_begin_tu_request_anchor(
         lambda _lease: tu.case_execution_lease_sha256,
     )
 
-    assert port._register_begin_termination_unconfirmed_request_anchor(
+    assert port._register_formed_begin_failure_request_anchor(
         operation=LiveRubricOperationV1.GENERATE,
         context=context,
         attempt_id=tu.attempt_id,
-        transport_binding_sha256=tu.transport_binding_sha256,
+        transport_binding=source_attempt.transport_binding,
+        backend_extension=extension,
         provider_input=source.provider_input,
         provider_request=source.provider_request,
     )
@@ -1529,6 +3269,7 @@ def test_begin_tu_commit_fault_recovery_retains_independent_request_proof(
         worker_reaped=False,
         failure_code="TERMINATION_UNCONFIRMED",
     )
+    (tu_generate,) = _rebind_attempt_authorities((tu_generate,), (anchors[0],))
     policy = _patch_incomplete_audit_policy(
         monkeypatch,
         attempts=(tu_generate,),
@@ -1625,6 +3366,7 @@ def test_begin_tu_commit_fault_recovery_retains_independent_request_proof(
         persisted_proofs[0],
         attempt_receipt=persisted_attempts[0],
         expected_attempt_order=1,
+        **_expected_request_proof_roots(persisted_attempts[0], persisted_proofs[0]),
     )
     assert len(attempted_failures) == 1
     assert aborts == [True]
@@ -1772,7 +3514,7 @@ def test_incomplete_track_attempt_request_proof_covers_cancellation_and_tu(
             )
 
 
-def test_begin_failure_before_callable_is_the_only_unanchored_attempt_boundary(
+def test_formed_begin_failure_cannot_be_unanchored(
     tmp_path: Path,
 ) -> None:
     extension, attempts, _, anchors, binding = _complete_live_rubric_cross_binding_proof(tmp_path)
@@ -1796,32 +3538,34 @@ def test_begin_failure_before_callable_is_the_only_unanchored_attempt_boundary(
         worker_reaped=False,
         failure_code="ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
     )
-    validate_live_rubric_cross_bindings_v1(
-        logical_call_id=binding.logical_call_id,
-        actor_request_sha256=binding.actor_request_sha256,
-        attempts=(begin_failure,),
-        rubric_attempt_request_anchors=(),
-        rubric_call_receipts=(),
-        rubric_call_trust_anchors=(),
-        expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
-            anchors[0].collector_stimulus
-        ),
-        expected_tracking_packet_sha256=None,
-        rubric_backend_extension=extension,
-        binding=None,
-        actor_call_index=1,
-        expect_history_policy=False,
-        allow_incomplete=True,
-    )
-    assert (
+    with pytest.raises(R24ContractError, match="formed rubric attempt lacks"):
+        validate_live_rubric_cross_bindings_v1(
+            logical_call_id=binding.logical_call_id,
+            actor_request_sha256=binding.actor_request_sha256,
+            attempts=(begin_failure,),
+            rubric_attempt_request_anchors=(),
+            rubric_call_receipts=(),
+            rubric_call_trust_anchors=(),
+            expected_collector_stimulus_sha256=rubric_evidence_snapshot_sha256(
+                anchors[0].collector_stimulus
+            ),
+            expected_tracking_packet_sha256=None,
+            rubric_backend_extension=extension,
+            binding=None,
+            actor_call_index=1,
+            expect_history_policy=False,
+            allow_incomplete=True,
+        )
+    with pytest.raises(
+        production_audit_module.ProductionRuntimeAuditError,
+        match="has no durable request proof",
+    ):
         production_audit_module._rubric_request_proof_detail_projection(
             (),
             (begin_failure,),
             extension,
             None,
         )
-        == []
-    )
 
 
 def test_failed_generate_attempt_request_hash_rewrite_is_rejected(tmp_path: Path) -> None:
@@ -1897,28 +3641,11 @@ def test_live_rubric_trust_anchors_reject_rehashed_receipt_graphs(
     )
     collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
     tracking_packet_root = _anchored_tracking_packet_sha256(anchors)
-    expect_history_policy = proof_path == "success"
+    # This test isolates the rubric trust-anchor graph.  Complete history-attempt
+    # proofs are exercised separately and may not be represented by a synthetic
+    # hash-only attempt now that every formed HISTORY_POLICY attempt is closed.
+    expect_history_policy = False
     allow_incomplete = proof_path == "generic_fallback"
-    if expect_history_policy:
-        history_attempt = replace(
-            attempts[-1],
-            attempt_id="r24-cross-binding-history-attempt",
-            role=LiveAttemptRoleV1.HISTORY_POLICY,
-            authority_sha256=_sha("cross-binding-history-authority"),
-            request_sha256=_sha("cross-binding-history-request"),
-            transport_binding_sha256=_sha("cross-binding-history-transport"),
-            response_envelope_sha256=_sha("cross-binding-history-envelope"),
-            cost_usd_micros=4,
-        )
-        attempts = (*attempts, history_attempt)
-        binding = replace(
-            binding,
-            source_transport_binding_sha256=history_attempt.transport_binding_sha256,
-            history_policy_attempt_receipt_sha256=live_attempt_receipt_sha256(history_attempt),
-            output_sha256=_sha("cross-binding-live-output"),
-            openai_calls=3,
-            cost_usd_micros=7,
-        )
     selected_binding = None if allow_incomplete else binding
     validate_live_rubric_cross_bindings_v1(
         logical_call_id=binding.logical_call_id,
@@ -2070,6 +3797,7 @@ def test_live_rubric_cross_binding_rejects_nonprefix_sequences(
     extension, attempts, receipts, anchors, binding = _complete_live_rubric_cross_binding_proof(
         tmp_path
     )
+    original_request_anchors = _attempt_request_anchors(attempts, anchors)
     collector_stimulus_sha256 = rubric_evidence_snapshot_sha256(anchors[0].collector_stimulus)
     tracking_packet_root = _anchored_tracking_packet_sha256(anchors)
     history_attempt = replace(
@@ -2119,7 +3847,7 @@ def test_live_rubric_cross_binding_rejects_nonprefix_sequences(
             logical_call_id=binding.logical_call_id,
             actor_request_sha256=binding.actor_request_sha256,
             attempts=selected_attempts,
-            rubric_attempt_request_anchors=_attempt_request_anchors(selected_attempts, anchors),
+            rubric_attempt_request_anchors=original_request_anchors,
             rubric_call_receipts=receipts,
             rubric_call_trust_anchors=anchors,
             expected_collector_stimulus_sha256=collector_stimulus_sha256,
@@ -2619,7 +4347,7 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 output_tokens=1,
                 total_tokens=3,
                 cost_status=LiveAttemptCostStatusV1.EXACT,
-                cost_usd_micros=1,
+                cost_usd_micros=0,
                 cancellation_requested=False,
                 termination=LiveAttemptTerminationV1.NONE,
                 worker_pid=10_000 + index,
@@ -2709,6 +4437,12 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
                 strict=True,
             )
         )
+        attempts = _rebind_attempt_authorities(attempts, rubric_call_trust_anchors)
+        rubric_call_receipts = tuple(
+            _rebind_call_receipt_to_attempt(receipt, attempt)
+            for receipt, attempt in zip(rubric_call_receipts, attempts, strict=True)
+        )
+        attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
         rubric_attempt_request_anchors = _attempt_request_anchors(
             attempts, rubric_call_trust_anchors
         )
@@ -2724,17 +4458,20 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
             execution_authority_sha256=cast(str, common["manifest_sha256"]),
             source_transport_descriptor_sha256=_sha("history-descriptor"),
             source_transport_binding_sha256=None,
-            case_execution_lease_sha256=cast(str, common["case_execution_lease_sha256"]),
+            case_execution_lease_sha256=attempts[0].case_execution_lease_sha256,
             preflight_report_sha256=cast(str, common["preflight_sha256"]),
-            factory_binding_sha256=_sha("factory-binding"),
-            pricing_binding_sha256=cast(str, common["pricing_binding_sha256"]),
+            factory_binding_sha256=cast(
+                str,
+                rubric_attempt_request_anchors[0].case_execution_lease["factory_binding_sha256"],
+            ),
+            pricing_binding_sha256=attempts[0].pricing_binding_sha256,
             rubric_backend_extension_descriptor_sha256=(rubric_backend_extension.sha256),
             rubric_attempt_receipt_sha256s=attempt_hashes,
             rubric_call_receipt_sha256s=rubric_call_hashes,
             history_policy_attempt_receipt_sha256=None,
             output_sha256=None,
             openai_calls=2,
-            cost_usd_micros=2,
+            cost_usd_micros=0,
         )
         policy = object.__new__(OwnerAuthorizedLivePerCallPolicyV1)
         policy._policy_id = policy_id
@@ -2819,6 +4556,16 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
         monkeypatch.setattr(
             OwnerAuthorizedLivePerCallPolicyV1,
             "failure_for_call",
+            lambda _self, _logical_call_id: None,
+        )
+        monkeypatch.setattr(
+            OwnerAuthorizedLivePerCallPolicyV1,
+            "history_policy_attempt_request_anchor_for_call",
+            lambda _self, _logical_call_id: None,
+        )
+        monkeypatch.setattr(
+            OwnerAuthorizedLivePerCallPolicyV1,
+            "history_evidence_packet_sha256_for_call",
             lambda _self, _logical_call_id: None,
         )
 
@@ -2938,6 +4685,7 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
     assert stage["rubric_generation_result"] is not None
     assert stage["rubric_result"] is not None
     assert stage["path_relevance_output"] is not None
+    assert stage["r2_4_history_policy_request_proof"] is None
     assert [item["role"] for item in stage["live_attempt_receipts"]] == [
         "RUBRIC",
         "RUBRIC",
@@ -2960,6 +4708,7 @@ def test_no_history_terminal_audit_persists_rubric_preimages_and_retry_stability
             request_proof,
             attempt_receipt=attempt_projection,
             expected_attempt_order=index,
+            **_expected_request_proof_roots(attempt_projection, request_proof),
         )
     assert cast(dict[str, JsonValue], request_proofs[0])["tracking_packet_sha256"] is None
     assert (
