@@ -264,10 +264,12 @@ def _install_runner_fakes(
     pricing_sha = live_attempt_pricing_sha256(pricing)
     report = SimpleNamespace(eligible_for_post_preflight_factory=True)
     calls: list[str] = []
+    fixture_root = Path(getattr(manifest, "smoke_plans")[0].cases[0].request_fixture_path).parent
     runtime = SimpleNamespace(
         resource_topology=ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED,
         qwen_gpu_index=5,
         mai_gpu_index=5,
+        authorized_pilot_input_root=str(fixture_root),
     )
     monkeypatch.setattr(
         module, "load_owner_authorized_smoke_authority_v1", lambda *a, **k: manifest
@@ -387,6 +389,161 @@ def test_smoke_runner_defaults_to_dry_run_and_has_no_pilot_surface(
     assert output["dry_run"] is True
     assert output["pilot_reachable"] is False
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["sibling_root", "hardlink_outside", "root_symlink", "intermediate_symlink", "leaf_symlink"],
+)
+def test_smoke_runner_rejects_unbound_fixture_path_before_preflight_or_resource_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fault: str,
+) -> None:
+    manifest = _authorized_manifest(tmp_path)
+    module = _load_script("run_r2_4_smoke")
+    _, manifest_sha, runtime_sha, pricing_sha = _install_runner_fakes(
+        module, monkeypatch, manifest, execute=False
+    )
+    fixture_root = tmp_path / "fixtures"
+    authorized_root = fixture_root
+    fixture = fixture_root / "qwen-off.json"
+    if fault == "sibling_root":
+        authorized_root = tmp_path / "authorized-fixtures"
+        authorized_root.mkdir()
+    elif fault == "hardlink_outside":
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        outside_fixture = outside / fixture.name
+        fixture.rename(outside_fixture)
+        os.link(outside_fixture, fixture)
+    elif fault == "root_symlink":
+        authorized_root = tmp_path / "fixture-root-alias"
+        authorized_root.symlink_to(fixture_root, target_is_directory=True)
+    elif fault == "intermediate_symlink":
+        stored_fixtures = tmp_path / "stored-fixtures"
+        fixture_root.rename(stored_fixtures)
+        fixture_root.symlink_to(stored_fixtures, target_is_directory=True)
+        authorized_root = tmp_path
+    else:
+        fixture.unlink()
+        fixture.symlink_to("qwen-shadow.json")
+    runtime = SimpleNamespace(
+        resource_topology=ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED,
+        qwen_gpu_index=5,
+        mai_gpu_index=5,
+        authorized_pilot_input_root=str(authorized_root),
+    )
+    monkeypatch.setattr(module, "parse_production_runtime_config", lambda value: runtime)
+    forbidden_calls: list[str] = []
+
+    def forbid(name: str):
+        def forbidden(*args: object, **kwargs: object) -> object:
+            forbidden_calls.append(name)
+            raise AssertionError(f"unexpected {name}")
+
+        return forbidden
+
+    monkeypatch.setattr(
+        module,
+        "run_r24_smoke_production_preflight_v1",
+        forbid("preflight"),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_production_resource_lifecycle_adapter_v1",
+        forbid("resource"),
+    )
+    monkeypatch.setattr(
+        module,
+        "ExternalProductionRuntimeAuditSinkV1",
+        forbid("audit"),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_production_driver_v1",
+        forbid("driver"),
+    )
+    now = datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    result = module.main(
+        [
+            "--authority-manifest",
+            str(tmp_path / "owner.json"),
+            "--confirm-manifest-sha256",
+            manifest_sha,
+            "--runtime-config",
+            str(tmp_path / "runtime.json"),
+            "--confirm-runtime-config-sha256",
+            runtime_sha,
+            "--pricing",
+            str(tmp_path / "pricing.json"),
+            "--confirm-pricing-sha256",
+            pricing_sha,
+            "--preflight-checked-at-utc",
+            now,
+        ]
+    )
+    error = json.loads(capsys.readouterr().err.splitlines()[-1])
+    assert result == 2
+    assert error["error_code"] == "SMOKE_FIXTURE_PATH_REJECTED"
+    assert forbidden_calls == []
+
+
+def test_smoke_runner_rejects_fixture_component_swap_after_preflight_before_resource_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = _authorized_manifest(tmp_path)
+    module = _load_script("run_r2_4_smoke")
+    calls, manifest_sha, runtime_sha, pricing_sha = _install_runner_fakes(
+        module, monkeypatch, manifest, execute=True
+    )
+    fixture_root = tmp_path / "fixtures"
+    stored_fixtures = tmp_path / "stored-fixtures"
+
+    def swap_component(*args: object, **kwargs: object) -> object:
+        fixture_root.rename(stored_fixtures)
+        fixture_root.symlink_to(stored_fixtures, target_is_directory=True)
+        return SimpleNamespace(eligible_for_post_preflight_factory=True)
+
+    audit_calls: list[Path] = []
+    monkeypatch.setattr(module, "run_r24_smoke_production_preflight_v1", swap_component)
+    monkeypatch.setattr(
+        module,
+        "ExternalProductionRuntimeAuditSinkV1",
+        lambda path, **kwargs: audit_calls.append(path),
+    )
+    now = datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    result = module.main(
+        [
+            "--authority-manifest",
+            str(tmp_path / "owner.json"),
+            "--confirm-manifest-sha256",
+            manifest_sha,
+            "--runtime-config",
+            str(tmp_path / "runtime.json"),
+            "--confirm-runtime-config-sha256",
+            runtime_sha,
+            "--pricing",
+            str(tmp_path / "pricing.json"),
+            "--confirm-pricing-sha256",
+            pricing_sha,
+            "--preflight-checked-at-utc",
+            now,
+            "--confirm-preflight-report-sha256",
+            "b" * 64,
+            "--production-audit-root",
+            str(tmp_path / "audit"),
+            "--execute",
+        ]
+    )
+    error = json.loads(capsys.readouterr().err.splitlines()[-1])
+    assert result == 2
+    assert error["error_code"] == "SMOKE_FIXTURE_PATH_REJECTED"
+    assert calls == []
+    assert audit_calls == []
 
 
 def test_smoke_runner_execute_uses_one_exact_smoke_builder_identity_chain(

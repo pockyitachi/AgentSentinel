@@ -392,6 +392,26 @@ def _is_within_path(path: Path, root: Path) -> bool:
     return True
 
 
+def _path_components_are_direct(path: Path, *, root: Path) -> bool:
+    if not path.is_absolute() or not root.is_absolute():
+        return False
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        return False
+    current = root
+    for index, part in enumerate(relative.parts):
+        current /= part
+        metadata = current.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or (
+            index < len(relative.parts) - 1 and not stat.S_ISDIR(metadata.st_mode)
+        ):
+            return False
+    return True
+
+
 def _read_hash_bound_smoke_fixture(
     case: LiveSmokeCaseV1,
     *,
@@ -403,16 +423,26 @@ def _read_hash_bound_smoke_fixture(
 
     path = Path(case.request_fixture_path)
     try:
+        root_metadata = authorized_input_root.lstat()
+        direct_components = _path_components_are_direct(path, root=authorized_input_root)
         root = authorized_input_root.resolve(strict=True)
+        resolved_root_metadata = root.lstat()
         repository = repository_root.resolve(strict=True)
         parent = path.parent.resolve(strict=True)
+        rebound_root_metadata = authorized_input_root.lstat()
     except OSError as exc:
         raise ProductionDriverError(
             "SMOKE_FIXTURE_UNAVAILABLE", "fixture root is unavailable"
         ) from exc
     candidate = parent / path.name
     if (
-        not root.is_dir()
+        not stat.S_ISDIR(root_metadata.st_mode)
+        or not root.is_dir()
+        or (resolved_root_metadata.st_dev, resolved_root_metadata.st_ino)
+        != (root_metadata.st_dev, root_metadata.st_ino)
+        or (rebound_root_metadata.st_dev, rebound_root_metadata.st_ino)
+        != (root_metadata.st_dev, root_metadata.st_ino)
+        or not direct_components
         or _is_within_path(root, repository)
         or _is_within_path(repository, root)
         or not _is_within_path(candidate, root)
@@ -430,10 +460,11 @@ def _read_hash_bound_smoke_fixture(
             )
         descriptor = os.open(candidate, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | no_follow)
         metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_size != case.request_fixture_byte_count
-        ):
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ProductionDriverError(
+                "SMOKE_FIXTURE_PATH_REJECTED", "fixture identity is not exclusive"
+            )
+        if metadata.st_size != case.request_fixture_byte_count:
             raise ProductionDriverError("SMOKE_FIXTURE_MISMATCH", "fixture metadata differs")
         remaining = metadata.st_size
         chunks: list[bytes] = []
@@ -447,6 +478,20 @@ def _read_hash_bound_smoke_fixture(
             remaining -= len(chunk)
         if os.read(descriptor, 1) or digest.hexdigest() != case.request_fixture_sha256:
             raise ProductionDriverError("SMOKE_FIXTURE_MISMATCH", "fixture content differs")
+        final_metadata = os.fstat(descriptor)
+        declared_metadata = candidate.lstat()
+        if (
+            not stat.S_ISREG(final_metadata.st_mode)
+            or final_metadata.st_nlink != 1
+            or not stat.S_ISREG(declared_metadata.st_mode)
+            or declared_metadata.st_nlink != 1
+            or (final_metadata.st_dev, final_metadata.st_ino) != (metadata.st_dev, metadata.st_ino)
+            or (declared_metadata.st_dev, declared_metadata.st_ino)
+            != (metadata.st_dev, metadata.st_ino)
+        ):
+            raise ProductionDriverError(
+                "SMOKE_FIXTURE_PATH_REJECTED", "fixture identity changed while reading"
+            )
         raw = b"".join(chunks)
     except OSError as exc:
         raise ProductionDriverError(
@@ -8592,15 +8637,6 @@ class _ProductionFixedExecutionPortV1:
         self._require_broker(lease)
         self._require_invocation_deadlines(invocation)
         self._require_run_dispatch_allowed()
-        fixture = _read_hash_bound_smoke_fixture(
-            invocation.case,
-            host=invocation.host,
-            authorized_input_root=Path(self._config.authorized_pilot_input_root),
-            repository_root=Path(self._config.repository_root),
-        )
-        image = Image.open(io.BytesIO(fixture.current_image_png))
-        image.load()
-        observation = Observation(screenshot=image, accessibility_tree=None)
         unit_id = self._unit_id(invocation)
         state = _ProductionUnitStateV1(
             unit_id=unit_id,
@@ -8611,12 +8647,22 @@ class _ProductionFixedExecutionPortV1:
             authority_deadline_monotonic_ns=invocation.authority_deadline_monotonic_ns,
             attempt_termination_upper_bound_ns=invocation.attempt_termination_upper_bound_ns,
             environment=None,
-            observation=observation,
+            observation=None,
         )
         with self._lock:
             if unit_id in self._units:
                 raise ProductionDriverError("UNIT_ALREADY_STARTED", "smoke case repeats")
             self._units[unit_id] = state
+        fixture = _read_hash_bound_smoke_fixture(
+            invocation.case,
+            host=invocation.host,
+            authorized_input_root=Path(self._config.authorized_pilot_input_root),
+            repository_root=Path(self._config.repository_root),
+        )
+        image = Image.open(io.BytesIO(fixture.current_image_png))
+        image.load()
+        observation = Observation(screenshot=image, accessibility_tree=None)
+        state.observation = observation
         self._begin_task_runtime(
             invocation=invocation,
             state=state,

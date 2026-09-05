@@ -1621,12 +1621,18 @@ def test_successful_shared_dispatch_attestation_enters_full_unit_journal(
     adapter.cleanup(context)
 
 
-def test_shared_predispatch_failure_cleanup_preserves_dispatch_error(
+def test_shared_fixture_path_rejection_cleanup_preserves_dispatch_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _shared_context()
     config = _shared_runtime_config(tmp_path)
+    Path(config.authorized_pilot_input_root).mkdir(parents=True)
+    Path(config.repository_root).mkdir(parents=True)
+    plan = _smoke_plan(tmp_path, PilotHostV1.QWEN3_VL)
+    rejected_fixture = Path(plan.cases[0].request_fixture_path)
+    rejected_fixture.parent.mkdir(parents=True)
+    rejected_fixture.write_bytes(b"{}")
     resources = _resources(tmp_path)
     resource_lifecycle = build_cpu_test_resource_lifecycle_adapter_v1(config)
     resource_lifecycle.prepare(resources, context)
@@ -1639,32 +1645,10 @@ def test_shared_predispatch_failure_cleanup_preserves_dispatch_error(
     object.__setattr__(port, "_unit_journals", {})
     object.__setattr__(port, "_unpublished_unit_evidence", {})
 
-    def reject_fixture_before_dispatch(
-        exact_port: production_driver_module._ProductionFixedExecutionPortV1,
-        invocation: production_driver_module._SmokeInvocationV1,
-        _: object,
-    ) -> None:
-        state = production_driver_module._ProductionUnitStateV1(
-            unit_id=exact_port._unit_id(invocation),
-            host=invocation.host,
-            task_name=invocation.case.task_id,
-            deadline_monotonic_ns=invocation.deadline_monotonic_ns,
-            cleanup_deadline_monotonic_ns=invocation.cleanup_deadline_monotonic_ns,
-            authority_deadline_monotonic_ns=invocation.authority_deadline_monotonic_ns,
-            attempt_termination_upper_bound_ns=invocation.attempt_termination_upper_bound_ns,
-            environment=None,
-            observation=None,
-        )
-        exact_port._units[state.unit_id] = state
-        raise ProductionDriverError(
-            "SMOKE_FIXTURE_MISMATCH",
-            "fixture actor binding differs",
-        )
-
     monkeypatch.setattr(
         production_driver_module._ProductionFixedExecutionPortV1,
-        "run_smoke_case",
-        reject_fixture_before_dispatch,
+        "_require_broker",
+        lambda *_: None,
     )
     adapter = production_driver_module.FixedLiveSmokeAdapterV1(
         port,
@@ -1674,7 +1658,7 @@ def test_shared_predispatch_failure_cleanup_preserves_dispatch_error(
     with pytest.raises(ProductionDriverError) as raised:
         adapter.run_host(
             PilotHostV1.QWEN3_VL,
-            _smoke_plan(tmp_path, PilotHostV1.QWEN3_VL),
+            plan,
             resources[0],
             _live_stages(),
             context,
@@ -1687,7 +1671,7 @@ def test_shared_predispatch_failure_cleanup_preserves_dispatch_error(
     failure = cast(dict[str, Any], json.loads(failure_raw))
     assert failure["failure_phase"] == "DISPATCH"
     assert failure["failure_code"] == "SMOKE_CASE_EXECUTION_FAILED"
-    assert failure["dispatch_failure_code"] == "SMOKE_FIXTURE_MISMATCH"
+    assert failure["dispatch_failure_code"] == "SMOKE_FIXTURE_PATH_REJECTED"
     assert failure["current_unit"]["cleanup"]["status"] == "SUCCEEDED"
     unit_failure = cast(dict[str, Any], failure["unit_failure_evidence"])
     assert unit_failure["resource_dispatch_records"] == []
@@ -1698,6 +1682,67 @@ def test_shared_predispatch_failure_cleanup_preserves_dispatch_error(
     assert port._units == {}
     assert tuple(port._unit_journals) == ("smoke:QWEN3_VL:OFF",)
     resource_lifecycle.cleanup(context)
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    ("hardlink", "leaf-symlink", "intermediate-symlink", "root-symlink"),
+)
+def test_smoke_fixture_loader_rejects_nonexclusive_path_provenance(
+    tmp_path: Path,
+    provenance: str,
+) -> None:
+    fixture_source = (
+        Path(__file__).resolve().parents[2]
+        / "offline"
+        / "fixtures"
+        / "g1_5_history_codecs"
+        / "qwen_flat_progress.captured.v1.json"
+    )
+    fixture_value = cast(dict[str, Any], json.loads(fixture_source.read_bytes()))
+    fixture_raw = production_driver_module.canonical_json_bytes(cast(Any, fixture_value))
+    external_root = tmp_path / "external"
+    external_root.mkdir()
+    external_fixture = external_root / "qwen.json"
+    external_fixture.write_bytes(fixture_raw)
+    real_authorized_root = tmp_path / "authorized"
+    real_authorized_root.mkdir()
+    declared_authorized_root = real_authorized_root
+    fixture_path = real_authorized_root / "qwen.json"
+    if provenance == "hardlink":
+        os.link(external_fixture, fixture_path)
+    elif provenance == "leaf-symlink":
+        fixture_path.symlink_to(external_fixture)
+    elif provenance == "intermediate-symlink":
+        real_parent = real_authorized_root / "real"
+        real_parent.mkdir()
+        (real_parent / fixture_path.name).write_bytes(fixture_raw)
+        alias_parent = real_authorized_root / "alias"
+        alias_parent.symlink_to(real_parent, target_is_directory=True)
+        fixture_path = alias_parent / fixture_path.name
+    else:
+        fixture_path.write_bytes(fixture_raw)
+        declared_authorized_root = tmp_path / "authorized-link"
+        declared_authorized_root.symlink_to(real_authorized_root, target_is_directory=True)
+        fixture_path = declared_authorized_root / fixture_path.name
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    case = replace(
+        _smoke_plan(tmp_path, PilotHostV1.QWEN3_VL).cases[0],
+        request_fixture_path=str(fixture_path),
+        request_fixture_sha256=hashlib.sha256(fixture_raw).hexdigest(),
+        request_fixture_byte_count=len(fixture_raw),
+    )
+
+    with pytest.raises(ProductionDriverError) as raised:
+        production_driver_module._read_hash_bound_smoke_fixture(
+            case,
+            host=PilotHostV1.QWEN3_VL,
+            authorized_input_root=declared_authorized_root,
+            repository_root=repository_root,
+        )
+
+    assert raised.value.code == "SMOKE_FIXTURE_PATH_REJECTED"
 
 
 def test_production_smoke_port_keeps_fixture_and_actor_request_hashes_distinct(

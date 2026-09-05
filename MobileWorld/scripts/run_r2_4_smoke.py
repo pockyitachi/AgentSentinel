@@ -41,6 +41,7 @@ from mobile_world.runtime.sentinel.r2_4.production_driver import (
     PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1,
     ProductionDriverError,
     ProductionResourceTopologyV1,
+    ProductionRuntimeConfigV1,
     build_production_case_authority_broker_provider_v1,
     build_production_driver_v1,
     build_production_resource_lifecycle_adapter_v1,
@@ -55,6 +56,7 @@ from mobile_world.runtime.sentinel.r2_4.production_preflight import (
 )
 from mobile_world.runtime.sentinel.r2_4.smoke_run import (
     R24_SMOKE_MIN_CLEANUP_RESERVE_SECONDS,
+    R24SmokeRunAuthorityManifestV1,
     smoke_authority_manifest_sha256,
 )
 
@@ -70,6 +72,15 @@ class _CliError(RuntimeError):
 
 
 class _SecretMetadataPin:
+    __slots__ = ("descriptor", "identity", "path")
+
+    def __init__(self, descriptor: int, path: Path, identity: tuple[int, ...]) -> None:
+        self.descriptor = descriptor
+        self.path = path
+        self.identity = identity
+
+
+class _FixtureMetadataPin:
     __slots__ = ("descriptor", "identity", "path")
 
     def __init__(self, descriptor: int, path: Path, identity: tuple[int, ...]) -> None:
@@ -317,6 +328,129 @@ def _parse_pricing(value: JsonValue) -> LiveAttemptPricingV1:
         raise _CliError("INVALID_PRICING") from exc
 
 
+def _is_within_path(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _require_no_symlink_component(path: Path) -> None:
+    current = Path(path.anchor)
+    try:
+        for part in path.parts[1:]:
+            current /= part
+            if stat.S_ISLNK(os.lstat(current).st_mode):
+                raise _CliError("SMOKE_FIXTURE_PATH_REJECTED")
+    except _CliError:
+        raise
+    except OSError as exc:
+        raise _CliError("SMOKE_FIXTURE_PATH_REJECTED") from exc
+
+
+def _require_smoke_fixture_root(runtime: ProductionRuntimeConfigV1) -> Path:
+    declared_root = Path(runtime.authorized_pilot_input_root)
+    _require_no_symlink_component(declared_root)
+    try:
+        root = declared_root.resolve(strict=True)
+        repository = REPOSITORY_ROOT.resolve(strict=True)
+    except OSError as exc:
+        raise _CliError("SMOKE_FIXTURE_PATH_REJECTED") from exc
+    if not root.is_dir() or _is_within_path(root, repository) or _is_within_path(repository, root):
+        raise _CliError("SMOKE_FIXTURE_PATH_REJECTED")
+    return root
+
+
+def _open_smoke_fixture_metadata(path: Path, *, root: Path) -> tuple[int, tuple[int, ...]]:
+    descriptor = -1
+    try:
+        _require_no_symlink_component(path)
+        parent = path.parent.resolve(strict=True)
+        candidate = parent / path.name
+        if not _is_within_path(candidate, root):
+            raise _CliError("SMOKE_FIXTURE_PATH_REJECTED")
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        path_only = getattr(os, "O_PATH", None)
+        if type(no_follow) is not int or type(path_only) is not int:
+            raise _CliError("SMOKE_FIXTURE_PATH_REJECTED")
+        descriptor = os.open(
+            candidate,
+            path_only | no_follow | getattr(os, "O_CLOEXEC", 0),
+        )
+        opened = os.fstat(descriptor)
+        declared = os.lstat(path)
+        resolved = path.resolve(strict=True)
+        resolved_metadata = os.stat(resolved, follow_symlinks=False)
+        identity = _input_identity(opened)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(declared.st_mode)
+            or not stat.S_ISREG(resolved_metadata.st_mode)
+            or opened.st_nlink != 1
+            or declared.st_nlink != 1
+            or resolved_metadata.st_nlink != 1
+            or _input_identity(declared) != identity
+            or _input_identity(resolved_metadata) != identity
+            or not _is_within_path(resolved, root)
+        ):
+            raise _CliError("SMOKE_FIXTURE_PATH_REJECTED")
+        return descriptor, identity
+    except _CliError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise _CliError("SMOKE_FIXTURE_PATH_REJECTED") from exc
+
+
+def _require_smoke_fixture_input_root(
+    manifest: R24SmokeRunAuthorityManifestV1,
+    runtime: ProductionRuntimeConfigV1,
+) -> tuple[_FixtureMetadataPin, ...]:
+    """Reject a fixture/root mismatch before production preflight or resource I/O."""
+
+    root = _require_smoke_fixture_root(runtime)
+    pins: list[_FixtureMetadataPin] = []
+    try:
+        for plan in manifest.smoke_plans:
+            for case in plan.cases:
+                path = Path(case.request_fixture_path)
+                descriptor, identity = _open_smoke_fixture_metadata(path, root=root)
+                pins.append(_FixtureMetadataPin(descriptor, path, identity))
+        return tuple(pins)
+    except BaseException:
+        for pin in pins:
+            os.close(pin.descriptor)
+        raise
+
+
+def _require_current_smoke_fixture_pins(
+    pins: tuple[_FixtureMetadataPin, ...],
+    runtime: ProductionRuntimeConfigV1,
+) -> None:
+    root = _require_smoke_fixture_root(runtime)
+    for pin in pins:
+        rebound_descriptor = -1
+        try:
+            held = os.fstat(pin.descriptor)
+            rebound_descriptor, rebound_identity = _open_smoke_fixture_metadata(
+                pin.path,
+                root=root,
+            )
+            if _input_identity(held) != pin.identity or rebound_identity != pin.identity:
+                raise _CliError("SMOKE_FIXTURE_PATH_REJECTED")
+        except _CliError:
+            raise
+        except OSError as exc:
+            raise _CliError("SMOKE_FIXTURE_PATH_REJECTED") from exc
+        finally:
+            if rebound_descriptor >= 0:
+                os.close(rebound_descriptor)
+
+
 def _utc_second(value: str) -> datetime:
     try:
         return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
@@ -332,6 +466,7 @@ def _error_code(exc: BaseException) -> str:
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     secret_pin: _SecretMetadataPin | None = None
+    fixture_pins: tuple[_FixtureMetadataPin, ...] = ()
     try:
         manifest = load_owner_authorized_smoke_authority_v1(
             arguments.authority_manifest,
@@ -362,6 +497,7 @@ def main(argv: list[str] | None = None) -> int:
             or runtime.qwen_gpu_index != runtime.mai_gpu_index
         ):
             raise _CliError("SMOKE_SHARED_RESOURCE_CONFIG_REQUIRED")
+        fixture_pins = _require_smoke_fixture_input_root(manifest, runtime)
 
         pricing_value = _load_canonical_input(
             arguments.pricing,
@@ -385,6 +521,10 @@ def main(argv: list[str] | None = None) -> int:
             repository_root=REPOSITORY_ROOT,
             now=checked_at,
         )
+        _require_current_smoke_fixture_pins(fixture_pins, runtime)
+        for pin in fixture_pins:
+            os.close(pin.descriptor)
+        fixture_pins = ()
         report_sha256 = r24_smoke_production_preflight_report_sha256(report)
         report_projection = r24_smoke_production_preflight_report_projection(report)
         if not report.eligible_for_post_preflight_factory:
@@ -499,6 +639,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     finally:
+        for pin in fixture_pins:
+            os.close(pin.descriptor)
         if secret_pin is not None:
             os.close(secret_pin.descriptor)
 
