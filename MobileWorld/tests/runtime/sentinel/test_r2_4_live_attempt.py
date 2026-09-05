@@ -772,14 +772,23 @@ def test_history_transport_schema_is_supported_shape_and_r22_schema_stays_frozen
 
     stack: list[object] = [transport_schema]
     observed_keys: set[str] = set()
+    ref_nodes: list[dict[str, object]] = []
     while stack:
         node = stack.pop()
         if type(node) is dict:
             observed_keys.update(node)
+            if "$ref" in node:
+                ref_nodes.append(node)
             stack.extend(node.values())
         elif type(node) is list:
             stack.extend(node)
     assert not (observed_keys & live_attempt_module._OPENAI_STRICT_SCHEMA_FORBIDDEN_KEYWORDS_V1)
+    assert ref_nodes
+    assert all(set(node) == {"$ref"} for node in ref_nodes)
+
+    exact_schema = deepcopy(transport_schema)
+    live_attempt_module._require_openai_supported_strict_schema_v1(exact_schema)
+    assert exact_schema == transport_schema
 
     nested_unsupported = deepcopy(transport_schema)
     decision = cast(
@@ -789,6 +798,16 @@ def test_history_transport_schema_is_supported_shape_and_r22_schema_stays_frozen
     with pytest.raises(LiveAttemptError) as unsupported:
         live_attempt_module._require_openai_supported_strict_schema_v1(nested_unsupported)
     assert unsupported.value.code == "UNSUPPORTED_HISTORY_TRANSPORT_SCHEMA"
+
+    ref_sibling_unsupported = deepcopy(transport_schema)
+    packet_id = cast(
+        dict[str, object],
+        cast(dict[str, object], ref_sibling_unsupported["properties"])["packet_id"],
+    )
+    packet_id["description"] = "sibling metadata is unsupported beside $ref"
+    with pytest.raises(LiveAttemptError) as ref_sibling:
+        live_attempt_module._require_openai_supported_strict_schema_v1(ref_sibling_unsupported)
+    assert ref_sibling.value.code == "UNSUPPORTED_HISTORY_TRANSPORT_SCHEMA"
 
 
 def test_history_transport_builder_requires_full_r22_source_then_binds_physical_shape() -> None:

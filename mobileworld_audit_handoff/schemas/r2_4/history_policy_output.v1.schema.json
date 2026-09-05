@@ -21,14 +21,8 @@
       "type": "string",
       "enum": ["mobileworld.runtime.sentinel-policy-proposal/v1"]
     },
-    "packet_id": {
-      "description": "Copy required_output_bindings.packet_id exactly.",
-      "$ref": "#/$defs/runtimeId"
-    },
-    "evidence_packet_sha256": {
-      "description": "Copy required_output_bindings.evidence_packet_sha256 exactly; this is not raw_request_sha256.",
-      "$ref": "#/$defs/sha256"
-    },
+    "packet_id": {"$ref": "#/$defs/runtimeId"},
+    "evidence_packet_sha256": {"$ref": "#/$defs/sha256"},
     "status": {
       "description": "ABSTAIN for zero decisions or all KEEP_UNCERTAIN; COMPLETE for non-empty decisions with no KEEP_UNCERTAIN; PARTIAL_ABSTAIN only for a mixture.",
       "type": "string",

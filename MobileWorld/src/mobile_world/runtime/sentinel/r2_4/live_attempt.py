@@ -264,7 +264,7 @@ def _canonical_bytes(value: object) -> bytes:
 
 
 def _require_openai_supported_strict_schema_v1(value: object) -> None:
-    """Reject composition keywords outside the live Responses strict subset."""
+    """Reject keywords and reference shapes outside the Responses strict subset."""
 
     if type(value) is not dict or value.get("type") != "object":
         raise LiveAttemptError(
@@ -284,6 +284,11 @@ def _require_openai_supported_strict_schema_v1(value: object) -> None:
             raise LiveAttemptError(
                 "UNSUPPORTED_HISTORY_TRANSPORT_SCHEMA",
                 "history transport schema contains an unsupported strict keyword",
+            )
+        if "$ref" in node and len(node) != 1:
+            raise LiveAttemptError(
+                "UNSUPPORTED_HISTORY_TRANSPORT_SCHEMA",
+                "history transport schema contains an unsupported $ref sibling",
             )
         stack.extend(node.values())
 
