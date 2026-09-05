@@ -1,6 +1,6 @@
 # Project Status：GUI Agent Previous-Step Misleading Motivation Study
 
-Last updated: 2026-09-02 (UTC)
+Last updated: 2026-09-05 (UTC)
 
 ## 1. Project objective
 
@@ -14,7 +14,12 @@ Last updated: 2026-09-02 (UTC)
 风险：该旧历史仍进入下一步prompt，模型可能以它为前提继续行动或提前结束
 ```
 
-长期 Sentinel还可能根据 task在开始时生成 milestones/rubrics，并随可见证据更新 rubric state，用来判断 agent是否仍走在任务轨迹上。但这不是当前开发阶段。
+该方向已在 accepted R2.3 CPU/offline/injected-fake checkpoint 与 accepted
+R2.4 runtime vertical slice 中形成 rubric/tracking、runtime glue 与独立
+smoke-only 入口。R2.4 已由 owner 接受并关闭；新六-case action-free run 及
+六份官方 Collector integrity report 均通过。因此 Runtime Epic 2 现为 4/6
+accepted。已消费的 smoke authority 不提供重跑或 R2.5 权限；R2.5 pilot
+仍未获授权且未运行。
 
 ## 2. Current stage and decision
 
@@ -50,7 +55,7 @@ typed Original fallback、严格 canonical-JSON admission、递归 trusted/detac
 renderer snapshots 与 history-only 验证，以及 transactional、hash-only、detached-commit、
 repo-external receipt。Qwen、MAI 与 Seed 接入复用现有
 provider/parser/action 路径；R2.1 本身不实现自动 validity policy、multi-path rubric、真实
-actor/Sentinel 模型或 live transformation。后续 accepted R2.2 与 candidate R2.3 分别增加前
+actor/Sentinel 模型或 live transformation。后续 accepted R2.2 与 accepted R2.3 分别增加前
 两项的独立合同层。Linear 工作流状态由 owner 单独管理，本仓库交付没有修改 Linear。**
 
 **Runtime ALE-325 / R2.2 的 repository engineering checkpoint 已由 owner 接受。**
@@ -63,9 +68,11 @@ edit，invalidation 必须晚于 target 和所有 cited support，`REPLACE` 在 
 MobileWorld backend/GUI/tool/action 或 replay；没有把两个 G1.5 v1 Codec 改成
 `live_ready=true`，也没有授权 R2.4。Linear 工作流状态仍由 owner 单独管理。**
 
-**Runtime ALE-326 / R2.3 已形成 corrected repository engineering candidate commit
-`54381b7b56b06d5aa262005af62b65269b4cf0a6`，当前等待 owner review，尚不计入
-accepted/Done。** 候选范围严格限定为 CPU/offline/injected-fake、SHADOW-only：versioned
+**Runtime ALE-326 / R2.3 corrected repository engineering checkpoint commit
+`54381b7b56b06d5aa262005af62b65269b4cf0a6` 已通过 mainline merge
+`2aa0a268b7d709cf05d524e74c3fba8612f64003` 接受；该里程碑当时使 Runtime
+Epic 2 达到 3/6，当前连同 accepted R2.4 已为 4/6。** 接受范围严格限定为
+CPU/offline/injected-fake、SHADOW-only：versioned
 exact-span `AND`/`OR` rubric、generate-once cache、显式 revision、history-free causal packet、
 milestone/path/frontier tracking、post-state relevance、hash-only receipt 与 low-cardinality
 metrics。共享 DAG 派生已 memoize 且以显式 stack/topological DP 覆盖完整 512-gate 上限，state validator
@@ -73,6 +80,81 @@ metrics。共享 DAG 派生已 memoize 且以显式 stack/topological DP 覆盖�
 均为 `RETAIN`，`ARCHIVE_SHADOW` 仅保留在 schema vocabulary 中，不写 history、不进入 renderer，也不执行。
 Qwen/MAI 只使用 captured fixtures；没有真实模型/provider、网络、GPU、MobileWorld backend/
 GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
+
+**Runtime ALE-327 / R2.4 已由 owner 接受并关闭；implementation/source
+checkpoint 为 `2f5eae0dba43908a44017bf8f3ab6916b56db095`。当前没有新的 live
+或 R2.5 authority。** 初始 joint R2.4/R2.5
+CPU-only/offline preparation `344e1c42596a4dca717da66374eeca3d936c3f61`
+曾被 owner 判为 NO-GO；后续整改、exact-authority live smoke、官方 Collector
+integrity gate 与最终 owner 复审均已完成。accepted checkpoint 保留此前
+SDK/http logging、type-sensitive sealed schema、request anchor、bounded
+cleanup 与 fatal-dispatch 整改，并将每个 formed `RUBRIC`/`HISTORY_POLICY` attempt 的完整
+authority、deadline/constraint、case lease、精确双-stage set、pricing、transport 与 canonical
+provider request preimage 写入 owner-only proof。validator 还要求 authority、constraint、
+manifest、preflight、case lease、stage、pricing、transport、request 九个 caller-known roots。
+`HISTORY_POLICY` 已收到 provider response 但 R2.2 receipt prepare/publish/deadline
+失败时，response 与 request proof 继续保留，receipt 明确记录为 post-dispatch absent，
+policy result 不会被 admit。
+deadline/cancel 与已到达的有效 `COMPLETED` Responses envelope 发生竞争时，最终为
+`FAILED`、`CANCELLED_POST_DISPATCH` 或 `TERMINATION_UNCONFIRMED` 的 attempt 会保留
+detached response hash 与 requested/returned model；provider usage 存在时再保留完整 usage、
+cached-input census 与精确重算 cost，usage 缺失时仍为 `UNKNOWN` 并触发既有 run-fatal。
+late output 仍被丢弃且不会 admit，已知 exact 超限结果也只作 proof。已 dispatch 的 child
+若在 cancellation 中自然退出，可形成 cooperative terminal cancellation。rubric durable
+validator 现在必须接收并完整核验 matching terminal attempt receipt。
+cancel signal 设置、deadline adjudication 与 `COMPLETED` 发布/返回现在由同一个
+finalization lock 线性化，并在发布成功前于锁内复查；若 cancellation 或 deadline 先赢，
+已到达的 response 只能保留为 late proof，不能被 return、标记 passed 或 admit。
+HISTORY_POLICY durable validator 禁止 non-`COMPLETED` attempt 搭配 `ADMITTED` R2.2
+receipt 或 admitted plan。唯一允许的 committed-receipt 例外是严格 pre-response
+`POLICY_TRANSPORT_ERROR`：attempt dispatch 与 policy transport call 均为 1，returned-model/
+response/output/proposal/plan/usage 字段均为空，semantic decision census 全为 0。
+Production-audit `begin` 从 root/destination/temp/write/file-fsync/directory-fsync 到 sink-begin/
+transaction-binding 的失败均保留 module-sealed 完整 pre-provider recovery receipt。超过 4 MiB
+的 unit-evidence journal 使用 owner-only content-addressed blob 与 compact bound reference；blob
+故障仍保留 outer failure evidence，且不会阻止 cleanup 与 audit finalize。post-dispatch
+`UNKNOWN` cost 与 `TERMINATION_UNCONFIRMED` 使用独立 run-fatal reason 阻断 actor/later
+dispatch。cleanup 只有在 client/backend `/init` 已在本地确认后才可 teardown dispatch；否则
+记录 `NOT_INITIALIZED_NO_IO`/zero-I/O recovery evidence。
+
+新增的 `R24_LIVE_SMOKE_ONLY` authority/preflight/executor/CLI 只允许固定顺序：同一
+shared-GPU project lease 下启动 backend 与 Qwen，依次执行 Qwen
+OFF/SHADOW/ACTIVE；随后停止并 reap Qwen、证明 port 已释放、重新核验 GPU 与 MAI
+immutable snapshot，再启动 MAI 并依次执行 OFF/SHADOW/ACTIVE，最后进入 bounded
+cleanup。`SINGLE_GPU_SEQUENTIAL_SHARED` 要求 Qwen/MAI 使用同一 GPU index，vLLM
+`gpu_memory_utilization=0.24`，每个 admission boundary 至少 51,200 MiB free。
+共享卡 census 绑定 GPU identity 以及所有 visible compute process 的 PID、starttime、
+pgrp、session、UID、user 和 memory；baseline co-tenant 可保留，但新增或 identity drift
+会 fail closed，cleanup 只处理 project-owned process。
+
+Smoke-only manifest 不含 pilot/cohort/117-row task source/cell/score/GUI-action authority，
+其 executor 与 CLI 不可到达 R2.5；pilot method 在 snapshot read、reset 或 dispatch 前即
+拒绝 smoke scope。secure loader 与 preflight 绑定 owner-only file 的 path/inode identity，
+parent 对 secret 保持 zero-read；每次 dispatch、terminal、recovery 与 oversized-journal
+CAS proof 均 durable。shared runtime 的 cleanup exact upper bound 为
+`5 * shutdown_grace_seconds + 3 * ceil(health_poll_interval_ms / 1000) + 225`，默认
+grace=10 秒、poll=250 ms 时为 278 秒；低于该 bound 的 authority 在 resource I/O 前失败。
+既有 independent dual-GPU concurrent full-run path 保持不变且不能从 smoke-only 入口到达。
+
+当前 source checkpoint 的 R2.4 gate 为 646/646；完整 MobileWorld CPU/offline suite
+为 2438/2438（625.79 秒）；production-driver 134/134，独立 production-driver +
+audit-integrity 150/150；Ruff check/format、configured source mypy、Git diff checks
+与独立 red-team 均通过。旧 transport-success run
+`r24-smoke-gpu5-20260905t115136z` 的六个 raw Collector root 因 scoreless smoke
+被错误标成 `completed` 而各有三项 integrity error，现保持不可变并排除于 acceptance。
+`2f5eae0` 改为 task `aborted`/`score=null`、run `completed`，没有伪造 score，也不改变
+失败 smoke 或 scored pilot 的语义。
+
+Fresh run `r24-smoke-gpu5-integrity-retry-20260905t181000z` 在 exact OWNER
+manifest `395c89f...3bfb` 与 preflight `7974cf03...765a` 下完成六个 action-free
+case：6 个 actor output 全部 PARSED，12 个 Sentinel OpenAI attempt 全部 completed，
+action=0，exact cost `$0.173954`，Qwen→reap→MAI 顺序与 bounded cleanup 成立。
+六个新 raw root 的官方 `mobileworld.audit.integrity/v1` report 全部
+`valid=true/errors=[]/warnings=[]`。ACTIVE 为合法 admitted `KEEP_UNCERTAIN` no-op，
+仅证明链路可运行，不证明 material transformation、task effectiveness 或 causality。
+使用过的 authority 已消费；没有当前 live authority、持久化 117-row executable
+task source、selected cohort、frozen pilot manifest 或 pilot artifact。R2.5 未授权，
+Runtime Epic 2 现为 4/6 accepted。
 
 **Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
 并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
@@ -116,8 +198,9 @@ Evaluation
 
 因此，第一次错误 taxonomy即使设计不合理，只需重跑离线 evaluator，不需要重新运行昂贵的 MobileWorld任务。
 
-当前仍不实现 live claim extraction/verdict prediction、在线 filter、active archive 或自然轨迹
-干预；R2.3 rubric 仅为上述 CPU/offline/fake SHADOW candidate。
+当前仍未运行 active archive 或自然轨迹干预。R2.3 rubric 的独立 repository
+checkpoint 仍是 accepted CPU/offline/injected-fake 范围；R2.4 已完成并接受
+Qwen/MAI action-free live vertical slice，而 R2.5 real MobileWorld pilot 尚未授权或运行。
 
 ## 3. Canonical notation
 
@@ -1125,4 +1208,557 @@ Bindings: `contracts.py` is SHA-256 `faccf4ca02467f88cf5124db63a2187b3b30e69bab9
 Verification: focused R2.3 passed 64/64; the R2.3 + R2.2 + R2.1 + Collector audit + portable G1.2 + G1.5 Codec affected surface passed 648/648; and the complete MobileWorld suite passed 1733/1733 in 425.59 seconds. Ruff check/format, targeted mypy for all seven R2.3 source/test files, Python compilation, all five Draft 2020-12 schema meta-checks, and Git diff checks passed. Independent read-only review exercised 512-gate AND/OR chains in both declaration orders, repeated them with the interpreter recursion limit reduced to 80, verified typed cycle/unreachable rejection, and compared 400 random reachable DAG/state cases against the prior semantics with exact path/frontier agreement; no remaining P0/P1 was found in scope.
 
 Authority and next boundary: this correction used only CPU/offline code, injected fake backends, and captured Qwen/MAI fixtures. It invoked no live model/provider, network, GPU, model weights, MobileWorld backend/emulator/container, GUI/tool/action, replay, active archive, or persistent repo-external artifact. R2.4 remains the next dependency only after owner acceptance of R2.3 and separate authorization for any live/resource/GPU/action work. The repository agent did not push, merge, or modify Linear.
+```
+
+```text
+Date: 2026-09-03 UTC
+ALE-327 / R2.4 and ALE-328 / R2.5 joint CPU repository-preparation candidate: implementation commit `344e1c452e54aa01dc1bf29650af234f30a23f81` adds the two-host runtime plumbing, governed live-run contracts, and a frozen pilot protocol without performing the live work. The candidate is pending owner review and is not accepted or Done. R2.3 remains pending owner review, Runtime Epic 2 remains 2/6 accepted, and Linear remains owner-managed.
+
+Behavior and invariants: the candidate binds same-cutoff Collector evidence to independent history-free rubric and history-policy decisions, exact runtime spans, history-only rendering, provider-bound request/audit records, parser/action evidence, and typed fail-closed receipts. A first production-shaped no-history decision runs rubric generate+track only, makes no history-policy call, and sends exact Original; a later history-bearing call reuses the task rubric and performs one track plus one history-policy decision. Generic semantic, sidecar, render, invariant, timeout, publication, resource, or cleanup failures remain journaled and cannot be admitted as a successful smoke or pilot decision. Record relevance remains graph-derived, every v1 disposition remains RETAIN, and no runtime path executes ARCHIVE.
+
+Resource and experiment preparation: exact owner-manifest, production-preflight, case-lease, cancellable child-attempt, token/cost, GPU/model/backend identity, kill/cleanup, owner-only external audit, recovery, and analysis contracts are implemented and exercised only with sealed CPU doubles. The reproducible CPU topology artifact records two isolated provider dispatches versus one non-independent joint dispatch plus a coupled joint-failure probe; it does not establish live independence or effectiveness. The cohort tooling binds the exact 117-row GUI source and current registry screen, excludes user-interaction and statically detected dynamic/unknown wall-clock tasks, and deterministically freezes 20 tasks. One cell is one task x host x arm run, so the prepared cohort has 20 x 2 hosts x 2 arms = 80 sequential cells. The seed and observable reset-state commitments improve input matching but do not prove equality of hidden Android/app state or transitive time independence.
+
+Files and bindings: the implementation adds `runtime/sentinel/r2_4/` and `r2_5/`, seven operator scripts, focused tests, the R2.4/R2.5 contracts, and versioned R2.4/R2.5 schemas; it also adds narrow host, Collector, R2.2, R2.3, client/server, and audit integration changes. The authority builder produces DRAFT only. Promotion requires a separate explicit owner assertion over the exact draft digest and only changes authorization status; no manifest was promoted during this checkpoint.
+
+Verification: final R2.4 tests passed 211/211, R2.5 tests passed 38/38, and the combined focused gate passed 249/249 in 88.72 seconds. The complete MobileWorld suite passed 2000/2000 in 517.89 seconds. The previously selected compatibility surface passed 636/636. Ruff check and format check passed over 73 affected files; targeted mypy passed over all 26 R2.4/R2.5 source files, all 7 new scripts, and 8 shared integration files; all 15 R2.3-R2.5 schema JSON files parsed; Python compilation and Git diff checks passed. The exact Qwen/MAI whole-file mypy command still reports nine historical errors on unchanged lines from the repository root baseline, with zero errors attributable to this candidate. Final independent normal-exact red-team review reported GO with no remaining P0/P1.
+
+Authority and next boundary: this checkpoint used no live OpenAI/model/provider call, external network, GPU, Docker, model weights/service, MobileWorld backend/emulator, GUI/tool/action, replay, or active archive. It read no credential value, issued no `OWNER_AUTHORIZED` manifest, ran neither the six-case action-free R2.4 smoke nor the 80-cell R2.5 pilot, created no persistent repo-external artifact, and made no effectiveness or causal claim. After owner review of R2.3 and this candidate, the next operational boundary is one separately issued exact resource/run authorization: run all six R2.4 smoke cases first and stop on any failure; only if all six pass may the 80-cell R2.5 pilot begin. R2.6 is not mechanically available. The repository agent did not push, merge, or modify Linear.
+```
+
+```text
+Date: 2026-09-03 UTC
+Current-governance erratum and owner-review disposition: this entry supersedes
+the current-state claims in the immediately preceding R2.4/R2.5 entry while
+preserving that entry as historical audit text. Its implementation SHA
+`344e1c452e54aa01dc1bf29650af234f30a23f81` is a transcription error and does
+not identify a repository object. The actual initial implementation commit is
+`344e1c42596a4dca717da66374eeca3d936c3f61`. R2.3 implementation commit
+`54381b7b56b06d5aa262005af62b65269b4cf0a6` was accepted through mainline
+merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`; Runtime Epic 2 is therefore
+3/6 accepted, with Linear still owner-managed.
+Owner-review result: the initial R2.4/R2.5 candidate is NO-GO. Four P1 findings
+were reproduced: task instructions reached ordinary logs in strict production
+mode; the live OpenAI runner did not independently validate the final request
+against its sealed stage; accepted R2.3 v1 descriptor/receipt/schema semantics
+were changed in place instead of using an additive R2.4 version; and repository
+governance recorded the wrong commit and acceptance count. Two P2 findings were
+also recorded: some unconfirmed worker-termination paths used ordinary FAILED,
+and the status overstated an unpersisted 117-row source/cohort/pilot as frozen.
+Remediation candidate: `91c224446679b4c312a054f3d34f9d4853f6d24f`. It remains pending owner
+re-review. R2.4 remains In Progress / NO-GO, must not be merged, and does not
+authorize any of the six live-smoke cases. R2.5 is blocked on a future R2.4 GO.
+The repository currently has tooling/protocol only: no persistent 117-row
+executable-task-source artifact, selected-cohort artifact, frozen-pilot
+manifest, 80--120-cell matrix, or corresponding artifact/hash was created.
+No `OWNER_AUTHORIZED` manifest, live model/provider/network/GPU/Docker/backend/
+emulator/GUI/tool/action execution, pilot, effectiveness claim, or causal claim
+is authorized or established by this correction.
+
+Remediation outcome: commit `91c224446679b4c312a054f3d34f9d4853f6d24f`
+closes the four P1 findings and both P2 findings in the CPU-only repository
+candidate. Strict production logging no longer emits task instructions; the
+parent and spawned child independently validate the complete sealed Responses
+request before secret access or dispatch; accepted R2.3 implementation and
+schema bytes are restored exactly; additive R2.4 backend-extension, rubric-call,
+and live-attempt receipts bind requested/returned model identity and complete
+receipt/attempt/lease/stage/pricing provenance; and unconfirmed termination is
+represented only as `TERMINATION_UNCONFIRMED`. Independent normal-exact red-team
+review found no remaining P0/P1 in the remediation scope.
+
+Verification: R2.3/R2.4/R2.5 focused tests passed 380/380; the accepted runtime,
+Collector, portable G1.2, and G1.5 compatibility surface passed 648/648; and the
+complete MobileWorld suite passed 2067/2067 in 517.18 seconds. Ruff check and
+format check passed over 55 related Python files; targeted mypy passed over all
+26 R2.4/R2.5 source files; all 17 R2.3--R2.5 Draft 2020-12 schemas passed
+meta-validation; the five restored R2.3 implementation/schema files are
+byte-identical to `54381b7b56b06d5aa262005af62b65269b4cf0a6`; and Git diff checks passed.
+These results make `91c2244...` a remediation candidate for owner re-review,
+not permission to merge or issue live authority.
+```
+
+```text
+Date: 2026-09-03 UTC
+Latest ALE-327 / R2.4 CPU remediation candidate: implementation commit
+`4053a90c3ed97ad76cba133d6a2e26089d7f1888` supersedes the prior remediation
+candidate after closing four additional independently reproduced live-boundary
+P1 findings. This is repository engineering evidence for owner re-review, not
+an R2.4 live-smoke result. R2.4 remains In Progress / NO-GO, must not be merged,
+and does not authorize live work. R2.5 remains blocked on a future R2.4 GO.
+Runtime Epic 2 remains 3/6 accepted through the already accepted R2.3 mainline
+merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`; Linear was not changed.
+
+Remediated behavior: strict production scope suppresses pinned OpenAI,
+httpx, and httpcore standard logging around both Responses and actor Chat
+Completions calls while leaving non-production logging unchanged. Sealed JSON
+Schema equality is now checked using type-sensitive canonical JSON bytes, so
+numeric and boolean values cannot compare equal through Python coercion.
+Live-rubric validation recomputes module-owned prompt hashes and binds exact
+same-cutoff Collector stimulus, current-image bytes/metadata, Responses
+envelope, provider output, requested/returned model, and usage back to the
+coordinated call. A one-way run-fatal latch trips on the first exact
+`TERMINATION_UNCONFIRMED`, blocks the current Original actor call at the final
+SDK gate, and blocks later reset/runtime/model/backend/task-goal/action/score/
+cell dispatch. Cleanup is the sole closed recovery exception: its separately
+frozen bounded window is cross-bound to the seven-second termination upper
+bound, production authority requires at least eight seconds of cleanup grace,
+and insufficient or expired cleanup time is retained as typed failure evidence.
+
+Verification: focused R2.3--R2.5 tests passed 413/413; the complete MobileWorld
+suite passed 2102/2102. Independent normal-exact red teams reported GO for the
+code boundary, including real SDK MockTransport logging probes, nested
+boolean/integer sealed-schema mutations, proof-anchor mutation attempts,
+run-fatal dispatch probes, and execution-deadline/cleanup-window probes. Ruff
+check and format check passed. Targeted mypy passed over 28 source files;
+`runtime/client.py` still has 16 pre-existing unrelated diagnostics, with no
+new-line diagnostic introduced by this candidate. All 17 R2.3--R2.5 Draft
+2020-12 schemas passed validation; the five accepted R2.3 v1 implementation and
+schema files remain byte-identical to
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`; and Git diff checks passed.
+
+Authority and artifact boundary: this work used no external network, live
+OpenAI/API/provider call, credential/secret, GPU, Docker, model service or
+weights, MobileWorld backend/emulator, GUI/tool/action, replay, pilot, or live
+resource. It issued no `OWNER_AUTHORIZED` manifest and created no persistent
+117-row executable source, selected cohort, frozen pilot manifest, or
+corresponding artifact/hash. Only tooling/protocol preparation is claimed; no
+effectiveness or causal claim is established. Owner re-review is the next
+repository decision, and any later resource/run authority remains a separate
+owner action.
+```
+
+```text
+Date: 2026-09-03 UTC
+Latest ALE-327 / R2.4 CPU remediation candidate: implementation commit
+`c03c3c0848f76adbbac049bde5e498e7e89355f0` supersedes
+`4053a90c3ed97ad76cba133d6a2e26089d7f1888` after closing two further
+independently reproduced production-boundary P1 findings. This remains
+CPU-only repository engineering evidence for owner re-review, not an R2.4
+live-smoke result. R2.4 remains In Progress / NO-GO, must not be merged, and
+does not authorize live work. R2.5 remains blocked on a future R2.4 GO. Runtime
+Epic 2 remains 3/6 accepted; Linear was not changed.
+
+Remediated behavior: cleanup teardown is now recovery-only and cannot call
+backend initialization. After an initial `/init` failure, cleanup records the
+typed, hash-bound `NOT_INITIALIZED_NO_IO` outcome with
+`request_dispatched=false`, performs no dispatch callback, resource
+re-attestation, or backend HTTP request, and still closes local state and
+finalizes any already-created audit lifecycle. Every admitted live-rubric
+attempt now has a module-sealed request anchor created from the complete
+canonical provider request. The independent owner-only proof reconstructs and
+cross-binds the fixed prompt/instructions, task or tracking packet,
+Coordinator packet root, same-cutoff Collector stimulus, current image/data
+URL, response schema, model/settings, exact attempt order and terminal receipt,
+request hash, and any completed-call receipt. Failed, cancelled, and
+`TERMINATION_UNCONFIRMED` attempts retain the request proof without inventing a
+provider response. A termination-unconfirmed request and an audit publication
+fault both preserve recoverable proof while the one-way fatal latch continues
+to block actor and action dispatch.
+
+Verification: focused R2.3--R2.5 tests passed 443/443 in 139.68 seconds; the
+complete MobileWorld suite passed 2133/2133 in 558.25 seconds. The final
+request-proof implementation subset passed 201/201, and independent cold-red
+team probes passed 25/25 with no remaining normal-exact P0/P1 in scope. Ruff
+check and format check passed on all 14 changed Python files. Targeted mypy
+passed over 28 source files; `runtime/client.py` retains exactly 16 historical
+diagnostics, none on added or modified lines. All 18 R2.3--R2.5 Draft 2020-12
+schemas passed validation; accepted R2.3 implementation/schema bytes remain
+identical to `54381b7b56b06d5aa262005af62b65269b4cf0a6`; and Git diff checks passed.
+
+Authority and artifact boundary: this work used no external network, live
+OpenAI/API/provider call, credential/secret, GPU, Docker, model service or
+weights, MobileWorld backend/emulator, GUI/tool/action, replay, pilot, or live
+resource. It issued no `OWNER_AUTHORIZED` manifest and created no persistent
+117-row executable source, selected cohort, frozen pilot manifest, or
+corresponding artifact/hash. Only tooling/protocol preparation is claimed; no
+effectiveness or causal claim is established. Owner re-review is the next
+repository decision, and any later resource/run authority remains a separate
+owner action.
+```
+
+```text
+Date: 2026-09-04 UTC
+Latest ALE-327 / R2.4 CPU/offline remediation candidate: implementation commit
+`375fb87809cd0964bc9fb06aac52ff8228ccd09f` supersedes the preceding
+`c03c3c0848f76adbbac049bde5e498e7e89355f0` remediation candidate after
+closing the three newly reported durable-proof/recovery P1 findings and the
+additional normal-exact failures found during independent review. This
+candidate is ready only for owner re-review. R2.4 remains In Progress / NO-GO,
+must not be merged or pushed, and does not authorize any live smoke or other
+live work. R2.5 remains blocked on future owner approval of R2.4. R2.3 remains
+accepted through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`;
+Runtime Epic 2 remains 3/6 accepted and Linear was not changed.
+
+Authority and proof boundary: each formed `RUBRIC` and `HISTORY_POLICY`
+attempt retains the complete `LiveAttemptAuthorityV1`, deadline/constraint,
+case-execution lease, both exact OpenAI stage preimages and reconstructed stage
+set, pricing, transport, canonical provider request, terminal attempt receipt,
+and any observed response envelope or committed R2.2 receipt. Validation
+cross-checks token, deadline, stage, call, model, usage, and exact recomputed
+cost constraints and requires nine caller-known roots for authority,
+constraint, manifest, preflight, case lease, stage, pricing, transport, and
+request. Thus coherently rewriting proof-local hashes cannot replace a sealed
+authority or request. If `HISTORY_POLICY` receives a provider response but
+R2.2 receipt prepare, publish, mutation, or deadline handling fails, the
+response/request proof remains durable with an explicit
+`R22_RECEIPT_ABSENT_POST_DISPATCH`
+state and closed publication-failure code; the policy result is not admitted.
+
+Audit and recovery boundary: failure of production-audit pre-provider `begin`
+now creates a module-sealed `ADMISSION_OUTCOME_UNKNOWN` recovery receipt that
+retains the complete detached pre-provider projection across root-open,
+destination, temporary creation, admission write, file-fsync,
+directory-fsync, sink-begin, and transaction-binding faults. Existing terminal
+commit-outcome recovery is detached from caller mutation. Canonical unit
+evidence larger than 4 MiB is atomically persisted as an owner-only
+content-addressed blob and represented in the small journal by a hash/size/
+locator-bound reference. Blob root, write, fsync, link, collision, or readback
+failure preserves the full in-memory projection in outer failure evidence;
+cleanup and already-created audit finalization still execute. A dispatched
+attempt with `UNKNOWN` cost trips the separate
+`LIVE_COST_ACCOUNTING_UNKNOWN` one-way fatal reason, while
+`TERMINATION_UNCONFIRMED` keeps its own fatal reason; either blocks the current
+actor and all later non-cleanup dispatch. Cleanup never initializes or
+reinitializes a backend: if client/backend `/init` was not locally confirmed,
+it records `NOT_INITIALIZED_NO_IO` with zero backend I/O and continues local
+closure/finalization.
+
+Verification: R2.4 passed 434/434; the combined R2.3--R2.5 gate passed 536/536;
+and the complete MobileWorld suite passed 2226/2226 in 621.39 seconds.
+Independent authority/request-proof QA passed 301/301; independent
+audit-admission/blob review passed 87/87 plus 6/6. Ruff check and format check
+passed over all 15 changed Python files. Configured mypy passed over 28 source
+files. R2.3--R2.5 schemas passed 19/19 and R2.2--R2.5 schemas passed 22/22,
+including the additive
+`schemas/r2_4/history_policy_request_proof.v1.schema.json`. The accepted R2.3
+implementation/schema files are byte-identical to
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`; staged/unstaged and commit-range
+Git diff checks passed. These CPU results are repository engineering evidence,
+not an owner acceptance or live result.
+
+Authority and artifact boundary: this remediation used no live OpenAI/API/
+model/provider call, external network, live credential or production secret,
+GPU, Docker, model service or weights, MobileWorld backend/emulator,
+GUI/tool/action, replay,
+pilot, or live resource. It issued no `OWNER_AUTHORIZED` manifest and created
+no persistent 117-row executable source, selected cohort, frozen pilot
+manifest, 80--120-cell execution artifact, or corresponding content hash.
+Only tooling/protocol preparation is claimed; no effectiveness or causal claim
+is established. Owner re-review is the next repository decision, and any
+resource/run authorization remains a separate owner action.
+Owner approval required: yes before merge, push, live authority, live smoke,
+pilot, or any resource/model/backend/action execution.
+```
+
+```text
+Date: 2026-09-04 UTC
+Latest ALE-327 / R2.4 CPU/offline remediation candidate: implementation commit
+`dfbad16dc96fc6f5d930c0764999c102b624d5d5` supersedes
+`375fb87809cd0964bc9fb06aac52ff8228ccd09f` after closing the reported
+deadline/cancellation response-retention P1 and durable-rubric-validator P2.
+This candidate remains ready only for owner re-review. R2.4 stays In Progress /
+NO-GO and must not be merged or pushed; it grants no live authority. Runtime
+Epic 2 remains 3/6 accepted, R2.5 remains unauthorized, and Linear was not
+changed.
+
+Late-response proof boundary: receipt formation now serializes receive/drain
+with cancellation and failure finalization. If a valid `COMPLETED` Responses
+envelope has arrived while the attempt ultimately becomes `FAILED`,
+`CANCELLED_POST_DISPATCH`, or `TERMINATION_UNCONFIRMED`, owner-only proof
+retains its detached envelope hash and requested and returned model. When
+provider usage is present, complete usage including cached input and exact
+recomputed cost are retained as well; absent usage remains `UNKNOWN` and trips
+the existing run-fatal rule. The terminal attempt does not become `COMPLETED`,
+`passed`, or admitted; policy-facing invocation still fails. Known exact
+usage/cost beyond authority is retained only as proof, while completed over-
+limit, non-late, partial-accounting, receipt-hash, and terminal-state drift
+remain rejected. A dispatched child that exits naturally during cancellation
+can terminalize as a cooperative post-dispatch cancellation without being
+promoted to success.
+
+Durable-validator boundary: the public rubric request-proof validator now
+requires the complete matching terminal attempt receipt. It reconstructs and
+checks the canonical receipt hash, terminal status/dispatch state, authority,
+request/model, exact pricing, usage, and limit state; rewriting only proof-local
+terminal fields or omitting the receipt cannot validate. HISTORY_POLICY late
+proof records the R2.2 receipt as absent post-dispatch and never admits the late
+provider output.
+
+Verification: R2.4 passed 447/447; the combined R2.3--R2.5 gate passed 549/549;
+and the complete MobileWorld suite passed 2239/2239 in 623.68 seconds.
+Independent final red-team review reported GO for the late-response races,
+natural-exit cancellation,
+negative authority/accounting cases, retained HISTORY_POLICY proof, and
+mandatory rubric receipt. Ruff check and format check passed; configured mypy
+passed over 28 source files; all 22 R2.2--R2.5 schemas passed; accepted R2.3
+implementation/schema bytes remained exactly equal to
+`54381b7b56b06d5aa262005af62b65269b4cf0a6`; and Git diff checks passed.
+
+Authority and artifact boundary: no live OpenAI/API/model/provider call,
+external network, credential or production secret, GPU, Docker, model service
+or weights, MobileWorld backend/emulator, GUI/tool/action, replay, smoke, pilot,
+or other live resource was used. No `OWNER_AUTHORIZED` manifest, persistent
+117-row executable source, selected cohort, frozen pilot manifest, 80--120-cell
+execution artifact, or corresponding content hash was created. Only CPU/
+offline tooling and protocol preparation is claimed; no effectiveness or
+causal claim is established. Owner re-review is the next repository decision,
+and any later resource/run authorization remains a separate owner action.
+```
+
+```text
+Date: 2026-09-04 UTC
+Latest ALE-327 / R2.4 CPU/offline remediation candidate: implementation commit
+`37bde84c33c885dd0a266d9b2a770501b9e0855b` supersedes
+`dfbad16dc96fc6f5d930c0764999c102b624d5d5` after closing the reported
+cancel-versus-success publication race and the adjacent durable
+history-policy admission inconsistency. This candidate remains ready only for
+owner re-review. R2.4 stays In Progress / NO-GO and must not be merged or
+pushed; it grants no live authority. Runtime Epic 2 remains 3/6 accepted, R2.5
+remains unauthorized, and Linear was not changed.
+
+Cancellation and deadline boundary: cancellation signaling, deadline
+adjudication, and successful `COMPLETED` publication share one finalization
+lock. After receiving a provider envelope, the attempt rechecks cancellation
+and deadline under that lock after child reaping and immediately before
+terminal success publication. If cancellation or deadline wins, cancellation
+terminalization runs instead: an arrived response is retained only as late
+proof and cannot be returned, marked passed, or admitted. Deterministic CPU
+regressions cover cancellation after receive and deadline expiry during child
+reaping.
+
+History-policy proof boundary: a non-`COMPLETED` attempt cannot bind an R2.2
+receipt with `evaluation_status=ADMITTED` or a non-null admitted-plan hash.
+The only committed-receipt exception is a strict pre-response
+`POLICY_TRANSPORT_ERROR` receipt: attempt dispatch count and policy transport
+call count are both one; returned-model, response, provider-output, parsed-
+proposal, admitted-plan, and usage fields are absent; and every semantic
+decision count is zero. This preserves truthful durable evidence for a
+transport failure without allowing a cancelled, failed, or
+termination-unconfirmed attempt to claim semantic admission.
+
+Verification: the combined affected gate passed 247/247; R2.4 passed 455/455;
+the combined R2.3--R2.5 gate passed 557/557; and the complete MobileWorld suite
+passed 2247/2247 in 604.38 seconds. Independent scoped red-team review reported
+GO. Ruff check and format check passed over the four changed
+implementation/test files; configured mypy passed over 28 source files; all 22
+R2.2--R2.5 schemas passed; accepted R2.3 implementation/schema bytes remained
+exactly equal; and Git diff checks passed. These are CPU/offline repository
+engineering results, not owner acceptance or a live result.
+
+Authority and artifact boundary: no live OpenAI/API/model/provider call,
+external network, credential or production secret, GPU, Docker, model service
+or weights, MobileWorld backend/emulator, GUI/tool/action, replay, smoke, pilot,
+or other live resource was used. No `OWNER_AUTHORIZED` manifest, persistent
+117-row executable source, selected cohort, frozen pilot manifest,
+80--120-cell execution artifact, or corresponding content hash was created.
+Only CPU/offline tooling and protocol preparation is claimed; no effectiveness
+or causal claim is established. Owner re-review is the next repository
+decision, and merge, push, live authorization, resource use, and Linear remain
+separate owner actions.
+```
+
+```text
+Date: 2026-09-05 UTC
+Latest ALE-327 / R2.4 CPU/offline shared-GPU smoke-preparation candidate:
+implementation commit `46a176c6f523da34439a75fd10f3901644c52530`
+supersedes `37bde84c33c885dd0a266d9b2a770501b9e0855b` after adding a narrow,
+pilot-free single-shared-GPU execution path for the six action-free live-smoke
+cases. This is repository engineering evidence for owner re-review, not an
+R2.4 live-smoke result. R2.4 remains In Progress / NO-GO, must not be merged or
+pushed, and grants no live authority. Runtime Epic 2 remains 3/6 accepted,
+R2.5 remains unauthorized, and Linear was not changed.
+
+Smoke-only lifecycle: `R24_LIVE_SMOKE_ONLY` and
+`SINGLE_GPU_SEQUENTIAL_SHARED` bind one project lease and one GPU index. The
+fixed sequence starts backend plus Qwen, runs Qwen OFF/SHADOW/ACTIVE, stops and
+reaps Qwen and proves its port clear, re-attests the shared GPU and immutable
+MAI snapshot, starts MAI, runs MAI OFF/SHADOW/ACTIVE, and finishes with bounded
+cleanup. Only one actor service may be live at a time. The runtime pins vLLM
+`gpu_memory_utilization=0.24` and requires at least 51,200 MiB free at each
+admission boundary. GPU census evidence binds index/UUID/capacity/use plus each
+visible compute process's PID, start time, process group, session, UID, user,
+and memory. Baseline co-tenants may remain; new or identity-drifting tenants
+fail closed, and cleanup targets only exact project-owned process identities.
+
+Authority and isolation boundary: the additive smoke-only authority,
+preflight, executor, and CLI contain no pilot, cohort, 117-row task source,
+cell, score, or GUI-action authority and cannot reach R2.5. Pilot methods reject
+smoke scope before snapshot reads, reset, or dispatch. Owner-only authority and
+input files are pinned by path/inode metadata; input alias, hard-link, symlink,
+or path-swap attacks fail before reading a secret, and the parent remains
+zero-read for the OpenAI key. The legacy independent two-GPU concurrent
+full-run path is unchanged and separate.
+
+Cleanup and proof boundary: the complete shared cleanup upper bound is
+`5 * shutdown_grace_seconds + 3 * ceil(health_poll_interval_ms / 1000) + 225`.
+The default grace 10 seconds and poll 250 ms require exactly 278 seconds; a
+smaller reserve fails before resource I/O. Canonical bound evidence is carried
+through authority, executor, terminal, failure, recovery, and cleanup. Resource
+preparation, handoff, every physical actor/Sentinel dispatch, case result,
+terminal, rollback, and cleanup are durable. Admission/write/fsync/rename and
+terminal-publication failures preserve full recovery proof, while oversized
+legal journals use owner-only content-addressed blobs with bound compact
+references.
+
+Verification: the combined R2.3--R2.5 CPU/offline gate passed 667/667 and the
+complete MobileWorld suite passed 2357/2357 in 606.62 seconds. Ruff check and
+format check passed over 15 changed Python files. Configured mypy passed over
+29 runtime source files and four operator scripts. All 23 R2.2--R2.5 schemas
+passed; accepted R2.3 implementation/schema bytes remained exactly equal; Git
+diff checks passed; and independent shared-resource, smoke-CLI, and execution-
+boundary red teams reported GO.
+
+Authority and resource boundary: no `OWNER_AUTHORIZED` manifest was issued.
+No GPU process/model service or weights, network, OpenAI/API/provider call,
+live credential, Docker/backend/emulator, GUI/tool/action, replay, smoke, or
+pilot was started or used. Read-only GPU5/process/model/environment facts are
+planning observations only and do not constitute preflight, resource
+admission, or acceptance. No persistent live-run artifact or receipt was
+created. Owner re-review remains the next repository decision; exact live
+authority, merge, push, resource use, and Linear remain separate owner actions.
+Owner approval required: yes before merge, push, live authority, live smoke,
+pilot, or any GPU/model/network/API/backend/action execution.
+```
+
+```text
+Date: 2026-09-05 UTC
+ALE-327 / R2.4 live-smoke evidence gate: PASSED; OWNER RE-REVIEW PENDING;
+NO CURRENT LIVE AUTHORITY; MERGE/PUSH/R2.5 NO-GO. Runtime Epic 2 remains
+3/6 accepted and Linear was not changed.
+
+Implementation and CPU evidence: source commit
+`2f5eae0dba43908a44017bf8f3ab6916b56db095` fixes the scoreless parser-smoke
+Collector terminal semantics in production_driver.py and its direct tests. A
+successful smoke task is `aborted` with `score=null` and termination source
+`r2_4_parser_smoke_no_action`; its successfully finalized Collector run is
+`completed`. Failed smoke remains `crashed`, scored-pilot completion remains
+numeric, and no zero score is invented. R2.4 passed 646/646, production-driver
+passed 134/134, independent production-driver plus audit-integrity passed
+150/150, and the complete MobileWorld CPU/offline suite passed 2438/2438 in
+625.79 seconds. Ruff check/format, configured source mypy, Git diff checks, and
+independent red-team review passed.
+
+Excluded immutable predecessor: run `r24-smoke-gpu5-20260905t115136z` at
+source `67b93e1aba76b58db0a6902390efef7b714ee357` completed the transport chain,
+but all six raw Collector roots failed the official checker with exactly
+`invalid_task_ended_payload`, `task_capture_complete_inconsistent`, and
+`run_capture_complete_inconsistent`. It is excluded from acceptance and was
+not rewritten. Its six-root metadata/content combined tree remains
+`5b5201053f4c035bf015650ecdf47bea16412f489ce65f0bf35c54de759ce754`;
+none of those old roots contains an integrity report.
+
+Fresh authority and preflight:
+- run ID: `r24-smoke-gpu5-integrity-retry-20260905t181000z`
+- workspace: `/shared/linqiang/agent_monitor/r24_live_smoke_workspace_20260905`
+- durable run root: `run-r24-smoke-gpu5-integrity-retry-20260905t181000z`
+- production audit root: `audit-r24-smoke-gpu5-integrity-retry-20260905t181000z`
+- DRAFT SHA: `db616b2744cf83617b9e15b8a901334ab0854648b28ed58434621f561c8da0e1`
+- OWNER SHA: `395c89f304d77823a2172ab5175661d30897fc31615f01f1dbc7ab8537d13bfb`
+- scope: `R24_LIVE_SMOKE_ONLY`; pilot forbidden; source `2f5eae0...db095`
+- dry-run file SHA: `513a3aba9bdc8ada75ddc65d60682cc3d0bf1b41312251d0ea119ba2f350893a`
+- preflight report SHA: `7974cf03759132e48e3507c11e49d08aeccc918c2dd2fa56a9ec854ac0fb765a`
+- preflight: 25/25, side-effect census zero, `pilot_reachable=false`
+
+Fresh run outcome: terminal COMPLETE; completed stages RESOURCE_PREFLIGHT,
+QWEN_LIVE_SMOKE, and MAI_LIVE_SMOKE. Qwen and MAI each completed
+OFF/SHADOW/ACTIVE in that order, with Qwen fully reaped and port-clear before
+MAI start. All six actor attempts succeeded and parsed; all 12 Sentinel OpenAI
+attempts completed; GUI/action executions were zero. Qwen cost was 90,378
+micros, MAI cost 83,576 micros, and total exact cost was 173,954 micros
+(`$0.173954`). ACTIVE was exercised but its admitted decisions were
+`KEEP_UNCERTAIN` with an empty plan, so final request equaled Original; this is
+a valid no-op and proves no effectiveness or causal claim.
+
+Durable sequence artifacts:
+- manifest binding file SHA: `3d35ca8dd01566dda73e4bc0eca1119b84691f3e6baae6f0374c4af7ee4fc664`
+- resource stage file SHA: `107adb272c1948c48fab2be42afffa691e7072ebd97b03f408527c6c675a9174`
+- Qwen stage file SHA: `fb6d4d25644492edd687cdc26f28111da2b9395377faab26438fd85b08364950`
+- MAI stage file SHA: `cc29f1e19d91b735bede3ac19e905e8cc56f75ac45d639c4b7868a89d7403024`
+- cleanup file SHA: `465404defabf9752a2b544b8464d363355992a936eb418cab949bb7f4949431f`
+- terminal file SHA: `972cb521ff0819a4cc631130f8b74019abeca99a9678997342221c7011403313`
+- terminal result SHA: `6c8a3866cbfe0e8972b130fc24ccdf17f8ee9bb7474ea978b4d8497cef406a99`
+- CLI execute-result file SHA: `56e48bea0d5e34b6ecdfbcb24e0b558b14b1752ecba3d90dfe3c9ad0db702e3e`
+
+Official Collector integrity reports (`mobileworld.audit.integrity/v1`) are
+owner-only mode-0600, nlink-1 canonical JSON. Every report has `valid=true`,
+`errors=[]`, `warnings=[]`, event_count=9, model_request_count=1,
+model_terminal_count=1, action_execution_count=0, and orphan_blob_count=0:
+their common raw base is
+`process-logs-v2/collector/raw/runs` under the workspace above.
+- Qwen OFF raw `01M1SE10B3SAEM5MJX45CNQYMW`, task
+  `01M1SE10B6G8HM645T5BJDSQ82`, manifest.final
+  `005d7d6a77d1f886e8842dbb6a8ca495c0ff2d4c9e1121283817155c69ab2e7c`,
+  report `57f485e4d611d325f0427bb0ee60f289a47fb97889d33504e7d27ce0541deefb`.
+- Qwen SHADOW raw `01M1SE12MFHZGY21XDH0E0RG9J`, task
+  `01M1SE12MFR2NE4XT6M6SZ868S`, manifest.final
+  `7d228e4327b84834277e345a67f1fae1984b20f63556a353ce77ce83e32eee83`,
+  report `a6be60471dc786bd447f0061b8e03d3b0b17c5579052b8d3534a27b1a6cb2490`.
+- Qwen ACTIVE raw `01M1SE1SAEQC1EPZ83PYH01QKH`, task
+  `01M1SE1SAFGAQ47VG8RVSXQ94Z`, manifest.final
+  `dfa77da7be50f7673282bae183097dffb280152e8639bffc624a8dcbc633abb7`,
+  report `ba52b92ab2508145cb892ade41ee5d5ae19fc2ff1615b8f6d82696866a216565`.
+- MAI OFF raw `01M1SE4RBYYHMRPXYW48HPXT8P`, task
+  `01M1SE4RC1MZRS274T2CPCQPT1`, manifest.final
+  `ab7dbc46c0218ac3b21a9803c1d8db787e6dbbe08295f2079b4e11884920e9de`,
+  report `8165782f7968444f0bebcdde917a647fc767b1d57d3b33ade652fa3ccff1ffbf`.
+- MAI SHADOW raw `01M1SE4T7Q11R4XTKWD7X3MK0Q`, task
+  `01M1SE4T7R1MYTSP451DYC4PHZ`, manifest.final
+  `d331c2320a9e33b8afc43a27f64e648ba9a27d7a8a180cd30da651e913311393`,
+  report `87ced581989b4ba319539463cfb154c1f2f8424cad8e30f849bf59c11b4c61d6`.
+- MAI ACTIVE raw `01M1SE5FM7844RB3AYZAM55N3W`, task
+  `01M1SE5FM8WG7TREG68KRSVG43`, manifest.final
+  `ce7d9268d8330aeb57303e0dcc9245777952fbd135044b20aef0d5bddfaf0ff9`,
+  report `04066cfbe461c983d93c656f90d560277c5495df364843d66e3cb9523d4e85bd`.
+
+Cleanup: `SUCCEEDED/CLEANED/SHARED_MODELS_RECLAIMED`; Qwen leader/PGID/SID
+165018 and MAI leader/PGID/SID 178349 were reaped, session membership was zero,
+ports 6960/18007/18008 were clear, residual capability lists were empty, and
+the GPU lease was released. Baseline co-tenant PID/PGID/SID 27625 completed its
+own scheduled iteration 500 and logged `Evolution complete` at 18:43:43 UTC,
+about 67 seconds before R2.4 cleanup terminalization; it was absent from the
+project stopped-model census. This supports natural completion rather than a
+project signal. A read-only credential-pattern scan over this run, production
+audit, model logs, and Sentinel receipts found no bearer token, `sk-` value, or
+`OPENAI_API_KEY` occurrence.
+
+Limitations and authority: all raw/live artifacts remain repo-external. The
+exact smoke authority has been consumed and cannot authorize a rerun. No GUI
+action, R2.5/pilot, merge, push, release, Linear change, task-effectiveness
+measurement, or causal evaluation occurred. Owner review of the exact source
+commit and evidence digests is the next required repository decision.
+```
+
+```text
+Date: 2026-09-05 UTC
+ALE-327 / R2.4 owner disposition: ACCEPTED / DONE. Runtime Epic 2 is now
+4/6 accepted. The exact reviewed implementation/source checkpoint is
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`; run
+`r24-smoke-gpu5-integrity-retry-20260905t181000z` and the evidence hashes in
+the preceding ledger are the accepted live-smoke basis. Owner review found no
+remaining P0/P1 and authorized the reviewed repository branch for PR/merge and
+the ALE-327 Linear completion update.
+
+Independent acceptance replayed the complete R2.4 CPU gate at 646/646, read
+the terminal through `AtomicR24SmokeOutputTransactionV1`, revalidated all six
+new Collector roots with `check_run_integrity(..., write_report=False)`, and
+recomputed the manifest, stage, terminal, result, integrity-report, and cost
+bindings. Qwen and MAI each completed OFF/SHADOW/ACTIVE; all six actor outputs
+parsed, all 12 Sentinel attempts completed and were reaped, exact cost was
+173,954 micros, and GUI/action execution remained zero. The old six invalid
+Collector roots remain excluded and unmodified.
+
+Evidence-language clarification: explicit hash-bound model-service evidence
+proves ports 18007 and 18008 available and both project model identities
+reaped. Port 6960 clearance follows from the bound backend/container cleanup
+and empty residual-capability census rather than a separate hashed port probe.
+Likewise, the co-tenant's `Evolution complete` text and 18:43:43 timestamp are
+operator observations; the durable claim used for acceptance is narrower:
+PID/PGID/SID 27625 retained stable identity through the bound censuses and was
+absent from the project stopped-model set.
+
+Acceptance boundary: ACTIVE produced an admitted `KEEP_UNCERTAIN` no-op. R2.4
+therefore proves the bounded runtime transport/parser/isolation/safety chain,
+not a material history edit, task-effectiveness improvement, or causal effect.
+The smoke authority is consumed. No new live run, API/GPU/backend/GUI action,
+R2.5 pilot, or release is authorized by this acceptance. R2.5 is mechanically
+next but requires a separate exact owner decision and authority.
 ```

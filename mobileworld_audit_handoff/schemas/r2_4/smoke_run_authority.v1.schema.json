@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/smoke_run_authority.v1.schema.json",
+  "title": "R2.4 Shared-GPU Live-Smoke-Only Run Authority v1",
+  "description": "Closed authority for resource preparation, Qwen OFF/SHADOW/ACTIVE, one Qwen-to-MAI handoff, MAI OFF/SHADOW/ACTIVE, and cleanup. It contains no R2.5 pilot, cohort, task-source, or topology-comparison authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "actor_resources",
+    "authorization",
+    "execution_scope",
+    "max_qwen_to_mai_handoff_wall_time_seconds",
+    "max_resource_preflight_wall_time_seconds",
+    "max_resource_cleanup_wall_time_seconds",
+    "max_sequence_actor_calls",
+    "max_sequence_cost_usd_micros",
+    "max_sequence_openai_calls",
+    "max_sequence_wall_time_seconds",
+    "openai_stages",
+    "output_root",
+    "resource_topology",
+    "run_id",
+    "runtime_config_sha256",
+    "safety",
+    "schema_version",
+    "secret",
+    "smoke_plans",
+    "source_commit"
+  ],
+  "properties": {
+    "actor_resources": {
+      "type": "array",
+      "prefixItems": [
+        {"$ref": "run_authority_manifest.v1.schema.json#/$defs/qwenResource"},
+        {"$ref": "run_authority_manifest.v1.schema.json#/$defs/maiResource"}
+      ],
+      "items": false
+    },
+    "authorization": {"$ref": "#/$defs/authorization"},
+    "execution_scope": {"const": "R24_LIVE_SMOKE_ONLY"},
+    "max_qwen_to_mai_handoff_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600
+    },
+    "max_resource_preflight_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "max_resource_cleanup_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 8,
+      "maximum": 3600
+    },
+    "max_sequence_actor_calls": {"type": "integer", "minimum": 1},
+    "max_sequence_cost_usd_micros": {"type": "integer", "minimum": 1},
+    "max_sequence_openai_calls": {"type": "integer", "minimum": 1},
+    "max_sequence_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "openai_stages": {
+      "type": "array",
+      "prefixItems": [
+        {"$ref": "run_authority_manifest.v1.schema.json#/$defs/rubricOpenAIStage"},
+        {"$ref": "run_authority_manifest.v1.schema.json#/$defs/historyOpenAIStage"}
+      ],
+      "items": false
+    },
+    "output_root": {"$ref": "#/$defs/absolutePath"},
+    "resource_topology": {"const": "SINGLE_GPU_SEQUENTIAL_SHARED"},
+    "run_id": {"$ref": "#/$defs/runtimeId"},
+    "runtime_config_sha256": {"$ref": "#/$defs/sha256"},
+    "safety": {"$ref": "#/$defs/safety"},
+    "schema_version": {
+      "const": "mobileworld.runtime.sentinel-r2.4-live-smoke-run-authority/v1"
+    },
+    "secret": {"$ref": "run_authority_manifest.v1.schema.json#/$defs/secret"},
+    "smoke_plans": {
+      "type": "array",
+      "prefixItems": [
+        {"$ref": "run_authority_manifest.v1.schema.json#/$defs/qwenSmokePlan"},
+        {"$ref": "run_authority_manifest.v1.schema.json#/$defs/maiSmokePlan"}
+      ],
+      "items": false
+    },
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/"
+    },
+    "runtimeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "utcSecond": {
+      "type": "string",
+      "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_model_calls_allowed",
+        "authorization_id",
+        "authorized_by",
+        "backend_allowed",
+        "docker_allowed",
+        "expires_at_utc",
+        "frozen_artifact_mutation_allowed",
+        "gpu_allowed",
+        "issued_at_utc",
+        "linear_update_allowed",
+        "merge_allowed",
+        "model_loading_allowed",
+        "network_allowed",
+        "sentinel_provider_calls_allowed",
+        "smoke_gui_actions_allowed",
+        "status"
+      ],
+      "properties": {
+        "actor_model_calls_allowed": {"const": true},
+        "authorization_id": {"$ref": "#/$defs/runtimeId"},
+        "authorized_by": {"$ref": "#/$defs/runtimeId"},
+        "backend_allowed": {"const": true},
+        "docker_allowed": {"const": true},
+        "expires_at_utc": {"$ref": "#/$defs/utcSecond"},
+        "frozen_artifact_mutation_allowed": {"const": false},
+        "gpu_allowed": {"const": true},
+        "issued_at_utc": {"$ref": "#/$defs/utcSecond"},
+        "linear_update_allowed": {"const": false},
+        "merge_allowed": {"const": false},
+        "model_loading_allowed": {"const": true},
+        "network_allowed": {"const": true},
+        "sentinel_provider_calls_allowed": {"const": true},
+        "smoke_gui_actions_allowed": {"const": false},
+        "status": {"enum": ["DRAFT_NOT_AUTHORIZED", "OWNER_AUTHORIZED"]}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arbitrary_commands_forbidden",
+        "default_dry_run",
+        "pilot_stage_forbidden",
+        "repo_external_output_required",
+        "secrets_in_logs_forbidden",
+        "stages",
+        "stop_on_failure"
+      ],
+      "properties": {
+        "arbitrary_commands_forbidden": {"const": true},
+        "default_dry_run": {"const": true},
+        "pilot_stage_forbidden": {"const": true},
+        "repo_external_output_required": {"const": true},
+        "secrets_in_logs_forbidden": {"const": true},
+        "stages": {
+          "type": "array",
+          "prefixItems": [
+            {"const": "RESOURCE_PREFLIGHT"},
+            {"const": "QWEN_LIVE_SMOKE"},
+            {"const": "MAI_LIVE_SMOKE"}
+          ],
+          "items": false
+        },
+        "stop_on_failure": {"const": true}
+      }
+    }
+  }
+}

@@ -61,6 +61,56 @@ class FakeResponse:
             raise requests.HTTPError(f"HTTP {self.status_code}")
 
 
+class _StepEnvelopeResponse:
+    """Preserve exact fake transport bytes while modeling the server's success envelope."""
+
+    def __init__(self, response: FakeResponse, request_body: dict[str, Any]) -> None:
+        self._response = response
+        self.content = response.content
+        self.status_code = response.status_code
+        self.headers = response.headers
+        self._request_body = request_body
+
+    @property
+    def ok(self) -> bool:
+        return self._response.ok
+
+    @property
+    def text(self) -> str:
+        return self._response.text
+
+    def json(self) -> dict[str, Any]:
+        try:
+            decoded = self._response.json()
+        except Exception:
+            decoded = None
+        result = decoded.get("result") if type(decoded) is dict else self._response.text
+        return {
+            "action": self._request_body["action"],
+            "device": self._request_body["device"],
+            "result": result,
+        }
+
+    def raise_for_status(self) -> None:
+        self._response.raise_for_status()
+
+
+class _PatchedRequestsSession:
+    """Route the owned-session client through this module's monkeypatched requests calls."""
+
+    def post(self, url: str, **kwargs: Any) -> Any:
+        kwargs.pop("timeout", None)
+        response = client_module.requests.post(url, **kwargs)
+        request_body = kwargs.get("json")
+        if url.endswith("/step") and type(request_body) is dict:
+            return _StepEnvelopeResponse(response, request_body)
+        return response
+
+    def get(self, url: str, **kwargs: Any) -> Any:
+        kwargs.pop("timeout", None)
+        return client_module.requests.get(url, **kwargs)
+
+
 def _png_bytes(color: tuple[int, int, int]) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (3, 2), color).save(buffer, format="PNG")
@@ -73,6 +123,8 @@ def _client() -> AndroidEnvClient:
     client.device = "fixture-device"
     client.step_wait_time = 0
     client._initialized = True
+    client._request_deadline_monotonic_ns = None
+    client._session = _PatchedRequestsSession()
     return client
 
 

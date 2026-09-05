@@ -3,7 +3,11 @@
 
 import asyncio
 import base64
+import hashlib
+import json
+import math
 import os
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -515,10 +519,9 @@ def step(req: StepRequest):
         elif action_type == INPUT_TEXT:
             text = action.text
             logger.info(f"[STEP] Executing text input: '{text}'")
-            if text != "":
-                ret = ctr.text(text)
-            else:
-                logger.warning("[STEP] Text input is empty, skipping")
+            if type(text) is not str or not text:
+                raise HTTPException(status_code=400, detail="input_text requires non-empty text")
+            ret = ctr.text(text)
 
         elif action_type == NAVIGATE_BACK:
             logger.info("[STEP] Executing back button")
@@ -608,6 +611,8 @@ def step(req: StepRequest):
     except KeyError as e:
         logger.error(f"[STEP] Missing parameter: {e}")
         raise HTTPException(status_code=400, detail=f"missing param: {e}")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[STEP] Error executing action {action_type}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -667,7 +672,17 @@ def get_task_metadata(task_name: str):
     return JSONResponse(status_code=200, content=metadata)
 
 
-def _initialize_task_once(task: Any, controller: AndroidController) -> None:
+def _initialize_task_once(
+    task: Any,
+    controller: AndroidController,
+    *,
+    reset_seed: int | None = None,
+) -> None:
+    if reset_seed is not None:
+        # Task initialization is serialized by ``_serialized_device_operation``.
+        # Re-seed on every infrastructure retry so a failed first attempt cannot
+        # advance the matched episode's task-generation stream.
+        random.seed(reset_seed, version=2)
     result = task.initialize_task(controller)
     if result is False:
         task.initialized = False
@@ -687,6 +702,34 @@ def init_task(req: TaskOperationRequest):
             status_code=500, detail="Task registry not initialized. Server not properly configured."
         )
 
+    frozen_values = (req.task_trial, req.task_parameters_sha256, req.reset_seed)
+    if any(value is not None for value in frozen_values):
+        if (
+            type(req.task_trial) is not int
+            or not 1 <= req.task_trial <= 1_000_000
+            or type(req.task_parameters_sha256) is not str
+            or len(req.task_parameters_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in req.task_parameters_sha256)
+            or type(req.reset_seed) is not int
+            or not 0 <= req.reset_seed <= 2_147_483_647
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Frozen task initialization binding is incomplete or invalid",
+            )
+        canonical_parameters = json.dumps(
+            {"task_name": req.task_name, "trial": req.task_trial},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        if hashlib.sha256(canonical_parameters).hexdigest() != req.task_parameters_sha256:
+            raise HTTPException(
+                status_code=400,
+                detail="Frozen task parameters do not match their canonical hash",
+            )
+
     global RUNNING_TASK
     logger.info(f"[TASK_INIT] Initializing task: {req.task_name}")
 
@@ -699,7 +742,7 @@ def init_task(req: TaskOperationRequest):
             task = task_registry.get_task(req.task_name)
             try:
                 ctr = _ensure_controller_healthy(req.req_device)
-                _initialize_task_once(task, ctr)
+                _initialize_task_once(task, ctr, reset_seed=req.reset_seed)
             except DeviceUnhealthyError as initial_error:
                 # Snapshot acknowledgement can be followed by a delayed ADB
                 # disconnect.  Recover once, inside this same request, so a
@@ -711,7 +754,7 @@ def init_task(req: TaskOperationRequest):
                 task.initialized = False
                 ctr = _restart_and_verify_emulator(req.req_device)
                 _mark_restart_success()
-                _initialize_task_once(task, ctr)
+                _initialize_task_once(task, ctr, reset_seed=req.reset_seed)
         except Exception as error:
             if task is not None:
                 task.initialized = False
@@ -737,11 +780,42 @@ def eval_task(req: TaskOperationRequest):
     ctr = ensure_controller(req.req_device)
     logger.info(f"[TASK_IS_SUCCESSFUL] Checking if task is successful: {req.task_name}")
     task = task_registry.get_task(req.task_name)
+    if RUNNING_TASK is None or RUNNING_TASK is not task:
+        raise HTTPException(
+            status_code=409,
+            detail="Requested task is not the currently running task",
+        )
     ret = task.is_successful(ctr)
-    if isinstance(ret, tuple):
-        return JSONResponse(status_code=200, content={"score": ret[0], "reason": ret[1]})
+    if type(ret) is tuple:
+        if len(ret) != 2:
+            raise HTTPException(status_code=500, detail="Task evaluator returned an invalid tuple")
+        score, reason = ret
     else:
-        return JSONResponse(status_code=200, content={"score": ret})
+        score = ret
+        reason = "TASK_EVALUATOR_RETURNED_SCALAR"
+    if (
+        type(score) not in (int, float)
+        or not 0.0 <= score <= 1.0
+        or not math.isfinite(float(score))
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail="Task evaluator score must be a finite number in [0, 1]",
+        )
+    if type(reason) is not str or not reason or len(reason) > 16_384:
+        raise HTTPException(
+            status_code=500,
+            detail="Task evaluator reason must be a bounded non-empty string",
+        )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "device": req.req_device,
+            "reason": reason,
+            "score": float(score),
+            "task_name": req.task_name,
+        },
+    )
 
 
 @app.post("/task/tear_down")

@@ -1,6 +1,6 @@
 # AgentSentinel agent instructions
 
-Last synchronized with the owner-facing repository state: **2026-09-02 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-05 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
 This is the AgentSentinel monorepo. `MobileWorld/` is the active implementation
@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 2/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`. ALE-326 / R2.3 has a corrected CPU/offline/injected-fake, SHADOW-only candidate at `54381b7b56b06d5aa262005af62b65269b4cf0a6`, pending owner review and not counted as accepted. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 4/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`; ALE-327 / R2.4 is owner-accepted at implementation/source commit `2f5eae0dba43908a44017bf8f3ab6916b56db095`. Fresh run `r24-smoke-gpu5-integrity-retry-20260905t181000z` completed the fixed Qwen then MAI `OFF / SHADOW / ACTIVE` sequence with 6 parsed actor calls, 12 completed Sentinel OpenAI calls, 0 actions, exact cost `$0.173954`, successful bounded cleanup, and six official Collector integrity reports with `valid=true`, `errors=[]`, and `warnings=[]`. Acceptance is limited to the R2.4 runtime vertical-slice and live-smoke contract; it is not an effectiveness/causal result. The consumed authority grants no rerun or R2.5 permission. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -89,7 +89,7 @@ PromptSentinel.before_model_call(
 
 At the accepted R2.1 checkpoint, only deterministic no-op/fake policies were
 available. The accepted R2.2 boundary below adds automatic-policy contracts
-and fake-transport behavior; the R2.3 candidate adds the separate multi-path
+and fake-transport behavior; accepted R2.3 adds the separate multi-path
 rubric axis. Live model-backed Sentinel decisions still belong to later stories.
 
 The executable R2.1 edit surface is deterministic `DROP` only. Every `REPLACE`
@@ -175,10 +175,11 @@ Collector-to-evidence plumbing, runtime span discovery/capability overlays, a
 cancellable live transport/attempt receipt, secrets/resource authority, and a
 versioned zero-target bridge.
 
-## Candidate implementation boundary: ALE-326 / R2.3
+## Accepted implementation boundary: ALE-326 / R2.3
 
 Commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` is the corrected
-**Multi-Path Rubric Tracker** repository candidate pending owner review. Its
+**Multi-Path Rubric Tracker** repository checkpoint accepted through mainline
+merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. Its
 tested boundary is CPU-only, offline, injected-fake, and SHADOW-only. It does
 not authorize or claim a live model/provider call, network or GPU use,
 MobileWorld execution, active history mutation, action selection, or task
@@ -208,17 +209,132 @@ so legal graphs through the 512-gate limit do not consume Python call-stack
 depth and are independent of gate declaration order.
 Post-state record relevance remains derived, but this checkpoint has no trusted
 record-level R2.2 `SUPPORTED + KEEP` resolver: arbitrary support hashes have no
-archive authority, every record remains `RETAIN`, and `ARCHIVE_SHADOW` is
-schema-reserved until R2.4 supplies that resolver. Hash-only receipts include
+archive authority, every record remains `RETAIN`, and `ARCHIVE_SHADOW` remains
+schema-reserved. The accepted R2.4 vertical slice did not install that resolver.
+Hash-only receipts include
 measured backend-failure latency; cumulative call census, cache metrics, and
 frozen-label-only calibration remain derived sidecars. Qwen and MAI are
 represented only by captured CPU fixtures; there is no host/model-specific
 runtime branch.
 
-R2.4 is now the next mechanically available repository dependency after owner
-review of this candidate, but any live vertical slice, provider/model use,
-resource provisioning, GPU, backend, GUI, tool, action, or replay still needs
-separate explicit owner authorization.
+R2.4 is owner-accepted. R2.5 is now the next mechanically available repository
+dependency, but any new live run, provider/model use, resource provisioning,
+GPU, backend, GUI, tool, action, or replay still needs separate explicit owner
+authorization.
+
+## Accepted ALE-327 / R2.4 boundary and candidate ALE-328 / R2.5 preparation
+
+The initial implementation commit
+`344e1c42596a4dca717da66374eeca3d936c3f61` prepared the two-host runtime
+overlay, same-cutoff Collector evidence, independent history-free rubric and
+history-policy orchestration, typed no-history behavior, sealed
+authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
+evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
+fixtures and injected fakes. Owner review classified that candidate **NO-GO**.
+The remediation and live-smoke source checkpoint
+`2f5eae0dba43908a44017bf8f3ab6916b56db095` is owner-accepted for R2.4. It
+retains the earlier strict-logging, type-sensitive-schema,
+request-anchor, run-fatal, bounded-cleanup, and no-cleanup-initialization
+repairs. It additionally binds every formed `RUBRIC` and `HISTORY_POLICY`
+attempt to the complete authority, deadline/constraint, case lease, exact
+two-stage set, pricing, transport, and canonical provider-request preimages.
+The durable validators require nine caller-known roots: authority, constraint,
+manifest, preflight, case lease, stage, pricing, transport, and request. A
+received `HISTORY_POLICY` provider response remains proof-bound when R2.2 receipt
+prepare, publish, or deadline handling fails; the missing receipt is recorded
+as post-dispatch and the policy result is not admitted.
+When deadline or cancellation handling wins a race with an already-arrived
+valid `COMPLETED` Responses envelope, a `FAILED`, `CANCELLED_POST_DISPATCH`, or
+`TERMINATION_UNCONFIRMED` attempt retains the detached envelope hash, requested/
+returned model, and, when provider usage is present, full usage including
+cached input plus exact recomputed cost. If usage is absent, cost remains
+`UNKNOWN` and the existing run-fatal rule applies. The late result remains
+discarded and cannot be admitted; even a known exact over-limit result is
+evidence only. A clean natural child exit can terminalize as a cooperative
+post-dispatch cancellation. The public durable rubric-proof validator requires
+the complete matching terminal attempt receipt.
+Cancellation signaling, deadline adjudication, and successful `COMPLETED`
+publication now share one finalization lock. If cancellation or deadline wins
+before terminal publication, an arrived response cannot be returned or
+published as `COMPLETED`; it remains late evidence only. A non-`COMPLETED`
+history-policy attempt cannot bind an `ADMITTED` R2.2 receipt or an admitted
+plan. The sole committed-receipt exception is a strict pre-response
+`POLICY_TRANSPORT_ERROR` receipt with one dispatched transport call, no
+returned-model/response/output/proposal/plan/usage fields, and a zero semantic
+decision census.
+
+The additive smoke-only execution scope is `R24_LIVE_SMOKE_ONLY`. Its secure
+authority, preflight, executor, and CLI expose only the fixed sequence
+Qwen `OFF / SHADOW / ACTIVE`, stop/reap/port-clear and re-attest, MAI
+`OFF / SHADOW / ACTIVE`, then cleanup. The resource topology
+`SINGLE_GPU_SEQUENTIAL_SHARED` uses one exclusive project lease over the same
+GPU index, starts only one actor service at a time, pins vLLM
+`gpu_memory_utilization=0.24`, and requires at least 51,200 MiB free at each
+admission boundary. Shared-GPU census evidence binds GPU identity and each
+visible compute process's PID, start time, process group, session, UID, user,
+and memory. Pre-existing co-tenants may remain, but new or changed tenants fail
+closed; cleanup reaps only project-owned processes. The handoff re-attests the
+shared GPU and next immutable model snapshot before MAI starts.
+
+The smoke-only authority contains no cohort, pilot, task-source, cell, score,
+or GUI-action authority, and the smoke executor and CLI cannot reach R2.5.
+Pilot methods also fail before snapshot reads, reset, or dispatch when invoked
+under smoke scope. Input/authority handling uses owner-only, inode-bound files;
+the parent validates secret metadata and path identity without reading the
+secret. Per-dispatch, terminal, recovery, and oversized-journal CAS evidence is
+durable and bound into the smoke result. For the shared default runtime, the
+exact cleanup upper bound is
+`5 * shutdown_grace_seconds + 3 * ceil(health_poll_interval_ms / 1000) + 225`,
+or 278 seconds for grace 10 seconds and polling 250 ms; authority below that
+bound fails before resource I/O. The existing two-GPU concurrent full-run path
+and its semantics remain unchanged and separate from this smoke-only entrypoint.
+
+Production-audit `begin` failures now retain a module-sealed full pre-provider
+recovery receipt across root, destination, temporary-file, write, file-fsync,
+directory-fsync, sink-begin, and transaction-binding failures. Unit-evidence
+journals larger than 4 MiB use an owner-only content-addressed blob plus a
+compact bound reference; blob publication/readback failures retain full outer
+failure evidence while cleanup and audit finalization still run. Both
+`TERMINATION_UNCONFIRMED` and a post-dispatch `UNKNOWN` cost trip distinct
+one-way run-fatal reasons before actor or later dispatch. Cleanup teardown
+cannot initialize or reinitialize a backend: when client/backend `/init` was
+not locally confirmed, it records the hash-bound `NOT_INITIALIZED_NO_IO`
+outcome with zero backend I/O. Repository commits do not themselves authorize
+live execution. The exact smoke authority used below is consumed; any new live
+run requires a fresh exact authority. The reviewed repository branch is
+authorized for PR/merge, but this is not an R2.5 pilot result or live authority.
+
+The first six-case transport-success run,
+`r24-smoke-gpu5-20260905t115136z` at source
+`67b93e1aba76b58db0a6902390efef7b714ee357`, is retained repo-externally but
+excluded from acceptance because all six Collector raw runs failed the
+official integrity checker with `invalid_task_ended_payload`,
+`task_capture_complete_inconsistent`, and
+`run_capture_complete_inconsistent`. The smoke task had been incorrectly
+marked `completed` despite its intentionally absent score. Commit
+`2f5eae0dba43908a44017bf8f3ab6916b56db095` fixes this without fabricating a
+score: a successful parser-only/no-action smoke task is `aborted` with
+`score=null`, while its successfully finalized Collector run is `completed`;
+failure and scored-pilot semantics remain unchanged.
+
+At that commit, the complete MobileWorld CPU/offline suite passed 2438/2438 in
+625.79 seconds; the R2.4 gate passed 646/646, the production-driver gate passed
+134/134, and independent production-driver plus audit-integrity coverage
+passed 150/150. Ruff check/format, configured source mypy, Git diff checks, and
+independent red-team review passed. Under exact owner manifest
+`395c89f304d77823a2172ab5175661d30897fc31615f01f1dbc7ab8537d13bfb`
+and preflight report
+`7974cf03759132e48e3507c11e49d08aeccc918c2dd2fa56a9ec854ac0fb765a`,
+fresh run `r24-smoke-gpu5-integrity-retry-20260905t181000z` then completed all
+six action-free cases. Qwen was reaped before MAI started; both model services,
+the backend, ports, and project lease were cleaned. All six new raw Collector
+runs pass `mobileworld.audit.integrity/v1` with no errors or warnings. ACTIVE
+was exercised but produced an admitted `KEEP_UNCERTAIN` no-op, so this proves
+the bounded transport/parser/isolation/safety chain, not a material edit,
+effectiveness improvement, or causal effect. No persistent 117-row executable
+task source, selected cohort, frozen pilot manifest, or pilot artifact exists.
+The frozen G1.5 Codecs remain `live_ready=false`; R2.3 and R2.4 are accepted,
+Runtime Epic 2 is 4/6 accepted, and R2.5 remains separately unauthorized.
 
 ## Runtime Epic 2 sequence
 
@@ -257,6 +373,12 @@ causal-evaluation epic after an explicit owner decision.
   `live_ready=false` declaration. Runtime readiness requires a new overlay.
 - G1.3 capsules and the G1.4 runner/fake provider are optional regression/test
   assets, not online dependencies and not blockers for R2.1–R2.3.
+- R2.3, R2.4, and R2.5 runtime contracts, CPU fixtures, authority builders,
+  audit/analysis layers, and tests live under
+  `MobileWorld/src/mobile_world/runtime/sentinel/r2_3/`, `r2_4/`, `r2_5/`,
+  `MobileWorld/tests/runtime/sentinel/`, and `mobileworld_audit_handoff/`.
+  Their production entrypoints remain inert without an exact separately
+  promoted owner authority and passing production preflight.
 - `sentinel_mvp/` is a legacy behavioral reference, not production runtime
   code and not an authority over the new seam.
 
@@ -308,12 +430,13 @@ These paths were under the old server's `/shared/linqiang/...` tree. Bind any
 restored data through configuration and verify hashes; never hardcode that
 prefix on a new server.
 
-R2.4/R2.5 later require separately provisioned Qwen and MAI model snapshots,
-the MobileWorld backend/emulator/container environment, loopback model
-services, external mode-0600 secrets, and repo-external output roots. None is
-needed or authorized for R2.1 CPU acceptance. Do not reuse old GPU indices,
-PIDs, tmux names, or port assumptions. At this handoff no project tmux session,
-port 8766 annotation site, or port 18007 model service should be assumed live.
+R2.4/R2.5 live execution requires separately provisioned Qwen and MAI model
+snapshots, the MobileWorld backend/emulator/container environment,
+loopback-only model services, external mode-0600 secrets, and repo-external
+output roots. None is needed or authorized for the CPU repository-preparation
+candidate. Do not reuse old GPU indices, PIDs, tmux names, or port assumptions.
+At this handoff no project tmux session, port 8766 annotation site, or port
+18007 model service should be assumed live.
 
 ## Data, publication, and Git safety
 
@@ -347,8 +470,15 @@ For R2.1/R2.2 maintenance or dependent runtime work, read completely:
 10. `mobileworld_audit_handoff/R2_2_EVIDENCE_GROUNDED_SENTINEL_POLICY_CONTRACT_V1.md`
 11. the three checked-in schemas under
     `mobileworld_audit_handoff/schemas/r2_2/`;
-12. The current BaseAgent, Qwen, MAI, Collector, G1.2, G1.4 fake-provider,
-    G1.5 Codec, and `runtime/sentinel/r2_2/` implementation/tests.
+12. `mobileworld_audit_handoff/R2_3_MULTI_PATH_RUBRIC_CONTRACT_V1.md`
+    and the checked-in schemas under `mobileworld_audit_handoff/schemas/r2_3/`;
+13. `mobileworld_audit_handoff/R2_4_QWEN_MAI_RUNTIME_VERTICAL_SLICES_CONTRACT_V1.md`,
+    `mobileworld_audit_handoff/R2_5_MOBILEWORLD_PILOT_PROTOCOL_V1.md`, and the
+    checked-in schemas under `mobileworld_audit_handoff/schemas/r2_4/` and
+    `mobileworld_audit_handoff/schemas/r2_5/`;
+14. The current BaseAgent, Qwen, MAI, Collector, G1.2, G1.4 fake-provider,
+    G1.5 Codec, and `runtime/sentinel/r2_2/`, `r2_3/`, `r2_4/`, and `r2_5/`
+    implementation/tests.
 
 Read the G1.1/G1.3/G1.4/G1.6 contracts and `STATUS.md` when touching those
 historical artifacts or validating their provenance. They are not mandatory

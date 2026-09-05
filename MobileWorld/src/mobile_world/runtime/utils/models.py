@@ -457,6 +457,9 @@ class StepRequest(BaseModel):
 class TaskOperationRequest(BaseModel):
     task_name: str
     req_device: str
+    task_trial: int | None = None
+    task_parameters_sha256: str | None = None
+    reset_seed: int | None = None
 
 
 # Client Response Models
