@@ -85,13 +85,14 @@ CPU/offline/injected-fake, SHADOW-only checkpoint at commit
 `2aa0a268b7d709cf05d524e74c3fba8612f64003`. ALE-327 / R2.4 and ALE-328 /
 R2.5 have an initial joint CPU-only/offline/injected-fake repository-preparation
 implementation at `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
-**NO-GO**. The latest CPU/offline shared-GPU smoke-preparation candidate is
-`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
-re-review: R2.4 remains In Progress / NO-GO; do not merge or push it, and do not
-issue or use live authority. No repository-preparation or remediation checkpoint
-issued an `OWNER_AUTHORIZED` manifest or ran the six-case live smoke or any
-pilot. Only smoke-only tooling/protocol preparation and read-only environment
-facts are claimed. R2.1
+**NO-GO**. The current R2.4 implementation/source checkpoint is
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`. Its six-case action-free live
+smoke and all six official Collector integrity checks passed, so the status is
+**LIVE-SMOKE EVIDENCE GATE PASSED; OWNER RE-REVIEW PENDING; NO CURRENT LIVE
+AUTHORITY; MERGE/PUSH/R2.5 NO-GO**. The exact authority used by that run is
+consumed; it grants no rerun or pilot permission. This is not automatic owner
+acceptance: Runtime Epic 2 remains 3/6 accepted and Linear remains owner-managed.
+R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
 History-IR snapshots,
 precomputed renderer-result binding, worker-owned policy-evaluation census, and
@@ -272,15 +273,16 @@ overlay, same-cutoff Collector evidence, independent history-free rubric and
 history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
-fixtures and injected fakes. Owner review classified it **NO-GO**. The latest
-CPU/offline shared-GPU smoke-preparation candidate is
-`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
-re-review. It retains the earlier strict SDK/HTTP
+fixtures and injected fakes. Owner review classified it **NO-GO**. The current
+remediation and live-smoke source checkpoint is
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`; its live-smoke evidence gate has
+passed, but it remains pending owner re-review and must not be merged or pushed.
+It retains the earlier strict SDK/HTTP
 logging suppression, type-sensitive canonical-byte sealed-schema comparison,
 module-owned request anchors, bounded cleanup, and fatal-dispatch repairs. It
-must not be merged or pushed and does not authorize live execution. No
-repository-preparation or remediation checkpoint is an R2.4 live-smoke result
-or an R2.5 pilot result.
+must not be merged or pushed. The checkpoint itself grants no live execution;
+the successful smoke below used a separate exact authority that is now
+consumed. It is not an R2.5 pilot result.
 
 Every formed `RUBRIC` and `HISTORY_POLICY` attempt now retains the complete
 authority, deadline/constraint, case lease, exact two-stage set, pricing,
@@ -362,23 +364,35 @@ smaller reserve fails before resource I/O. The legacy independent two-GPU
 concurrent full-run path remains unchanged and is not reachable
 through the smoke-only entrypoint.
 
-These repository candidates made no live OpenAI/model/provider call; used no
-external network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
-GUI/tool/action, or replay; issued no `OWNER_AUTHORIZED` manifest; and
-established no effectiveness or causal claim. No persistent 117-row executable
-task source, selected cohort, frozen pilot manifest, or corresponding content
-hash was created; only tooling/protocol preparation exists. A DRAFT authority
-does not grant execution permission. The frozen G1.5 Codecs remain
-`live_ready=false`, R2.3 is accepted, Runtime Epic 2 remains 3/6 accepted, and
-Linear remains owner-managed.
+The earlier transport-success run `r24-smoke-gpu5-20260905t115136z` remains
+immutable and excluded because its six Collector raw runs all failed the
+official integrity checker: the parser-only smoke task was marked `completed`
+with no score. Commit `2f5eae0dba43908a44017bf8f3ab6916b56db095`
+uses the Collector-v1 legal split instead: a successful no-action smoke task is
+`aborted` with `score=null`, while its successfully finalized one-task run is
+`completed`; failed smoke remains `crashed` and scored pilot behavior is
+unchanged. No score is fabricated.
 
-Candidate `46a176c6f523da34439a75fd10f3901644c52530` passed the CPU/offline
-R2.3--R2.5 gate 667/667 and the complete MobileWorld suite 2357/2357 in 606.62
-seconds. Ruff check/format passed over 15 changed Python files; configured mypy
-passed over 29 runtime source files and four operator scripts; all 23
-R2.2--R2.5 schemas passed; accepted R2.3 bytes remained exactly equal; Git diff
-checks passed; and independent shared-resource, smoke-CLI, and execution-
-boundary red teams reported GO. These checks are not an R2.4 live-smoke result.
+At that commit, R2.4 passed 646/646 and the complete CPU/offline MobileWorld
+suite passed 2438/2438 in 625.79 seconds. Independent production-driver plus
+audit-integrity coverage passed 150/150; Ruff check/format, configured source
+mypy, Git diff checks, and red-team review passed. Exact owner manifest
+`395c89f304d77823a2172ab5175661d30897fc31615f01f1dbc7ab8537d13bfb`
+and preflight
+`7974cf03759132e48e3507c11e49d08aeccc918c2dd2fa56a9ec854ac0fb765a`
+authorized fresh run `r24-smoke-gpu5-integrity-retry-20260905t181000z`.
+It completed Qwen then MAI `OFF / SHADOW / ACTIVE`: 6 parsed actor calls, 12
+completed Sentinel OpenAI calls, 0 actions, exact cost `$0.173954`, and bounded
+cleanup. All six new raw Collector roots pass
+`mobileworld.audit.integrity/v1` with `valid=true`, `errors=[]`, and
+`warnings=[]`. ACTIVE was an admitted `KEEP_UNCERTAIN` no-op, so this establishes
+transport/parser/isolation/safety evidence only, not a material edit,
+effectiveness, or causal effect.
+
+The used authority is consumed and grants no further execution. No persistent
+117-row executable source, selected cohort, frozen pilot manifest, or pilot
+artifact was created. The frozen G1.5 Codecs remain `live_ready=false`, R2.3 is
+accepted, Runtime Epic 2 remains 3/6 accepted, and Linear remains owner-managed.
 
 ## 5. Reusable implementation assets
 
@@ -459,7 +473,7 @@ Not currently permitted:
 - live/model-backed rubric generation/tracking or active `ARCHIVE` (R2.3);
 - promotion or use of an `OWNER_AUTHORIZED` R2.4/R2.5 run manifest without a
   new explicit owner approval of its exact digest;
-- the real six-case R2.4 smoke or any R2.5 backend reset, model call, GUI
+- any new six-case R2.4 smoke or any R2.5 backend reset, model call, GUI
   action, score collection, or 80-cell pilot execution;
 - a target actor/Sentinel model or any project provider/client;
 - external network, GPU probe/use, weight loading/serving, or model endpoint;
@@ -605,20 +619,15 @@ owner-managed.
 
 The initial joint R2.4/R2.5 repository-preparation implementation is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
-**NO-GO**. Its latest CPU/offline shared-GPU smoke-preparation candidate is
-`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
-re-review. It is CPU-only, offline, injected-fake engineering evidence, is
-ready only for owner re-review, and must not be merged, pushed, or treated as
-live authority. The combined R2.3--R2.5 gate passed 667/667 and the complete
-MobileWorld suite passed 2357/2357 in 606.62 seconds. Ruff check and format
-check passed over 15 changed Python files; configured mypy passed over 29
-runtime source files and four scripts; R2.2--R2.5 schemas passed 23/23;
-accepted R2.3 bytes remained exactly equal; Git diff checks passed; and
-independent shared-resource, smoke-CLI, and execution-boundary red teams
-reported GO.
+**NO-GO**. The current R2.4 implementation/source checkpoint is
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`. Its complete MobileWorld
+CPU/offline suite passed 2438/2438, and its exact-authority live run
+`r24-smoke-gpu5-integrity-retry-20260905t181000z` plus six official Collector
+integrity reports passed the evidence gate. This is ready only for owner
+re-review: it must not be merged or pushed and is not current live authority.
 
-No repository-preparation or remediation checkpoint issued live authority, ran
-a smoke or pilot, or created a persistent executable-task source, selected
-cohort, or frozen pilot manifest/hash. R2.3 is accepted through merge
+The consumed smoke authority created no persistent executable-task source,
+selected cohort, frozen pilot manifest/hash, GUI action, or pilot artifact.
+R2.5 remains unauthorized. R2.3 is accepted through merge
 `2aa0a268b7d709cf05d524e74c3fba8612f64003`; Runtime Epic 2 remains 3/6
 accepted, and Linear remains owner-managed.

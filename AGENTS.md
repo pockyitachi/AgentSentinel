@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. The initial joint R2.4/R2.5 CPU repository-preparation implementation is `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it **NO-GO**. Its latest CPU/offline shared-GPU smoke-preparation candidate is `46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner re-review: R2.4 remains In Progress / NO-GO; do not merge or push it, and do not issue or use live authority. No `OWNER_AUTHORIZED` manifest was issued and no GPU/model/network/API/backend/action smoke or pilot was run. Only smoke-only tooling/protocol preparation and read-only environment facts are claimed. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. ALE-327 / R2.4 is now **LIVE-SMOKE EVIDENCE GATE PASSED; OWNER RE-REVIEW PENDING; NO CURRENT LIVE AUTHORITY; MERGE/PUSH/R2.5 NO-GO** at implementation/source commit `2f5eae0dba43908a44017bf8f3ab6916b56db095`. Fresh run `r24-smoke-gpu5-integrity-retry-20260905t181000z` completed the fixed Qwen then MAI `OFF / SHADOW / ACTIVE` sequence with 6 parsed actor calls, 12 completed Sentinel OpenAI calls, 0 actions, exact cost `$0.173954`, successful bounded cleanup, and six official Collector integrity reports with `valid=true`, `errors=[]`, and `warnings=[]`. This evidence is not automatic owner acceptance or an effectiveness/causal result; Runtime Epic 2 remains 3/6 accepted and Linear remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -230,9 +230,10 @@ history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified that candidate **NO-GO**.
-The latest CPU/offline shared-GPU smoke-preparation candidate is
-`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
-re-review. It retains the earlier strict-logging, type-sensitive-schema,
+The remediation and live-smoke source checkpoint is now
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`. Its live-smoke evidence gate has
+passed, but the checkpoint remains pending owner re-review and is not accepted
+or merge-ready. It retains the earlier strict-logging, type-sensitive-schema,
 request-anchor, run-fatal, bounded-cleanup, and no-cleanup-initialization
 repairs. It additionally binds every formed `RUBRIC` and `HISTORY_POLICY`
 attempt to the complete authority, deadline/constraint, case lease, exact
@@ -298,27 +299,42 @@ failure evidence while cleanup and audit finalization still run. Both
 one-way run-fatal reasons before actor or later dispatch. Cleanup teardown
 cannot initialize or reinitialize a backend: when client/backend `/init` was
 not locally confirmed, it records the hash-bound `NOT_INITIALIZED_NO_IO`
-outcome with zero backend I/O. It must not be merged or pushed and does not
-authorize live execution. No repository-preparation or remediation checkpoint
-is an R2.4 live-smoke result or an R2.5 pilot result.
+outcome with zero backend I/O. Repository commits do not themselves authorize
+live execution. The exact smoke authority used below is consumed; any new live
+run requires a fresh exact authority. This checkpoint must not be merged or
+pushed, and it is not an R2.5 pilot result.
 
-These repository candidates made no live OpenAI/model/provider call; used no
-external network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
-GUI/tool/action, or replay; issued no `OWNER_AUTHORIZED` manifest; and
-established no effectiveness or causal claim. No persistent 117-row executable
-task source, selected cohort, frozen pilot manifest, or corresponding content
-hash was created; only tooling/protocol preparation exists. The frozen G1.5
-Codecs remain `live_ready=false`. R2.3 is accepted, Runtime Epic 2 remains 3/6
-accepted, and Linear remains owner-managed.
+The first six-case transport-success run,
+`r24-smoke-gpu5-20260905t115136z` at source
+`67b93e1aba76b58db0a6902390efef7b714ee357`, is retained repo-externally but
+excluded from acceptance because all six Collector raw runs failed the
+official integrity checker with `invalid_task_ended_payload`,
+`task_capture_complete_inconsistent`, and
+`run_capture_complete_inconsistent`. The smoke task had been incorrectly
+marked `completed` despite its intentionally absent score. Commit
+`2f5eae0dba43908a44017bf8f3ab6916b56db095` fixes this without fabricating a
+score: a successful parser-only/no-action smoke task is `aborted` with
+`score=null`, while its successfully finalized Collector run is `completed`;
+failure and scored-pilot semantics remain unchanged.
 
-The final CPU/offline gates for candidate
-`46a176c6f523da34439a75fd10f3901644c52530` passed R2.3--R2.5 667/667 and the
-complete MobileWorld suite 2357/2357 in 606.62 seconds. Ruff check/format passed
-over 15 changed Python files; configured mypy passed over 29 runtime source
-files and four operator scripts; all 23 R2.2--R2.5 schemas passed; accepted
-R2.3 bytes remained exactly equal; Git diff checks passed; and independent
-shared-resource, smoke-CLI, and execution-boundary red teams reported GO.
-These are CPU/offline engineering results only, not live acceptance.
+At that commit, the complete MobileWorld CPU/offline suite passed 2438/2438 in
+625.79 seconds; the R2.4 gate passed 646/646, the production-driver gate passed
+134/134, and independent production-driver plus audit-integrity coverage
+passed 150/150. Ruff check/format, configured source mypy, Git diff checks, and
+independent red-team review passed. Under exact owner manifest
+`395c89f304d77823a2172ab5175661d30897fc31615f01f1dbc7ab8537d13bfb`
+and preflight report
+`7974cf03759132e48e3507c11e49d08aeccc918c2dd2fa56a9ec854ac0fb765a`,
+fresh run `r24-smoke-gpu5-integrity-retry-20260905t181000z` then completed all
+six action-free cases. Qwen was reaped before MAI started; both model services,
+the backend, ports, and project lease were cleaned. All six new raw Collector
+runs pass `mobileworld.audit.integrity/v1` with no errors or warnings. ACTIVE
+was exercised but produced an admitted `KEEP_UNCERTAIN` no-op, so this proves
+the bounded transport/parser/isolation/safety chain, not a material edit,
+effectiveness improvement, or causal effect. No persistent 117-row executable
+task source, selected cohort, frozen pilot manifest, or pilot artifact exists.
+The frozen G1.5 Codecs remain `live_ready=false`; R2.3 is accepted, Runtime
+Epic 2 remains 3/6 accepted, and Linear remains owner-managed.
 
 ## Runtime Epic 2 sequence
 

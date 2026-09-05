@@ -1,6 +1,6 @@
 # R2.4 Qwen and MAI Runtime Vertical Slices Contract v1
 
-Status: **IN PROGRESS; CPU/OFFLINE SHARED-GPU SMOKE-PREPARATION CANDIDATE; OWNER RE-REVIEW PENDING; LIVE AUTHORITY UNISSUED; MERGE/PUSH/LIVE NO-GO**
+Status: **LIVE-SMOKE EVIDENCE GATE PASSED; OWNER RE-REVIEW PENDING; NO CURRENT LIVE AUTHORITY; MERGE/PUSH/R2.5 NO-GO**
 
 Contract ID: `mobileworld.runtime.r2-4-qwen-mai-vertical-slices/contract-v1`
 
@@ -43,13 +43,16 @@ Qwen3-VL or MAI assembles the exact actor request
   -> unchanged actor provider, parser, and action path
 ```
 
-The repository candidate scaffolds this intended behavior with CPU fixtures,
-injected fake transports, sealed resource/execution doubles, strict external-
-output contracts, and an additive single-shared-GPU sequential smoke-only
-entrypoint. It does **not** by itself establish that a live OpenAI request, GPU
-model, MobileWorld backend, GUI action, smoke result, or task-effectiveness
-result exists. Those claims require an owner-authorized manifest, a passing
-production preflight, actual execution, and committed repo-external receipts.
+The repository candidate implements this behavior with CPU fixtures, injected
+fake transports, sealed resource/execution doubles, strict external-output
+contracts, and an additive single-shared-GPU sequential smoke-only entrypoint.
+At source commit `2f5eae0dba43908a44017bf8f3ab6916b56db095`, an exact
+owner-authorized, action-free Qwen-then-MAI live smoke completed and all six
+Collector raw roots passed the official integrity checker. That establishes
+bounded transport, parser, isolation, accounting, durability, handoff, and
+cleanup evidence. It does **not** establish task effectiveness, a material
+ACTIVE edit, a causal result, R2.5 readiness, automatic owner acceptance, or
+authority for another live run.
 
 The Sentinel edits only model-bound history. It does not select, recommend,
 parse, or execute an actor action. The rubric is an independent task-path
@@ -492,6 +495,25 @@ failure, audit failure, or resource drift must be a typed Original/failure
 record with complete negative accounting. Any smoke failure stops the sequence
 before R2.5.
 
+A smoke-case `PASSED` result is distinct from MobileWorld task completion.
+Because the parser-only smoke deliberately executes no GUI action and obtains
+no environment score, its Collector task terminal and summary must use the
+legal non-completion representation `runtime_status=aborted`, `score=null`, and
+the explicit no-action termination source. It must never fabricate `0` or
+`0.0`. The enclosing Collector run may be `runtime_status=completed` when its
+capture/finalization succeeds. A smoke dispatch or cleanup failure remains
+`crashed`, while an independently authorized scored pilot retains its numeric
+score and `completed` semantics.
+
+Repository acceptance evidence additionally requires every raw Collector root
+from the six cases to pass the official
+`check_run_integrity()` implementation at
+`checker_version=mobileworld.audit.integrity/v1` with `valid=true`,
+`errors=[]`, and no undisclosed warnings. Each report must be published as a
+fresh owner-only `integrity_report.json` and hash-bound in the handoff. The
+checker is a post-run acceptance gate rather than part of bounded resource
+cleanup; a parser/stage success cannot substitute for it.
+
 Under `R24_LIVE_SMOKE_ONLY`, the sequence always stops after its own bounded
 cleanup and terminal publication even when all six cases pass. A later R2.5
 pilot would require a distinct authority and entrypoint; smoke success cannot
@@ -519,37 +541,48 @@ This contract does not authorize:
 
 ## 12. Repository-candidate handoff and current disposition
 
-The final candidate handoff must record the exact commit, file/hash map,
-focused/affected/full CPU results, schema validation, static checks, external
-artifacts, and cleanup census. Until the owner reviews that candidate and
-separately authorizes a frozen live manifest, R2.4 remains In Progress. The
-initial implementation commit is
-`344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
-**NO-GO**. Its latest CPU/offline shared-GPU smoke-preparation candidate is
-`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
-re-review. The R2.3--R2.5 gate passed 667/667 and the complete MobileWorld
-suite passed 2357/2357 in 606.62 seconds. Ruff check and format check passed
-over 15 changed Python files; configured mypy passed over 29 runtime source
-files and four operator scripts; all 23 R2.2--R2.5 schemas passed; accepted
-R2.3 bytes remained exactly equal; Git diff checks passed; and independent
-shared-resource, smoke-CLI, and execution-boundary red teams reported GO.
-These CPU/offline checks
-make the remediation candidate ready only for owner re-review; they do not
-constitute owner approval, acceptance, a live-ready claim, or a live result.
-The candidate must not be merged or pushed, and the six live-smoke cases
-remain unauthorized.
+The current implementation and live source commit is
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`. It closes the scoreless-smoke
+Collector defect without inventing a score. R2.4 passed 646/646, the complete
+MobileWorld CPU/offline suite passed 2438/2438 in 625.79 seconds, and
+independent production-driver plus audit-integrity coverage passed 150/150;
+Ruff check/format, configured source mypy, Git diff checks, and independent
+red-team review also passed.
 
-No `OWNER_AUTHORIZED` manifest was issued and no live OpenAI/model/provider,
-external network, live credential or production secret, GPU, Docker, model
-service/weights, MobileWorld backend/emulator, GUI/tool/action, replay, smoke,
-or pilot resource was used. Read-only GPU5/process/model/environment facts, if
-inspected for planning, are availability observations only and are not a
-preflight, resource admission, or acceptance result.
-No persistent 117-row executable source, selected cohort, frozen pilot
-manifest, 80--120-cell execution artifact, or corresponding content hash was
-created; only CPU/offline tooling and protocol preparation is claimed.
+The first six-case transport-success run,
+`r24-smoke-gpu5-20260905t115136z`, remains immutable but is excluded from
+acceptance because its six raw Collector runs each failed with
+`invalid_task_ended_payload`, `task_capture_complete_inconsistent`, and
+`run_capture_complete_inconsistent`. It was not rewritten or repaired.
 
-R2.3 commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` is accepted through
-mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`, so Runtime Epic 2 is
-3/6 accepted. A promoted run manifest would neither change that acceptance nor
-change Linear; both live authorization and Linear workflow remain owner-managed.
+Fresh authority DRAFT
+`db616b2744cf83617b9e15b8a901334ab0854648b28ed58434621f561c8da0e1`
+was promoted to exact OWNER manifest
+`395c89f304d77823a2172ab5175661d30897fc31615f01f1dbc7ab8537d13bfb`.
+Side-effect-free preflight passed 25/25 with report hash
+`7974cf03759132e48e3507c11e49d08aeccc918c2dd2fa56a9ec854ac0fb765a`.
+Run `r24-smoke-gpu5-integrity-retry-20260905t181000z` then completed
+RESOURCE_PREFLIGHT, Qwen `OFF / SHADOW / ACTIVE`, Qwen reap/port-clear,
+MAI `OFF / SHADOW / ACTIVE`, and bounded cleanup. It recorded 6 parsed actor
+calls, 12 completed Sentinel OpenAI attempts, 0 GUI actions, exact cost
+`$0.173954`, result hash
+`6c8a3866cbfe0e8972b130fc24ccdf17f8ee9bb7474ea978b4d8497cef406a99`,
+terminal-file hash
+`972cb521ff0819a4cc631130f8b74019abeca99a9678997342221c7011403313`,
+and cleanup-file hash
+`465404defabf9752a2b544b8464d363355992a936eb418cab949bb7f4949431f`.
+All six new Collector raw roots have owner-only official integrity reports
+with `valid=true`, `errors=[]`, and `warnings=[]`.
+
+The live-smoke evidence gate is therefore passed. The result is limited:
+ACTIVE produced an admitted `KEEP_UNCERTAIN` no-op, so no material history
+transformation or effectiveness/causal claim was demonstrated. The used
+authority is consumed; no current live authority, R2.5/pilot authority,
+persistent executable task source, selected cohort, frozen pilot manifest, or
+pilot artifact exists. The checkpoint remains pending owner re-review, must
+not be merged or pushed, and does not change Linear automatically.
+
+R2.3 commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` remains accepted through
+mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`; Runtime Epic 2 remains
+3/6 accepted. Owner review is required to change repository acceptance, and
+Linear workflow remains owner-managed.

@@ -15,10 +15,12 @@ Last updated: 2026-09-05 (UTC)
 ```
 
 该方向已在 accepted R2.3 CPU/offline/injected-fake checkpoint 与 R2.4
-CPU/offline shared-GPU smoke-preparation candidate 中形成 rubric/tracking、
-runtime glue 与独立 smoke-only 入口；R2.4 当前仍是 **NO-GO / In Progress**，
-不得 merge、push 或进入 live 授权。真实 model-backed/live 执行尚未获授权，
-R2.5 pilot 也未运行。
+runtime vertical slice 中形成 rubric/tracking、runtime glue 与独立 smoke-only
+入口。R2.4 当前是 **LIVE-SMOKE EVIDENCE GATE PASSED；OWNER RE-REVIEW
+PENDING；NO CURRENT LIVE AUTHORITY；MERGE/PUSH/R2.5 NO-GO**。新六-case
+action-free run 及六份官方 Collector integrity report 已通过，但这不会自动
+改变 repository acceptance 或 Linear：Runtime Epic 2 仍为 3/6 accepted，
+R2.5 pilot 未获授权且未运行。
 
 ## 2. Current stage and decision
 
@@ -79,13 +81,14 @@ metrics。共享 DAG 派生已 memoize 且以显式 stack/topological DP 覆盖�
 Qwen/MAI 只使用 captured fixtures；没有真实模型/provider、网络、GPU、MobileWorld backend/
 GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 
-**Runtime ALE-327 / R2.4 与 ALE-328 / R2.5 的初始 joint
-CPU-only/offline/injected-fake repository engineering preparation implementation
-是 `344e1c42596a4dca717da66374eeca3d936c3f61`；owner review 结论为
-`NO-GO`。最新 CPU/offline shared-GPU smoke-preparation 候选 commit 为
-`46a176c6f523da34439a75fd10f3901644c52530`，已完成 CPU-only/offline 代码整改但仍须
-owner 复审；R2.4 保持 In Progress / NO-GO，不得 merge/push，也不得进入 live 授权。** 最新
-候选保留此前 SDK/http logging、type-sensitive sealed schema、request anchor、bounded
+**Runtime ALE-327 / R2.4 当前 implementation/source checkpoint 为
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`。状态是
+`LIVE-SMOKE EVIDENCE GATE PASSED / OWNER RE-REVIEW PENDING / NO CURRENT
+LIVE AUTHORITY / MERGE-PUSH-R2.5 NO-GO`。** 初始 joint R2.4/R2.5
+CPU-only/offline preparation `344e1c42596a4dca717da66374eeca3d936c3f61`
+曾被 owner 判为 NO-GO；后续整改、exact-authority live smoke 与官方 Collector
+integrity gate 现已完成，但尚未自动接受或关闭 R2.4。当前候选保留此前
+SDK/http logging、type-sensitive sealed schema、request anchor、bounded
 cleanup 与 fatal-dispatch 整改，并将每个 formed `RUBRIC`/`HISTORY_POLICY` attempt 的完整
 authority、deadline/constraint、case lease、精确双-stage set、pricing、transport 与 canonical
 provider request preimage 写入 owner-only proof。validator 还要求 authority、constraint、
@@ -134,20 +137,25 @@ CAS proof 均 durable。shared runtime 的 cleanup exact upper bound 为
 grace=10 秒、poll=250 ms 时为 278 秒；低于该 bound 的 authority 在 resource I/O 前失败。
 既有 independent dual-GPU concurrent full-run path 保持不变且不能从 smoke-only 入口到达。
 
-候选的 CPU/offline gate 已通过：R2.3--R2.5 667/667，完整 MobileWorld suite
-2357/2357（606.62 秒）；Ruff check/format 覆盖 15 个 changed Python files，configured
-mypy 覆盖 29 个 runtime source files 与 4 个 scripts，R2.2--R2.5 schemas 23/23，
-accepted R2.3 bytes exact equality 与 Git diff checks 均通过，独立 shared-resource、
-smoke-CLI、execution-boundary red teams 均为 GO。这些结果仅是 CPU/offline engineering
-evidence，不是 live-smoke 验收。
+当前 source checkpoint 的 R2.4 gate 为 646/646；完整 MobileWorld CPU/offline suite
+为 2438/2438（625.79 秒）；production-driver 134/134，独立 production-driver +
+audit-integrity 150/150；Ruff check/format、configured source mypy、Git diff checks
+与独立 red-team 均通过。旧 transport-success run
+`r24-smoke-gpu5-20260905t115136z` 的六个 raw Collector root 因 scoreless smoke
+被错误标成 `completed` 而各有三项 integrity error，现保持不可变并排除于 acceptance。
+`2f5eae0` 改为 task `aborted`/`score=null`、run `completed`，没有伪造 score，也不改变
+失败 smoke 或 scored pilot 的语义。
 
-当前只有 tooling/protocol preparation：没有持久化的 117-row executable task source、
-selected cohort、frozen pilot manifest 或对应 hash。R2.4 的 6 个 action-free live
-smoke cases 未运行；R2.5 的 80--120-cell pilot 未获授权且未执行。没有
-`OWNER_AUTHORIZED` manifest、live receipts 或 pilot outcome；没有启动 GPU process、
-加载 model、使用 network/API、启动 backend 或执行 action。GPU5/process/model/environment
-的只读 planning facts 不构成 preflight、resource admission 或 live 验收。R2.3 已接受，
-Runtime Epic 2 为 3/6 accepted；Linear 未修改。
+Fresh run `r24-smoke-gpu5-integrity-retry-20260905t181000z` 在 exact OWNER
+manifest `395c89f...3bfb` 与 preflight `7974cf03...765a` 下完成六个 action-free
+case：6 个 actor output 全部 PARSED，12 个 Sentinel OpenAI attempt 全部 completed，
+action=0，exact cost `$0.173954`，Qwen→reap→MAI 顺序与 bounded cleanup 成立。
+六个新 raw root 的官方 `mobileworld.audit.integrity/v1` report 全部
+`valid=true/errors=[]/warnings=[]`。ACTIVE 为合法 admitted `KEEP_UNCERTAIN` no-op，
+仅证明链路可运行，不证明 material transformation、task effectiveness 或 causality。
+使用过的 authority 已消费；没有当前 live authority、持久化 117-row executable
+task source、selected cohort、frozen pilot manifest 或 pilot artifact。R2.5 未授权，
+Runtime Epic 2 仍为 3/6 accepted；Linear 未修改。
 
 **Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
 并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
@@ -1610,4 +1618,112 @@ created. Owner re-review remains the next repository decision; exact live
 authority, merge, push, resource use, and Linear remain separate owner actions.
 Owner approval required: yes before merge, push, live authority, live smoke,
 pilot, or any GPU/model/network/API/backend/action execution.
+```
+
+```text
+Date: 2026-09-05 UTC
+ALE-327 / R2.4 live-smoke evidence gate: PASSED; OWNER RE-REVIEW PENDING;
+NO CURRENT LIVE AUTHORITY; MERGE/PUSH/R2.5 NO-GO. Runtime Epic 2 remains
+3/6 accepted and Linear was not changed.
+
+Implementation and CPU evidence: source commit
+`2f5eae0dba43908a44017bf8f3ab6916b56db095` fixes the scoreless parser-smoke
+Collector terminal semantics in production_driver.py and its direct tests. A
+successful smoke task is `aborted` with `score=null` and termination source
+`r2_4_parser_smoke_no_action`; its successfully finalized Collector run is
+`completed`. Failed smoke remains `crashed`, scored-pilot completion remains
+numeric, and no zero score is invented. R2.4 passed 646/646, production-driver
+passed 134/134, independent production-driver plus audit-integrity passed
+150/150, and the complete MobileWorld CPU/offline suite passed 2438/2438 in
+625.79 seconds. Ruff check/format, configured source mypy, Git diff checks, and
+independent red-team review passed.
+
+Excluded immutable predecessor: run `r24-smoke-gpu5-20260905t115136z` at
+source `67b93e1aba76b58db0a6902390efef7b714ee357` completed the transport chain,
+but all six raw Collector roots failed the official checker with exactly
+`invalid_task_ended_payload`, `task_capture_complete_inconsistent`, and
+`run_capture_complete_inconsistent`. It is excluded from acceptance and was
+not rewritten. Its six-root metadata/content combined tree remains
+`5b5201053f4c035bf015650ecdf47bea16412f489ce65f0bf35c54de759ce754`;
+none of those old roots contains an integrity report.
+
+Fresh authority and preflight:
+- run ID: `r24-smoke-gpu5-integrity-retry-20260905t181000z`
+- workspace: `/shared/linqiang/agent_monitor/r24_live_smoke_workspace_20260905`
+- durable run root: `run-r24-smoke-gpu5-integrity-retry-20260905t181000z`
+- production audit root: `audit-r24-smoke-gpu5-integrity-retry-20260905t181000z`
+- DRAFT SHA: `db616b2744cf83617b9e15b8a901334ab0854648b28ed58434621f561c8da0e1`
+- OWNER SHA: `395c89f304d77823a2172ab5175661d30897fc31615f01f1dbc7ab8537d13bfb`
+- scope: `R24_LIVE_SMOKE_ONLY`; pilot forbidden; source `2f5eae0...db095`
+- dry-run file SHA: `513a3aba9bdc8ada75ddc65d60682cc3d0bf1b41312251d0ea119ba2f350893a`
+- preflight report SHA: `7974cf03759132e48e3507c11e49d08aeccc918c2dd2fa56a9ec854ac0fb765a`
+- preflight: 25/25, side-effect census zero, `pilot_reachable=false`
+
+Fresh run outcome: terminal COMPLETE; completed stages RESOURCE_PREFLIGHT,
+QWEN_LIVE_SMOKE, and MAI_LIVE_SMOKE. Qwen and MAI each completed
+OFF/SHADOW/ACTIVE in that order, with Qwen fully reaped and port-clear before
+MAI start. All six actor attempts succeeded and parsed; all 12 Sentinel OpenAI
+attempts completed; GUI/action executions were zero. Qwen cost was 90,378
+micros, MAI cost 83,576 micros, and total exact cost was 173,954 micros
+(`$0.173954`). ACTIVE was exercised but its admitted decisions were
+`KEEP_UNCERTAIN` with an empty plan, so final request equaled Original; this is
+a valid no-op and proves no effectiveness or causal claim.
+
+Durable sequence artifacts:
+- manifest binding file SHA: `3d35ca8dd01566dda73e4bc0eca1119b84691f3e6baae6f0374c4af7ee4fc664`
+- resource stage file SHA: `107adb272c1948c48fab2be42afffa691e7072ebd97b03f408527c6c675a9174`
+- Qwen stage file SHA: `fb6d4d25644492edd687cdc26f28111da2b9395377faab26438fd85b08364950`
+- MAI stage file SHA: `cc29f1e19d91b735bede3ac19e905e8cc56f75ac45d639c4b7868a89d7403024`
+- cleanup file SHA: `465404defabf9752a2b544b8464d363355992a936eb418cab949bb7f4949431f`
+- terminal file SHA: `972cb521ff0819a4cc631130f8b74019abeca99a9678997342221c7011403313`
+- terminal result SHA: `6c8a3866cbfe0e8972b130fc24ccdf17f8ee9bb7474ea978b4d8497cef406a99`
+- CLI execute-result file SHA: `56e48bea0d5e34b6ecdfbcb24e0b558b14b1752ecba3d90dfe3c9ad0db702e3e`
+
+Official Collector integrity reports (`mobileworld.audit.integrity/v1`) are
+owner-only mode-0600, nlink-1 canonical JSON. Every report has `valid=true`,
+`errors=[]`, `warnings=[]`, event_count=9, model_request_count=1,
+model_terminal_count=1, action_execution_count=0, and orphan_blob_count=0:
+their common raw base is
+`process-logs-v2/collector/raw/runs` under the workspace above.
+- Qwen OFF raw `01M1SE10B3SAEM5MJX45CNQYMW`, task
+  `01M1SE10B6G8HM645T5BJDSQ82`, manifest.final
+  `005d7d6a77d1f886e8842dbb6a8ca495c0ff2d4c9e1121283817155c69ab2e7c`,
+  report `57f485e4d611d325f0427bb0ee60f289a47fb97889d33504e7d27ce0541deefb`.
+- Qwen SHADOW raw `01M1SE12MFHZGY21XDH0E0RG9J`, task
+  `01M1SE12MFR2NE4XT6M6SZ868S`, manifest.final
+  `7d228e4327b84834277e345a67f1fae1984b20f63556a353ce77ce83e32eee83`,
+  report `a6be60471dc786bd447f0061b8e03d3b0b17c5579052b8d3534a27b1a6cb2490`.
+- Qwen ACTIVE raw `01M1SE1SAEQC1EPZ83PYH01QKH`, task
+  `01M1SE1SAFGAQ47VG8RVSXQ94Z`, manifest.final
+  `dfa77da7be50f7673282bae183097dffb280152e8639bffc624a8dcbc633abb7`,
+  report `ba52b92ab2508145cb892ade41ee5d5ae19fc2ff1615b8f6d82696866a216565`.
+- MAI OFF raw `01M1SE4RBYYHMRPXYW48HPXT8P`, task
+  `01M1SE4RC1MZRS274T2CPCQPT1`, manifest.final
+  `ab7dbc46c0218ac3b21a9803c1d8db787e6dbbe08295f2079b4e11884920e9de`,
+  report `8165782f7968444f0bebcdde917a647fc767b1d57d3b33ade652fa3ccff1ffbf`.
+- MAI SHADOW raw `01M1SE4T7Q11R4XTKWD7X3MK0Q`, task
+  `01M1SE4T7R1MYTSP451DYC4PHZ`, manifest.final
+  `d331c2320a9e33b8afc43a27f64e648ba9a27d7a8a180cd30da651e913311393`,
+  report `87ced581989b4ba319539463cfb154c1f2f8424cad8e30f849bf59c11b4c61d6`.
+- MAI ACTIVE raw `01M1SE5FM7844RB3AYZAM55N3W`, task
+  `01M1SE5FM8WG7TREG68KRSVG43`, manifest.final
+  `ce7d9268d8330aeb57303e0dcc9245777952fbd135044b20aef0d5bddfaf0ff9`,
+  report `04066cfbe461c983d93c656f90d560277c5495df364843d66e3cb9523d4e85bd`.
+
+Cleanup: `SUCCEEDED/CLEANED/SHARED_MODELS_RECLAIMED`; Qwen leader/PGID/SID
+165018 and MAI leader/PGID/SID 178349 were reaped, session membership was zero,
+ports 6960/18007/18008 were clear, residual capability lists were empty, and
+the GPU lease was released. Baseline co-tenant PID/PGID/SID 27625 completed its
+own scheduled iteration 500 and logged `Evolution complete` at 18:43:43 UTC,
+about 67 seconds before R2.4 cleanup terminalization; it was absent from the
+project stopped-model census. This supports natural completion rather than a
+project signal. A read-only credential-pattern scan over this run, production
+audit, model logs, and Sentinel receipts found no bearer token, `sk-` value, or
+`OPENAI_API_KEY` occurrence.
+
+Limitations and authority: all raw/live artifacts remain repo-external. The
+exact smoke authority has been consumed and cannot authorize a rerun. No GUI
+action, R2.5/pilot, merge, push, release, Linear change, task-effectiveness
+measurement, or causal evaluation occurred. Owner review of the exact source
+commit and evidence digests is the next required repository decision.
 ```
