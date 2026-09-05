@@ -1411,14 +1411,18 @@ def _validate_shared_gpu_tenants(
 ) -> None:
     if value.gpu_index != baseline.gpu_index or value.gpu_uuid != baseline.gpu_uuid:
         raise ProductionDriverError("GPU_IDENTITY_MISMATCH", "shared physical GPU drifted")
-    baseline_identities = {
-        (item.pid, item.starttime_ticks, item.uid) for item in baseline.processes
-    }
+    baseline_identities = {_shared_gpu_process_identity(item) for item in baseline.processes}
+    baseline_pids = {item.pid for item in baseline.processes}
     owned_process_seen = False
     for item in value.processes:
-        identity = (item.pid, item.starttime_ticks, item.uid)
+        identity = _shared_gpu_process_identity(item)
         if identity in baseline_identities:
             continue
+        if item.pid in baseline_pids:
+            raise ProductionDriverError(
+                "GPU_SHARED_TENANT_DRIFT",
+                "a pre-existing shared GPU compute process identity drifted",
+            )
         if (
             owned_identity is not None
             and item.uid == owned_identity.uid
@@ -2087,6 +2091,57 @@ def _read_shared_gpu_process_evidence(
             "GPU_PROCESS_IDENTITY_UNAVAILABLE",
             "shared GPU compute process identity could not be proven",
         ) from exc
+
+
+def _read_shared_gpu_process_census(
+    stdout: str,
+    *,
+    gpu_uuid: str,
+) -> tuple[SharedGpuProcessEvidenceV1, ...]:
+    processes: list[SharedGpuProcessEvidenceV1] = []
+    seen_processes: set[tuple[str, int]] = set()
+    expected_gpu_uuid = gpu_uuid.lower()
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        fields = tuple(item.strip() for item in line.split(","))
+        if len(fields) != 3 or fields[0].lower() != expected_gpu_uuid:
+            raise ProductionDriverError(
+                "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process row differs"
+            )
+        try:
+            pid = int(fields[1])
+            process_memory_mib = int(fields[2])
+        except ValueError as exc:
+            raise ProductionDriverError(
+                "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process memory differs"
+            ) from exc
+        process_key = (expected_gpu_uuid, pid)
+        if process_key in seen_processes:
+            raise ProductionDriverError(
+                "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process row is duplicated"
+            )
+        seen_processes.add(process_key)
+        processes.append(
+            _read_shared_gpu_process_evidence(
+                pid,
+                used_gpu_memory_mib=process_memory_mib,
+            )
+        )
+    return tuple(sorted(processes, key=lambda item: (item.pid, item.starttime_ticks)))
+
+
+def _shared_gpu_process_identity(
+    value: SharedGpuProcessEvidenceV1,
+) -> tuple[int, int, int, int, int, str]:
+    return (
+        value.pid,
+        value.starttime_ticks,
+        value.process_group_id,
+        value.session_id,
+        value.uid,
+        value.user,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2773,38 +2828,34 @@ class _PosixProductionResourceSystemV1:
             raise ProductionDriverError(
                 "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU compute census is unavailable"
             )
-        processes: list[SharedGpuProcessEvidenceV1] = []
-        for line in process_result.stdout.splitlines():
-            if not line.strip():
-                continue
-            fields = tuple(item.strip() for item in line.split(","))
-            if len(fields) != 3 or fields[0].lower() != identity_fields[1].lower():
-                raise ProductionDriverError(
-                    "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process row differs"
-                )
-            try:
-                pid = int(fields[1])
-                process_memory_mib = int(fields[2])
-            except ValueError as exc:
-                raise ProductionDriverError(
-                    "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process memory differs"
-                ) from exc
-            processes.append(
-                _read_shared_gpu_process_evidence(
-                    pid,
-                    used_gpu_memory_mib=process_memory_mib,
-                )
-            )
+        processes = _read_shared_gpu_process_census(
+            process_result.stdout,
+            gpu_uuid=identity_fields[1],
+        )
         process_result_after = self._attestation_run(process_command)
-        if (
-            process_result_after.returncode != 0
-            or process_result_after.stderr
-            or process_result_after.stdout != process_result.stdout
+        if process_result_after.returncode != 0 or process_result_after.stderr:
+            raise ProductionDriverError(
+                "GPU_PROCESS_ATTESTATION_RACED",
+                "shared GPU compute rows changed during process identity binding",
+            )
+        try:
+            processes_after = _read_shared_gpu_process_census(
+                process_result_after.stdout,
+                gpu_uuid=identity_fields[1],
+            )
+        except ProductionDriverError as exc:
+            raise ProductionDriverError(
+                "GPU_PROCESS_ATTESTATION_RACED",
+                "shared GPU compute rows changed during process identity binding",
+            ) from exc
+        if tuple(map(_shared_gpu_process_identity, processes_after)) != tuple(
+            map(_shared_gpu_process_identity, processes)
         ):
             raise ProductionDriverError(
                 "GPU_PROCESS_ATTESTATION_RACED",
                 "shared GPU compute rows changed during process identity binding",
             )
+        processes = processes_after
         identity_after = self._attestation_run(identity_command)
         identity_fields_after = tuple(
             item.strip() for item in identity_after.stdout.strip().split(",")
@@ -2842,7 +2893,7 @@ class _PosixProductionResourceSystemV1:
             gpu_utilization_percent=gpu_utilization_percent,
             memory_utilization_percent=memory_utilization_percent,
             minimum_free_memory_mib=minimum_free_memory_mib,
-            processes=tuple(sorted(processes, key=lambda item: (item.pid, item.starttime_ticks))),
+            processes=processes,
         )
 
     def start_model(
