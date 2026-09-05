@@ -2061,6 +2061,7 @@ def test_durable_history_policy_request_proof_is_independently_reconstructable(
     assert proof["provider_output_schema_sha256"] == (history_policy_transport_schema_v1().sha256)
     assert proof["r22_output_schema_sha256"] == ProposalSchemaSnapshotV1.from_checked_in().sha256
     assert proof["provider_output_schema_sha256"] != proof["r22_output_schema_sha256"]
+    assert proof["physical_prompt_sha256"] != proof["r22_prompt_sha256"]
     assert (
         cast(dict[str, JsonValue], proof["attempt_authority"])["max_output_tokens"]
         == GPT56_MAX_OUTPUT_TOKENS
@@ -2071,7 +2072,12 @@ def test_durable_history_policy_request_proof_is_independently_reconstructable(
     )
     assert proof["r22_receipt_state"] == "R22_RECEIPT_COMMITTED"
 
-    for field in ("provider_output_schema_sha256", "r22_output_schema_sha256"):
+    for field in (
+        "provider_output_schema_sha256",
+        "r22_output_schema_sha256",
+        "physical_prompt_sha256",
+        "r22_prompt_sha256",
+    ):
         drifted_schema_hash = deepcopy(proof)
         drifted_schema_hash[field] = _sha(f"drifted:{field}")
         with pytest.raises(R24ContractError, match="hashes or terminal state differ"):
@@ -2814,6 +2820,8 @@ def test_durable_history_cost_reservation_failure_retains_complete_authority(
         "pricing_input_rate_bool",
         "transport_timeout_bool",
         "request_store",
+        "request_prompt",
+        "wrapper_binding",
         "packet_actor_request",
         "lease_stage_set_rehashed",
         "receipt_exact_cost_rehashed",
@@ -2870,13 +2878,26 @@ def test_durable_history_policy_request_proof_rejects_authority_and_source_drift
         transport["transport_timeout_ns"] = True
     elif drift == "request_store":
         request["store"] = True
+    elif drift == "request_prompt":
+        request["instructions"] = cast(str, request["instructions"]) + "\nSynthetic mutation."
+    elif drift == "wrapper_binding":
+        messages = cast(list[JsonValue], request["input"])
+        content = cast(list[JsonValue], cast(dict[str, JsonValue], messages[0])["content"])
+        packet_part = cast(dict[str, JsonValue], content[0])
+        wrapper = cast(dict[str, JsonValue], json.loads(cast(str, packet_part["text"])))
+        bindings = cast(dict[str, JsonValue], wrapper["required_output_bindings"])
+        bindings["evidence_packet_sha256"] = _sha("wrong-history-wrapper-binding")
+        packet_part["text"] = canonical_json_bytes(cast(JsonValue, wrapper)).decode()
     elif drift == "packet_actor_request":
         messages = cast(list[JsonValue], request["input"])
         content = cast(list[JsonValue], cast(dict[str, JsonValue], messages[0])["content"])
         packet_part = cast(dict[str, JsonValue], content[0])
-        packet = cast(dict[str, JsonValue], json.loads(cast(str, packet_part["text"])))
+        wrapper = cast(dict[str, JsonValue], json.loads(cast(str, packet_part["text"])))
+        packet = cast(dict[str, JsonValue], wrapper["evidence_packet"])
         packet["raw_request_sha256"] = _sha("wrong-history-actor-request")
-        packet_part["text"] = canonical_json_bytes(cast(JsonValue, packet)).decode()
+        bindings = cast(dict[str, JsonValue], wrapper["required_output_bindings"])
+        bindings["evidence_packet_sha256"] = canonical_sha256(cast(JsonValue, packet))
+        packet_part["text"] = canonical_json_bytes(cast(JsonValue, wrapper)).decode()
     elif drift == "lease_stage_set_rehashed":
         lease["openai_stage_set_sha256"] = _sha("different-synchronized-stage-set")
         lease_sha256 = canonical_sha256(cast(JsonValue, lease))

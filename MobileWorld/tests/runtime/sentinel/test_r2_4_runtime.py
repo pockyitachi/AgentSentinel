@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import time
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from io import BytesIO
 from threading import Event
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 from PIL import Image
 
 from mobile_world.agents.base import BaseAgent
@@ -61,6 +63,7 @@ from mobile_world.runtime.sentinel.r2_2.contracts import (
     TaskInstructionDataV1,
     TextEvidenceProjectionV1,
     evidence_packet_sha256,
+    validate_runtime_policy_proposal,
 )
 from mobile_world.runtime.sentinel.r2_2.evidence import (
     CausalEvidenceSnapshotV1,
@@ -81,6 +84,7 @@ from mobile_world.runtime.sentinel.r2_2.runtime_overlay import (
     bind_policy_receipt,
     make_gpt_evidence_input,
     make_proposal_admission,
+    parse_runtime_policy_proposal,
 )
 from mobile_world.runtime.sentinel.r2_2.sidecar import (
     MemoryR22PolicyReceiptSink,
@@ -106,6 +110,7 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     RuntimeVerticalOperationV1,
     replacement_text_for_template,
 )
+from mobile_world.runtime.sentinel.r2_4.live_attempt import history_policy_transport_schema_v1
 from mobile_world.runtime.sentinel.r2_4.renderer import (
     render_vertical_admitted_plan,
     restore_vertical_original,
@@ -459,6 +464,90 @@ def _build_adapter_case(
         context=context,
         packet=packet,
         current_image_data_url=image_url,
+    )
+
+
+def _synthetic_history_output_with_observed_violation_shape() -> str:
+    decisions: list[JsonValue] = []
+    for index in range(3):
+        decisions.append(
+            {
+                "confidence_millis": 990,
+                "decision_id": f"decision-synthetic-{index}",
+                "evidence_refs": [],
+                "factual_verdict": "UNVERIFIABLE",
+                "fallback_status": "NONE",
+                "proposed_operation": "KEEP_UNCERTAIN",
+                "rationale_summary": "Synthetic evidence is insufficient.",
+                "reason_code": "TEMPORAL_PROVENANCE_MISSING",
+                "replacement_fact_id": None,
+                "target_id": f"target-synthetic-{index}",
+                "temporal_validity": "UNKNOWN",
+                "uncertainty_codes": [
+                    "EVIDENCE_MISSING",
+                    "TEMPORAL_PROVENANCE_MISSING",
+                ],
+            }
+        )
+    value: dict[str, JsonValue] = {
+        "action_or_tool_authority": False,
+        "automatic": True,
+        "curated": False,
+        "decisions": decisions,
+        "deployment_prediction": True,
+        "evidence_packet_sha256": hashlib.sha256(b"synthetic-actor-request-not-packet").hexdigest(),
+        "packet_id": "r22pkt:synthetic-observed-regression",
+        "schema_version": "mobileworld.runtime.sentinel-policy-proposal/v1",
+        "status": "COMPLETE",
+    }
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def test_observed_violation_shape_stays_rejected_and_corrected_output_is_admitted() -> None:
+    """Regress the observed violations using synthetic, repository-safe bytes."""
+
+    raw_text = _synthetic_history_output_with_observed_violation_shape()
+    raw = cast(dict[str, JsonValue], json.loads(raw_text))
+    assert json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")) == raw_text
+    Draft202012Validator(history_policy_transport_schema_v1().as_dict()).validate(raw)
+
+    full_validator = Draft202012Validator(ProposalSchemaSnapshotV1.from_checked_in().as_dict())
+    errors = tuple(full_validator.iter_errors(raw))
+    assert len(errors) == 4
+    assert {tuple(error.absolute_path) for error in errors} == {
+        ("decisions",),
+        ("decisions", 0, "fallback_status"),
+        ("decisions", 1, "fallback_status"),
+        ("decisions", 2, "fallback_status"),
+    }
+
+    built = _build_adapter_case("qwen")
+    decisions = cast(list[dict[str, JsonValue]], raw["decisions"])
+    target_ids = tuple(cast(str, decision["target_id"]) for decision in decisions)
+    assert len(built.packet.targets) == 1
+    packet = replace(
+        built.packet,
+        packet_id=cast(str, raw["packet_id"]),
+        targets=tuple(
+            replace(built.packet.targets[0], target_id=target_id) for target_id in target_ids
+        ),
+    )
+    corrected = cast(dict[str, JsonValue], deepcopy(raw))
+    corrected["status"] = "ABSTAIN"
+    corrected["evidence_packet_sha256"] = evidence_packet_sha256(packet)
+    for decision in cast(list[dict[str, JsonValue]], corrected["decisions"]):
+        decision["fallback_status"] = "ABSTAIN_TO_ORIGINAL"
+
+    assert json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")) == raw_text
+    assert not tuple(full_validator.iter_errors(corrected))
+    proposal = parse_runtime_policy_proposal(corrected)
+    assert validate_runtime_policy_proposal(proposal, packet) == (
+        "r22.schema_exact",
+        "r22.target_census_bound",
+        "r22.evidence_refs_bound",
+        "r22.temporal_cutoff_bound",
+        "r22.replacement_fact_bound",
+        "r22.no_action_surface",
     )
 
 

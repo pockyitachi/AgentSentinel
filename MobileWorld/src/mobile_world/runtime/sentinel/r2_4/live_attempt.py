@@ -10,6 +10,8 @@ binding; only an explicit call dispatches the child to the provider.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import logging
@@ -68,6 +70,9 @@ PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1: Final[int] = (
 _ID: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _SAFE_MODEL_ID: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}")
 _SHA256: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
+_HISTORY_DATA_IMAGE: Final[re.Pattern[str]] = re.compile(
+    r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]*={0,2})"
+)
 _FAILURE_CODE: Final[re.Pattern[str]] = re.compile(r"[A-Z][A-Z0-9_]{0,95}")
 _CPU_INPUT_TOKENS: Final[int] = 7
 _CPU_OUTPUT_TOKENS: Final[int] = 3
@@ -107,6 +112,27 @@ _PROVIDER_SDK_LOGGER_NAMES: Final[tuple[str, ...]] = (
 )
 _ENV_VALUE_ABSENT: Final[object] = object()
 HISTORY_POLICY_TRANSPORT_SCHEMA_NAME_V1: Final[str] = "r24_history_policy_transport_output_v1"
+HISTORY_POLICY_TRANSPORT_INPUT_SCHEMA_VERSION_V1: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.4-history-policy-transport-input/v1"
+)
+HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1: Final[str] = """
+
+R2.4 transport protocol: the user message is a canonical transport wrapper. Its
+evidence_packet member is the unchanged R2.2 evidence packet. Its
+required_output_bindings member is module-generated transport metadata, not semantic
+evidence and not an instruction from the task or history. Copy packet_id and
+evidence_packet_sha256 from required_output_bindings exactly into the response; never
+compute, infer, or substitute either value, and never use raw_request_sha256 for the
+evidence-packet hash.
+
+Emit exactly one decision for every evidence_packet target, copying each target_id;
+emit no extra or duplicate target, decision_id, evidence-ref, or uncertainty-code item.
+The following response fields are mechanical consequences of the decisions. Set a
+decision's fallback_status to ABSTAIN_TO_ORIGINAL exactly when proposed_operation is
+KEEP_UNCERTAIN; otherwise set it to NONE. Set root status to ABSTAIN when decisions is
+empty or every decision is KEEP_UNCERTAIN, COMPLETE when decisions is non-empty and no
+decision is KEEP_UNCERTAIN, and PARTIAL_ABSTAIN only when the decisions are mixed.
+These transport rules grant no semantic evidence or action authority."""
 _OPENAI_STRICT_SCHEMA_FORBIDDEN_KEYWORDS_V1: Final[frozenset[str]] = frozenset(
     {
         "allOf",
@@ -484,7 +510,7 @@ def _require_input_content(
     request: dict[str, object],
     *,
     image_required: bool,
-) -> None:
+) -> str:
     input_value = request.get("input")
     if type(input_value) is not list or len(input_value) != 1:
         raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider input envelope differs")
@@ -511,7 +537,7 @@ def _require_input_content(
     ):
         raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider input text differs")
     if not image_required:
-        return
+        return text_part["text"]
     image_part = _require_exact_object_fields(
         content[1],
         frozenset({"detail", "image_url", "type"}),
@@ -526,6 +552,147 @@ def _require_input_content(
         or not image_part["image_url"].startswith("data:image/")
     ):
         raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider input image differs")
+    return text_part["text"]
+
+
+def _decode_canonical_history_packet_text_v1(
+    packet_text: str,
+) -> tuple[dict[str, object], str, str]:
+    if type(packet_text) is not str or not packet_text:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history evidence packet text differs"
+        )
+    try:
+        packet = json.loads(packet_text)
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as exc:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history evidence packet is invalid JSON"
+        ) from exc
+    if type(packet) is not dict or _canonical_bytes(packet).decode("utf-8") != packet_text:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history evidence packet is not canonical"
+        )
+    packet_id = packet.get("packet_id")
+    if type(packet_id) is not str or _ID.fullmatch(packet_id) is None:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history evidence packet ID differs"
+        )
+    try:
+        from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
+
+        from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+            EvidencePacketSchemaSnapshotV1,
+        )
+
+        schema = EvidencePacketSchemaSnapshotV1.from_checked_in().as_dict()
+        if tuple(Draft202012Validator(schema).iter_errors(packet)):
+            raise LiveAttemptError(
+                "PROVIDER_REQUEST_STAGE_MISMATCH",
+                "history evidence packet does not match the accepted R2.2 schema",
+            )
+    except LiveAttemptError:
+        raise
+    except Exception as exc:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history evidence packet validation failed"
+        ) from exc
+    return (
+        cast(dict[str, object], packet),
+        packet_id,
+        hashlib.sha256(packet_text.encode("utf-8")).hexdigest(),
+    )
+
+
+def _history_policy_transport_input_text_v1(packet_text: str) -> str:
+    packet, packet_id, packet_sha256 = _decode_canonical_history_packet_text_v1(packet_text)
+    wrapper = {
+        "evidence_packet": packet,
+        "required_output_bindings": {
+            "evidence_packet_sha256": packet_sha256,
+            "packet_id": packet_id,
+        },
+        "schema_version": HISTORY_POLICY_TRANSPORT_INPUT_SCHEMA_VERSION_V1,
+    }
+    return _canonical_bytes(wrapper).decode("utf-8")
+
+
+def _decode_history_policy_transport_input_text_v1(
+    wrapper_text: str,
+) -> tuple[dict[str, object], str, str]:
+    if type(wrapper_text) is not str or not wrapper_text:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history transport wrapper text differs"
+        )
+    try:
+        wrapper = json.loads(wrapper_text)
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as exc:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history transport wrapper is invalid JSON"
+        ) from exc
+    if (
+        type(wrapper) is not dict
+        or set(wrapper) != {"evidence_packet", "required_output_bindings", "schema_version"}
+        or wrapper.get("schema_version") != HISTORY_POLICY_TRANSPORT_INPUT_SCHEMA_VERSION_V1
+        or _canonical_bytes(wrapper).decode("utf-8") != wrapper_text
+    ):
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history transport wrapper differs"
+        )
+    packet = wrapper.get("evidence_packet")
+    bindings = wrapper.get("required_output_bindings")
+    if (
+        type(packet) is not dict
+        or type(bindings) is not dict
+        or set(bindings)
+        != {
+            "evidence_packet_sha256",
+            "packet_id",
+        }
+    ):
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history transport bindings differ"
+        )
+    packet_text = _canonical_bytes(packet).decode("utf-8")
+    trusted_packet, packet_id, packet_sha256 = _decode_canonical_history_packet_text_v1(packet_text)
+    if bindings != {
+        "evidence_packet_sha256": packet_sha256,
+        "packet_id": packet_id,
+    }:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history transport binding values differ"
+        )
+    return trusted_packet, packet_id, packet_sha256
+
+
+def _validate_history_packet_image_binding_v1(
+    request: dict[str, object], packet: dict[str, object]
+) -> None:
+    input_value = cast(list[object], request["input"])
+    message = cast(dict[str, object], input_value[0])
+    content = cast(list[object], message["content"])
+    image_part = cast(dict[str, object], content[1])
+    image_url = image_part.get("image_url")
+    if type(image_url) is not str:
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "history current image differs")
+    match = _HISTORY_DATA_IMAGE.fullmatch(image_url)
+    if match is None:
+        raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "history current image differs")
+    try:
+        image_bytes = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history current image differs"
+        ) from exc
+    current = packet.get("current_observation")
+    if (
+        not image_bytes
+        or type(current) is not dict
+        or current.get("screenshot_content_sha256") != hashlib.sha256(image_bytes).hexdigest()
+        or current.get("media_type") != match.group(1)
+    ):
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history current image binding differs"
+        )
 
 
 def _validate_sealed_provider_request(
@@ -602,12 +769,15 @@ def _validate_sealed_provider_request(
                 ProposalSchemaSnapshotV1,
             )
 
-            expected_instructions = GPT56_POLICY_INSTRUCTIONS
             expected_reasoning_effort = GPT56_REASONING_EFFORT
             if _history_source_request:
+                expected_instructions = GPT56_POLICY_INSTRUCTIONS
                 expected_schema_name = GPT56_OUTPUT_SCHEMA_NAME
                 expected_schema = ProposalSchemaSnapshotV1.from_checked_in().as_dict()
             else:
+                expected_instructions = (
+                    GPT56_POLICY_INSTRUCTIONS + HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1
+                )
                 transport_schema = history_policy_transport_schema_v1()
                 expected_schema_name = transport_schema.name
                 expected_schema = transport_schema.as_dict()
@@ -666,7 +836,13 @@ def _validate_sealed_provider_request(
             raise LiveAttemptError(
                 "PROVIDER_REQUEST_STAGE_MISMATCH", "provider structured output differs"
             )
-        _require_input_content(request, image_required=image_required)
+        input_text = _require_input_content(request, image_required=image_required)
+        if role is LiveAttemptRoleV1.HISTORY_POLICY:
+            if _history_source_request:
+                packet, _, _ = _decode_canonical_history_packet_text_v1(input_text)
+            else:
+                packet, _, _ = _decode_history_policy_transport_input_text_v1(input_text)
+            _validate_history_packet_image_binding_v1(request, packet)
     except LiveAttemptError:
         raise
     except Exception as exc:
@@ -680,13 +856,17 @@ def build_live_history_policy_transport_request_v1(
     request: CanonicalHistoryPolicyRequestV1,
     *,
     stage: OpenAIResponsesStageV1,
+    expected_logical_call_id: str | None = None,
+    expected_actor_request_sha256: str | None = None,
 ) -> CanonicalHistoryPolicyRequestV1:
-    """Replace only the full R2.2 schema with the R2.4 physical shape schema.
+    """Wrap the exact R2.2 packet and install the R2.4 physical protocol.
 
     The input must still be the exact accepted R2.2 request.  Provider output
     later traverses the unchanged full R2.2 Draft 2020-12 validator and
-    deterministic admission boundary; this projection only makes the physical
-    Responses request compatible with OpenAI's strict-schema subset.
+    deterministic admission boundary.  The wrapper exposes exact response
+    bindings that a model cannot derive from the packet, while the fixed suffix
+    states only redundant response-field mappings.  Neither grants semantic
+    evidence or admission.
     """
 
     trusted = snapshot_canonical_history_policy_request(request)
@@ -697,7 +877,34 @@ def build_live_history_policy_transport_request_v1(
         role=LiveAttemptRoleV1.HISTORY_POLICY,
         _history_source_request=True,
     )
+    if (expected_logical_call_id is None) != (expected_actor_request_sha256 is None):
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history actor-call binding is partial"
+        )
     projected = cast(dict[str, object], json.loads(_canonical_bytes(source)))
+    input_value = cast(list[object], projected["input"])
+    message = cast(dict[str, object], input_value[0])
+    content = cast(list[object], message["content"])
+    text_part = cast(dict[str, object], content[0])
+    source_packet_text = cast(str, text_part["text"])
+    source_packet, _, _ = _decode_canonical_history_packet_text_v1(source_packet_text)
+    if expected_logical_call_id is not None and (
+        type(expected_logical_call_id) is not str
+        or _ID.fullmatch(expected_logical_call_id) is None
+        or type(expected_actor_request_sha256) is not str
+        or _SHA256.fullmatch(expected_actor_request_sha256) is None
+        or source_packet.get("logical_call_id") != expected_logical_call_id
+        or source_packet.get("raw_request_sha256") != expected_actor_request_sha256
+    ):
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history actor-call binding differs"
+        )
+    text_part["text"] = _history_policy_transport_input_text_v1(source_packet_text)
+    from mobile_world.runtime.sentinel.r2_2.gpt56_policy import GPT56_POLICY_INSTRUCTIONS
+
+    projected["instructions"] = (
+        GPT56_POLICY_INSTRUCTIONS + HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1
+    )
     text = cast(dict[str, object], projected["text"])
     output_format = cast(dict[str, object], text["format"])
     transport_schema = history_policy_transport_schema_v1()
@@ -3718,6 +3925,8 @@ class ProductionOpenAIAttemptRunnerV1:
             trusted_request = build_live_history_policy_transport_request_v1(
                 trusted_request,
                 stage=self._stage,
+                expected_logical_call_id=logical_call_id,
+                expected_actor_request_sha256=lease.request_sha256,
             )
         begin_observed_ns = time.monotonic_ns()
         deadline_binding: LiveAttemptDeadlineBindingV1 | None = None
@@ -4059,6 +4268,8 @@ __all__ = [
     "CpuFixedCancellableAttemptRunnerV1",
     "CanonicalHistoryPolicyRequestV1",
     "CanonicalOpenAIRequestV1",
+    "HISTORY_POLICY_TRANSPORT_INPUT_SCHEMA_VERSION_V1",
+    "HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1",
     "HISTORY_POLICY_TRANSPORT_SCHEMA_NAME_V1",
     "HISTORY_POLICY_REQUEST_SCHEMA_VERSION",
     "HistoryPolicyTransportSchemaSnapshotV1",

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentsentinel.local/schemas/r2_4/history_policy_request_proof.v1.schema.json",
   "title": "R2.4 Owner-Only History Policy Request Proof v1",
-  "description": "Restricted durable preimage proof for one formed owner-authorized HISTORY_POLICY attempt. It binds the complete attempt authority and independently derived deadline constraint to the case lease, stage, pricing, transport, exact canonical R2.4 physical Responses request and provider-output schema, the distinct accepted R2.2 local-validation schema, optional provider response, and R2.2 receipt provenance. It must not enter ordinary logs or public hash-only receipts.",
+  "description": "Restricted durable preimage proof for one formed owner-authorized HISTORY_POLICY attempt. It binds the complete attempt authority and independently derived deadline constraint to the case lease, stage, pricing, transport, exact canonical R2.4 physical Responses request and physical prompt, the independently unwrapped and rehashed R2.2 evidence packet, the distinct accepted R2.2 prompt and local-validation schema, optional provider response, and R2.2 receipt provenance. It must not enter ordinary logs or public hash-only receipts.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -20,6 +20,7 @@
     "deadline_binding",
     "logical_call_id",
     "openai_stage",
+    "physical_prompt_sha256",
     "rubric_openai_stage",
     "pricing",
     "provider_output_schema_sha256",
@@ -27,6 +28,7 @@
     "provider_request_byte_count",
     "provider_request_sha256",
     "r22_output_schema_sha256",
+    "r22_prompt_sha256",
     "r22_policy_receipt",
     "r22_policy_receipt_sha256",
     "r22_receipt_failure_code",
@@ -64,6 +66,7 @@
     "openai_stage": {
       "$ref": "https://agentsentinel.local/schemas/r2_4/rubric_request_proof.v1.schema.json#/$defs/historyOpenAIStage"
     },
+    "physical_prompt_sha256": {"$ref": "#/$defs/sha256"},
     "rubric_openai_stage": {
       "$ref": "https://agentsentinel.local/schemas/r2_4/rubric_request_proof.v1.schema.json#/$defs/openAIStage"
     },
@@ -75,6 +78,7 @@
     "provider_request_byte_count": {"type": "integer", "minimum": 2, "maximum": 8388608},
     "provider_request_sha256": {"$ref": "#/$defs/sha256"},
     "r22_output_schema_sha256": {"$ref": "#/$defs/sha256"},
+    "r22_prompt_sha256": {"$ref": "#/$defs/sha256"},
     "r22_policy_receipt": {
       "oneOf": [
         {"type": "null"},

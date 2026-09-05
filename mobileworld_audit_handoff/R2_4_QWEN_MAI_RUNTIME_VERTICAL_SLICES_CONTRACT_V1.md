@@ -129,17 +129,31 @@ table and observed token census. Legal zero-dispatch cost-reservation failures
 and post-dispatch bound violations remain typed proof rather than being
 discarded as invalid authority.
 
-For HISTORY_POLICY, the proof retains the canonical physical R2.4 Responses
-request and its provider-output shape-schema hash, plus the distinct accepted
-full R2.2 output-schema hash used for local validation and receipt binding. The
-R2.4 shape schema is a transport-only structural superset and grants no
-admission: every returned object still passes the unchanged full R2.2 schema
-and deterministic contracts before any plan can be admitted. The observed
-Responses envelope and R2.2 policy receipt remain independently bound. If the
-provider response arrives but R2.2 receipt preparation, publication, mutation
-checking, or deadline handling fails, the attempt and response remain
-proof-bound with a closed publication-failure code and
-`R22_RECEIPT_ABSENT_POST_DISPATCH`; the policy result is not admitted.
+For HISTORY_POLICY, the source-to-transport bridge first validates the exact
+canonical accepted R2.2 request, including the full checked-in evidence-packet
+schema, current-image bytes/media/hash, and the production actor logical-call
+and raw-request bindings. It then wraps the unchanged packet in a canonical
+R2.4 transport envelope carrying only module-derived `packet_id` and canonical
+evidence-packet-SHA output bindings. A fixed additive instruction suffix tells
+the provider to copy those bindings and states the already accepted target
+census, fallback, and root-status mappings. The wrapper and suffix are
+transport metadata only: they add no semantic evidence, history truth, action
+authority, or admission authority.
+
+The proof retains the canonical physical R2.4 Responses request, independently
+unwraps and rehashes its unchanged R2.2 evidence packet, and binds the physical
+prompt hash separately from the accepted R2.2 prompt hash. It also binds the
+provider-output shape-schema hash separately from the distinct accepted full
+R2.2 output-schema hash used for local validation and receipt binding. The R2.4
+shape schema is a transport-only structural superset and grants no admission:
+provider bytes are never hydrated, corrected, or overwritten, and every
+returned object still passes the unchanged full R2.2 schema and deterministic
+contracts before any plan can be admitted. The observed Responses envelope and
+R2.2 policy receipt remain independently bound. If the provider response
+arrives but R2.2 receipt preparation, publication, mutation checking, or
+deadline handling fails, the attempt and response remain proof-bound with a
+closed publication-failure code and `R22_RECEIPT_ABSENT_POST_DISPATCH`; the
+policy result is not admitted.
 
 If deadline or cancellation handling wins a race with an already-arrived valid
 `COMPLETED` Responses envelope, a terminal `FAILED`,
@@ -358,10 +372,13 @@ ordinary production logs.
 Every sealed request component, including the physical R2.4 JSON Schema, is
 compared as canonical JSON bytes rather than with Python container equality.
 The source-to-transport bridge first requires the exact accepted full R2.2
-schema, then replaces only the output-schema name and schema with the checked-in
-R2.4 transport shape. JSON numeric and boolean values are therefore
-type-distinct; a mutation such as `1` to `true` fails before secret access or
-provider dispatch.
+request. It then canonically wraps the unchanged packet with its derived output
+bindings, appends the fixed transport-only instruction suffix, and replaces the
+output-schema name and schema with the checked-in R2.4 transport shape. The
+formed physical request is validated again before dispatch. JSON numeric and
+boolean values are therefore type-distinct; a mutation such as `1` to `true`,
+or any wrapper, binding, prompt, packet, image, or actor-call drift, fails before
+secret access or provider dispatch.
 
 The accepted R2.3 v1 descriptor, receipt, and schema bytes remain unchanged and
 cannot represent a live Responses call. Live rubric execution uses additive,

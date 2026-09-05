@@ -103,6 +103,8 @@ from mobile_world.runtime.sentinel.r2_4.evidence import (
     rubric_evidence_snapshot_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    HISTORY_POLICY_TRANSPORT_INPUT_SCHEMA_VERSION_V1,
+    HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1,
     CanonicalHistoryPolicyRequestV1,
     LiveAttemptAuthorityV1,
     LiveAttemptCostStatusV1,
@@ -1661,7 +1663,7 @@ def _validate_history_provider_request_v1(
     transport_binding: OpenAIResponsesTransportBindingV1,
     logical_call_id: str,
     actor_request_sha256: str,
-) -> tuple[str, str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str, str, str]:
     """Rebuild R2.2 semantics plus the exact R2.4 physical request provenance."""
 
     projection = _history_provider_request_projection(request)
@@ -1712,20 +1714,37 @@ def _validate_history_provider_request_v1(
         raise R24ContractError(
             "INVALID_HISTORY_REQUEST_PROOF", "history provider semantic content differs"
         )
-    packet_text = cast(str, text_part["text"])
+    wrapper_text = cast(str, text_part["text"])
     try:
-        packet = json.loads(packet_text)
+        wrapper = json.loads(wrapper_text)
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise R24ContractError(
-            "INVALID_HISTORY_REQUEST_PROOF", "history evidence packet is invalid JSON"
+            "INVALID_HISTORY_REQUEST_PROOF", "history transport wrapper is invalid JSON"
         ) from exc
     if (
-        type(packet) is not dict
-        or canonical_json_bytes(cast(JsonValue, packet)).decode("utf-8") != packet_text
+        type(wrapper) is not dict
+        or set(wrapper) != {"evidence_packet", "required_output_bindings", "schema_version"}
+        or wrapper.get("schema_version") != HISTORY_POLICY_TRANSPORT_INPUT_SCHEMA_VERSION_V1
+        or canonical_json_bytes(cast(JsonValue, wrapper)).decode("utf-8") != wrapper_text
     ):
         raise R24ContractError(
-            "INVALID_HISTORY_REQUEST_PROOF", "history evidence packet is not canonical"
+            "INVALID_HISTORY_REQUEST_PROOF", "history transport wrapper is not canonical"
         )
+    packet = wrapper.get("evidence_packet")
+    bindings = wrapper.get("required_output_bindings")
+    if (
+        type(packet) is not dict
+        or type(bindings) is not dict
+        or set(bindings)
+        != {
+            "evidence_packet_sha256",
+            "packet_id",
+        }
+    ):
+        raise R24ContractError(
+            "INVALID_HISTORY_REQUEST_PROOF", "history transport wrapper bindings differ"
+        )
+    packet_text = canonical_json_bytes(cast(JsonValue, packet)).decode("utf-8")
     if tuple(_history_evidence_packet_validator().iter_errors(packet)):
         raise R24ContractError(
             "INVALID_HISTORY_REQUEST_PROOF",
@@ -1733,17 +1752,22 @@ def _validate_history_provider_request_v1(
         )
     packet_id = packet.get("packet_id")
     packet_host_id = packet.get("host_id")
+    packet_sha256 = hashlib.sha256(packet_text.encode("utf-8")).hexdigest()
     if (
         type(packet_id) is not str
         or type(packet_host_id) is not str
         or packet.get("logical_call_id") != logical_call_id
         or packet.get("raw_request_sha256") != actor_request_sha256
+        or bindings
+        != {
+            "evidence_packet_sha256": packet_sha256,
+            "packet_id": packet_id,
+        }
     ):
         raise R24ContractError(
             "INVALID_HISTORY_REQUEST_PROOF",
             "history evidence packet differs from its actor call",
         )
-    packet_sha256 = hashlib.sha256(packet_text.encode("utf-8")).hexdigest()
     image_url = cast(str, image_part["image_url"])
     match = _HISTORY_DATA_IMAGE.fullmatch(image_url)
     if match is None:
@@ -1773,7 +1797,9 @@ def _validate_history_provider_request_v1(
     transport_schema = history_policy_transport_schema_v1()
     expected_request: dict[str, JsonValue] = {
         "input": cast(JsonValue, input_value),
-        "instructions": GPT56_POLICY_INSTRUCTIONS,
+        "instructions": (
+            GPT56_POLICY_INSTRUCTIONS + HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1
+        ),
         "max_output_tokens": GPT56_MAX_OUTPUT_TOKENS,
         "model": GPT56_REQUESTED_MODEL,
         "parallel_tool_calls": False,
@@ -1823,6 +1849,12 @@ def _validate_history_provider_request_v1(
         "sdk_max_retries": 0,
         "openai_sdk_version": SUPPORTED_OPENAI_SDK_VERSION,
     }
+    r22_prompt_sha256 = hashlib.sha256(GPT56_POLICY_INSTRUCTIONS.encode("utf-8")).hexdigest()
+    physical_prompt_sha256 = hashlib.sha256(
+        (GPT56_POLICY_INSTRUCTIONS + HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1).encode(
+            "utf-8"
+        )
+    ).hexdigest()
     return (
         packet_sha256,
         image_sha256,
@@ -1831,6 +1863,8 @@ def _validate_history_provider_request_v1(
         packet_host_id,
         transport_schema.sha256,
         checked_schema.sha256,
+        physical_prompt_sha256,
+        r22_prompt_sha256,
     )
 
 
@@ -1860,6 +1894,8 @@ def validate_live_history_policy_attempt_request_anchor_v1(
         packet_host_id,
         _provider_output_schema_sha256,
         r22_output_schema_sha256,
+        _physical_prompt_sha256,
+        _r22_prompt_sha256,
     ) = _validate_history_provider_request_v1(
         request,
         transport_binding=transport,
@@ -2139,6 +2175,11 @@ def live_history_policy_attempt_request_proof_projection(
         ),
         "logical_call_id": anchor.logical_call_id,
         "openai_stage": cast(JsonValue, openai_stage_projection(anchor.openai_stage)),
+        "physical_prompt_sha256": hashlib.sha256(
+            (GPT56_POLICY_INSTRUCTIONS + HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1).encode(
+                "utf-8"
+            )
+        ).hexdigest(),
         "rubric_openai_stage": cast(JsonValue, openai_stage_projection(anchor.rubric_openai_stage)),
         "pricing": cast(JsonValue, live_attempt_pricing_projection(anchor.pricing)),
         "provider_output_schema_sha256": provider_schema.sha256,
@@ -2148,6 +2189,7 @@ def live_history_policy_attempt_request_proof_projection(
         "provider_request_byte_count": anchor.provider_request.byte_count,
         "provider_request_sha256": anchor.provider_request.request_sha256,
         "r22_output_schema_sha256": r22_schema.sha256,
+        "r22_prompt_sha256": hashlib.sha256(GPT56_POLICY_INSTRUCTIONS.encode("utf-8")).hexdigest(),
         "r22_policy_receipt": (
             None
             if anchor.r22_policy_receipt is None
@@ -2239,6 +2281,7 @@ def validate_live_history_policy_request_proof_projection_v1(
         "deadline_binding",
         "logical_call_id",
         "openai_stage",
+        "physical_prompt_sha256",
         "rubric_openai_stage",
         "pricing",
         "provider_output_schema_sha256",
@@ -2246,6 +2289,7 @@ def validate_live_history_policy_request_proof_projection_v1(
         "provider_request_byte_count",
         "provider_request_sha256",
         "r22_output_schema_sha256",
+        "r22_prompt_sha256",
         "r22_policy_receipt",
         "r22_policy_receipt_sha256",
         "r22_receipt_failure_code",
@@ -2336,6 +2380,15 @@ def validate_live_history_policy_request_proof_projection_v1(
         or proof["provider_request_sha256"] != request.request_sha256
         or proof["provider_output_schema_sha256"] != history_policy_transport_schema_v1().sha256
         or proof["r22_output_schema_sha256"] != ProposalSchemaSnapshotV1.from_checked_in().sha256
+        or proof["physical_prompt_sha256"]
+        != hashlib.sha256(
+            (GPT56_POLICY_INSTRUCTIONS + HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        or proof["r22_prompt_sha256"]
+        != hashlib.sha256(GPT56_POLICY_INSTRUCTIONS.encode("utf-8")).hexdigest()
+        or proof["physical_prompt_sha256"] == proof["r22_prompt_sha256"]
         or type(proof["provider_request_byte_count"]) is not int
         or proof["provider_request_byte_count"] != request.byte_count
         or proof["r22_policy_receipt_sha256"] != (None if r22 is None else r22.sha256)

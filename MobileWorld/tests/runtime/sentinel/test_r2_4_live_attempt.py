@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -22,9 +23,12 @@ from mobile_world.runtime.sentinel.r2_4 import (
     production_preflight as production_preflight_module,
 )
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    HISTORY_POLICY_TRANSPORT_INPUT_SCHEMA_VERSION_V1,
+    HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1,
     PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1,
     PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1,
     PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1,
+    CanonicalHistoryPolicyRequestV1,
     CpuFixedAttemptScriptV1,
     CpuFixedCancellableAttemptRunnerV1,
     CpuFixedLiveAttemptHandleV1,
@@ -162,6 +166,87 @@ def _history_policy_source_request_kwargs() -> dict[str, object]:
         ProposalSchemaSnapshotV1,
     )
 
+    image_bytes = b"\x00"
+    image_sha256 = hashlib.sha256(image_bytes).hexdigest()
+    task_text = "Adjust display brightness."
+    packet = {
+        "codec_contract_version": "v1",
+        "current_observation": {
+            "accessibility_evidence_ids": [],
+            "actor_request_image_path": ["messages", 1, "content", 1],
+            "actor_request_image_value_sha256": _digest("history-image-value"),
+            "height": 1,
+            "media_type": "image/png",
+            "screenshot_content_sha256": image_sha256,
+            "screenshot_evidence_id": "evidence-current-screen",
+            "source_event_id": "event-step-started",
+            "source_event_seq": 2,
+            "source_event_type": "step_started",
+            "width": 1,
+        },
+        "cutoff": {
+            "actor_request_sha256": _digest("history-source-actor-request"),
+            "current_observation_event_id": "event-step-started",
+            "cutoff_event_seq": 2,
+            "kind": "ACTOR_REQUEST_PRE_SEND",
+            "run_id": "run-history-source",
+            "step_id": "step-history-source",
+            "task_run_id": "task-run-history-source",
+        },
+        "evidence_index": [
+            {
+                "caused_by_event_id": None,
+                "evidence_id": "evidence-current-screen",
+                "monotonic_ns": 2,
+                "observed_by_cutoff": True,
+                "payload_sha256": _digest("history-screen-payload"),
+                "projection": {
+                    "content_sha256": image_sha256,
+                    "height": 1,
+                    "media_type": "image/png",
+                    "projection_type": "IMAGE_REFERENCE",
+                    "request_value_sha256": _digest("history-image-value"),
+                    "width": 1,
+                },
+                "role": "CURRENT_UI_SCREENSHOT",
+                "semantic_scope": "CURRENT_STATE_ONLY",
+                "source_event_id": "event-step-started",
+                "source_event_seq": 2,
+                "source_event_type": "step_started",
+                "task_run_id": "task-run-history-source",
+                "wall_time": "2026-09-05T00:00:00Z",
+            }
+        ],
+        "history_codec_id": "mobileworld.g1.history-codec.qwen-flat-progress",
+        "host_id": "mobileworld.qwen3vl.actor",
+        "input_exclusions": {
+            "benchmark_checker_included": False,
+            "collector_raw_mutated": False,
+            "future_event_included": False,
+            "host_history_used_as_evidence": False,
+            "peer_decision_included": False,
+            "replay_result_included": False,
+            "target_action_included": False,
+            "target_actor_response_included": False,
+            "target_result_or_post_state_included": False,
+            "task_outcome_included": False,
+        },
+        "logical_call_id": "logical-history-source",
+        "packet_id": "r22pkt:history-source",
+        "raw_request_sha256": _digest("history-source-actor-request"),
+        "replacement_facts": [],
+        "schema_version": "mobileworld.runtime.sentinel-evidence-packet/v1",
+        "targets": [],
+        "task": {
+            "exact_text": task_text,
+            "role": "TASK_INSTRUCTION_DATA",
+            "source_event_id": "event-task-started",
+            "source_event_seq": 1,
+            "source_event_type": "task_started",
+            "text_sha256": hashlib.sha256(task_text.encode()).hexdigest(),
+        },
+    }
+
     return {
         "model": "gpt-5.6-sol",
         "instructions": GPT56_POLICY_INSTRUCTIONS,
@@ -169,7 +254,15 @@ def _history_policy_source_request_kwargs() -> dict[str, object]:
             {
                 "role": "user",
                 "content": [
-                    {"type": "input_text", "text": "{}"},
+                    {
+                        "type": "input_text",
+                        "text": json.dumps(
+                            packet,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    },
                     {
                         "type": "input_image",
                         "image_url": "data:image/png;base64,AA==",
@@ -722,8 +815,26 @@ def test_history_transport_builder_requires_full_r22_source_then_binds_physical_
     assert physical_format["name"] == transport.name
     assert physical_format["schema"] == transport.as_dict()
     assert source.request_sha256 != physical.request_sha256
+    source_input = cast(list[dict[str, object]], source_value["input"])
+    physical_input = cast(list[dict[str, object]], physical_value["input"])
+    source_content = cast(list[dict[str, object]], source_input[0]["content"])
+    physical_content = cast(list[dict[str, object]], physical_input[0]["content"])
+    source_packet_text = cast(str, source_content[0]["text"])
+    wrapper_text = cast(str, physical_content[0]["text"])
+    wrapper = cast(dict[str, object], json.loads(wrapper_text))
+    assert wrapper["schema_version"] == HISTORY_POLICY_TRANSPORT_INPUT_SCHEMA_VERSION_V1
+    assert wrapper["evidence_packet"] == json.loads(source_packet_text)
+    assert wrapper["required_output_bindings"] == {
+        "evidence_packet_sha256": hashlib.sha256(source_packet_text.encode()).hexdigest(),
+        "packet_id": "r22pkt:history-source",
+    }
+    assert physical_value["instructions"] == (
+        cast(str, source_value["instructions"]) + HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1
+    )
     source_format["name"] = physical_format["name"]
     source_format["schema"] = physical_format["schema"]
+    source_value["instructions"] = physical_value["instructions"]
+    source_content[0]["text"] = wrapper_text
     assert source_value == physical_value
 
     with pytest.raises(LiveAttemptError) as already_physical:
@@ -732,6 +843,120 @@ def test_history_transport_builder_requires_full_r22_source_then_binds_physical_
             stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
         )
     assert already_physical.value.code == "PROVIDER_REQUEST_STAGE_MISMATCH"
+
+
+def _history_source_with_packet_mutation(
+    mutation: str,
+) -> CanonicalHistoryPolicyRequestV1:
+    kwargs = deepcopy(_history_policy_source_request_kwargs())
+    input_value = cast(list[dict[str, object]], kwargs["input"])
+    content = cast(list[dict[str, object]], input_value[0]["content"])
+    packet = cast(dict[str, object], json.loads(cast(str, content[0]["text"])))
+    if mutation == "schema_drift":
+        task = cast(dict[str, object], packet["task"])
+        del task["text_sha256"]
+    elif mutation == "image_hash_drift":
+        current = cast(dict[str, object], packet["current_observation"])
+        current["screenshot_content_sha256"] = _digest("wrong-current-image")
+    elif mutation == "image_media_drift":
+        current = cast(dict[str, object], packet["current_observation"])
+        current["media_type"] = "image/jpeg"
+    else:  # pragma: no cover - closed test helper input
+        raise AssertionError(f"unknown packet mutation: {mutation}")
+    content[0]["text"] = json.dumps(
+        packet,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return build_canonical_history_policy_request(kwargs)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("schema_drift", "image_hash_drift", "image_media_drift"),
+)
+def test_history_transport_builder_rejects_invalid_source_packet_before_projection(
+    mutation: str,
+) -> None:
+    with pytest.raises(LiveAttemptError) as raised:
+        build_live_history_policy_transport_request_v1(
+            _history_source_with_packet_mutation(mutation),
+            stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
+        )
+    assert raised.value.code == "PROVIDER_REQUEST_STAGE_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    ("logical_call_id", "actor_request_sha256"),
+    (
+        ("different-logical-call", _digest("history-source-actor-request")),
+        ("logical-history-source", _digest("different-actor-request")),
+    ),
+)
+def test_history_transport_builder_rejects_production_actor_call_binding_drift(
+    logical_call_id: str,
+    actor_request_sha256: str,
+) -> None:
+    source = build_canonical_history_policy_request(_history_policy_source_request_kwargs())
+    with pytest.raises(LiveAttemptError) as raised:
+        build_live_history_policy_transport_request_v1(
+            source,
+            stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
+            expected_logical_call_id=logical_call_id,
+            expected_actor_request_sha256=actor_request_sha256,
+        )
+    assert raised.value.code == "PROVIDER_REQUEST_STAGE_MISMATCH"
+
+
+@pytest.mark.parametrize("drift", ("wrapper_binding", "physical_prompt"))
+def test_sealed_history_request_rejects_transport_wrapper_or_prompt_drift(drift: str) -> None:
+    physical = build_live_history_policy_transport_request_v1(
+        build_canonical_history_policy_request(_history_policy_source_request_kwargs()),
+        stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
+    )
+    value = cast(dict[str, object], json.loads(physical.canonical_bytes))
+    if drift == "wrapper_binding":
+        input_value = cast(list[dict[str, object]], value["input"])
+        content = cast(list[dict[str, object]], input_value[0]["content"])
+        wrapper = cast(dict[str, object], json.loads(cast(str, content[0]["text"])))
+        bindings = cast(dict[str, object], wrapper["required_output_bindings"])
+        bindings["evidence_packet_sha256"] = _digest("wrong-wrapper-binding")
+        content[0]["text"] = json.dumps(
+            wrapper,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    elif drift == "physical_prompt":
+        value["instructions"] = cast(str, value["instructions"]) + "\nSynthetic mutation."
+    else:  # pragma: no cover - closed parametrization
+        raise AssertionError(f"unknown physical request drift: {drift}")
+    request = build_canonical_history_policy_request(value)
+    with pytest.raises(LiveAttemptError) as raised:
+        live_attempt_module._validate_sealed_provider_request(
+            request.canonical_bytes,
+            stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
+            role=LiveAttemptRoleV1.HISTORY_POLICY,
+        )
+    assert raised.value.code == "PROVIDER_REQUEST_STAGE_MISMATCH"
+
+
+def test_history_transport_suffix_states_every_mechanical_output_rule() -> None:
+    suffix = HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1
+    for rule in (
+        "Copy packet_id and",
+        "evidence_packet_sha256 from required_output_bindings exactly",
+        "never use raw_request_sha256",
+        "exactly one decision for every evidence_packet target",
+        "no extra or duplicate target, decision_id, evidence-ref, or uncertainty-code item",
+        "fallback_status to ABSTAIN_TO_ORIGINAL exactly when proposed_operation is",
+        "KEEP_UNCERTAIN; otherwise set it to NONE",
+        "root status to ABSTAIN when decisions is",
+        "COMPLETE when decisions is non-empty and no",
+        "PARTIAL_ABSTAIN only when the decisions are mixed",
+    ):
+        assert rule in suffix
 
 
 def test_history_transport_shape_does_not_weaken_full_r22_semantic_validation() -> None:
@@ -910,7 +1135,8 @@ def test_child_disables_env_driven_sdk_logs_before_client_and_request(
     connection = _MemoryConnection(("DISPATCH", authority_sha256))
     secret_token = "SYNTHETIC_CHILD_API_KEY_TOKEN_R24"
     task_token = "SYNTHETIC_CHILD_TASK_EVIDENCE_TOKEN_R24"
-    image_token = "SYNTHETIC_CHILD_IMAGE_TOKEN_R24"
+    image_bytes = b"SYNTHETIC_CHILD_IMAGE_TOKEN_R24"
+    image_token = base64.b64encode(image_bytes).decode("ascii")
     observed_request_bodies: list[bytes] = []
 
     class _SecretLease:
@@ -952,7 +1178,31 @@ def test_child_disables_env_driven_sdk_logs_before_client_and_request(
     request_kwargs = _history_policy_request_kwargs()
     input_value = cast(list[dict[str, object]], request_kwargs["input"])
     content = cast(list[dict[str, object]], input_value[0]["content"])
-    content[0]["text"] = task_token
+    wrapper = cast(dict[str, object], json.loads(cast(str, content[0]["text"])))
+    packet = cast(dict[str, object], wrapper["evidence_packet"])
+    task = cast(dict[str, object], packet["task"])
+    task["exact_text"] = task_token
+    task["text_sha256"] = hashlib.sha256(task_token.encode()).hexdigest()
+    image_sha256 = hashlib.sha256(image_bytes).hexdigest()
+    current = cast(dict[str, object], packet["current_observation"])
+    current["screenshot_content_sha256"] = image_sha256
+    evidence = cast(list[dict[str, object]], packet["evidence_index"])
+    projection = cast(dict[str, object], evidence[0]["projection"])
+    projection["content_sha256"] = image_sha256
+    packet_text = json.dumps(
+        packet,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    bindings = cast(dict[str, object], wrapper["required_output_bindings"])
+    bindings["evidence_packet_sha256"] = hashlib.sha256(packet_text.encode()).hexdigest()
+    content[0]["text"] = json.dumps(
+        wrapper,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     content[1]["image_url"] = f"data:image/png;base64,{image_token}"
     request = build_canonical_history_policy_request(request_kwargs)
 
@@ -1826,7 +2076,7 @@ def test_history_begin_cost_reservation_failure_retains_formed_proof_preimages()
             "openai_stage_set_sha256": openai_stage_set_sha256((rubric_stage, history_stage)),
             "preflight_report_sha256": _digest("history-cost-failure-preflight"),
             "pricing_binding_sha256": live_attempt_pricing_sha256(pricing),
-            "request_sha256": _digest("history-cost-failure-actor-request"),
+            "request_sha256": _digest("history-source-actor-request"),
             "reset_seed": None,
             "schema_version": "mobileworld.runtime.sentinel-r2.4-case-execution-lease/v1",
             "stage": "QWEN_LIVE_SMOKE",
@@ -1861,7 +2111,7 @@ def test_history_begin_cost_reservation_failure_retains_formed_proof_preimages()
     runner._attempt_requests = {}
     runner._attempt_calls = {}
     attempt_id = "history-cost-failure-attempt-1"
-    logical_call_id = "history-cost-failure-call-1"
+    logical_call_id = "logical-history-source"
     now_ns = time.monotonic_ns()
     runner.register_history_attempt_constraint(
         case_lease=lease,

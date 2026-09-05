@@ -88,6 +88,91 @@ def _sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _history_policy_packet_text() -> str:
+    image_sha256 = _sha(b"\x00")
+    actor_request_sha256 = _sha(b"assembled-actor-request")
+    image_value_sha256 = _sha(b"synthetic-actor-image-value")
+    task_text = "Synthetic production cancellation fixture."
+    packet = {
+        "codec_contract_version": "v1",
+        "current_observation": {
+            "accessibility_evidence_ids": [],
+            "actor_request_image_path": ["messages", 1, "content", 1],
+            "actor_request_image_value_sha256": image_value_sha256,
+            "height": 1,
+            "media_type": "image/png",
+            "screenshot_content_sha256": image_sha256,
+            "screenshot_evidence_id": "evidence-current-screen",
+            "source_event_id": "event-step-started",
+            "source_event_seq": 2,
+            "source_event_type": "step_started",
+            "width": 1,
+        },
+        "cutoff": {
+            "actor_request_sha256": actor_request_sha256,
+            "current_observation_event_id": "event-step-started",
+            "cutoff_event_seq": 2,
+            "kind": "ACTOR_REQUEST_PRE_SEND",
+            "run_id": "run-production-cancel",
+            "step_id": "step-production-cancel",
+            "task_run_id": "task-run-production-cancel",
+        },
+        "evidence_index": [
+            {
+                "caused_by_event_id": None,
+                "evidence_id": "evidence-current-screen",
+                "monotonic_ns": 2,
+                "observed_by_cutoff": True,
+                "payload_sha256": image_sha256,
+                "projection": {
+                    "content_sha256": image_sha256,
+                    "height": 1,
+                    "media_type": "image/png",
+                    "projection_type": "IMAGE_REFERENCE",
+                    "request_value_sha256": image_value_sha256,
+                    "width": 1,
+                },
+                "role": "CURRENT_UI_SCREENSHOT",
+                "semantic_scope": "CURRENT_STATE_ONLY",
+                "source_event_id": "event-step-started",
+                "source_event_seq": 2,
+                "source_event_type": "step_started",
+                "task_run_id": "task-run-production-cancel",
+                "wall_time": "2026-09-05T00:00:00Z",
+            }
+        ],
+        "history_codec_id": "mobileworld.g1.history-codec.qwen-flat-progress",
+        "host_id": "mobileworld.qwen3vl.actor",
+        "input_exclusions": {
+            "benchmark_checker_included": False,
+            "collector_raw_mutated": False,
+            "future_event_included": False,
+            "host_history_used_as_evidence": False,
+            "peer_decision_included": False,
+            "replay_result_included": False,
+            "target_action_included": False,
+            "target_actor_response_included": False,
+            "target_result_or_post_state_included": False,
+            "task_outcome_included": False,
+        },
+        "logical_call_id": "logical-history-policy",
+        "packet_id": "r22pkt:production-cancel-fixture",
+        "raw_request_sha256": actor_request_sha256,
+        "replacement_facts": [],
+        "schema_version": "mobileworld.runtime.sentinel-evidence-packet/v1",
+        "targets": [],
+        "task": {
+            "exact_text": task_text,
+            "role": "TASK_INSTRUCTION_DATA",
+            "source_event_id": "event-task-started",
+            "source_event_seq": 1,
+            "source_event_type": "task_started",
+            "text_sha256": _sha(task_text.encode()),
+        },
+    }
+    return json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _sealed_openai_request_kwargs(role: LiveAttemptRoleV1) -> dict[str, object]:
     if role is LiveAttemptRoleV1.HISTORY_POLICY:
         from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
@@ -103,7 +188,7 @@ def _sealed_openai_request_kwargs(role: LiveAttemptRoleV1) -> dict[str, object]:
         schema = ProposalSchemaSnapshotV1.from_checked_in().as_dict()
         max_output_tokens = 4096
         content: list[dict[str, object]] = [
-            {"type": "input_text", "text": "{}"},
+            {"type": "input_text", "text": _history_policy_packet_text()},
             {
                 "type": "input_image",
                 "image_url": "data:image/png;base64,AA==",
@@ -792,10 +877,15 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
             max_cost_usd_micros=max_cost_usd_micros,
         )
 
+    def logical_call_id(suffix: str) -> str:
+        if role is LiveAttemptRoleV1.HISTORY_POLICY:
+            return "logical-history-policy"
+        return f"logical-{suffix}-{role.value.lower()}"
+
     with pytest.raises(LiveAttemptError) as insufficient:
         begin_attempt(
             attempt_id=f"insufficient-budget-{role.value.lower()}",
-            logical_call_id=f"logical-insufficient-{role.value.lower()}",
+            logical_call_id=logical_call_id("insufficient"),
             transport_binding_sha256=_sha(f"transport-{role.value}".encode()),
             max_cost_usd_micros=max(0, reservation - 1),
         )
@@ -811,7 +901,7 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
     process_start_methods.clear()
     call = begin_attempt(
         attempt_id=f"pre-dispatch-{role.value.lower()}",
-        logical_call_id=f"logical-{role.value.lower()}",
+        logical_call_id=logical_call_id("pre-dispatch"),
         transport_binding_sha256=_sha(f"transport-{role.value}".encode()),
         max_cost_usd_micros=reservation,
     )
@@ -838,7 +928,7 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
     Path(manifest.secret.path).chmod(0o640)
     failed_call = begin_attempt(
         attempt_id=f"secret-drift-{role.value.lower()}",
-        logical_call_id=f"logical-secret-drift-{role.value.lower()}",
+        logical_call_id=logical_call_id("secret-drift"),
         transport_binding_sha256=_sha(f"transport-drift-{role.value}".encode()),
         max_cost_usd_micros=reservation,
     )
@@ -864,7 +954,7 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
     )
     hardlink_call = begin_attempt(
         attempt_id=f"secret-hardlink-drift-{role.value.lower()}",
-        logical_call_id=f"logical-secret-hardlink-drift-{role.value.lower()}",
+        logical_call_id=logical_call_id("secret-hardlink-drift"),
         transport_binding_sha256=_sha(f"transport-hardlink-{role.value}".encode()),
         max_cost_usd_micros=reservation,
     )
