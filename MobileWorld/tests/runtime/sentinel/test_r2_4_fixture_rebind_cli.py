@@ -15,6 +15,14 @@ from typing import Any, cast
 import pytest
 from PIL import Image
 
+from mobile_world.agents.implementations.mai_ui_agent import (
+    parse_action_to_structure_output as parse_mai_action,
+)
+from mobile_world.agents.implementations.qwen3vl import (
+    parse_action_to_structure_output as parse_qwen_action,
+)
+from mobile_world.agents.utils.prompts.mai_ui import MAI_MOBILE_SYS_PROMPT_ASK_USER_MCP
+from mobile_world.agents.utils.prompts.qwen3vl import MOBILE_QWEN3VL_PROMPT_WITH_ASK_USER
 from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes
 
@@ -43,6 +51,30 @@ def _fixture(name: str) -> dict[str, Any]:
 
 def _canonical(value: dict[str, Any]) -> bytes:
     return canonical_json_bytes(cast(JsonValue, value))
+
+
+def _production_prompt(host: str) -> str:
+    if host == "qwen":
+        return MOBILE_QWEN3VL_PROMPT_WITH_ASK_USER.render(tools="")
+    assert host == "mai"
+    return MAI_MOBILE_SYS_PROMPT_ASK_USER_MCP.render(tools=None)
+
+
+def _system_prompt(value: dict[str, Any], host: str) -> str:
+    first = value["application_request"]["messages"][0]
+    if host == "qwen":
+        return cast(str, first["content"][0]["text"])
+    assert host == "mai"
+    return cast(str, first["content"])
+
+
+def _set_system_prompt(value: dict[str, Any], host: str, prompt: str) -> None:
+    first = value["application_request"]["messages"][0]
+    if host == "qwen":
+        first["content"][0]["text"] = prompt
+    else:
+        assert host == "mai"
+        first["content"] = prompt
 
 
 def _run(
@@ -76,7 +108,7 @@ def _run(
 
 
 @pytest.mark.parametrize("host,fixture_name,_served_model_id", CASES)
-def test_same_model_rebind_is_byte_identical(
+def test_same_model_preparation_binds_production_prompt_and_is_idempotent(
     host: str,
     fixture_name: str,
     _served_model_id: str,
@@ -96,17 +128,41 @@ def test_same_model_rebind_is_byte_identical(
 
     assert result == 0
     assert source.read_bytes() == raw
-    assert output.read_bytes() == raw
+    output_raw = output.read_bytes()
+    assert output_raw != raw
+    rebound = cast(dict[str, Any], json.loads(output_raw))
+    assert _system_prompt(rebound, host) == _production_prompt(host)
+    assert (
+        rebound["application_request"]["messages"][1:]
+        == value["application_request"]["messages"][1:]
+    )
     metadata = output.stat()
     assert stat.S_IMODE(metadata.st_mode) == 0o600
     assert metadata.st_nlink == 1
     receipt = json.loads(capsys.readouterr().out)
-    assert receipt["fixture_artifact_sha256"] == hashlib.sha256(raw).hexdigest()
-    assert receipt["application_request_sha256"] == value["fixture_request_sha256"]
+    assert receipt["fixture_artifact_sha256"] == hashlib.sha256(output_raw).hexdigest()
+    assert receipt["application_request_sha256"] == rebound["fixture_request_sha256"]
+    assert (
+        receipt["production_system_prompt_sha256"]
+        == hashlib.sha256(_production_prompt(host).encode()).hexdigest()
+    )
+
+    second_root = tmp_path / "second"
+    second_root.mkdir(mode=0o700)
+    second_result, _, second_output, second_source_raw = _run(
+        module,
+        tmp_path=second_root,
+        host=host,
+        served_model_id=source_model,
+        value=rebound,
+    )
+    assert second_result == 0
+    assert second_source_raw == output_raw
+    assert second_output.read_bytes() == output_raw
 
 
 @pytest.mark.parametrize("host,fixture_name,served_model_id", CASES)
-def test_real_served_model_rebind_changes_only_model_derived_bindings(
+def test_live_preparation_preserves_history_and_codec_reversibility(
     host: str,
     fixture_name: str,
     served_model_id: str,
@@ -129,6 +185,8 @@ def test_real_served_model_rebind_changes_only_model_derived_bindings(
     rebound = json.loads(output_raw)
     request = rebound["application_request"]
     assert request["model"] == served_model_id
+    assert _system_prompt(rebound, host) == _production_prompt(host)
+    assert request["messages"][1:] == source_value["application_request"]["messages"][1:]
     request_sha256 = hashlib.sha256(_canonical(request)).hexdigest()
     assert rebound["fixture_request_sha256"] == request_sha256
     assert rebound["expected_rendered_request_sha256"]["ORIGINAL"] == request_sha256
@@ -140,8 +198,17 @@ def test_real_served_model_rebind_changes_only_model_derived_bindings(
         != source_value["expected_rendered_request_sha256"][arm]
         for arm in source_value["expected_rendered_request_sha256"]
     )
+    assert (
+        module._rendered_hashes(rebound, module._HOSTS[host])
+        == rebound["expected_rendered_request_sha256"]
+    )
 
     restored = deepcopy(rebound)
+    _set_system_prompt(
+        restored,
+        host,
+        _system_prompt(source_value, host),
+    )
     restored["application_request"]["model"] = source_value["application_request"]["model"]
     restored["fixture_request_sha256"] = source_value["fixture_request_sha256"]
     for binding, source_binding in zip(
@@ -157,6 +224,50 @@ def test_real_served_model_rebind_changes_only_model_derived_bindings(
     assert receipt["fixture_artifact_sha256"] == hashlib.sha256(output_raw).hexdigest()
     assert receipt["application_request_sha256"] == request_sha256
     assert receipt["fixture_artifact_sha256"] != receipt["application_request_sha256"]
+    assert (
+        receipt["production_system_prompt_sha256"]
+        == hashlib.sha256(_production_prompt(host).encode()).hexdigest()
+    )
+
+
+@pytest.mark.parametrize("host,fixture_name,served_model_id", CASES)
+def test_bound_prompt_is_exact_and_describes_a_production_parser_shaped_response(
+    host: str,
+    fixture_name: str,
+    served_model_id: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_script()
+    result, _, output, _ = _run(
+        module,
+        tmp_path=tmp_path,
+        host=host,
+        served_model_id=served_model_id,
+        value=_fixture(fixture_name),
+    )
+
+    assert result == 0
+    rebound = cast(dict[str, Any], json.loads(output.read_bytes()))
+    prompt = _system_prompt(rebound, host)
+    assert prompt == _production_prompt(host)
+    assert "<tool_call>" in prompt
+    assert "</tool_call>" in prompt
+    assert '"name"' in prompt
+    assert '"arguments"' in prompt
+    payload = '{"name":"mobile_use","arguments":{"action":"wait"}}'
+    if host == "qwen":
+        parsed = parse_qwen_action(
+            f"Thought: inspect only\nAction: wait\n<tool_call>{payload}</tool_call>"
+        )
+        assert parsed["action_name"] == "mobile_use"
+    else:
+        parsed = parse_mai_action(
+            f"<thinking>inspect only</thinking><tool_call>{payload}</tool_call>"
+        )
+        assert parsed["tool_name"] == "mobile_use"
+    assert parsed["action_json"] == {"action": "wait"}
+    capsys.readouterr()
 
 
 def test_wrong_host_fails_before_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

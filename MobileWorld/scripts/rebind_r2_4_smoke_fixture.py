@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Rebind one canonical G1.5 smoke fixture to an exact served-model ID.
+"""Prepare one canonical G1.5 fixture for an R2.4 live actor smoke.
 
 This operator tool is CPU-only and offline.  It reads one secret-free captured
-fixture, changes only its model identity and request-derived bindings, and
-publishes one fresh owner-only repo-external fixture.  It has no secret,
-provider, network, GPU, backend, actor, or action path.
+fixture, binds the exact current production system prompt and served-model
+identity, recomputes request-derived bindings, and publishes one fresh
+owner-only repo-external fixture.  It has no secret, provider, network, GPU,
+backend, actor, or action path.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 from jsonschema.exceptions import SchemaError, ValidationError  # type: ignore[import-untyped]
 from PIL import Image, UnidentifiedImageError
 
+from mobile_world.agents.utils.prompts.mai_ui import MAI_MOBILE_SYS_PROMPT_ASK_USER_MCP
+from mobile_world.agents.utils.prompts.qwen3vl import MOBILE_QWEN3VL_PROMPT_WITH_ASK_USER
 from mobile_world.offline.causal_replay.contracts import (
     ArmKind,
     EvidenceRef,
@@ -69,6 +72,8 @@ class _HostSpec:
     fixture_id: str
     human_diff_golden: str
     codec_type: type[QwenFlatProgressHistoryCodec] | type[MaiRawReplayHistoryCodec]
+    production_system_prompt: str
+    system_prompt_shape: str
 
 
 _HOSTS = {
@@ -79,6 +84,8 @@ _HOSTS = {
         fixture_id="g15-qwen-flat-progress-captured-redacted-v1",
         human_diff_golden="qwen_flat_progress.expected_diff.v1.txt",
         codec_type=QwenFlatProgressHistoryCodec,
+        production_system_prompt=MOBILE_QWEN3VL_PROMPT_WITH_ASK_USER.render(tools=""),
+        system_prompt_shape="QWEN_TEXT_BLOCK",
     ),
     "mai": _HostSpec(
         codec_id="mobileworld.g1.history-codec.mai-raw-replay",
@@ -87,6 +94,8 @@ _HOSTS = {
         fixture_id="g15-mai-raw-replay-captured-redacted-v1",
         human_diff_golden="mai_raw_replay.expected_diff.v1.txt",
         codec_type=MaiRawReplayHistoryCodec,
+        production_system_prompt=MAI_MOBILE_SYS_PROMPT_ASK_USER_MCP.render(tools=None),
+        system_prompt_shape="MAI_STRING",
     ),
 }
 
@@ -94,8 +103,8 @@ _HOSTS = {
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Offline rebind of one canonical secret-free G1.5 captured fixture to "
-            "an exact R2.4 actor served-model ID."
+            "Offline preparation of one canonical secret-free G1.5 captured fixture "
+            "with the exact production prompt and R2.4 actor served-model ID."
         )
     )
     parser.add_argument("--input", required=True, type=Path)
@@ -183,6 +192,46 @@ def _request_sha256(data: dict[str, Any]) -> str:
     if type(request) is not dict:
         raise _RebindError("SOURCE_FIXTURE_SCHEMA_REJECTED")
     return hashlib.sha256(canonical_json_bytes(cast(JsonValue, request))).hexdigest()
+
+
+def _system_prompt(data: dict[str, Any], spec: _HostSpec) -> str:
+    try:
+        messages = data["application_request"]["messages"]
+        first = messages[0]
+        if type(messages) is not list or type(first) is not dict or first.get("role") != "system":
+            raise _RebindError("SOURCE_SYSTEM_PROMPT_INVALID")
+        if spec.system_prompt_shape == "QWEN_TEXT_BLOCK":
+            content = first.get("content")
+            if (
+                type(content) is not list
+                or len(content) != 1
+                or type(content[0]) is not dict
+                or set(content[0]) != {"text", "type"}
+                or content[0].get("type") != "text"
+                or type(content[0].get("text")) is not str
+            ):
+                raise _RebindError("SOURCE_SYSTEM_PROMPT_INVALID")
+            return cast(str, content[0]["text"])
+        if spec.system_prompt_shape == "MAI_STRING":
+            content = first.get("content")
+            if type(content) is not str:
+                raise _RebindError("SOURCE_SYSTEM_PROMPT_INVALID")
+            return content
+    except (KeyError, IndexError, TypeError) as exc:
+        raise _RebindError("SOURCE_SYSTEM_PROMPT_INVALID") from exc
+    raise _RebindError("SOURCE_SYSTEM_PROMPT_INVALID")
+
+
+def _set_system_prompt(data: dict[str, Any], spec: _HostSpec, prompt: str) -> None:
+    # _system_prompt performs the complete host-specific shape check before mutation.
+    _system_prompt(data, spec)
+    first = data["application_request"]["messages"][0]
+    if spec.system_prompt_shape == "QWEN_TEXT_BLOCK":
+        first["content"][0]["text"] = prompt
+    elif spec.system_prompt_shape == "MAI_STRING":
+        first["content"] = prompt
+    else:  # pragma: no cover - every closed host specification is defined above.
+        raise _RebindError("SOURCE_SYSTEM_PROMPT_INVALID")
 
 
 def _bindings(data: dict[str, Any]) -> tuple[CuratedSpanBinding, ...]:
@@ -417,6 +466,7 @@ def _validate_document(
         or data.get("human_diff_golden") != spec.human_diff_golden
     ):
         raise _RebindError("SOURCE_HOST_MISMATCH")
+    _system_prompt(data, spec)
     request_sha256 = _request_sha256(data)
     if data.get("fixture_request_sha256") != request_sha256:
         raise _RebindError("SOURCE_REQUEST_BINDING_MISMATCH")
@@ -447,6 +497,8 @@ def _rebind(
     ):
         raise _RebindError("SERVED_MODEL_ID_INVALID")
     rebound = cast(dict[str, Any], copy_json(cast(JsonValue, source)))
+    source_system_prompt = _system_prompt(source, spec)
+    _set_system_prompt(rebound, spec, spec.production_system_prompt)
     rebound["application_request"]["model"] = served_model_id
     request_sha256 = _request_sha256(rebound)
     rebound["fixture_request_sha256"] = request_sha256
@@ -461,6 +513,7 @@ def _rebind(
     )
 
     restored = cast(dict[str, Any], copy_json(cast(JsonValue, rebound)))
+    _set_system_prompt(restored, spec, source_system_prompt)
     restored["application_request"]["model"] = source["application_request"]["model"]
     restored["fixture_request_sha256"] = source["fixture_request_sha256"]
     for binding, source_binding in zip(
@@ -569,7 +622,7 @@ def _publish_fresh(output: Path, payload: bytes, *, repository: Path) -> None:
                 pass
 
 
-def _build(arguments: argparse.Namespace) -> tuple[bytes, str, str]:
+def _build(arguments: argparse.Namespace) -> tuple[bytes, str, str, str]:
     try:
         repository = arguments.repository_root.resolve(strict=True)
     except OSError as exc:
@@ -598,13 +651,18 @@ def _build(arguments: argparse.Namespace) -> tuple[bytes, str, str]:
         validator=validator,
     )
     payload = canonical_json_bytes(cast(JsonValue, rebound))
-    return payload, hashlib.sha256(payload).hexdigest(), request_sha256
+    return (
+        payload,
+        hashlib.sha256(payload).hexdigest(),
+        request_sha256,
+        hashlib.sha256(spec.production_system_prompt.encode("utf-8")).hexdigest(),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
-        payload, artifact_sha256, request_sha256 = _build(arguments)
+        payload, artifact_sha256, request_sha256, prompt_sha256 = _build(arguments)
         repository = arguments.repository_root.resolve(strict=True)
         _publish_fresh(arguments.output, payload, repository=repository)
     except _RebindError as exc:
@@ -619,6 +677,7 @@ def main(argv: list[str] | None = None) -> int:
                 "fixture_artifact_sha256": artifact_sha256,
                 "ok": True,
                 "output": str(arguments.output),
+                "production_system_prompt_sha256": prompt_sha256,
                 "served_model_id": arguments.served_model_id,
             },
             sort_keys=True,
