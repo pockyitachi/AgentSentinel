@@ -10,11 +10,15 @@ from pathlib import Path
 from mobile_world.runtime.sentinel.r2_4.authority_promotion import (
     AuthorityPromotionError,
     load_canonical_draft_authority_v1,
+    load_canonical_draft_smoke_authority_v1,
     promote_draft_authority_v1,
+    promote_draft_smoke_authority_v1,
     write_fresh_owner_authority_v1,
+    write_fresh_owner_smoke_authority_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes
 from mobile_world.runtime.sentinel.r2_4.live_run import authority_manifest_sha256
+from mobile_world.runtime.sentinel.r2_4.smoke_run import smoke_authority_manifest_sha256
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -47,20 +51,41 @@ def main(argv: list[str] | None = None) -> int:
                 "OWNER_APPROVAL_ASSERTION_REQUIRED",
                 "promotion requires the explicit operator assertion",
             )
-        draft = load_canonical_draft_authority_v1(
-            arguments.draft_manifest,
-            repository_root=arguments.repository_root,
-        )
-        draft_sha256 = authority_manifest_sha256(draft)
-        promoted = promote_draft_authority_v1(
-            draft,
-            confirmed_draft_sha256=arguments.confirm_draft_sha256,
-        )
-        promoted_sha256 = write_fresh_owner_authority_v1(
-            promoted,
-            arguments.output,
-            repository_root=arguments.repository_root,
-        )
+        try:
+            smoke_draft = load_canonical_draft_smoke_authority_v1(
+                arguments.draft_manifest,
+                repository_root=arguments.repository_root,
+            )
+        except AuthorityPromotionError:
+            smoke_draft = None
+        if smoke_draft is not None:
+            draft_sha256 = smoke_authority_manifest_sha256(smoke_draft)
+            smoke_promoted = promote_draft_smoke_authority_v1(
+                smoke_draft,
+                confirmed_draft_sha256=arguments.confirm_draft_sha256,
+            )
+            promoted_sha256 = write_fresh_owner_smoke_authority_v1(
+                smoke_promoted,
+                arguments.output,
+                repository_root=arguments.repository_root,
+            )
+            execution_scope = "R24_LIVE_SMOKE_ONLY"
+        else:
+            draft = load_canonical_draft_authority_v1(
+                arguments.draft_manifest,
+                repository_root=arguments.repository_root,
+            )
+            draft_sha256 = authority_manifest_sha256(draft)
+            promoted = promote_draft_authority_v1(
+                draft,
+                confirmed_draft_sha256=arguments.confirm_draft_sha256,
+            )
+            promoted_sha256 = write_fresh_owner_authority_v1(
+                promoted,
+                arguments.output,
+                repository_root=arguments.repository_root,
+            )
+            execution_scope = "R24_R25_FULL"
     except (AuthorityPromotionError, OSError, ValueError) as exc:
         code = getattr(exc, "code", None)
         if type(code) is not str:
@@ -73,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
                 "authorized_manifest_path": str(arguments.output),
                 "authorized_manifest_sha256": promoted_sha256,
                 "draft_manifest_sha256": draft_sha256,
+                "execution_scope": execution_scope,
                 "ok": True,
                 "projection_change": "AUTHORIZATION_STATUS_ONLY",
             }

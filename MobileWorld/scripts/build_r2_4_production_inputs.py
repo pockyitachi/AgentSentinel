@@ -22,6 +22,7 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
 )
 from mobile_world.runtime.sentinel.r2_4.production_driver import (
     ProductionDriverError,
+    ProductionResourceTopologyV1,
     ProductionRuntimeConfigV1,
     production_runtime_config_projection,
     production_runtime_config_sha256,
@@ -45,7 +46,22 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--repository-root", type=Path, default=REPOSITORY_ROOT)
-    parser.add_argument("--authorized-pilot-input-root", required=True, type=Path)
+    input_root = parser.add_mutually_exclusive_group(required=True)
+    input_root.add_argument(
+        "--authorized-smoke-input-root",
+        dest="authorized_input_root",
+        type=Path,
+        help=(
+            "Repo-external root containing the six authorized smoke fixtures. The "
+            "runtime projection retains its historical field name."
+        ),
+    )
+    input_root.add_argument(
+        "--authorized-pilot-input-root",
+        dest="authorized_input_root",
+        type=Path,
+        help="Compatibility alias for existing R2.4/R2.5 runtime configurations.",
+    )
     parser.add_argument("--process-log-root", required=True, type=Path)
     parser.add_argument("--backend-port", required=True, type=int)
     parser.add_argument("--backend-device", required=True)
@@ -53,6 +69,20 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--backend-environment-file", required=True, type=Path)
     parser.add_argument("--qwen-gpu-index", required=True, type=int)
     parser.add_argument("--mai-gpu-index", required=True, type=int)
+    parser.add_argument(
+        "--resource-topology",
+        choices=tuple(item.value for item in ProductionResourceTopologyV1),
+        default=ProductionResourceTopologyV1.INDEPENDENT_GPU_CONCURRENT.value,
+    )
+    parser.add_argument(
+        "--vllm-gpu-memory-utilization",
+        help="Exact decimal text; defaults to 0.90 legacy or 0.24 shared-sequential.",
+    )
+    parser.add_argument(
+        "--minimum-free-gpu-memory-mib",
+        type=int,
+        help="Defaults to 0 legacy or 51200 shared-sequential.",
+    )
     parser.add_argument("--vllm-python-executable", required=True, type=Path)
     parser.add_argument("--vllm-version", required=True)
     parser.add_argument("--startup-timeout-seconds", type=int, default=900)
@@ -160,13 +190,21 @@ def _build(arguments: argparse.Namespace) -> tuple[bytes, str, bytes, str]:
         arguments.vllm_python_executable, maximum_bytes=1_000_000_000
     )
     environment_metadata = _backend_environment_metadata(arguments.backend_environment_file)
+    resource_topology = ProductionResourceTopologyV1(arguments.resource_topology)
+    shared = resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+    gpu_memory_utilization = arguments.vllm_gpu_memory_utilization
+    if gpu_memory_utilization is None:
+        gpu_memory_utilization = "0.24" if shared else "0.90"
+    minimum_free_gpu_memory_mib = arguments.minimum_free_gpu_memory_mib
+    if minimum_free_gpu_memory_mib is None:
+        minimum_free_gpu_memory_mib = 51_200 if shared else 0
     runtime = ProductionRuntimeConfigV1(
         backend_port=arguments.backend_port,
         backend_device=arguments.backend_device,
         qwen_gpu_index=arguments.qwen_gpu_index,
         mai_gpu_index=arguments.mai_gpu_index,
         process_log_root=str(arguments.process_log_root.absolute()),
-        authorized_pilot_input_root=str(arguments.authorized_pilot_input_root.absolute()),
+        authorized_pilot_input_root=str(arguments.authorized_input_root.absolute()),
         repository_root=str(repository),
         mobileworld_source_root=str(repository / "MobileWorld" / "src"),
         vllm_python_executable=str(executable),
@@ -185,6 +223,9 @@ def _build(arguments: argparse.Namespace) -> tuple[bytes, str, bytes, str]:
         startup_timeout_seconds=arguments.startup_timeout_seconds,
         shutdown_grace_seconds=arguments.shutdown_grace_seconds,
         health_poll_interval_ms=arguments.health_poll_interval_ms,
+        resource_topology=resource_topology,
+        vllm_gpu_memory_utilization=gpu_memory_utilization,
+        minimum_free_gpu_memory_mib=minimum_free_gpu_memory_mib,
     )
     pricing = LiveAttemptPricingV1(
         pricing_id=arguments.pricing_id,

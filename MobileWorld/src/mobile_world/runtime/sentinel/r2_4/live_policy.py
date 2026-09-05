@@ -188,6 +188,13 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     validate_live_rubric_attempt_request_anchor_v1,
     validate_live_rubric_request_anchor_v1,
 )
+from mobile_world.runtime.sentinel.r2_4.smoke_run import (
+    R24_SMOKE_AUTHORITY_SCHEMA_VERSION,
+    R24SmokeRunAuthorityManifestV1,
+    parse_smoke_authority_manifest,
+    smoke_authority_manifest_projection,
+    smoke_authority_manifest_sha256,
+)
 from mobile_world.runtime.sentinel.r2_5.pilot import PilotArmV1, PilotHostV1
 
 OWNER_AUTHORIZED_LIVE_POLICY_AUTHORITY_SCHEMA_VERSION = (
@@ -376,15 +383,37 @@ def history_policy_stage_sha256(value: OpenAIResponsesStageV1) -> str:
     return canonical_sha256(cast(JsonValue, _history_policy_stage_projection(value)))
 
 
-def _detach_manifest(value: object) -> tuple[R24R25RunAuthorityManifestV1, bytes]:
-    if type(value) is not R24R25RunAuthorityManifestV1:
+def _live_manifest_sha256(
+    value: R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1,
+) -> str:
+    if isinstance(value, R24R25RunAuthorityManifestV1):
+        return authority_manifest_sha256(value)
+    if isinstance(value, R24SmokeRunAuthorityManifestV1):
+        return smoke_authority_manifest_sha256(value)
+    raise R24ContractError("UNTRUSTED_LIVE_AUTHORITY", "manifest type differs")
+
+
+def _detach_manifest(
+    value: object,
+) -> tuple[R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1, bytes]:
+    if type(value) is R24R25RunAuthorityManifestV1:
+        projection = authority_manifest_projection(value)
+        parser_kind = "JOINT"
+    elif type(value) is R24SmokeRunAuthorityManifestV1:
+        projection = smoke_authority_manifest_projection(value)
+        parser_kind = "SMOKE"
+    else:
         raise R24ContractError(
             "UNTRUSTED_LIVE_AUTHORITY", "manifest must use the exact authority type"
         )
     try:
-        projection = authority_manifest_projection(value)
         raw = canonical_json_bytes(cast(JsonValue, projection))
-        detached = parse_authority_manifest(json.loads(raw))
+        decoded = json.loads(raw)
+        detached = (
+            parse_authority_manifest(decoded)
+            if parser_kind == "JOINT"
+            else parse_smoke_authority_manifest(decoded)
+        )
     except (TypeError, ValueError, RecursionError, json.JSONDecodeError) as exc:
         raise R24ContractError(
             "UNTRUSTED_LIVE_AUTHORITY", "manifest could not be rebuilt as trusted data"
@@ -392,7 +421,9 @@ def _detach_manifest(value: object) -> tuple[R24R25RunAuthorityManifestV1, bytes
     return detached, raw
 
 
-def _manifest_from_canonical_bytes(value: object) -> R24R25RunAuthorityManifestV1:
+def _manifest_from_canonical_bytes(
+    value: object,
+) -> R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1:
     if type(value) is not bytes or not value:
         raise R24ContractError(
             "UNTRUSTED_LIVE_AUTHORITY", "authority does not retain canonical manifest bytes"
@@ -400,8 +431,18 @@ def _manifest_from_canonical_bytes(value: object) -> R24R25RunAuthorityManifestV
     raw = value
     try:
         decoded = json.loads(raw)
-        manifest = parse_authority_manifest(decoded)
-        rebuilt = canonical_json_bytes(cast(JsonValue, authority_manifest_projection(manifest)))
+        if type(decoded) is not dict:
+            raise ValueError("manifest must be an object")
+        manifest: R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1
+        if decoded.get("schema_version") == R24_SMOKE_AUTHORITY_SCHEMA_VERSION:
+            smoke_manifest = parse_smoke_authority_manifest(decoded)
+            manifest = smoke_manifest
+            projection = smoke_authority_manifest_projection(smoke_manifest)
+        else:
+            joint_manifest = parse_authority_manifest(decoded)
+            manifest = joint_manifest
+            projection = authority_manifest_projection(joint_manifest)
+        rebuilt = canonical_json_bytes(cast(JsonValue, projection))
     except (TypeError, ValueError, RecursionError, json.JSONDecodeError) as exc:
         raise R24ContractError(
             "UNTRUSTED_LIVE_AUTHORITY", "bound manifest is not trusted canonical data"
@@ -413,7 +454,9 @@ def _manifest_from_canonical_bytes(value: object) -> R24R25RunAuthorityManifestV
     return manifest
 
 
-def _history_policy_stage(manifest: R24R25RunAuthorityManifestV1) -> OpenAIResponsesStageV1:
+def _history_policy_stage(
+    manifest: R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1,
+) -> OpenAIResponsesStageV1:
     stages = tuple(
         stage for stage in manifest.openai_stages if stage.role is OpenAIRoleV1.HISTORY_POLICY
     )
@@ -426,14 +469,14 @@ def _history_policy_stage(manifest: R24R25RunAuthorityManifestV1) -> OpenAIRespo
 
 
 def _require_manifest_authority_current(
-    manifest: R24R25RunAuthorityManifestV1,
+    manifest: R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1,
     *,
     confirmed_manifest_sha256: str,
     now: datetime,
 ) -> OpenAIResponsesStageV1:
     confirmed = _require_sha256(confirmed_manifest_sha256, "confirmed_manifest_sha256")
     try:
-        actual = authority_manifest_sha256(manifest)
+        actual = _live_manifest_sha256(manifest)
     except (TypeError, ValueError, RecursionError) as exc:
         raise R24ContractError(
             "UNTRUSTED_LIVE_AUTHORITY", "manifest hash could not be recomputed"
@@ -505,7 +548,9 @@ class OwnerAuthorizedLivePolicyAuthorityV1:
                 "authority fields differ from the confirmed manifest",
             )
 
-    def manifest_snapshot(self) -> R24R25RunAuthorityManifestV1:
+    def manifest_snapshot(
+        self,
+    ) -> R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1:
         """Return a fresh exact manifest graph without touching referenced files."""
 
         return _manifest_from_canonical_bytes(self._manifest_canonical_bytes)
@@ -546,7 +591,7 @@ def owner_authorized_live_policy_authority_sha256(
 
 
 def issue_owner_authorized_live_policy_authority(
-    manifest: R24R25RunAuthorityManifestV1,
+    manifest: R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1,
     *,
     confirmed_manifest_sha256: str,
     now: datetime | None = None,
@@ -561,7 +606,7 @@ def issue_owner_authorized_live_policy_authority(
         now=current,
     )
     authority = OwnerAuthorizedLivePolicyAuthorityV1(
-        manifest_sha256=authority_manifest_sha256(trusted),
+        manifest_sha256=_live_manifest_sha256(trusted),
         history_policy_stage_sha256=history_policy_stage_sha256(stage),
         authorization_id=trusted.authorization.authorization_id,
         run_id=trusted.run_id,
@@ -2920,7 +2965,7 @@ class _PerCallAdmissionBridgeV1:
 
 
 def _manifest_case_descriptor(
-    manifest: R24R25RunAuthorityManifestV1,
+    manifest: R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1,
     *,
     stage: RunStageV1,
     host: PilotHostV1,
@@ -2961,18 +3006,21 @@ def _manifest_case_descriptor(
         )
     if stage is not RunStageV1.R25_PILOT or mode is SmokeModeV1.SHADOW:
         raise R24ContractError("CASE_OUTSIDE_MANIFEST", "pilot case stage or mode differs")
+    if type(manifest) is R24SmokeRunAuthorityManifestV1:
+        raise R24ContractError("CASE_OUTSIDE_MANIFEST", "smoke authority has no pilot cases")
+    joint_manifest = cast(R24R25RunAuthorityManifestV1, manifest)
     prefix = "pilot-cell-"
     index_text = case_id.removeprefix(prefix)
     if not case_id.startswith(prefix) or len(index_text) != 3 or not index_text.isdigit():
         raise R24ContractError("CASE_OUTSIDE_MANIFEST", "pilot case ID is not canonical")
     try:
-        cell = manifest.pilot.cells[int(index_text)]
+        cell = joint_manifest.pilot.cells[int(index_text)]
     except (IndexError, ValueError) as exc:
         raise R24ContractError("CASE_OUTSIDE_MANIFEST", "pilot case is absent") from exc
     expected_mode = SmokeModeV1.OFF if cell.arm is PilotArmV1.BASELINE else SmokeModeV1.ACTIVE
     if cell.host is not host or mode is not expected_mode:
         raise R24ContractError("CASE_OUTSIDE_MANIFEST", "pilot cell binding differs")
-    possible_openai_calls = 2 * manifest.pilot.max_steps_per_cell + 1
+    possible_openai_calls = 2 * joint_manifest.pilot.max_steps_per_cell + 1
     return OwnerAuthorizedLiveCaseDescriptorV1(
         stage=stage,
         host=host,
@@ -2981,10 +3029,10 @@ def _manifest_case_descriptor(
         task_id=cell.task_id,
         task_parameters_sha256=cell.task_parameters_sha256,
         reset_seed=cell.reset_seed,
-        max_actor_calls=manifest.pilot.max_steps_per_cell,
-        max_openai_calls=min(possible_openai_calls, manifest.pilot.max_total_openai_calls),
-        max_wall_time_seconds=manifest.pilot.per_cell_timeout_seconds,
-        max_cost_usd_micros=manifest.pilot.max_total_cost_usd_micros,
+        max_actor_calls=joint_manifest.pilot.max_steps_per_cell,
+        max_openai_calls=min(possible_openai_calls, joint_manifest.pilot.max_total_openai_calls),
+        max_wall_time_seconds=joint_manifest.pilot.per_cell_timeout_seconds,
+        max_cost_usd_micros=joint_manifest.pilot.max_total_cost_usd_micros,
     )
 
 
@@ -3028,20 +3076,23 @@ class ProductionLiveBudgetLedgerV1:
         ):
             raise PermissionError("production live budget ledger is module-owned")
         manifest = factory.manifest_snapshot()
-        joint_cells = tuple(
-            (index, cell)
-            for index, cell in enumerate(manifest.pilot.cells)
-            if cell.arm is PilotArmV1.JOINT_SENTINEL
-        )
-        if not joint_cells:
-            raise R24ContractError("INVALID_PILOT_BUDGET", "pilot has no live cells")
-        total = manifest.pilot.max_total_cost_usd_micros
-        base, remainder = divmod(total, len(joint_cells))
         case_grants: dict[str, int] = {}
-        for ordinal, (index, _) in enumerate(joint_cells):
-            case_grants[f"{RunStageV1.R25_PILOT.value}:pilot-cell-{index:03d}"] = base + (
-                1 if ordinal < remainder else 0
+        if type(manifest) is R24R25RunAuthorityManifestV1:
+            joint_cells = tuple(
+                (index, cell)
+                for index, cell in enumerate(manifest.pilot.cells)
+                if cell.arm is PilotArmV1.JOINT_SENTINEL
             )
+            if not joint_cells:
+                raise R24ContractError("INVALID_PILOT_BUDGET", "pilot has no live cells")
+            total = manifest.pilot.max_total_cost_usd_micros
+            base, remainder = divmod(total, len(joint_cells))
+            for ordinal, (index, _) in enumerate(joint_cells):
+                case_grants[f"{RunStageV1.R25_PILOT.value}:pilot-cell-{index:03d}"] = base + (
+                    1 if ordinal < remainder else 0
+                )
+        elif type(manifest) is not R24SmokeRunAuthorityManifestV1:
+            raise R24ContractError("UNTRUSTED_LIVE_AUTHORITY", "budget manifest type differs")
         for plan in manifest.smoke_plans:
             stage = (
                 RunStageV1.QWEN_LIVE_SMOKE
@@ -3212,7 +3263,8 @@ class OwnerAuthorizedLivePerCallPolicyV1:
         if pricing_sha256 != factory.pricing_binding_sha256:
             raise R24ContractError("PRICING_AUTHORITY_MISMATCH", "pricing pin differs")
         manifest = factory.manifest_snapshot()
-        if authority_manifest_sha256(manifest) != factory.manifest_sha256:
+        manifest_sha256 = _live_manifest_sha256(manifest)
+        if manifest_sha256 != factory.manifest_sha256:
             raise R24ContractError("FACTORY_MANIFEST_DRIFT", "factory manifest snapshot differs")
         descriptor = budget_ledger.grant_descriptor(
             factory,

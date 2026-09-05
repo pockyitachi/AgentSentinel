@@ -7,6 +7,7 @@ import io
 import json
 import os
 import random
+import signal
 import stat
 import threading
 import time
@@ -550,6 +551,8 @@ def _context(
 ) -> StageAdapterContextV1:
     return StageAdapterContextV1(
         manifest_sha256="a" * 64,
+        sequence_execution_scope="R24_R25_FULL",
+        sequence_scope_authority_sha256="a" * 64,
         run_id="cpu-production-driver",
         source_commit="b" * 40,
         remaining_actor_calls=actor_calls,
@@ -557,6 +560,14 @@ def _context(
         remaining_cost_usd_micros=cost_usd_micros,
         remaining_wall_time_ms=wall_time_ms,
         authority_deadline_monotonic_ns=time.monotonic_ns() + wall_time_ms * 1_000_000,
+    )
+
+
+def _shared_context(**kwargs: int) -> StageAdapterContextV1:
+    return replace(
+        _context(**kwargs),
+        sequence_execution_scope="R24_LIVE_SMOKE_ONLY",
+        sequence_scope_authority_sha256="f" * 64,
     )
 
 
@@ -726,6 +737,19 @@ def _runtime_config(tmp_path: Path) -> ProductionRuntimeConfigV1:
         startup_timeout_seconds=60,
         shutdown_grace_seconds=8,
         health_poll_interval_ms=25,
+    )
+
+
+def _shared_runtime_config(tmp_path: Path) -> ProductionRuntimeConfigV1:
+    return replace(
+        _runtime_config(tmp_path),
+        qwen_gpu_index=5,
+        mai_gpu_index=5,
+        resource_topology=(
+            production_driver_module.ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        ),
+        vllm_gpu_memory_utilization="0.24",
+        minimum_free_gpu_memory_mib=51_200,
     )
 
 
@@ -905,6 +929,749 @@ def test_cpu_gpu_lease_is_exclusive_and_released_without_files(tmp_path: Path) -
     replacement.cleanup(_context())
 
 
+def test_shared_single_gpu_prepare_handoff_dispatch_and_cleanup_are_bound(
+    tmp_path: Path,
+) -> None:
+    config = _shared_runtime_config(tmp_path)
+    context = _shared_context()
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(config)
+
+    prepared = adapter.prepare(_resources(tmp_path), context)
+    evidence = adapter.evidence
+    assert evidence is not None
+    assert evidence.active_hosts == (PilotHostV1.QWEN3_VL,)
+    assert len(evidence.gpu_lease_sha256s) == 1
+    assert evidence.vllm_gpu_memory_utilization == "0.24"
+    assert evidence.minimum_free_gpu_memory_mib == 51_200
+    assert evidence.sequence_execution_scope == "R24_LIVE_SMOKE_ONLY"
+    assert len(evidence.shared_gpu_attestations) == 2
+    assert all(item.reserved_memory_mib == 614 for item in evidence.shared_gpu_attestations)
+    assert prepared.evidence_sha256 == hashlib.sha256(prepared.evidence_preimage).hexdigest()
+    model_commands = [
+        item for item in adapter.cpu_trace.commands if "vllm.entrypoints.cli.main" in item
+    ]
+    assert len(model_commands) == 1
+    assert model_commands[0][model_commands[0].index("--gpu-memory-utilization") + 1] == "0.24"
+
+    deadline = time.monotonic_ns() + 1_000_000_000
+    adapter.require_dispatch(
+        PilotHostV1.QWEN3_VL,
+        ProductionDispatchKindV1.ACTOR,
+        authority_deadline_monotonic_ns=deadline,
+    )
+    with pytest.raises(ProductionDriverError) as raised:
+        adapter.require_dispatch(
+            PilotHostV1.MAI_UI,
+            ProductionDispatchKindV1.ACTOR,
+            authority_deadline_monotonic_ns=deadline,
+        )
+    assert raised.value.code == "RESOURCE_DISPATCH_UNAVAILABLE"
+
+    handoff = adapter.handoff_to_mai(context)
+    assert handoff.stage is RunStageV1.MAI_LIVE_SMOKE
+    assert handoff.completed_units == ("resource-handoff:QWEN3_VL:MAI_UI",)
+    assert handoff.evidence_sha256 == hashlib.sha256(handoff.evidence_preimage).hexdigest()
+    handoff_value = json.loads(handoff.evidence_preimage)["value"]
+    assert handoff_value["source_host"] == PilotHostV1.QWEN3_VL.value
+    assert handoff_value["target_host"] == PilotHostV1.MAI_UI.value
+    assert handoff_value["post_stop_shared_gpu_attestation"]["processes"][0]["user"]
+    assert handoff_value["target_ready_shared_gpu_attestation"]["processes"][-1]["user"] == (
+        "cpu-owner"
+    )
+    model_commands = [
+        item for item in adapter.cpu_trace.commands if "vllm.entrypoints.cli.main" in item
+    ]
+    assert len(model_commands) == 2
+    adapter.require_dispatch(
+        PilotHostV1.MAI_UI,
+        ProductionDispatchKindV1.ACTOR,
+        authority_deadline_monotonic_ns=deadline,
+    )
+
+    adapter.cleanup(context)
+    cleanup_preimage = adapter.cleanup_success_evidence_preimage()
+    assert cleanup_preimage is not None
+    cleanup_value = json.loads(cleanup_preimage)["value"]
+    assert cleanup_value["gpu_lease_released"] is True
+    assert cleanup_value["residual_capabilities"] == {
+        "admitted_model_processes": [],
+        "backend_candidates": [],
+        "partial_model_processes": [],
+        "pending_backend_ids": [],
+        "pending_backend_names": [],
+    }
+    assert [item["host"] for item in cleanup_value["stopped_models"]] == [
+        PilotHostV1.QWEN3_VL.value,
+        PilotHostV1.MAI_UI.value,
+    ]
+    assert adapter.cpu_trace.cleanup_targets[:2] == ("pid:10000", "pid:10001")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("mai_gpu_index", 6),
+        ("vllm_gpu_memory_utilization", "0.25"),
+        ("minimum_free_gpu_memory_mib", 51_199),
+    ),
+)
+def test_shared_single_gpu_configuration_is_exact(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    with pytest.raises(ProductionDriverError) as raised:
+        replace(_shared_runtime_config(tmp_path), **{field: value})
+    assert raised.value.code == "INVALID_RESOURCE_CONFIG"
+
+
+@pytest.mark.parametrize(
+    ("shutdown_grace_seconds", "health_poll_interval_ms", "expected_seconds"),
+    ((10, 250, 278), (60, 5_000, 540)),
+)
+def test_shared_cleanup_upper_bound_covers_every_bounded_cleanup_path(
+    tmp_path: Path,
+    shutdown_grace_seconds: int,
+    health_poll_interval_ms: int,
+    expected_seconds: int,
+) -> None:
+    config = replace(
+        _shared_runtime_config(tmp_path),
+        shutdown_grace_seconds=shutdown_grace_seconds,
+        health_poll_interval_ms=health_poll_interval_ms,
+    )
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(config)
+
+    assert adapter.cleanup_upper_bound_seconds == expected_seconds
+    assert (
+        adapter.cleanup_upper_bound_sha256
+        == hashlib.sha256(adapter.cleanup_upper_bound_preimage).hexdigest()
+    )
+    envelope = json.loads(adapter.cleanup_upper_bound_preimage)
+    assert envelope["schema_version"] == (
+        production_driver_module.PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1
+    )
+    assert envelope["domain"] == "production-resource-cleanup-bound"
+    value = envelope["value"]
+    poll_ceiling_seconds = (health_poll_interval_ms + 999) // 1_000
+    assert value["admitted_model_cleanup_upper_bound_seconds"] == (
+        5 * shutdown_grace_seconds + 3 * poll_ceiling_seconds
+    )
+    assert value["partial_model_cleanup_upper_bound_seconds"] == (
+        3 * shutdown_grace_seconds + 2 * poll_ceiling_seconds
+    )
+    assert value["pending_backend_cleanup_upper_bound_seconds"] == 105
+    assert value["final_shared_gpu_attestation_upper_bound_seconds"] == 120
+    assert value["cleanup_upper_bound_seconds"] == expected_seconds
+    assert value["runtime_config_sha256"] == production_runtime_config_sha256(config)
+    assert production_driver_module.canonical_json_bytes(cast(Any, envelope)) == (
+        adapter.cleanup_upper_bound_preimage
+    )
+    assert adapter.cpu_trace.commands == ()
+
+
+def test_shared_cleanup_bound_hash_rejects_runtime_config_drift(
+    tmp_path: Path,
+) -> None:
+    first_config = replace(
+        _shared_runtime_config(tmp_path / "first"),
+        shutdown_grace_seconds=10,
+        health_poll_interval_ms=250,
+    )
+    drifted_config = replace(first_config, backend_port=18_090)
+    first = build_cpu_test_resource_lifecycle_adapter_v1(first_config)
+    drifted = build_cpu_test_resource_lifecycle_adapter_v1(drifted_config)
+
+    assert first.cleanup_upper_bound_seconds == drifted.cleanup_upper_bound_seconds == 278
+    assert first.runtime_config_sha256 != drifted.runtime_config_sha256
+    assert first.cleanup_upper_bound_preimage != drifted.cleanup_upper_bound_preimage
+    assert first.cleanup_upper_bound_sha256 != drifted.cleanup_upper_bound_sha256
+    assert (
+        json.loads(first.cleanup_upper_bound_preimage)["value"]["runtime_config_sha256"]
+        == first.runtime_config_sha256
+    )
+    assert (
+        json.loads(drifted.cleanup_upper_bound_preimage)["value"]["runtime_config_sha256"]
+        == drifted.runtime_config_sha256
+    )
+
+
+def test_shared_cleanup_bound_exposes_insufficient_manifest_reserve_before_io(
+    tmp_path: Path,
+) -> None:
+    config = replace(
+        _shared_runtime_config(tmp_path),
+        shutdown_grace_seconds=10,
+        health_poll_interval_ms=250,
+    )
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    manifest_cleanup_reserve_seconds = 277
+
+    assert manifest_cleanup_reserve_seconds < adapter.cleanup_upper_bound_seconds
+    assert adapter.cpu_trace == production_driver_module.CpuResourceLifecycleTraceV1(
+        commands=(),
+        health_endpoints=(),
+        cleanup_targets=(),
+        dispatch_attestations=(),
+        pending_cleanup_count=0,
+    )
+
+
+def test_cleanup_upper_bound_is_not_claimed_for_legacy_concurrent_topology(
+    tmp_path: Path,
+) -> None:
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(_runtime_config(tmp_path))
+
+    with pytest.raises(ProductionDriverError) as raised:
+        _ = adapter.cleanup_upper_bound_seconds
+
+    assert raised.value.code == "CLEANUP_BOUND_UNAVAILABLE"
+
+
+def test_shared_gpu_attestation_binds_reserved_memory_and_uses_final_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    system_type = production_driver_module._PosixProductionResourceSystemV1
+    system = system_type(
+        _shared_runtime_config(tmp_path), seal=production_driver_module._MODULE_SEAL
+    )
+    uuid = "GPU-12345678-1234-1234-1234-123456789abc"
+    responses = iter(
+        (
+            SimpleNamespace(
+                returncode=0,
+                stderr="",
+                stdout=f"5, {uuid}, 143771, 94750, 48407, 614, 20, 33\n",
+            ),
+            SimpleNamespace(returncode=0, stderr="", stdout=""),
+            SimpleNamespace(returncode=0, stderr="", stdout=""),
+            SimpleNamespace(
+                returncode=0,
+                stderr="",
+                stdout=f"5, {uuid}, 143771, 94730, 48427, 616, 21, 34\n",
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        system_type,
+        "_attestation_run",
+        staticmethod(lambda _argv, **_kwargs: next(responses)),
+    )
+    attestation = system.attest_gpu_shared_capacity(5, minimum_free_memory_mib=51_200)
+    assert (attestation.free_memory_mib, attestation.used_memory_mib) == (94_730, 48_427)
+    assert attestation.reserved_memory_mib == 616
+    assert (
+        production_driver_module.production_shared_gpu_attestation_projection(attestation)[
+            "reserved_memory_mib"
+        ]
+        == 616
+    )
+    assert replace(attestation, used_memory_mib=48_423)
+    with pytest.raises(ProductionDriverError) as raised:
+        replace(attestation, reserved_memory_mib=620)
+    assert raised.value.code == "INVALID_GPU_ATTESTATION"
+
+
+def test_shared_gpu_attestation_rejects_missing_owned_compute_row(tmp_path: Path) -> None:
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(_shared_runtime_config(tmp_path))
+    adapter.prepare(_resources(tmp_path), _shared_context())
+    evidence = adapter.evidence
+    assert evidence is not None
+    baseline, ready = evidence.shared_gpu_attestations
+    owned = evidence.model_processes[0]
+    missing = replace(ready, processes=baseline.processes)
+    with pytest.raises(ProductionDriverError) as raised:
+        production_driver_module._validate_shared_gpu_tenants(
+            missing, baseline=baseline, owned_identity=owned
+        )
+    assert raised.value.code == "GPU_OWNED_PROCESS_ABSENT"
+    adapter.cleanup(_shared_context())
+
+
+def test_shared_initial_capacity_failure_reclaims_single_lease(tmp_path: Path) -> None:
+    config = _shared_runtime_config(tmp_path)
+    failed = build_cpu_test_resource_lifecycle_adapter_v1(
+        config, CpuResourceLifecycleFaultV1.SHARED_GPU_CAPACITY_BELOW_MINIMUM
+    )
+    with pytest.raises(ProductionDriverError) as raised:
+        failed.prepare(_resources(tmp_path), _shared_context())
+    assert raised.value.code == "GPU_SHARED_CAPACITY_INSUFFICIENT"
+    failure = failed.failure_evidence_preimage(RunStageV1.RESOURCE_PREFLIGHT)
+    assert failure is not None
+    value = json.loads(failure)
+    assert value["failure_code"] == "GPU_SHARED_CAPACITY_INSUFFICIENT"
+    assert value["cleanup_status"] == "RECLAIMED"
+    reclaimed = value["reclaimed_cleanup_outcome"]
+    assert len(reclaimed["value"]["gpu_lease_sha256s"]) == 1
+    assert reclaimed["value"]["backend_container_id"]
+    assert (
+        value["reclaimed_cleanup_outcome_sha256"]
+        == hashlib.sha256(
+            production_driver_module.canonical_json_bytes(cast(Any, reclaimed))
+        ).hexdigest()
+    )
+    failed.cleanup(_shared_context())
+    cleanup = failed.cleanup_success_evidence_preimage()
+    assert cleanup is not None
+    cleanup_value = json.loads(cleanup)["value"]
+    assert cleanup_value["cleanup_outcome"] == "SHARED_MODELS_RECLAIMED"
+    assert cleanup_value["gpu_lease_sha256s"] == reclaimed["value"]["gpu_lease_sha256s"]
+    assert cleanup_value["backend_container_id"] == reclaimed["value"]["backend_container_id"]
+    assert cleanup_value["reclaimed_cleanup_outcome"] == reclaimed
+
+    replacement = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    replacement.prepare(_resources(tmp_path), _shared_context())
+    replacement.cleanup(_shared_context())
+
+
+@pytest.mark.parametrize(
+    "failure_point",
+    ("attest_runtime", "start_backend", "attest_gpu_shared_capacity"),
+)
+def test_shared_prepare_failure_before_baseline_has_idempotent_cleanup_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    config = _shared_runtime_config(tmp_path)
+    context = _shared_context()
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    system_type = type(adapter._system)
+    original = getattr(system_type, failure_point)
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise ProductionDriverError(
+            "CPU_PRE_BASELINE_FAILURE", f"CPU {failure_point} failed before baseline"
+        )
+
+    monkeypatch.setattr(system_type, failure_point, fail)
+    with pytest.raises(ProductionDriverError) as raised:
+        adapter.prepare(_resources(tmp_path), context)
+    assert raised.value.code == "CPU_PRE_BASELINE_FAILURE"
+    adapter.cleanup(context)
+    cleanup = adapter.cleanup_success_evidence_preimage()
+    assert cleanup is not None
+    cleanup_value = json.loads(cleanup)["value"]
+    assert cleanup_value["cleanup_outcome"] == "PRE_BASELINE_NO_MODEL_RECLAIMED"
+    assert cleanup_value["gpu_lease_released"] is True
+    assert cleanup_value["prepare_failure_evidence_sha256"]
+
+    monkeypatch.setattr(system_type, failure_point, original)
+    replacement = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    replacement.prepare(_resources(tmp_path), context)
+    replacement.cleanup(context)
+
+
+@pytest.mark.parametrize(
+    ("fault", "expected_code"),
+    (
+        (
+            CpuResourceLifecycleFaultV1.HANDOFF_GPU_CAPACITY_BELOW_MINIMUM,
+            "GPU_SHARED_CAPACITY_INSUFFICIENT",
+        ),
+        (
+            CpuResourceLifecycleFaultV1.HANDOFF_MODEL_REAP_UNCONFIRMED,
+            "MODEL_REAP_UNCONFIRMED",
+        ),
+        (
+            CpuResourceLifecycleFaultV1.MAI_PARTIAL_START,
+            "MODEL_PARTIAL_START_RECOVERABLE",
+        ),
+    ),
+)
+def test_shared_handoff_failure_retains_lease_until_cleanup(
+    tmp_path: Path,
+    fault: CpuResourceLifecycleFaultV1,
+    expected_code: str,
+) -> None:
+    config = _shared_runtime_config(tmp_path)
+    context = _shared_context()
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(config, fault)
+    adapter.prepare(_resources(tmp_path), context)
+    with pytest.raises(ProductionDriverError) as raised:
+        adapter.handoff_to_mai(context)
+    assert raised.value.code == expected_code
+    failure = adapter.handoff_failure_evidence_preimage()
+    assert failure is not None
+    failure_value = json.loads(failure)["value"]
+    assert failure_value["failure_code"] == expected_code
+    assert failure_value["status"] == "FAILED_CLEANUP_REQUIRED"
+
+    competing = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    with pytest.raises(ProductionDriverError) as lease_raised:
+        competing.prepare(_resources(tmp_path), context)
+    assert lease_raised.value.code == "GPU_LEASE_CONFLICT"
+    adapter.cleanup(context)
+    assert adapter.cleanup_success_evidence_preimage() is not None
+    assert all(not target.startswith("pid:42") for target in adapter.cpu_trace.cleanup_targets)
+
+
+def test_shared_handoff_snapshot_crossing_deadline_never_starts_mai(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _shared_runtime_config(tmp_path)
+    context = _shared_context()
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    adapter.prepare(_resources(tmp_path), context)
+    now_ns = [1]
+    handoff_context = replace(context, authority_deadline_monotonic_ns=100)
+    original_attest = production_driver_module._attest_snapshot_resource
+
+    def attest_then_expire(resource: SnapshotResourceV1) -> str:
+        result = original_attest(resource)
+        now_ns[0] = 100
+        return result
+
+    monkeypatch.setattr(production_driver_module.time, "monotonic_ns", lambda: now_ns[0])
+    monkeypatch.setattr(production_driver_module, "_attest_snapshot_resource", attest_then_expire)
+
+    with pytest.raises(ProductionDriverError) as raised:
+        adapter.handoff_to_mai(handoff_context)
+
+    assert raised.value.code == "OWNER_AUTHORITY_EXPIRED"
+    model_commands = [
+        item for item in adapter.cpu_trace.commands if "vllm.entrypoints.cli.main" in item
+    ]
+    assert len(model_commands) == 1
+    assert not any("18082" in item for command in model_commands for item in command)
+    failure = adapter.handoff_failure_evidence_preimage()
+    assert failure is not None
+    assert json.loads(failure)["value"]["failure_code"] == "OWNER_AUTHORITY_EXPIRED"
+
+    now_ns[0] = 1
+    adapter.cleanup(replace(context, authority_deadline_monotonic_ns=1_000))
+    assert adapter.cleanup_success_evidence_preimage() is not None
+
+
+def test_shared_handoff_start_crossing_deadline_tracks_and_cleans_mai(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _shared_runtime_config(tmp_path)
+    context = _shared_context()
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    adapter.prepare(_resources(tmp_path), context)
+    now_ns = [1]
+    handoff_context = replace(context, authority_deadline_monotonic_ns=100)
+    system_type = production_driver_module._CpuRecordingResourceSystemV1
+    original_start = system_type.start_model
+
+    def start_then_expire(
+        system: object,
+        spec: production_driver_module.ProductionCommandSpecV1,
+        *,
+        log_label: str,
+    ) -> object:
+        result = original_start(cast(Any, system), spec, log_label=log_label)
+        if spec.kind == "VLLM_MAI":
+            now_ns[0] = 100
+        return result
+
+    monkeypatch.setattr(production_driver_module.time, "monotonic_ns", lambda: now_ns[0])
+    monkeypatch.setattr(system_type, "start_model", start_then_expire)
+
+    with pytest.raises(ProductionDriverError) as raised:
+        adapter.handoff_to_mai(handoff_context)
+
+    assert raised.value.code == "OWNER_AUTHORITY_EXPIRED"
+    model_commands = [
+        item for item in adapter.cpu_trace.commands if "vllm.entrypoints.cli.main" in item
+    ]
+    assert len(model_commands) == 2
+    assert not any(
+        endpoint.startswith("http://127.0.0.1:18082")
+        for endpoint in adapter.cpu_trace.health_endpoints
+    )
+    failure = adapter.handoff_failure_evidence_preimage()
+    assert failure is not None
+    assert json.loads(failure)["value"]["failure_code"] == "OWNER_AUTHORITY_EXPIRED"
+    assert set(adapter._models) == {PilotHostV1.MAI_UI}
+
+    now_ns[0] = 1
+    adapter.cleanup(replace(context, authority_deadline_monotonic_ns=1_000))
+    assert "pid:10001" in adapter.cpu_trace.cleanup_targets
+    assert adapter.cleanup_success_evidence_preimage() is not None
+
+
+@pytest.mark.parametrize(
+    "expiry_boundary",
+    ("post-stop-capacity", "await-ready", "snapshot-recheck"),
+)
+def test_shared_handoff_deadline_gates_each_following_external_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expiry_boundary: str,
+) -> None:
+    config = _shared_runtime_config(tmp_path)
+    context = _shared_context()
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    adapter.prepare(_resources(tmp_path), context)
+    now_ns = [1]
+    snapshot_calls = [0]
+    handoff_context = replace(context, authority_deadline_monotonic_ns=100)
+    system_type = production_driver_module._CpuRecordingResourceSystemV1
+    original_capacity = system_type.attest_gpu_shared_capacity
+    original_await = system_type.await_model
+    original_snapshot = production_driver_module._attest_snapshot_resource
+
+    def capacity_then_maybe_expire(
+        system: object,
+        gpu_index: int,
+        *,
+        minimum_free_memory_mib: int,
+    ) -> production_driver_module.ProductionSharedGpuAttestationV1:
+        result = original_capacity(
+            cast(Any, system),
+            gpu_index,
+            minimum_free_memory_mib=minimum_free_memory_mib,
+        )
+        if (
+            expiry_boundary == "post-stop-capacity"
+            and system is adapter._system
+            and cast(Any, system)._shared_attestation_count == 3
+        ):
+            now_ns[0] = 100
+        return result
+
+    def await_then_maybe_expire(
+        system: object,
+        owned: object,
+        *,
+        deadline_ns: int,
+    ) -> str:
+        result = original_await(cast(Any, system), cast(Any, owned), deadline_ns=deadline_ns)
+        if expiry_boundary == "await-ready" and cast(Any, owned).spec.kind == "VLLM_MAI":
+            now_ns[0] = 100
+        return result
+
+    def snapshot_then_maybe_expire(resource: SnapshotResourceV1) -> str:
+        result = original_snapshot(resource)
+        snapshot_calls[0] += 1
+        if expiry_boundary == "snapshot-recheck" and snapshot_calls[0] == 2:
+            now_ns[0] = 100
+        return result
+
+    monkeypatch.setattr(production_driver_module.time, "monotonic_ns", lambda: now_ns[0])
+    monkeypatch.setattr(system_type, "attest_gpu_shared_capacity", capacity_then_maybe_expire)
+    monkeypatch.setattr(system_type, "await_model", await_then_maybe_expire)
+    monkeypatch.setattr(
+        production_driver_module,
+        "_attest_snapshot_resource",
+        snapshot_then_maybe_expire,
+    )
+
+    with pytest.raises(ProductionDriverError) as raised:
+        adapter.handoff_to_mai(handoff_context)
+
+    assert raised.value.code == "OWNER_AUTHORITY_EXPIRED"
+    assert cast(Any, adapter._system)._shared_attestation_count == 3
+    expected_snapshots = {
+        "post-stop-capacity": 0,
+        "await-ready": 1,
+        "snapshot-recheck": 2,
+    }
+    assert snapshot_calls[0] == expected_snapshots[expiry_boundary]
+    model_commands = [
+        item for item in adapter.cpu_trace.commands if "vllm.entrypoints.cli.main" in item
+    ]
+    assert len(model_commands) == (1 if expiry_boundary == "post-stop-capacity" else 2)
+
+    now_ns[0] = 1
+    adapter.cleanup(replace(context, authority_deadline_monotonic_ns=1_000))
+    assert adapter.cleanup_success_evidence_preimage() is not None
+
+
+def test_shared_dispatch_tenant_drift_retains_complete_offender_and_recovers(
+    tmp_path: Path,
+) -> None:
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(
+        _shared_runtime_config(tmp_path),
+        CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT,
+    )
+    context = _shared_context()
+    adapter.prepare(_resources(tmp_path), context)
+    with pytest.raises(ProductionDriverError) as raised:
+        adapter.require_dispatch(
+            PilotHostV1.QWEN3_VL,
+            ProductionDispatchKindV1.ACTOR,
+            authority_deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+        )
+    assert raised.value.code == "GPU_SHARED_TENANT_DRIFT"
+    failure = adapter.last_dispatch_failure_evidence_preimage()
+    assert failure is not None
+    value = json.loads(failure)["value"]
+    assert value["sequence_execution_scope"] == "R24_LIVE_SMOKE_ONLY"
+    offender = value["shared_gpu_attestation"]["processes"][-1]
+    assert offender == {
+        "pid": 42_999,
+        "process_group_id": 42_999,
+        "session_id": 42_999,
+        "starttime_ticks": 4_299_900,
+        "uid": os.geteuid(),
+        "used_gpu_memory_mib": 1_024,
+        "user": "cpu-owner",
+    }
+    adapter.cleanup(context)
+
+
+def test_successful_shared_dispatch_attestation_enters_full_unit_journal(
+    tmp_path: Path,
+) -> None:
+    context = _shared_context()
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(_shared_runtime_config(tmp_path))
+    adapter.prepare(_resources(tmp_path), context)
+    port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(port, "_resource_lifecycle", adapter)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
+    object.__setattr__(port, "_lock", threading.RLock())
+    object.__setattr__(port, "_unit_journals", {})
+    object.__setattr__(port, "_unpublished_unit_evidence", {})
+    deadline = time.monotonic_ns() + 2_000_000_000
+    state = production_driver_module._ProductionUnitStateV1(
+        unit_id="smoke:QWEN3_VL:OFF",
+        host=PilotHostV1.QWEN3_VL,
+        task_name="shared-dispatch-proof",
+        deadline_monotonic_ns=deadline,
+        cleanup_deadline_monotonic_ns=deadline + 1_000_000_000,
+        authority_deadline_monotonic_ns=deadline + 2_000_000_000,
+        attempt_termination_upper_bound_ns=0,
+        environment=None,
+        observation=None,
+    )
+    port._require_resource_dispatch(
+        PilotHostV1.QWEN3_VL,
+        ProductionDispatchKindV1.ACTOR,
+        deadline_ns=deadline,
+        state=state,
+    )
+    assert len(state.resource_dispatch_journal) == 1
+    dispatch = state.resource_dispatch_journal[0]
+    assert dispatch["value"]["status"] == "PASSED"
+    assert dispatch["value"]["shared_gpu_attestation"]["processes"][-1]["user"] == ("cpu-owner")
+    case = _smoke_plan(tmp_path, PilotHostV1.QWEN3_VL).cases[0]
+    invocation = production_driver_module._SmokeInvocationV1(
+        manifest_sha256=context.manifest_sha256,
+        run_id=context.run_id,
+        source_commit=context.source_commit,
+        host=PilotHostV1.QWEN3_VL,
+        sequence_index=0,
+        case=case,
+        actor_resource_sha256="1" * 64,
+        history_policy_stage_sha256="2" * 64,
+        deadline_monotonic_ns=state.deadline_monotonic_ns,
+        cleanup_deadline_monotonic_ns=state.cleanup_deadline_monotonic_ns,
+        authority_deadline_monotonic_ns=state.authority_deadline_monotonic_ns,
+        attempt_termination_upper_bound_ns=0,
+    )
+    object.__setattr__(port, "_units", {state.unit_id: state})
+    cleanup = port.cleanup_unit(invocation)
+    assert cleanup.unit_journal_preimage is not None
+    assert cleanup.unit_journal_sha256 == hashlib.sha256(cleanup.unit_journal_preimage).hexdigest()
+    full = json.loads(cleanup.unit_journal_preimage)
+    assert full["resource_dispatch_records"] == state.resource_dispatch_journal
+    assert full["resource_dispatch_records_sha256"]
+
+    decision = _semantic_decision(actor_call_index=1, rubric_calls=2, history_policy_calls=1)
+    census = production_driver_module._sum_census((decision.census,))
+    records = []
+    for index, mode in enumerate(SmokeModeV1):
+        journal = dict(full)
+        journal["unit_id"] = f"smoke:{PilotHostV1.QWEN3_VL.value}:{mode.value}"
+        journal_raw = production_driver_module.canonical_json_bytes(cast(Any, journal))
+        records.append(
+            production_driver_module.SmokeCaseEvidenceV1(
+                manifest_sha256=context.manifest_sha256,
+                run_id=context.run_id,
+                stage=RunStageV1.QWEN_LIVE_SMOKE,
+                host=PilotHostV1.QWEN3_VL,
+                sequence_index=index,
+                case_id=f"qwen-{mode.value.lower()}",
+                task_id="shared-dispatch-proof",
+                mode=mode,
+                actor_resource_sha256="1" * 64,
+                history_policy_stage_sha256="2" * 64,
+                request_fixture_sha256="3" * 64,
+                request_fixture_byte_count=100,
+                decision=decision,
+                cleanup_receipt_sha256=cleanup.cleanup_receipt_sha256,
+                unit_journal_preimage=journal_raw,
+                unit_journal_sha256=hashlib.sha256(journal_raw).hexdigest(),
+                unit_journal_validated_reference=None,
+                census=census,
+            )
+        )
+    stage_evidence = production_driver_module.SmokeStageEvidenceV1(
+        manifest_sha256=context.manifest_sha256,
+        run_id=context.run_id,
+        stage=RunStageV1.QWEN_LIVE_SMOKE,
+        host=PilotHostV1.QWEN3_VL,
+        actor_resource_sha256="1" * 64,
+        history_policy_stage_sha256="2" * 64,
+        cases=tuple(records),
+        census=production_driver_module._sum_census(tuple(item.census for item in records)),
+        schema_version=(
+            production_driver_module.PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2
+        ),
+    )
+    durable = production_driver_module.smoke_stage_evidence_projection(stage_evidence)
+    assert durable["schema_version"] == (
+        production_driver_module.PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2
+    )
+    assert durable["cases"][0]["unit_journal"] == full
+    assert durable["cases"][0]["unit_journal_sha256"] == cleanup.unit_journal_sha256
+    adapter.cleanup(context)
+
+
+def test_shared_cleanup_records_persistent_foreign_tenant_without_signaling_it(
+    tmp_path: Path,
+) -> None:
+    config = _shared_runtime_config(tmp_path)
+    context = _shared_context()
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(
+        config,
+        CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT_PERSISTS,
+    )
+    adapter.prepare(_resources(tmp_path), context)
+    with pytest.raises(ProductionDriverError) as raised:
+        adapter.require_dispatch(
+            PilotHostV1.QWEN3_VL,
+            ProductionDispatchKindV1.ACTOR,
+            authority_deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+        )
+    assert raised.value.code == "GPU_SHARED_TENANT_DRIFT"
+    adapter.cleanup(context)
+    cleanup = adapter.cleanup_success_evidence_preimage()
+    assert cleanup is not None
+    final_processes = json.loads(cleanup)["value"]["final_shared_gpu_attestation"]["processes"]
+    assert final_processes[-1]["pid"] == 42_999
+    assert final_processes[-1]["user"] == "cpu-owner"
+    assert all(not item.startswith("pid:42") for item in adapter.cpu_trace.cleanup_targets)
+
+    replacement = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    replacement.prepare(_resources(tmp_path), context)
+    replacement.cleanup(context)
+
+
+def test_shared_scope_tamper_blocks_prepare_handoff_and_cleanup(tmp_path: Path) -> None:
+    config = _shared_runtime_config(tmp_path)
+    context = _shared_context()
+    unauthorized = replace(context, sequence_execution_scope="R24_R25_FULL")
+    unprepared = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    with pytest.raises(ProductionDriverError) as raised:
+        unprepared.prepare(_resources(tmp_path), unauthorized)
+    assert raised.value.code == "RESOURCE_SCOPE_UNAUTHORIZED"
+
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    adapter.prepare(_resources(tmp_path), context)
+    tampered = replace(context, sequence_scope_authority_sha256="e" * 64)
+    with pytest.raises(ProductionDriverError) as handoff_raised:
+        adapter.handoff_to_mai(tampered)
+    assert handoff_raised.value.code == "RESOURCE_BINDING_MISMATCH"
+    with pytest.raises(ProductionDriverError) as cleanup_raised:
+        adapter.cleanup(tampered)
+    assert cleanup_raised.value.code == "RESOURCE_BINDING_MISMATCH"
+    adapter.cleanup(context)
+
+
 def test_gpu_idle_attestation_binds_index_uuid_and_rejects_foreign_compute_pid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -959,6 +1726,89 @@ def test_gpu_idle_attestation_rejects_index_uuid_identity_drift(
     with pytest.raises(ProductionDriverError) as raised:
         system.attest_gpu_idle(0)
     assert raised.value.code == "GPU_IDENTITY_MISMATCH"
+
+
+def test_owned_session_drain_signals_leaderless_worker_by_stable_pidfd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leader = production_driver_module.OwnedProcessIdentityV1(
+        pid=20_000,
+        process_group_id=20_000,
+        session_id=20_000,
+        starttime_ticks=2_000_000,
+        uid=os.geteuid(),
+    )
+    worker = production_driver_module._OwnedSessionMemberV1(
+        pid=20_001,
+        process_group_id=20_001,
+        session_id=20_000,
+        starttime_ticks=2_000_100,
+        uid=os.geteuid(),
+    )
+    scans = iter(((worker,), (worker,), ()))
+    signals: list[tuple[int, int]] = []
+    clocks = iter((0, 0, 2_000_000_000, 2_000_000_000, 2_000_000_000))
+    monkeypatch.setattr(
+        production_driver_module, "_owned_session_members", lambda _identity: next(scans)
+    )
+    monkeypatch.setattr(
+        production_driver_module,
+        "_signal_owned_session_member",
+        lambda member, signum: signals.append((member.pid, signum)),
+    )
+    monkeypatch.setattr(production_driver_module.time, "monotonic_ns", lambda: next(clocks))
+    monkeypatch.setattr(production_driver_module.time, "sleep", lambda _seconds: None)
+
+    remaining = production_driver_module._drain_owned_session(
+        leader, shutdown_grace_seconds=1, poll_interval_ms=1
+    )
+    assert remaining == ()
+    assert signals == [(worker.pid, signal.SIGTERM), (worker.pid, signal.SIGKILL)]
+
+
+def test_partial_model_cleanup_drains_leaderless_session_and_checks_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _shared_runtime_config(tmp_path)
+    system_type = production_driver_module._PosixProductionResourceSystemV1
+    system = system_type(config, seal=production_driver_module._MODULE_SEAL)
+    spec = production_driver_module._vllm_command_spec(
+        _resources(tmp_path)[0], gpu_index=5, config=config
+    )
+
+    class _ExitedProcess:
+        pid = 20_100
+
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+    stdout = io.BytesIO()
+    stderr = io.BytesIO()
+    partial = production_driver_module._PartialModelProcessV1(
+        cast(Any, _ExitedProcess()), spec=spec, stdout_handle=stdout, stderr_handle=stderr
+    )
+    system._partial_models[20_100] = partial
+    drained: list[production_driver_module.OwnedProcessIdentityV1] = []
+    monkeypatch.setattr(
+        production_driver_module,
+        "_drain_owned_session",
+        lambda identity, **_kwargs: drained.append(identity) or (),
+    )
+    checked_ports: list[int] = []
+    monkeypatch.setattr(
+        production_driver_module,
+        "_assert_loopback_port_free",
+        lambda port: checked_ports.append(port),
+    )
+
+    system._stop_partial_model(20_100)
+    assert [(item.pid, item.session_id, item.uid) for item in drained] == [
+        (20_100, 20_100, os.geteuid())
+    ]
+    assert checked_ports == [18081]
+    assert system.residual_capabilities()["partial_model_processes"] == []
+    assert stdout.closed and stderr.closed
 
 
 def test_backend_nonzero_launch_with_exact_absence_clears_pending_name(
@@ -1779,6 +2629,58 @@ def _large_unit_journal_port(
     return port, state, invocation, audit_sink
 
 
+def _large_validated_smoke_case(
+    tmp_path: Path,
+    request: dict[str, Any],
+) -> tuple[
+    production_driver_module.SmokeCaseEvidenceV1,
+    bytes,
+    production_driver_module._ValidatedUnitJournalReferenceV1,
+    Path,
+]:
+    port, state, invocation, audit_sink = _large_unit_journal_port(tmp_path, request)
+    state.resource_dispatch_journal.append(
+        {
+            "schema_version": "cpu-shared-dispatch-attestation/v1",
+            "value": {
+                "gpu_index": 5,
+                "status": "PASSED",
+                "user": "cpu-owner",
+            },
+        }
+    )
+    journal_raw = port._unit_journal_snapshot(state)
+    validated = port._validated_smoke_unit_journal_reference(
+        journal_raw, expected_unit_id=state.unit_id
+    )
+    assert validated is not None
+    reference = cast(dict[str, Any], json.loads(journal_raw))
+    blob = cast(dict[str, Any], reference["blob"])
+    blob_path = audit_sink.root / cast(str, blob["safe_locator"])
+    decision = _semantic_decision(actor_call_index=1, rubric_calls=2, history_policy_calls=1)
+    evidence = production_driver_module.SmokeCaseEvidenceV1(
+        manifest_sha256=invocation.manifest_sha256,
+        run_id=invocation.run_id,
+        stage=RunStageV1.QWEN_LIVE_SMOKE,
+        host=invocation.host,
+        sequence_index=invocation.sequence_index,
+        case_id=invocation.case.case_id,
+        task_id=invocation.case.task_id,
+        mode=invocation.case.mode,
+        actor_resource_sha256=invocation.actor_resource_sha256,
+        history_policy_stage_sha256=invocation.history_policy_stage_sha256,
+        request_fixture_sha256=invocation.case.request_fixture_sha256,
+        request_fixture_byte_count=invocation.case.request_fixture_byte_count,
+        decision=decision,
+        cleanup_receipt_sha256="e" * 64,
+        unit_journal_preimage=journal_raw,
+        unit_journal_sha256=hashlib.sha256(journal_raw).hexdigest(),
+        unit_journal_validated_reference=validated,
+        census=production_driver_module._sum_census((decision.census,)),
+    )
+    return evidence, journal_raw, validated, blob_path
+
+
 def _configure_large_cleanup_state(
     *,
     port: production_driver_module._ProductionFixedExecutionPortV1,
@@ -1884,6 +2786,8 @@ def _assert_full_large_failure_evidence(
             "cleanup_recovery_outcome_sha256",
             "completed_decisions",
             "completed_decisions_sha256",
+            "resource_dispatch_records",
+            "resource_dispatch_records_sha256",
             "terminal_audit_records",
             "terminal_audit_records_sha256",
             "run_fatal_state",
@@ -1935,6 +2839,94 @@ def test_large_legal_request_proof_is_atomically_blobbed_and_cleanup_proceeds(
     assert recovered_proof["provider_request_sha256"] == canonical_sha256(
         cast(Any, large_legal_rubric_provider_request)
     )
+
+
+def test_large_smoke_case_cas_reference_is_read_back_and_durably_bound(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+) -> None:
+    evidence, journal_raw, validated, blob_path = _large_validated_smoke_case(
+        tmp_path, large_legal_rubric_provider_request
+    )
+
+    durable = production_driver_module._smoke_case_evidence_projection(evidence)
+    binding = cast(dict[str, Any], durable["unit_journal_validated_reference"])
+    reference = cast(dict[str, Any], json.loads(journal_raw))
+
+    assert blob_path.is_file()
+    assert binding["validation_status"] == "EXACT_OWNER_ONLY_READBACK"
+    assert binding["expected_unit_id"] == "smoke:QWEN3_VL:OFF"
+    assert binding["reference_preimage_sha256"] == hashlib.sha256(journal_raw).hexdigest()
+    assert binding["reference_sha256"] == reference["reference_sha256"]
+    assert binding["blob"]["byte_count"] > 4 * 1024 * 1024
+    assert binding["blob"]["sha256"] == hashlib.sha256(blob_path.read_bytes()).hexdigest()
+    assert binding["resource_dispatch_record_count"] == 1
+    assert binding == production_driver_module._validated_unit_journal_reference_projection(
+        validated
+    )
+
+
+@pytest.mark.parametrize("mutation", ("forged-minimal", "wrong-unit", "unsafe-locator"))
+def test_large_smoke_case_rejects_unvalidated_or_malformed_cas_reference(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+    mutation: str,
+) -> None:
+    evidence, journal_raw, validated, _ = _large_validated_smoke_case(
+        tmp_path, large_legal_rubric_provider_request
+    )
+    reference = cast(dict[str, Any], json.loads(journal_raw))
+    validation: object = validated
+    if mutation == "forged-minimal":
+        reference = {"storage": "OWNER_ONLY_CONTENT_ADDRESSED_BLOB"}
+        validation = None
+    elif mutation == "wrong-unit":
+        reference["unit_id"] = "smoke:MAI_UI:OFF"
+    else:
+        cast(dict[str, Any], reference["blob"])["safe_locator"] = "../escaped.json"
+    if mutation != "forged-minimal":
+        without_hash = dict(reference)
+        del without_hash["reference_sha256"]
+        reference["reference_sha256"] = canonical_sha256(cast(Any, without_hash))
+    mutated_raw = production_driver_module.canonical_json_bytes(cast(Any, reference))
+
+    with pytest.raises(ProductionDriverError):
+        replace(
+            evidence,
+            unit_journal_preimage=mutated_raw,
+            unit_journal_sha256=hashlib.sha256(mutated_raw).hexdigest(),
+            unit_journal_validated_reference=cast(Any, validation),
+        )
+
+
+@pytest.mark.parametrize("admission_phase", ("construction", "projection"))
+@pytest.mark.parametrize("mutation", ("missing", "content"))
+def test_large_smoke_case_cas_readback_fails_closed_after_blob_change(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+    admission_phase: str,
+    mutation: str,
+) -> None:
+    evidence, _, _, blob_path = _large_validated_smoke_case(
+        tmp_path, large_legal_rubric_provider_request
+    )
+    if mutation == "missing":
+        blob_path.unlink()
+        expected_code = "UNIT_EVIDENCE_BLOB_MISSING"
+    else:
+        with blob_path.open("r+b") as handle:
+            handle.write(b"X")
+            handle.flush()
+            os.fsync(handle.fileno())
+        expected_code = "UNIT_EVIDENCE_BLOB_INVALID"
+
+    with pytest.raises(ProductionDriverError) as raised:
+        if admission_phase == "construction":
+            replace(evidence)
+        else:
+            production_driver_module._smoke_case_evidence_projection(evidence)
+
+    assert raised.value.code == expected_code
 
 
 @pytest.mark.parametrize("mutation", ("content", "mode"))
@@ -2617,6 +3609,135 @@ def test_production_factory_requires_exact_explicit_dependencies() -> None:
     )
     with pytest.raises(TypeError):
         cast(Any, build_production_driver_v1)()
+
+
+@pytest.mark.parametrize("drift", ("scope", "factory_config", "lifecycle_config"))
+def test_shared_production_driver_cross_binds_scope_factory_and_lifecycle_config(
+    tmp_path: Path,
+    drift: str,
+) -> None:
+    runtime_config = _shared_runtime_config(tmp_path)
+    confirmed = production_runtime_config_sha256(runtime_config)
+    lifecycle_config = (
+        replace(runtime_config, backend_port=18090)
+        if drift == "lifecycle_config"
+        else runtime_config
+    )
+    lifecycle = build_cpu_test_resource_lifecycle_adapter_v1(lifecycle_config)
+    factory = object.__new__(production_driver_module.ProductionPostPreflightFactoryV1)
+    object.__setattr__(
+        factory,
+        "_sequence_execution_scope",
+        SimpleNamespace(value="R24_R25_FULL" if drift == "scope" else "R24_LIVE_SMOKE_ONLY"),
+    )
+    object.__setattr__(
+        factory,
+        "_runtime_config_sha256",
+        "d" * 64 if drift == "factory_config" else confirmed,
+    )
+
+    with pytest.raises(ProductionDriverError) as raised:
+        build_production_driver_v1(
+            factory=factory,
+            runtime_config=runtime_config,
+            confirmed_runtime_config_sha256=confirmed,
+            pricing=cast(Any, None),
+            confirmed_pricing_sha256="e" * 64,
+            production_audit_sink=cast(Any, None),
+            resource_lifecycle=lifecycle,
+        )
+    assert raised.value.code == "SHARED_RESOURCE_AUTHORITY_MISMATCH"
+
+
+def test_smoke_only_factory_cannot_select_legacy_independent_gpu_runtime(
+    tmp_path: Path,
+) -> None:
+    runtime_config = _runtime_config(tmp_path)
+    confirmed = production_runtime_config_sha256(runtime_config)
+    lifecycle = build_cpu_test_resource_lifecycle_adapter_v1(runtime_config)
+    factory = object.__new__(production_driver_module.ProductionPostPreflightFactoryV1)
+    object.__setattr__(
+        factory,
+        "_sequence_execution_scope",
+        SimpleNamespace(value="R24_LIVE_SMOKE_ONLY"),
+    )
+    object.__setattr__(factory, "_runtime_config_sha256", confirmed)
+
+    with pytest.raises(ProductionDriverError) as raised:
+        build_production_driver_v1(
+            factory=factory,
+            runtime_config=runtime_config,
+            confirmed_runtime_config_sha256=confirmed,
+            pricing=cast(Any, None),
+            confirmed_pricing_sha256="e" * 64,
+            production_audit_sink=cast(Any, None),
+            resource_lifecycle=lifecycle,
+        )
+    assert raised.value.code == "SHARED_RESOURCE_AUTHORITY_MISMATCH"
+
+
+def test_smoke_only_scope_rejects_direct_pilot_adapter_and_port_before_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = object.__new__(production_driver_module.ProductionPostPreflightFactoryV1)
+    object.__setattr__(
+        factory,
+        "_sequence_execution_scope",
+        SimpleNamespace(value="R24_LIVE_SMOKE_ONLY"),
+    )
+    port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    port._factory = factory
+    adapter = production_driver_module.FixedPilotAdapterV1(
+        port,
+        seal=production_driver_module._MODULE_SEAL,
+    )
+    calls = {"pilot_snapshot": 0, "input_resolve": 0, "reset": 0, "dispatch": 0}
+
+    def record_pilot_snapshot(value: object) -> Any:
+        calls["pilot_snapshot"] += 1
+        return value
+
+    def record_input_resolve(*args: object, **kwargs: object) -> Any:
+        calls["input_resolve"] += 1
+        return None
+
+    def record_reset(*args: object, **kwargs: object) -> None:
+        calls["reset"] += 1
+
+    def record_dispatch(*args: object, **kwargs: object) -> None:
+        calls["dispatch"] += 1
+
+    monkeypatch.setattr(production_driver_module, "_snapshot_pilot", record_pilot_snapshot)
+    monkeypatch.setattr(
+        production_driver_module,
+        "resolve_pilot_task_inputs_v1",
+        record_input_resolve,
+    )
+    monkeypatch.setattr(production_driver_module, "AndroidEnvClient", record_reset)
+    monkeypatch.setattr(
+        production_driver_module._ProductionFixedExecutionPortV1,
+        "_require_resource_dispatch",
+        record_dispatch,
+    )
+
+    attempts = (
+        lambda: adapter.run_pilot(
+            cast(Any, object()),
+            cast(Any, object()),
+            cast(Any, object()),
+            _shared_context(),
+            cast(Any, object()),
+        ),
+        lambda: port.prepare_pilot(cast(Any, object())),
+        lambda: port.reset_pilot_cell(cast(Any, object())),
+        lambda: port.run_pilot_cell(cast(Any, object()), cast(Any, object())),
+    )
+    for attempt in attempts:
+        with pytest.raises(ProductionDriverError) as raised:
+            attempt()
+        assert raised.value.code == "PILOT_SCOPE_UNAUTHORIZED"
+
+    assert calls == {"pilot_snapshot": 0, "input_resolve": 0, "reset": 0, "dispatch": 0}
 
 
 def test_fixed_smoke_adapter_proves_qwen_and_mai_exact_request_chains_without_actions(

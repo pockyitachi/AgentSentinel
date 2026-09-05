@@ -15,6 +15,7 @@ import io
 import json
 import math
 import os
+import pwd
 import re
 import secrets
 import signal
@@ -180,6 +181,21 @@ from mobile_world.runtime.utils.models import (
 PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION: Final[str] = (
     "mobileworld.runtime.sentinel-r2.4-r2.5-production-driver-evidence/v1"
 )
+PRODUCTION_SHARED_RESOURCE_EVIDENCE_SCHEMA_VERSION_V2: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.4-shared-resource-evidence/v2"
+)
+PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.4-shared-smoke-evidence/v2"
+)
+PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.4-model-handoff-evidence/v1"
+)
+PRODUCTION_RESOURCE_CLEANUP_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.4-resource-cleanup-evidence/v1"
+)
+PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.4-resource-cleanup-bound/v1"
+)
 OFFICIAL_RESULT_EVALUATOR_ID_V1: Final[str] = "mobileworld.task.official-success/v1"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -188,6 +204,11 @@ _MODULE_SEAL: Final[object] = object()
 _PRODUCTION_INSTALLATION_SEAL: Final[object] = object()
 _VLLM_MAX_MODEL_LEN: Final[int] = 32_768
 _VLLM_MAX_BATCHED_TOKENS: Final[int] = 8_192
+_SHARED_VLLM_GPU_MEMORY_UTILIZATION_V1: Final[str] = "0.24"
+_SHARED_MINIMUM_FREE_GPU_MEMORY_MIB_V1: Final[int] = 51_200
+_NVIDIA_MEMORY_ACCOUNTING_TOLERANCE_MIB_V1: Final[int] = 4
+_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1: Final[int] = 15
+_RESOURCE_ATTESTATION_COMMAND_TIMEOUT_SECONDS_V1: Final[int] = 30
 _MOBILEWORLD_BACKEND_IMAGE: Final[str] = "mobile_world:reset"
 _PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1: Final[int] = (
     PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
@@ -204,6 +225,9 @@ _MAX_HEALTH_RESPONSE_BYTES: Final[int] = 1_048_576
 _MAX_INLINE_UNIT_EVIDENCE_JOURNAL_BYTES: Final[int] = 4 * 1024 * 1024
 _UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION: Final[str] = (
     "mobileworld.runtime.sentinel-r2.4-production-unit-evidence-blob-reference/v1"
+)
+_VALIDATED_UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.4-validated-unit-evidence-blob-reference/v1"
 )
 _UNIT_EVIDENCE_BLOB_STORAGE_KIND: Final[str] = "OWNER_ONLY_CONTENT_ADDRESSED_BLOB"
 _UNIT_EVIDENCE_BLOB_SUFFIX: Final[str] = ".production-unit-evidence-blob.v1.json"
@@ -292,6 +316,12 @@ class CpuResourceLifecycleFaultV1(StrEnum):
     MODEL_PARTIAL_START = "MODEL_PARTIAL_START"
     MODEL_PARTIAL_CLEANUP_ONCE = "MODEL_PARTIAL_CLEANUP_ONCE"
     MODEL_STOP_ONCE = "MODEL_STOP_ONCE"
+    SHARED_GPU_CAPACITY_BELOW_MINIMUM = "SHARED_GPU_CAPACITY_BELOW_MINIMUM"
+    HANDOFF_GPU_CAPACITY_BELOW_MINIMUM = "HANDOFF_GPU_CAPACITY_BELOW_MINIMUM"
+    HANDOFF_MODEL_REAP_UNCONFIRMED = "HANDOFF_MODEL_REAP_UNCONFIRMED"
+    SHARED_GPU_TENANT_DRIFT = "SHARED_GPU_TENANT_DRIFT"
+    SHARED_GPU_TENANT_DRIFT_PERSISTS = "SHARED_GPU_TENANT_DRIFT_PERSISTS"
+    MAI_PARTIAL_START = "MAI_PARTIAL_START"
     DISPATCH_MODEL_IDENTITY = "DISPATCH_MODEL_IDENTITY"
     DISPATCH_BACKEND_IDENTITY = "DISPATCH_BACKEND_IDENTITY"
 
@@ -305,6 +335,13 @@ class ProductionDispatchKindV1(StrEnum):
     ACTION = "ACTION"
     SCORE = "SCORE"
     CLEANUP = "CLEANUP"
+
+
+class ProductionResourceTopologyV1(StrEnum):
+    """Closed GPU lifecycle topologies bound into the runtime configuration."""
+
+    INDEPENDENT_GPU_CONCURRENT = "INDEPENDENT_GPU_CONCURRENT"
+    SINGLE_GPU_SEQUENTIAL_SHARED = "SINGLE_GPU_SEQUENTIAL_SHARED"
 
 
 def _require_sha256(value: object, name: str) -> str:
@@ -557,6 +594,11 @@ class ProductionRuntimeConfigV1:
     startup_timeout_seconds: int = 900
     shutdown_grace_seconds: int = 10
     health_poll_interval_ms: int = 250
+    resource_topology: ProductionResourceTopologyV1 = (
+        ProductionResourceTopologyV1.INDEPENDENT_GPU_CONCURRENT
+    )
+    vllm_gpu_memory_utilization: str = "0.90"
+    minimum_free_gpu_memory_mib: int = 0
 
     def __post_init__(self) -> None:
         if type(self.backend_port) is not int or not 1_024 <= self.backend_port <= 65_535:
@@ -578,9 +620,42 @@ class ProductionRuntimeConfigV1:
                 raise ProductionDriverError(
                     "INVALID_RESOURCE_CONFIG", f"{name} is outside the closed GPU range"
                 )
-        if self.qwen_gpu_index == self.mai_gpu_index:
+        if type(self.resource_topology) is not ProductionResourceTopologyV1:
             raise ProductionDriverError(
-                "INVALID_RESOURCE_CONFIG", "Qwen and MAI require independent GPU leases"
+                "INVALID_RESOURCE_CONFIG", "resource topology must use the closed enum"
+            )
+        if (
+            type(self.vllm_gpu_memory_utilization) is not str
+            or re.fullmatch(r"0\.[0-9]{2}", self.vllm_gpu_memory_utilization) is None
+        ):
+            raise ProductionDriverError(
+                "INVALID_RESOURCE_CONFIG", "vLLM GPU memory utilization must be exact decimal text"
+            )
+        if (
+            type(self.minimum_free_gpu_memory_mib) is not int
+            or not 0 <= self.minimum_free_gpu_memory_mib <= 1_048_576
+        ):
+            raise ProductionDriverError(
+                "INVALID_RESOURCE_CONFIG", "minimum free GPU memory is outside its hard bound"
+            )
+        if self.resource_topology is ProductionResourceTopologyV1.INDEPENDENT_GPU_CONCURRENT:
+            if (
+                self.qwen_gpu_index == self.mai_gpu_index
+                or self.vllm_gpu_memory_utilization != "0.90"
+                or self.minimum_free_gpu_memory_mib != 0
+            ):
+                raise ProductionDriverError(
+                    "INVALID_RESOURCE_CONFIG",
+                    "concurrent topology requires distinct GPUs, utilization 0.90, and no floor",
+                )
+        elif (
+            self.qwen_gpu_index != self.mai_gpu_index
+            or self.vllm_gpu_memory_utilization != _SHARED_VLLM_GPU_MEMORY_UTILIZATION_V1
+            or self.minimum_free_gpu_memory_mib != _SHARED_MINIMUM_FREE_GPU_MEMORY_MIB_V1
+        ):
+            raise ProductionDriverError(
+                "INVALID_RESOURCE_CONFIG",
+                "shared sequential topology requires one GPU, utilization 0.24, and 51200 MiB free",
             )
         for path_value, name in (
             (self.process_log_root, "process_log_root"),
@@ -704,6 +779,9 @@ def production_runtime_config_projection(
         startup_timeout_seconds=value.startup_timeout_seconds,
         shutdown_grace_seconds=value.shutdown_grace_seconds,
         health_poll_interval_ms=value.health_poll_interval_ms,
+        resource_topology=value.resource_topology,
+        vllm_gpu_memory_utilization=value.vllm_gpu_memory_utilization,
+        minimum_free_gpu_memory_mib=value.minimum_free_gpu_memory_mib,
     )
     return {
         "authorized_pilot_input_root": trusted.authorized_pilot_input_root,
@@ -721,14 +799,17 @@ def production_runtime_config_projection(
         "backend_port": trusted.backend_port,
         "health_poll_interval_ms": trusted.health_poll_interval_ms,
         "mai_gpu_index": trusted.mai_gpu_index,
+        "minimum_free_gpu_memory_mib": trusted.minimum_free_gpu_memory_mib,
         "mobileworld_source_mount": "/app/service/src",
         "mobileworld_source_root": trusted.mobileworld_source_root,
         "process_log_root": trusted.process_log_root,
         "qwen_gpu_index": trusted.qwen_gpu_index,
         "repository_root": trusted.repository_root,
+        "resource_topology": trusted.resource_topology.value,
         "shutdown_grace_seconds": trusted.shutdown_grace_seconds,
         "startup_timeout_seconds": trusted.startup_timeout_seconds,
         "vllm_max_batched_tokens": _VLLM_MAX_BATCHED_TOKENS,
+        "vllm_gpu_memory_utilization": trusted.vllm_gpu_memory_utilization,
         "vllm_max_model_len": _VLLM_MAX_MODEL_LEN,
         "vllm_python_byte_count": trusted.vllm_python_byte_count,
         "vllm_python_executable": trusted.vllm_python_executable,
@@ -742,6 +823,72 @@ def production_runtime_config_sha256(value: ProductionRuntimeConfigV1) -> str:
     return _hash_projection(
         "production-runtime-config",
         cast(JsonValue, production_runtime_config_projection(value)),
+    )
+
+
+def _production_resource_cleanup_bound_projection(
+    config: ProductionRuntimeConfigV1,
+) -> dict[str, JsonValue]:
+    """Return the complete bounded-wait budget for one shared cleanup call."""
+
+    if type(config) is not ProductionRuntimeConfigV1:
+        raise ProductionDriverError("UNTRUSTED_TYPE", "cleanup bound config type differs")
+    if config.resource_topology is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED:
+        raise ProductionDriverError(
+            "CLEANUP_BOUND_UNAVAILABLE",
+            "the sealed cleanup bound applies only to shared sequential resources",
+        )
+    poll_ceiling_seconds = (config.health_poll_interval_ms + 999) // 1_000
+    admitted_model_seconds = 5 * config.shutdown_grace_seconds + 3 * poll_ceiling_seconds
+    partial_model_seconds = 3 * config.shutdown_grace_seconds + 2 * poll_ceiling_seconds
+    model_seconds = max(admitted_model_seconds, partial_model_seconds)
+    admitted_backend_seconds = max(
+        3 * _RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
+        config.shutdown_grace_seconds + 2 * _RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
+    )
+    pending_backend_seconds = 7 * _RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1
+    backend_seconds = max(admitted_backend_seconds, pending_backend_seconds)
+    final_shared_gpu_attestation_seconds = 4 * _RESOURCE_ATTESTATION_COMMAND_TIMEOUT_SECONDS_V1
+    cleanup_upper_bound_seconds = (
+        model_seconds + backend_seconds + final_shared_gpu_attestation_seconds
+    )
+    return {
+        "admitted_backend_cleanup_upper_bound_seconds": admitted_backend_seconds,
+        "admitted_model_cleanup_upper_bound_seconds": admitted_model_seconds,
+        "backend_cleanup_upper_bound_seconds": backend_seconds,
+        "cleanup_upper_bound_seconds": cleanup_upper_bound_seconds,
+        "docker_command_timeout_seconds": _RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
+        "final_shared_gpu_attestation_command_slots": 4,
+        "final_shared_gpu_attestation_upper_bound_seconds": (final_shared_gpu_attestation_seconds),
+        "health_poll_interval_ceiling_seconds": poll_ceiling_seconds,
+        "health_poll_interval_ms": config.health_poll_interval_ms,
+        "model_cleanup_upper_bound_seconds": model_seconds,
+        "model_leader_wait_slots": 2,
+        "model_poll_overshoot_slots": 3,
+        "model_port_wait_slots": 1,
+        "model_session_wait_slots": 2,
+        "nvidia_attestation_command_timeout_seconds": (
+            _RESOURCE_ATTESTATION_COMMAND_TIMEOUT_SECONDS_V1
+        ),
+        "partial_model_cleanup_upper_bound_seconds": partial_model_seconds,
+        "pending_backend_cleanup_command_slots": 7,
+        "pending_backend_cleanup_upper_bound_seconds": pending_backend_seconds,
+        "resource_topology": config.resource_topology.value,
+        "runtime_config_sha256": production_runtime_config_sha256(config),
+        "shutdown_grace_seconds": config.shutdown_grace_seconds,
+    }
+
+
+def _production_resource_cleanup_bound_preimage(config: ProductionRuntimeConfigV1) -> bytes:
+    return canonical_json_bytes(
+        cast(
+            JsonValue,
+            {
+                "domain": "production-resource-cleanup-bound",
+                "schema_version": PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1,
+                "value": _production_resource_cleanup_bound_projection(config),
+            },
+        )
     )
 
 
@@ -767,14 +914,17 @@ def parse_production_runtime_config(value: JsonValue) -> ProductionRuntimeConfig
         "backend_port",
         "health_poll_interval_ms",
         "mai_gpu_index",
+        "minimum_free_gpu_memory_mib",
         "mobileworld_source_mount",
         "mobileworld_source_root",
         "process_log_root",
         "qwen_gpu_index",
         "repository_root",
+        "resource_topology",
         "shutdown_grace_seconds",
         "startup_timeout_seconds",
         "vllm_max_batched_tokens",
+        "vllm_gpu_memory_utilization",
         "vllm_max_model_len",
         "vllm_python_byte_count",
         "vllm_python_executable",
@@ -822,6 +972,9 @@ def parse_production_runtime_config(value: JsonValue) -> ProductionRuntimeConfig
             startup_timeout_seconds=cast(int, mapping["startup_timeout_seconds"]),
             shutdown_grace_seconds=cast(int, mapping["shutdown_grace_seconds"]),
             health_poll_interval_ms=cast(int, mapping["health_poll_interval_ms"]),
+            resource_topology=ProductionResourceTopologyV1(cast(str, mapping["resource_topology"])),
+            vllm_gpu_memory_utilization=cast(str, mapping["vllm_gpu_memory_utilization"]),
+            minimum_free_gpu_memory_mib=cast(int, mapping["minimum_free_gpu_memory_mib"]),
         )
     except (KeyError, TypeError, ValueError) as exc:
         if isinstance(exc, ProductionDriverError):
@@ -949,7 +1102,7 @@ def _vllm_command_spec(
         str(_VLLM_MAX_MODEL_LEN),
         "--enforce-eager",
         "--gpu-memory-utilization",
-        "0.90",
+        config.vllm_gpu_memory_utilization,
         "--limit-mm-per-prompt",
         '{"image":3,"video":0}',
         "--mm-processor-cache-gb",
@@ -1067,6 +1220,203 @@ class OwnedProcessIdentityV1:
 
 
 @dataclass(frozen=True, slots=True)
+class SharedGpuProcessEvidenceV1:
+    """One compute tenant observed on the shared physical GPU."""
+
+    pid: int
+    starttime_ticks: int
+    process_group_id: int
+    session_id: int
+    uid: int
+    user: str
+    used_gpu_memory_mib: int
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.pid, "pid"),
+            (self.starttime_ticks, "starttime_ticks"),
+            (self.process_group_id, "process_group_id"),
+            (self.session_id, "session_id"),
+            (self.uid, "uid"),
+            (self.used_gpu_memory_mib, "used_gpu_memory_mib"),
+        ):
+            if type(value) is not int or value < 0:
+                raise ProductionDriverError(
+                    "INVALID_GPU_ATTESTATION", f"{name} must be nonnegative"
+                )
+        if self.pid < 2 or self.process_group_id < 1 or self.session_id < 1:
+            raise ProductionDriverError(
+                "INVALID_GPU_ATTESTATION", "shared compute process identity differs"
+            )
+        if type(self.user) is not str or re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", self.user) is None:
+            raise ProductionDriverError(
+                "INVALID_GPU_ATTESTATION", "shared compute process user differs"
+            )
+
+
+def _shared_gpu_process_projection(value: SharedGpuProcessEvidenceV1) -> dict[str, JsonValue]:
+    return {
+        "pid": value.pid,
+        "process_group_id": value.process_group_id,
+        "session_id": value.session_id,
+        "starttime_ticks": value.starttime_ticks,
+        "uid": value.uid,
+        "used_gpu_memory_mib": value.used_gpu_memory_mib,
+        "user": value.user,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionSharedGpuAttestationV1:
+    """Detached capacity and co-tenant snapshot for controlled GPU sharing."""
+
+    gpu_index: int
+    gpu_uuid: str
+    total_memory_mib: int
+    free_memory_mib: int
+    used_memory_mib: int
+    reserved_memory_mib: int
+    gpu_utilization_percent: int
+    memory_utilization_percent: int
+    minimum_free_memory_mib: int
+    processes: tuple[SharedGpuProcessEvidenceV1, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.gpu_index) is not int or not 0 <= self.gpu_index <= 255:
+            raise ProductionDriverError("INVALID_GPU_ATTESTATION", "GPU index differs")
+        if type(self.gpu_uuid) is not str or _NVIDIA_GPU_UUID.fullmatch(self.gpu_uuid) is None:
+            raise ProductionDriverError("INVALID_GPU_ATTESTATION", "GPU UUID differs")
+        for value, name in (
+            (self.total_memory_mib, "total_memory_mib"),
+            (self.free_memory_mib, "free_memory_mib"),
+            (self.used_memory_mib, "used_memory_mib"),
+            (self.reserved_memory_mib, "reserved_memory_mib"),
+            (self.gpu_utilization_percent, "gpu_utilization_percent"),
+            (self.memory_utilization_percent, "memory_utilization_percent"),
+            (self.minimum_free_memory_mib, "minimum_free_memory_mib"),
+        ):
+            if type(value) is not int or value < 0:
+                raise ProductionDriverError(
+                    "INVALID_GPU_ATTESTATION", f"{name} must be nonnegative"
+                )
+        if (
+            self.total_memory_mib == 0
+            or abs(
+                self.total_memory_mib
+                - self.free_memory_mib
+                - self.used_memory_mib
+                - self.reserved_memory_mib
+            )
+            > _NVIDIA_MEMORY_ACCOUNTING_TOLERANCE_MIB_V1
+            or self.free_memory_mib + self.used_memory_mib
+            > self.total_memory_mib + _NVIDIA_MEMORY_ACCOUNTING_TOLERANCE_MIB_V1
+            or self.minimum_free_memory_mib > self.total_memory_mib
+            or self.gpu_utilization_percent > 100
+            or self.memory_utilization_percent > 100
+        ):
+            raise ProductionDriverError("INVALID_GPU_ATTESTATION", "GPU memory census differs")
+        if type(self.processes) is not tuple or any(
+            type(item) is not SharedGpuProcessEvidenceV1 for item in self.processes
+        ):
+            raise ProductionDriverError("INVALID_GPU_ATTESTATION", "process census differs")
+        identities = tuple((item.pid, item.starttime_ticks) for item in self.processes)
+        if len(identities) != len(set(identities)):
+            raise ProductionDriverError("INVALID_GPU_ATTESTATION", "process identity is duplicated")
+
+
+def production_shared_gpu_attestation_projection(
+    value: ProductionSharedGpuAttestationV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not ProductionSharedGpuAttestationV1:
+        raise ProductionDriverError("UNTRUSTED_TYPE", "shared GPU attestation type differs")
+    return {
+        "free_memory_mib": value.free_memory_mib,
+        "gpu_utilization_percent": value.gpu_utilization_percent,
+        "gpu_index": value.gpu_index,
+        "gpu_uuid": value.gpu_uuid,
+        "minimum_free_memory_mib": value.minimum_free_memory_mib,
+        "memory_utilization_percent": value.memory_utilization_percent,
+        "processes": [_shared_gpu_process_projection(item) for item in value.processes],
+        "reserved_memory_mib": value.reserved_memory_mib,
+        "total_memory_mib": value.total_memory_mib,
+        "used_memory_mib": value.used_memory_mib,
+    }
+
+
+def production_shared_gpu_attestation_sha256(value: ProductionSharedGpuAttestationV1) -> str:
+    return _hash_projection(
+        "production-shared-gpu-attestation",
+        cast(JsonValue, production_shared_gpu_attestation_projection(value)),
+    )
+
+
+def _require_shared_gpu_capacity(value: ProductionSharedGpuAttestationV1) -> None:
+    if value.free_memory_mib < value.minimum_free_memory_mib:
+        raise ProductionDriverError(
+            "GPU_SHARED_CAPACITY_INSUFFICIENT",
+            "shared GPU free memory is below the hash-bound minimum",
+        )
+
+
+def _validate_shared_gpu_tenants(
+    value: ProductionSharedGpuAttestationV1,
+    *,
+    baseline: ProductionSharedGpuAttestationV1,
+    owned_identity: OwnedProcessIdentityV1 | None,
+) -> None:
+    if value.gpu_index != baseline.gpu_index or value.gpu_uuid != baseline.gpu_uuid:
+        raise ProductionDriverError("GPU_IDENTITY_MISMATCH", "shared physical GPU drifted")
+    baseline_identities = {
+        (item.pid, item.starttime_ticks, item.uid) for item in baseline.processes
+    }
+    owned_process_seen = False
+    for item in value.processes:
+        identity = (item.pid, item.starttime_ticks, item.uid)
+        if identity in baseline_identities:
+            continue
+        if (
+            owned_identity is not None
+            and item.uid == owned_identity.uid
+            and item.session_id == owned_identity.session_id
+        ):
+            owned_process_seen = True
+            continue
+        raise ProductionDriverError(
+            "GPU_SHARED_TENANT_DRIFT",
+            "a new non-owned compute process appeared on the shared GPU",
+        )
+    if owned_identity is not None and not owned_process_seen:
+        raise ProductionDriverError(
+            "GPU_OWNED_PROCESS_ABSENT",
+            "the owned model session has no bound compute process on the shared GPU",
+        )
+
+
+def _validate_shared_gpu_cleanup(
+    value: ProductionSharedGpuAttestationV1,
+    *,
+    baseline: ProductionSharedGpuAttestationV1,
+    stopped_models: tuple[ProductionModelStopEvidenceV1, ...],
+) -> None:
+    if value.gpu_index != baseline.gpu_index or value.gpu_uuid != baseline.gpu_uuid:
+        raise ProductionDriverError("GPU_IDENTITY_MISMATCH", "shared physical GPU drifted")
+    stopped_sessions = {(item.process.uid, item.process.session_id) for item in stopped_models}
+    stopped_identities = {
+        (item.process.pid, item.process.starttime_ticks, item.process.uid)
+        for item in stopped_models
+    }
+    if any(
+        (item.uid, item.session_id) in stopped_sessions
+        or (item.pid, item.starttime_ticks, item.uid) in stopped_identities
+        for item in value.processes
+    ):
+        raise ProductionDriverError(
+            "MODEL_REAP_UNCONFIRMED",
+            "an owned model identity remains in the final shared GPU census",
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ProductionResourceStageEvidenceV1:
     manifest_sha256: str
     runtime_config_sha256: str
@@ -1075,18 +1425,30 @@ class ProductionResourceStageEvidenceV1:
     backend_container_id: str
     backend_health_sha256: str
     model_command_sha256s: tuple[str, str]
-    model_processes: tuple[OwnedProcessIdentityV1, OwnedProcessIdentityV1]
-    model_health_sha256s: tuple[str, str]
-    gpu_lease_sha256s: tuple[str, str]
-    gpu_idle_attestation_sha256s: tuple[str, str]
+    model_processes: tuple[OwnedProcessIdentityV1, ...]
+    model_health_sha256s: tuple[str, ...]
+    gpu_lease_sha256s: tuple[str, ...]
+    gpu_idle_attestation_sha256s: tuple[str, ...]
+    shared_gpu_attestations: tuple[ProductionSharedGpuAttestationV1, ...]
+    active_hosts: tuple[PilotHostV1, ...]
+    resource_topology: ProductionResourceTopologyV1
+    vllm_gpu_memory_utilization: str
+    minimum_free_gpu_memory_mib: int
+    sequence_execution_scope: str
+    sequence_scope_authority_sha256: str
 
     def __post_init__(self) -> None:
+        if type(self.resource_topology) is not ProductionResourceTopologyV1:
+            raise ProductionDriverError(
+                "INVALID_RESOURCE_EVIDENCE", "resource topology type differs"
+            )
         for name in (
             "manifest_sha256",
             "runtime_config_sha256",
             "runtime_attestation_sha256",
             "backend_command_sha256",
             "backend_health_sha256",
+            "sequence_scope_authority_sha256",
         ):
             _require_sha256(getattr(self, name), name)
         if (
@@ -1098,11 +1460,16 @@ class ProductionResourceStageEvidenceV1:
             )
         raw_commands: object = self.model_command_sha256s
         raw_health: object = self.model_health_sha256s
+        expected_active_count = (
+            1
+            if self.resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+            else 2
+        )
         if (
             type(raw_commands) is not tuple
             or len(raw_commands) != 2
             or type(raw_health) is not tuple
-            or len(raw_health) != 2
+            or len(raw_health) != expected_active_count
             or any(
                 _SHA256.fullmatch(item) is None
                 for item in (*self.model_command_sha256s, *self.model_health_sha256s)
@@ -1116,16 +1483,22 @@ class ProductionResourceStageEvidenceV1:
         raw_gpu_idle: object = self.gpu_idle_attestation_sha256s
         if (
             type(raw_processes) is not tuple
-            or len(raw_processes) != 2
+            or len(raw_processes) != expected_active_count
             or any(type(item) is not OwnedProcessIdentityV1 for item in self.model_processes)
             or type(raw_leases) is not tuple
-            or len(raw_leases) != 2
+            or len(raw_leases) != expected_active_count
             or any(
                 type(item) is not str or _SHA256.fullmatch(item) is None
                 for item in cast(tuple[object, ...], raw_leases)
             )
             or type(raw_gpu_idle) is not tuple
-            or len(raw_gpu_idle) != 2
+            or len(raw_gpu_idle)
+            != (
+                0
+                if self.resource_topology
+                is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+                else 2
+            )
             or any(
                 type(item) is not str or _SHA256.fullmatch(item) is None
                 for item in cast(tuple[object, ...], raw_gpu_idle)
@@ -1134,6 +1507,61 @@ class ProductionResourceStageEvidenceV1:
             raise ProductionDriverError(
                 "INVALID_RESOURCE_EVIDENCE", "model process identity matrix differs"
             )
+        if (
+            type(self.active_hosts) is not tuple
+            or len(self.active_hosts) != expected_active_count
+            or any(type(item) is not PilotHostV1 for item in self.active_hosts)
+            or tuple(dict.fromkeys(self.active_hosts)) != self.active_hosts
+            or type(self.shared_gpu_attestations) is not tuple
+        ):
+            raise ProductionDriverError(
+                "INVALID_RESOURCE_EVIDENCE", "active-host or shared-GPU evidence differs"
+            )
+        if self.resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED:
+            if (
+                self.active_hosts != (PilotHostV1.QWEN3_VL,)
+                or len(self.shared_gpu_attestations) != 2
+                or any(
+                    type(item) is not ProductionSharedGpuAttestationV1
+                    for item in self.shared_gpu_attestations
+                )
+                or self.vllm_gpu_memory_utilization != _SHARED_VLLM_GPU_MEMORY_UTILIZATION_V1
+                or self.minimum_free_gpu_memory_mib != _SHARED_MINIMUM_FREE_GPU_MEMORY_MIB_V1
+                or self.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY"
+            ):
+                raise ProductionDriverError(
+                    "INVALID_RESOURCE_EVIDENCE", "shared sequential resource evidence differs"
+                )
+            _require_sha256(
+                self.sequence_scope_authority_sha256,
+                "sequence_scope_authority_sha256",
+            )
+            baseline, ready = self.shared_gpu_attestations
+            _require_shared_gpu_capacity(baseline)
+            if (
+                baseline.minimum_free_memory_mib != self.minimum_free_gpu_memory_mib
+                or ready.minimum_free_memory_mib != 0
+                or baseline.gpu_index != ready.gpu_index
+                or baseline.gpu_uuid != ready.gpu_uuid
+            ):
+                raise ProductionDriverError(
+                    "INVALID_RESOURCE_EVIDENCE", "shared GPU attestation sequence differs"
+                )
+            _validate_shared_gpu_tenants(
+                ready,
+                baseline=baseline,
+                owned_identity=self.model_processes[0],
+            )
+        elif (
+            self.active_hosts != (PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)
+            or self.shared_gpu_attestations
+            or self.vllm_gpu_memory_utilization != "0.90"
+            or self.minimum_free_gpu_memory_mib != 0
+            or self.sequence_execution_scope != "R24_R25_FULL"
+        ):
+            raise ProductionDriverError(
+                "INVALID_RESOURCE_EVIDENCE", "concurrent resource evidence differs"
+            )
 
 
 def production_resource_stage_evidence_projection(
@@ -1141,7 +1569,7 @@ def production_resource_stage_evidence_projection(
 ) -> dict[str, JsonValue]:
     if type(value) is not ProductionResourceStageEvidenceV1:
         raise ProductionDriverError("UNTRUSTED_TYPE", "resource evidence type differs")
-    return {
+    projection: dict[str, JsonValue] = {
         "backend_command_sha256": value.backend_command_sha256,
         "backend_container_id": value.backend_container_id,
         "backend_health_sha256": value.backend_health_sha256,
@@ -1163,27 +1591,269 @@ def production_resource_stage_evidence_projection(
         "runtime_config_sha256": value.runtime_config_sha256,
         "runtime_attestation_sha256": value.runtime_attestation_sha256,
     }
+    if value.resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED:
+        projection.update(
+            {
+                "active_hosts": [item.value for item in value.active_hosts],
+                "minimum_free_gpu_memory_mib": value.minimum_free_gpu_memory_mib,
+                "resource_topology": value.resource_topology.value,
+                "shared_gpu_attestation_sha256s": [
+                    production_shared_gpu_attestation_sha256(item)
+                    for item in value.shared_gpu_attestations
+                ],
+                "shared_gpu_attestations": [
+                    production_shared_gpu_attestation_projection(item)
+                    for item in value.shared_gpu_attestations
+                ],
+                "vllm_gpu_memory_utilization": value.vllm_gpu_memory_utilization,
+                "sequence_execution_scope": value.sequence_execution_scope,
+                "sequence_scope_authority_sha256": value.sequence_scope_authority_sha256,
+            }
+        )
+    return projection
 
 
 def production_resource_stage_evidence_sha256(
     value: ProductionResourceStageEvidenceV1,
 ) -> str:
-    return _hash_projection(
-        "production-resource-stage-evidence",
-        cast(JsonValue, production_resource_stage_evidence_projection(value)),
+    schema_version = (
+        PRODUCTION_SHARED_RESOURCE_EVIDENCE_SCHEMA_VERSION_V2
+        if value.resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        else PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+    )
+    return canonical_sha256(
+        cast(
+            JsonValue,
+            {
+                "domain": "production-resource-stage-evidence",
+                "schema_version": schema_version,
+                "value": production_resource_stage_evidence_projection(value),
+            },
+        )
     )
 
 
 def _production_resource_stage_evidence_preimage(
     value: ProductionResourceStageEvidenceV1,
 ) -> bytes:
+    schema_version = (
+        PRODUCTION_SHARED_RESOURCE_EVIDENCE_SCHEMA_VERSION_V2
+        if value.resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        else PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+    )
     return canonical_json_bytes(
         cast(
             JsonValue,
             {
                 "domain": "production-resource-stage-evidence",
-                "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
+                "schema_version": schema_version,
                 "value": production_resource_stage_evidence_projection(value),
+            },
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionModelStopEvidenceV1:
+    host: PilotHostV1
+    process: OwnedProcessIdentityV1
+    endpoint: str
+    leader_reaped: bool
+    session_members_remaining: int
+    port_available: bool
+
+    def __post_init__(self) -> None:
+        if type(self.host) is not PilotHostV1 or type(self.process) is not OwnedProcessIdentityV1:
+            raise ProductionDriverError("INVALID_MODEL_STOP_EVIDENCE", "model identity differs")
+        _exact_loopback_endpoint(self.endpoint, permitted_paths=frozenset({""}))
+        if (
+            type(cast(object, self.leader_reaped)) is not bool
+            or type(cast(object, self.port_available)) is not bool
+            or type(self.session_members_remaining) is not int
+            or self.session_members_remaining < 0
+            or not self.leader_reaped
+            or self.session_members_remaining != 0
+            or not self.port_available
+        ):
+            raise ProductionDriverError(
+                "MODEL_REAP_UNCONFIRMED", "model process/session/port release is unconfirmed"
+            )
+
+
+def production_model_stop_evidence_projection(
+    value: ProductionModelStopEvidenceV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not ProductionModelStopEvidenceV1:
+        raise ProductionDriverError("UNTRUSTED_TYPE", "model stop evidence type differs")
+    return {
+        "endpoint": value.endpoint,
+        "host": value.host.value,
+        "leader_reaped": value.leader_reaped,
+        "port_available": value.port_available,
+        "process": {
+            "pid": value.process.pid,
+            "process_group_id": value.process.process_group_id,
+            "session_id": value.process.session_id,
+            "starttime_ticks": value.process.starttime_ticks,
+            "uid": value.process.uid,
+        },
+        "session_members_remaining": value.session_members_remaining,
+    }
+
+
+def production_model_stop_evidence_sha256(value: ProductionModelStopEvidenceV1) -> str:
+    return _hash_projection(
+        "production-model-stop-evidence",
+        cast(JsonValue, production_model_stop_evidence_projection(value)),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionModelHandoffEvidenceV1:
+    manifest_sha256: str
+    runtime_config_sha256: str
+    sequence_execution_scope: str
+    sequence_scope_authority_sha256: str
+    resource_topology: ProductionResourceTopologyV1
+    gpu_lease_sha256: str
+    source_host: PilotHostV1
+    target_host: PilotHostV1
+    source_stop: ProductionModelStopEvidenceV1
+    baseline_shared_gpu_attestation: ProductionSharedGpuAttestationV1
+    post_stop_shared_gpu_attestation: ProductionSharedGpuAttestationV1
+    target_command_sha256: str
+    target_process: OwnedProcessIdentityV1
+    target_health_sha256: str
+    target_snapshot_attestation_sha256: str
+    target_ready_shared_gpu_attestation: ProductionSharedGpuAttestationV1
+
+    def __post_init__(self) -> None:
+        for name in (
+            "manifest_sha256",
+            "runtime_config_sha256",
+            "sequence_scope_authority_sha256",
+            "gpu_lease_sha256",
+            "target_command_sha256",
+            "target_health_sha256",
+            "target_snapshot_attestation_sha256",
+        ):
+            _require_sha256(getattr(self, name), name)
+        if (
+            self.resource_topology is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+            or self.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY"
+            or self.source_host is not PilotHostV1.QWEN3_VL
+            or self.target_host is not PilotHostV1.MAI_UI
+            or self.source_stop.host is not self.source_host
+            or type(self.target_process) is not OwnedProcessIdentityV1
+        ):
+            raise ProductionDriverError("INVALID_MODEL_HANDOFF", "handoff topology differs")
+        gpu_indices = {
+            self.baseline_shared_gpu_attestation.gpu_index,
+            self.post_stop_shared_gpu_attestation.gpu_index,
+            self.target_ready_shared_gpu_attestation.gpu_index,
+        }
+        gpu_uuids = {
+            self.baseline_shared_gpu_attestation.gpu_uuid,
+            self.post_stop_shared_gpu_attestation.gpu_uuid,
+            self.target_ready_shared_gpu_attestation.gpu_uuid,
+        }
+        if len(gpu_indices) != 1 or len(gpu_uuids) != 1:
+            raise ProductionDriverError("INVALID_MODEL_HANDOFF", "physical GPU identity drifted")
+        if (
+            self.baseline_shared_gpu_attestation.minimum_free_memory_mib
+            != _SHARED_MINIMUM_FREE_GPU_MEMORY_MIB_V1
+            or self.post_stop_shared_gpu_attestation.minimum_free_memory_mib
+            != _SHARED_MINIMUM_FREE_GPU_MEMORY_MIB_V1
+            or self.target_ready_shared_gpu_attestation.minimum_free_memory_mib != 0
+        ):
+            raise ProductionDriverError("INVALID_MODEL_HANDOFF", "capacity thresholds differ")
+        _require_shared_gpu_capacity(self.baseline_shared_gpu_attestation)
+        _require_shared_gpu_capacity(self.post_stop_shared_gpu_attestation)
+        _validate_shared_gpu_tenants(
+            self.post_stop_shared_gpu_attestation,
+            baseline=self.baseline_shared_gpu_attestation,
+            owned_identity=None,
+        )
+        _validate_shared_gpu_tenants(
+            self.target_ready_shared_gpu_attestation,
+            baseline=self.baseline_shared_gpu_attestation,
+            owned_identity=self.target_process,
+        )
+
+
+def production_model_handoff_evidence_projection(
+    value: ProductionModelHandoffEvidenceV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not ProductionModelHandoffEvidenceV1:
+        raise ProductionDriverError("UNTRUSTED_TYPE", "model handoff evidence type differs")
+    return {
+        "baseline_shared_gpu_attestation": production_shared_gpu_attestation_projection(
+            value.baseline_shared_gpu_attestation
+        ),
+        "baseline_shared_gpu_attestation_sha256": production_shared_gpu_attestation_sha256(
+            value.baseline_shared_gpu_attestation
+        ),
+        "gpu_lease_sha256": value.gpu_lease_sha256,
+        "manifest_sha256": value.manifest_sha256,
+        "post_stop_shared_gpu_attestation": production_shared_gpu_attestation_projection(
+            value.post_stop_shared_gpu_attestation
+        ),
+        "post_stop_shared_gpu_attestation_sha256": production_shared_gpu_attestation_sha256(
+            value.post_stop_shared_gpu_attestation
+        ),
+        "resource_topology": value.resource_topology.value,
+        "runtime_config_sha256": value.runtime_config_sha256,
+        "sequence_execution_scope": value.sequence_execution_scope,
+        "sequence_scope_authority_sha256": value.sequence_scope_authority_sha256,
+        "source_host": value.source_host.value,
+        "source_stop": production_model_stop_evidence_projection(value.source_stop),
+        "source_stop_sha256": production_model_stop_evidence_sha256(value.source_stop),
+        "status": "COMPLETED",
+        "target_command_sha256": value.target_command_sha256,
+        "target_health_sha256": value.target_health_sha256,
+        "target_host": value.target_host.value,
+        "target_process": {
+            "pid": value.target_process.pid,
+            "process_group_id": value.target_process.process_group_id,
+            "session_id": value.target_process.session_id,
+            "starttime_ticks": value.target_process.starttime_ticks,
+            "uid": value.target_process.uid,
+        },
+        "target_ready_shared_gpu_attestation": production_shared_gpu_attestation_projection(
+            value.target_ready_shared_gpu_attestation
+        ),
+        "target_ready_shared_gpu_attestation_sha256": production_shared_gpu_attestation_sha256(
+            value.target_ready_shared_gpu_attestation
+        ),
+        "target_snapshot_attestation_sha256": value.target_snapshot_attestation_sha256,
+    }
+
+
+def production_model_handoff_evidence_sha256(value: ProductionModelHandoffEvidenceV1) -> str:
+    return hashlib.sha256(
+        canonical_json_bytes(
+            cast(
+                JsonValue,
+                {
+                    "domain": "production-model-handoff-evidence",
+                    "schema_version": PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1,
+                    "value": production_model_handoff_evidence_projection(value),
+                },
+            )
+        )
+    ).hexdigest()
+
+
+def _production_model_handoff_evidence_preimage(
+    value: ProductionModelHandoffEvidenceV1,
+) -> bytes:
+    return canonical_json_bytes(
+        cast(
+            JsonValue,
+            {
+                "domain": "production-model-handoff-evidence",
+                "schema_version": PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1,
+                "value": production_model_handoff_evidence_projection(value),
             },
         )
     )
@@ -1220,16 +1890,18 @@ class _OwnedModelProcessV1:
 class _PartialModelProcessV1:
     """A Popen child claimed before complete /proc identity admission."""
 
-    __slots__ = ("process", "stderr_handle", "stdout_handle")
+    __slots__ = ("process", "spec", "stderr_handle", "stdout_handle")
 
     def __init__(
         self,
         process: subprocess.Popen[bytes],
         *,
+        spec: ProductionCommandSpecV1,
         stdout_handle: object,
         stderr_handle: object,
     ) -> None:
         self.process = process
+        self.spec = spec
         self.stdout_handle = stdout_handle
         self.stderr_handle = stderr_handle
 
@@ -1337,6 +2009,160 @@ def _read_owned_process_identity(pid: int) -> OwnedProcessIdentityV1:
         raise ProductionDriverError(
             "OWNED_PROCESS_IDENTITY_LOST", "model process identity is unavailable"
         ) from exc
+
+
+def _read_shared_gpu_process_evidence(
+    pid: int,
+    *,
+    used_gpu_memory_mib: int,
+) -> SharedGpuProcessEvidenceV1:
+    try:
+        proc = Path("/proc") / str(pid)
+        before = proc.stat()
+        fields = (proc / "stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()
+        after = proc.stat()
+        if (
+            before.st_dev != after.st_dev
+            or before.st_ino != after.st_ino
+            or before.st_uid != after.st_uid
+        ):
+            raise OSError("process identity changed during shared GPU attestation")
+        uid = after.st_uid
+        return SharedGpuProcessEvidenceV1(
+            pid=pid,
+            process_group_id=int(fields[2]),
+            session_id=int(fields[3]),
+            starttime_ticks=int(fields[19]),
+            uid=uid,
+            user=pwd.getpwuid(uid).pw_name,
+            used_gpu_memory_mib=used_gpu_memory_mib,
+        )
+    except (IndexError, KeyError, OSError, ValueError) as exc:
+        raise ProductionDriverError(
+            "GPU_PROCESS_IDENTITY_UNAVAILABLE",
+            "shared GPU compute process identity could not be proven",
+        ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class _OwnedSessionMemberV1:
+    pid: int
+    process_group_id: int
+    session_id: int
+    starttime_ticks: int
+    uid: int
+
+
+def _read_owned_session_member(pid: int) -> _OwnedSessionMemberV1 | None:
+    try:
+        proc = Path("/proc") / str(pid)
+        metadata_before = proc.stat()
+        fields = (proc / "stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()
+        metadata_after = proc.stat()
+        if (
+            metadata_before.st_dev != metadata_after.st_dev
+            or metadata_before.st_ino != metadata_after.st_ino
+            or metadata_before.st_uid != metadata_after.st_uid
+        ):
+            raise OSError("process identity changed while reading session membership")
+        return _OwnedSessionMemberV1(
+            pid=pid,
+            process_group_id=int(fields[2]),
+            session_id=int(fields[3]),
+            starttime_ticks=int(fields[19]),
+            uid=metadata_after.st_uid,
+        )
+    except FileNotFoundError:
+        return None
+    except (IndexError, OSError, ValueError) as exc:
+        raise ProductionDriverError(
+            "MODEL_REAP_UNCONFIRMED",
+            "process identity could not be inspected after model stop",
+        ) from exc
+
+
+def _owned_session_members(
+    identity: OwnedProcessIdentityV1,
+) -> tuple[_OwnedSessionMemberV1, ...]:
+    members: list[_OwnedSessionMemberV1] = []
+    try:
+        entries = tuple(Path("/proc").iterdir())
+    except OSError as exc:
+        raise ProductionDriverError(
+            "MODEL_REAP_UNCONFIRMED", "process table is unavailable after model stop"
+        ) from exc
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            member = _read_owned_session_member(int(entry.name))
+        except ProductionDriverError:
+            raise
+        if (
+            member is not None
+            and member.uid == identity.uid
+            and member.session_id == identity.session_id
+        ):
+            members.append(member)
+    return tuple(sorted(members, key=lambda item: (item.pid, item.starttime_ticks)))
+
+
+def _signal_owned_session_member(member: _OwnedSessionMemberV1, signum: int) -> None:
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    if not callable(pidfd_open) or not callable(pidfd_send_signal):
+        raise ProductionDriverError(
+            "MODEL_REAP_UNCONFIRMED", "pidfd process signaling is unavailable"
+        )
+    descriptor = -1
+    try:
+        descriptor = pidfd_open(member.pid, 0)
+        current = _read_owned_session_member(member.pid)
+        if current is None:
+            return
+        if current != member:
+            raise ProductionDriverError(
+                "MODEL_REAP_UNCONFIRMED",
+                "owned session PID identity changed before signaling",
+            )
+        pidfd_send_signal(descriptor, signum, None, 0)
+    except ProcessLookupError:
+        return
+    except PermissionError as exc:
+        raise ProductionDriverError(
+            "MODEL_REAP_UNCONFIRMED", "owned session member could not be signaled"
+        ) from exc
+    except OSError as exc:
+        raise ProductionDriverError(
+            "MODEL_REAP_UNCONFIRMED", "owned session pidfd signaling failed"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _drain_owned_session(
+    identity: OwnedProcessIdentityV1,
+    *,
+    shutdown_grace_seconds: int,
+    poll_interval_ms: int,
+) -> tuple[_OwnedSessionMemberV1, ...]:
+    """Signal only stable PID identities proven to belong to one owned session."""
+
+    members = _owned_session_members(identity)
+    for member in members:
+        _signal_owned_session_member(member, signal.SIGTERM)
+    term_deadline_ns = time.monotonic_ns() + shutdown_grace_seconds * 1_000_000_000
+    while members and time.monotonic_ns() < term_deadline_ns:
+        time.sleep(poll_interval_ms / 1_000)
+        members = _owned_session_members(identity)
+    kill_deadline_ns = time.monotonic_ns() + shutdown_grace_seconds * 1_000_000_000
+    while members and time.monotonic_ns() < kill_deadline_ns:
+        for member in members:
+            _signal_owned_session_member(member, signal.SIGKILL)
+        time.sleep(poll_interval_ms / 1_000)
+        members = _owned_session_members(identity)
+    return members
 
 
 def _regular_file_sha256(
@@ -1681,7 +2507,7 @@ class _PosixProductionResourceSystemV1:
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=_RESOURCE_ATTESTATION_COMMAND_TIMEOUT_SECONDS_V1,
                 cwd=cwd,
                 env={
                     "DO_NOT_TRACK": "1",
@@ -1779,7 +2605,7 @@ class _PosixProductionResourceSystemV1:
             )
         network = self._docker_run(
             (_DOCKER_EXECUTABLE, "network", "inspect", "--format", "{{.Name}}", _DOCKER_NETWORK),
-            timeout_seconds=15,
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         image = self._docker_run(
             (
@@ -1790,7 +2616,7 @@ class _PosixProductionResourceSystemV1:
                 "{{.Id}}",
                 _MOBILEWORLD_BACKEND_IMAGE,
             ),
-            timeout_seconds=15,
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         if (
             network.returncode != 0
@@ -1852,6 +2678,126 @@ class _PosixProductionResourceSystemV1:
                     "process_query": list(process_command),
                 },
             ),
+        )
+
+    def attest_gpu_shared_capacity(
+        self,
+        gpu_index: int,
+        *,
+        minimum_free_memory_mib: int,
+    ) -> ProductionSharedGpuAttestationV1:
+        identity_command = (
+            _NVIDIA_SMI_EXECUTABLE,
+            f"--id={gpu_index}",
+            "--query-gpu=index,uuid,memory.total,memory.free,memory.used,memory.reserved,"
+            "utilization.gpu,utilization.memory",
+            "--format=csv,noheader,nounits",
+        )
+        identity = self._attestation_run(identity_command)
+        identity_fields = tuple(item.strip() for item in identity.stdout.strip().split(","))
+        if (
+            identity.returncode != 0
+            or identity.stderr
+            or len(identity_fields) != 8
+            or identity_fields[0] != str(gpu_index)
+            or _NVIDIA_GPU_UUID.fullmatch(identity_fields[1]) is None
+        ):
+            raise ProductionDriverError(
+                "GPU_IDENTITY_MISMATCH",
+                "configured shared GPU does not resolve to one physical GPU census",
+            )
+        try:
+            total_memory_mib = int(identity_fields[2])
+            free_memory_mib = int(identity_fields[3])
+            used_memory_mib = int(identity_fields[4])
+            reserved_memory_mib = int(identity_fields[5])
+            gpu_utilization_percent = int(identity_fields[6])
+            memory_utilization_percent = int(identity_fields[7])
+        except ValueError as exc:
+            raise ProductionDriverError(
+                "GPU_CAPACITY_ATTESTATION_FAILED", "shared GPU capacity fields differ"
+            ) from exc
+        process_command = (
+            _NVIDIA_SMI_EXECUTABLE,
+            f"--id={gpu_index}",
+            "--query-compute-apps=gpu_uuid,pid,used_gpu_memory",
+            "--format=csv,noheader,nounits",
+        )
+        process_result = self._attestation_run(process_command)
+        if process_result.returncode != 0 or process_result.stderr:
+            raise ProductionDriverError(
+                "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU compute census is unavailable"
+            )
+        processes: list[SharedGpuProcessEvidenceV1] = []
+        for line in process_result.stdout.splitlines():
+            if not line.strip():
+                continue
+            fields = tuple(item.strip() for item in line.split(","))
+            if len(fields) != 3 or fields[0].lower() != identity_fields[1].lower():
+                raise ProductionDriverError(
+                    "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process row differs"
+                )
+            try:
+                pid = int(fields[1])
+                process_memory_mib = int(fields[2])
+            except ValueError as exc:
+                raise ProductionDriverError(
+                    "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process memory differs"
+                ) from exc
+            processes.append(
+                _read_shared_gpu_process_evidence(
+                    pid,
+                    used_gpu_memory_mib=process_memory_mib,
+                )
+            )
+        process_result_after = self._attestation_run(process_command)
+        if (
+            process_result_after.returncode != 0
+            or process_result_after.stderr
+            or process_result_after.stdout != process_result.stdout
+        ):
+            raise ProductionDriverError(
+                "GPU_PROCESS_ATTESTATION_RACED",
+                "shared GPU compute rows changed during process identity binding",
+            )
+        identity_after = self._attestation_run(identity_command)
+        identity_fields_after = tuple(
+            item.strip() for item in identity_after.stdout.strip().split(",")
+        )
+        if (
+            identity_after.returncode != 0
+            or identity_after.stderr
+            or len(identity_fields_after) != 8
+            or identity_fields_after[0] != identity_fields[0]
+            or identity_fields_after[1].lower() != identity_fields[1].lower()
+            or identity_fields_after[2] != identity_fields[2]
+        ):
+            raise ProductionDriverError(
+                "GPU_CAPACITY_ATTESTATION_RACED",
+                "shared GPU identity or total memory changed during process binding",
+            )
+        try:
+            total_memory_mib = int(identity_fields_after[2])
+            free_memory_mib = int(identity_fields_after[3])
+            used_memory_mib = int(identity_fields_after[4])
+            reserved_memory_mib = int(identity_fields_after[5])
+            gpu_utilization_percent = int(identity_fields_after[6])
+            memory_utilization_percent = int(identity_fields_after[7])
+        except ValueError as exc:
+            raise ProductionDriverError(
+                "GPU_CAPACITY_ATTESTATION_FAILED", "shared GPU capacity fields differ"
+            ) from exc
+        return ProductionSharedGpuAttestationV1(
+            gpu_index=gpu_index,
+            gpu_uuid=identity_fields[1],
+            total_memory_mib=total_memory_mib,
+            free_memory_mib=free_memory_mib,
+            used_memory_mib=used_memory_mib,
+            reserved_memory_mib=reserved_memory_mib,
+            gpu_utilization_percent=gpu_utilization_percent,
+            memory_utilization_percent=memory_utilization_percent,
+            minimum_free_memory_mib=minimum_free_memory_mib,
+            processes=tuple(sorted(processes, key=lambda item: (item.pid, item.starttime_ticks))),
         )
 
     def start_model(
@@ -1923,6 +2869,7 @@ class _PosixProductionResourceSystemV1:
             )
             self._partial_models[process.pid] = _PartialModelProcessV1(
                 process,
+                spec=spec,
                 stdout_handle=stdout_handle,
                 stderr_handle=stderr_handle,
             )
@@ -1959,6 +2906,13 @@ class _PosixProductionResourceSystemV1:
         if partial is None:
             return
         process = partial.process
+        partial_identity = OwnedProcessIdentityV1(
+            pid=pid,
+            process_group_id=pid,
+            session_id=pid,
+            starttime_ticks=0,
+            uid=os.geteuid(),
+        )
         if process.poll() is None:
             try:
                 process_group_id = os.getpgid(pid)
@@ -1980,6 +2934,26 @@ class _PosixProductionResourceSystemV1:
                 raise ProductionDriverError(
                     "MODEL_PARTIAL_CLEANUP_FAILED", "partial model did not exit"
                 ) from exc
+        session_members = _drain_owned_session(
+            partial_identity,
+            shutdown_grace_seconds=self._config.shutdown_grace_seconds,
+            poll_interval_ms=self._config.health_poll_interval_ms,
+        )
+        _, port, _ = _exact_loopback_endpoint(
+            partial.spec.endpoint, permitted_paths=frozenset({""})
+        )
+        try:
+            _assert_loopback_port_free(port)
+        except ProductionDriverError as exc:
+            raise ProductionDriverError(
+                "MODEL_PARTIAL_CLEANUP_FAILED",
+                "partial model loopback port remains live",
+            ) from exc
+        if session_members:
+            raise ProductionDriverError(
+                "MODEL_PARTIAL_CLEANUP_FAILED",
+                "partial model session remains live",
+            )
         for handle in (partial.stdout_handle, partial.stderr_handle):
             close = getattr(handle, "close", None)
             if callable(close):
@@ -2045,7 +3019,7 @@ class _PosixProductionResourceSystemV1:
             )
         return self._health_once(owned.spec)
 
-    def stop_model(self, owned: _OwnedModelProcessV1) -> None:
+    def stop_model(self, owned: _OwnedModelProcessV1) -> ProductionModelStopEvidenceV1:
         registered = self._models.get(owned.identity.pid)
         if registered is not owned:
             raise ProductionDriverError("UNOWNED_PROCESS", "model process is not module-owned")
@@ -2067,11 +3041,42 @@ class _PosixProductionResourceSystemV1:
                     )
                 os.killpg(owned.identity.process_group_id, signal.SIGKILL)
                 process.wait(timeout=self._config.shutdown_grace_seconds)
+        session_members = _drain_owned_session(
+            owned.identity,
+            shutdown_grace_seconds=self._config.shutdown_grace_seconds,
+            poll_interval_ms=self._config.health_poll_interval_ms,
+        )
+        port_available = False
+        _, port, _ = _exact_loopback_endpoint(owned.spec.endpoint, permitted_paths=frozenset({""}))
+        port_deadline_ns = time.monotonic_ns() + self._config.shutdown_grace_seconds * 1_000_000_000
+        while time.monotonic_ns() < port_deadline_ns:
+            try:
+                _assert_loopback_port_free(port)
+            except ProductionDriverError:
+                port_available = False
+            else:
+                port_available = True
+            if port_available:
+                break
+            time.sleep(self._config.health_poll_interval_ms / 1_000)
+        if session_members or not port_available:
+            raise ProductionDriverError(
+                "MODEL_REAP_UNCONFIRMED",
+                "owned model session or loopback port remains live after shutdown",
+            )
         for handle in (owned.stdout_handle, owned.stderr_handle):
             close = getattr(handle, "close", None)
             if callable(close):
                 close()
         self._models.pop(owned.identity.pid, None)
+        return ProductionModelStopEvidenceV1(
+            host=(PilotHostV1.QWEN3_VL if owned.spec.kind == "VLLM_QWEN" else PilotHostV1.MAI_UI),
+            process=owned.identity,
+            endpoint=owned.spec.endpoint,
+            leader_reaped=True,
+            session_members_remaining=0,
+            port_available=True,
+        )
 
     def start_backend(self, spec: ProductionCommandSpecV1) -> _OwnedBackendContainerV1:
         if spec.kind != "MOBILEWORLD_BACKEND":
@@ -2081,7 +3086,8 @@ class _PosixProductionResourceSystemV1:
         _assert_loopback_port_free(port)
         name = spec.argv[spec.argv.index("--name") + 1]
         existing = self._docker_run(
-            (_DOCKER_EXECUTABLE, "container", "inspect", name), timeout_seconds=15
+            (_DOCKER_EXECUTABLE, "container", "inspect", name),
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         if existing.returncode == 0:
             raise ProductionDriverError(
@@ -2150,7 +3156,7 @@ class _PosixProductionResourceSystemV1:
                 "{{.Id}} {{.Name}} {{.Image}} {{.State.Running}}",
                 container_id,
             ),
-            timeout_seconds=15,
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         if inspected.returncode != 0 or inspected.stdout.strip() != (
             f"{container_id} /{name} sha256:{self._config.backend_image_id_sha256} true"
@@ -2181,7 +3187,7 @@ class _PosixProductionResourceSystemV1:
                 "{{.Id}} {{.Name}} {{.Image}}",
                 name,
             ),
-            timeout_seconds=15,
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         if inspected.returncode != 0:
             if self._docker_inspect_confirms_absent(inspected, name):
@@ -2225,13 +3231,13 @@ class _PosixProductionResourceSystemV1:
     def _backend_capability_is_gone(self, owned: _OwnedBackendContainerV1) -> bool:
         by_id = self._docker_run(
             (_DOCKER_EXECUTABLE, "container", "inspect", owned.container_id),
-            timeout_seconds=15,
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         if not self._docker_inspect_confirms_absent(by_id, owned.container_id):
             return False
         by_name = self._docker_run(
             (_DOCKER_EXECUTABLE, "container", "inspect", owned.name),
-            timeout_seconds=15,
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         if self._docker_inspect_confirms_absent(by_name, owned.name):
             return True
@@ -2255,7 +3261,7 @@ class _PosixProductionResourceSystemV1:
             )
         stopped = self._docker_run(
             (_DOCKER_EXECUTABLE, "stop", "--time", "1", owned.container_id),
-            timeout_seconds=15,
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         if stopped.returncode != 0 or stopped.stdout.strip() != owned.container_id:
             if self._backend_capability_is_gone(owned):
@@ -2297,7 +3303,7 @@ class _PosixProductionResourceSystemV1:
                 "{{.Id}} {{.Name}} {{.Image}} {{.State.Running}}",
                 owned.container_id,
             ),
-            timeout_seconds=15,
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         if inspected.returncode != 0 or inspected.stdout.strip() != (
             f"{owned.container_id} /{owned.name} sha256:{self._config.backend_image_id_sha256} true"
@@ -2326,7 +3332,7 @@ class _PosixProductionResourceSystemV1:
                 "{{.Id}} {{.Name}}",
                 owned.container_id,
             ),
-            timeout_seconds=15,
+            timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
         )
         if inspected.returncode != 0:
             if self._docker_inspect_confirms_absent(
@@ -2349,7 +3355,9 @@ class _PosixProductionResourceSystemV1:
                 str(self._config.shutdown_grace_seconds),
                 owned.container_id,
             ),
-            timeout_seconds=self._config.shutdown_grace_seconds + 15,
+            timeout_seconds=(
+                self._config.shutdown_grace_seconds + _RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1
+            ),
         )
         if stopped.returncode != 0 or stopped.stdout.strip() != owned.container_id:
             raise ProductionDriverError("BACKEND_CLEANUP_FAILED", "owned container did not stop")
@@ -2451,8 +3459,10 @@ class _CpuRecordingResourceSystemV1:
         "_dispatch",
         "_fault",
         "_health",
+        "_active_models",
         "_next_pid",
         "_pending_cleanup",
+        "_shared_attestation_count",
         "_stop_fault_consumed",
     )
 
@@ -2464,8 +3474,10 @@ class _CpuRecordingResourceSystemV1:
         self._cleanup: list[str] = []
         self._dispatch: list[str] = []
         self._next_pid = 10_000
+        self._active_models: dict[int, _OwnedModelProcessV1] = {}
         self._fault = fault
         self._pending_cleanup: list[str] = []
+        self._shared_attestation_count = 0
         self._stop_fault_consumed = False
 
     def attest_runtime(self, config: ProductionRuntimeConfigV1, *, source_commit: str) -> str:
@@ -2539,6 +3551,104 @@ class _CpuRecordingResourceSystemV1:
             ),
         )
 
+    def attest_gpu_shared_capacity(
+        self,
+        gpu_index: int,
+        *,
+        minimum_free_memory_mib: int,
+    ) -> ProductionSharedGpuAttestationV1:
+        identity_command = (
+            _NVIDIA_SMI_EXECUTABLE,
+            f"--id={gpu_index}",
+            "--query-gpu=index,uuid,memory.total,memory.free,memory.used,memory.reserved,"
+            "utilization.gpu,utilization.memory",
+            "--format=csv,noheader,nounits",
+        )
+        process_command = (
+            _NVIDIA_SMI_EXECUTABLE,
+            f"--id={gpu_index}",
+            "--query-compute-apps=gpu_uuid,pid,used_gpu_memory",
+            "--format=csv,noheader,nounits",
+        )
+        self._commands.extend((identity_command, process_command))
+        self._shared_attestation_count += 1
+        active = tuple(self._active_models.values())
+        free_memory_mib = 90_169 if not active else 56_212
+        if (
+            self._fault is CpuResourceLifecycleFaultV1.SHARED_GPU_CAPACITY_BELOW_MINIMUM
+            and self._shared_attestation_count == 1
+        ) or (
+            self._fault is CpuResourceLifecycleFaultV1.HANDOFF_GPU_CAPACITY_BELOW_MINIMUM
+            and self._shared_attestation_count == 3
+        ):
+            free_memory_mib = 50_000
+        total_memory_mib = 143_771
+        reserved_memory_mib = 614
+        processes = [
+            SharedGpuProcessEvidenceV1(
+                pid=42_000,
+                process_group_id=42_000,
+                session_id=42_000,
+                starttime_ticks=4_200_000,
+                uid=1_001,
+                user="cpu-peer-a",
+                used_gpu_memory_mib=31_346,
+            ),
+            SharedGpuProcessEvidenceV1(
+                pid=42_001,
+                process_group_id=42_001,
+                session_id=42_001,
+                starttime_ticks=4_200_100,
+                uid=1_002,
+                user="cpu-peer-b",
+                used_gpu_memory_mib=22_256,
+            ),
+        ]
+        processes.extend(
+            SharedGpuProcessEvidenceV1(
+                pid=item.identity.pid,
+                process_group_id=item.identity.process_group_id,
+                session_id=item.identity.session_id,
+                starttime_ticks=item.identity.starttime_ticks,
+                uid=item.identity.uid,
+                user="cpu-owner",
+                used_gpu_memory_mib=33_957,
+            )
+            for item in active
+        )
+        if (
+            self._fault is CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT
+            and self._shared_attestation_count == 3
+        ) or (
+            self._fault is CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT_PERSISTS
+            and self._shared_attestation_count >= 3
+        ):
+            processes.append(
+                SharedGpuProcessEvidenceV1(
+                    pid=42_999,
+                    process_group_id=42_999,
+                    session_id=42_999,
+                    starttime_ticks=4_299_900,
+                    uid=os.geteuid(),
+                    user="cpu-owner",
+                    used_gpu_memory_mib=1_024,
+                )
+            )
+        return ProductionSharedGpuAttestationV1(
+            gpu_index=gpu_index,
+            gpu_uuid=f"GPU-{gpu_index:08x}-0000-0000-0000-000000000000",
+            total_memory_mib=total_memory_mib,
+            free_memory_mib=free_memory_mib,
+            used_memory_mib=total_memory_mib - free_memory_mib - reserved_memory_mib,
+            reserved_memory_mib=reserved_memory_mib,
+            gpu_utilization_percent=0 if not active else 93,
+            memory_utilization_percent=(
+                (total_memory_mib - free_memory_mib) * 100 // total_memory_mib
+            ),
+            minimum_free_memory_mib=minimum_free_memory_mib,
+            processes=tuple(processes),
+        )
+
     def start_model(self, spec: ProductionCommandSpecV1, *, log_label: str) -> _OwnedModelProcessV1:
         del log_label
         self._commands.append(spec.argv)
@@ -2547,12 +3657,14 @@ class _CpuRecordingResourceSystemV1:
         if self._fault in {
             CpuResourceLifecycleFaultV1.MODEL_PARTIAL_START,
             CpuResourceLifecycleFaultV1.MODEL_PARTIAL_CLEANUP_ONCE,
-        }:
+        } or (
+            self._fault is CpuResourceLifecycleFaultV1.MAI_PARTIAL_START and spec.kind == "VLLM_MAI"
+        ):
             self._pending_cleanup.append(f"partial-pid:{pid}")
             raise ProductionDriverError(
                 "MODEL_PARTIAL_START_RECOVERABLE", "CPU partial child awaits cleanup"
             )
-        return _OwnedModelProcessV1(
+        owned = _OwnedModelProcessV1(
             identity=OwnedProcessIdentityV1(
                 pid=pid,
                 process_group_id=pid,
@@ -2565,6 +3677,8 @@ class _CpuRecordingResourceSystemV1:
             stdout_handle=None,
             stderr_handle=None,
         )
+        self._active_models[pid] = owned
+        return owned
 
     def await_model(self, owned: _OwnedModelProcessV1, *, deadline_ns: int) -> str:
         del deadline_ns
@@ -2580,14 +3694,32 @@ class _CpuRecordingResourceSystemV1:
             raise ProductionDriverError("MODEL_DISPATCH_IDENTITY_LOST", "CPU model identity drift")
         return self.await_model(owned, deadline_ns=time.monotonic_ns() + 1_000_000_000)
 
-    def stop_model(self, owned: _OwnedModelProcessV1) -> None:
+    def stop_model(self, owned: _OwnedModelProcessV1) -> ProductionModelStopEvidenceV1:
         if (
-            self._fault is CpuResourceLifecycleFaultV1.MODEL_STOP_ONCE
+            self._fault
+            in {
+                CpuResourceLifecycleFaultV1.MODEL_STOP_ONCE,
+                CpuResourceLifecycleFaultV1.HANDOFF_MODEL_REAP_UNCONFIRMED,
+            }
             and not self._stop_fault_consumed
         ):
             self._stop_fault_consumed = True
-            raise ProductionDriverError("MODEL_CLEANUP_FAILED", "CPU one-shot cleanup failure")
+            code = (
+                "MODEL_REAP_UNCONFIRMED"
+                if self._fault is CpuResourceLifecycleFaultV1.HANDOFF_MODEL_REAP_UNCONFIRMED
+                else "MODEL_CLEANUP_FAILED"
+            )
+            raise ProductionDriverError(code, "CPU one-shot cleanup failure")
         self._cleanup.append(f"pid:{owned.identity.pid}")
+        self._active_models.pop(owned.identity.pid, None)
+        return ProductionModelStopEvidenceV1(
+            host=(PilotHostV1.QWEN3_VL if owned.spec.kind == "VLLM_QWEN" else PilotHostV1.MAI_UI),
+            process=owned.identity,
+            endpoint=owned.spec.endpoint,
+            leader_reaped=True,
+            session_members_remaining=0,
+            port_available=True,
+        )
 
     def start_backend(self, spec: ProductionCommandSpecV1) -> _OwnedBackendContainerV1:
         self._commands.append(spec.argv)
@@ -2682,11 +3814,23 @@ class ProductionResourceLifecycleAdapterV1:
         "_disabled_hosts",
         "_evidence",
         "_failure_evidence",
+        "_handoff_evidence",
+        "_handoff_failure_evidence",
+        "_last_dispatch_evidence",
+        "_last_dispatch_failure_evidence",
         "_gpu_leases",
         "_lock",
         "_manifest_sha256",
+        "_model_specs",
         "_models",
         "_resources",
+        "_shared_gpu_baseline",
+        "_cleanup_success_evidence",
+        "_cleanup_failure_evidence",
+        "_last_shared_cleanup_attestation",
+        "_reclaimed_cleanup_outcome",
+        "_reclaimed_cleanup_values",
+        "_stop_evidence",
         "_system",
     )
 
@@ -2707,13 +3851,65 @@ class ProductionResourceLifecycleAdapterV1:
         self._system = system
         self._backend: _OwnedBackendContainerV1 | None = None
         self._models: dict[PilotHostV1, _OwnedModelProcessV1] = {}
+        self._model_specs: dict[PilotHostV1, ProductionCommandSpecV1] = {}
         self._resources: dict[PilotHostV1, SnapshotResourceV1] = {}
         self._gpu_leases: dict[PilotHostV1, _ExclusiveGpuLeaseV1 | _CpuExclusiveGpuLeaseV1] = {}
         self._disabled_hosts: set[PilotHostV1] = set()
         self._manifest_sha256: str | None = None
         self._evidence: ProductionResourceStageEvidenceV1 | None = None
         self._failure_evidence: bytes | None = None
+        self._handoff_evidence: ProductionModelHandoffEvidenceV1 | None = None
+        self._handoff_failure_evidence: bytes | None = None
+        self._last_dispatch_evidence: bytes | None = None
+        self._last_dispatch_failure_evidence: bytes | None = None
+        self._cleanup_success_evidence: bytes | None = None
+        self._cleanup_failure_evidence: bytes | None = None
+        self._last_shared_cleanup_attestation: ProductionSharedGpuAttestationV1 | None = None
+        self._reclaimed_cleanup_outcome: bytes | None = None
+        self._reclaimed_cleanup_values: (
+            tuple[ProductionSharedGpuAttestationV1 | None, tuple[str, ...], str | None] | None
+        ) = None
+        self._shared_gpu_baseline: ProductionSharedGpuAttestationV1 | None = None
+        self._stop_evidence: list[ProductionModelStopEvidenceV1] = []
         self._lock = threading.RLock()
+
+    def _cache_reclaimed_cleanup(
+        self,
+        context: StageAdapterContextV1,
+        values: tuple[ProductionSharedGpuAttestationV1 | None, tuple[str, ...], str | None],
+    ) -> None:
+        final_attestation, lease_sha256s, backend_container_id = values
+        residual = self._system.residual_capabilities()
+        projection: dict[str, JsonValue] = {
+            "backend_container_id": backend_container_id,
+            "final_shared_gpu_attestation": (
+                None
+                if final_attestation is None
+                else production_shared_gpu_attestation_projection(final_attestation)
+            ),
+            "gpu_lease_sha256s": list(lease_sha256s),
+            "manifest_sha256": context.manifest_sha256,
+            "resource_topology": self._config.resource_topology.value,
+            "residual_capabilities": residual,
+            "runtime_config_sha256": production_runtime_config_sha256(self._config),
+            "sequence_execution_scope": context.sequence_execution_scope,
+            "sequence_scope_authority_sha256": context.sequence_scope_authority_sha256,
+            "status": "RECLAIMED",
+            "stopped_models": [
+                production_model_stop_evidence_projection(item) for item in self._stop_evidence
+            ],
+        }
+        self._reclaimed_cleanup_values = values
+        self._reclaimed_cleanup_outcome = canonical_json_bytes(
+            cast(
+                JsonValue,
+                {
+                    "domain": "production-resource-reclaimed-cleanup-outcome",
+                    "schema_version": PRODUCTION_RESOURCE_CLEANUP_EVIDENCE_SCHEMA_VERSION_V1,
+                    "value": projection,
+                },
+            )
+        )
 
     def _resource_failure_preimage(
         self,
@@ -2725,6 +3921,11 @@ class ProductionResourceLifecycleAdapterV1:
         cleanup_failure_code: str | None = None,
     ) -> bytes:
         residual = self._system.residual_capabilities()
+        reclaimed = (
+            None
+            if self._reclaimed_cleanup_outcome is None
+            else cast(JsonValue, json.loads(self._reclaimed_cleanup_outcome))
+        )
         return canonical_json_bytes(
             cast(
                 JsonValue,
@@ -2749,6 +3950,21 @@ class ProductionResourceLifecycleAdapterV1:
                         lease.lease_sha256 for lease in self._gpu_leases.values()
                     ],
                     "manifest_sha256": context.manifest_sha256,
+                    "resource_topology": self._config.resource_topology.value,
+                    "reclaimed_cleanup_outcome": reclaimed,
+                    "reclaimed_cleanup_outcome_sha256": (
+                        None
+                        if self._reclaimed_cleanup_outcome is None
+                        else hashlib.sha256(self._reclaimed_cleanup_outcome).hexdigest()
+                    ),
+                    "runtime_config_sha256": production_runtime_config_sha256(self._config),
+                    "sequence_execution_scope": context.sequence_execution_scope,
+                    "sequence_scope_authority_sha256": (context.sequence_scope_authority_sha256),
+                    "shared_gpu_baseline": (
+                        None
+                        if self._shared_gpu_baseline is None
+                        else production_shared_gpu_attestation_projection(self._shared_gpu_baseline)
+                    ),
                     "residual_capabilities": residual,
                     "residual_capabilities_sha256": _hash_projection(
                         "production-resource-residual-capabilities",
@@ -2767,6 +3983,18 @@ class ProductionResourceLifecycleAdapterV1:
         context: StageAdapterContextV1,
     ) -> AdapterStageResultV1:
         trusted_context = _snapshot_context(context)
+        if self._config.resource_topology is (
+            ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        ):
+            if trusted_context.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY":
+                raise ProductionDriverError(
+                    "RESOURCE_SCOPE_UNAUTHORIZED",
+                    "shared sequential resources require smoke-only sequence authority",
+                )
+            _require_sha256(
+                trusted_context.sequence_scope_authority_sha256,
+                "sequence_scope_authority_sha256",
+            )
         if self._manifest_sha256 is None:
             self._manifest_sha256 = trusted_context.manifest_sha256
         elif self._manifest_sha256 != trusted_context.manifest_sha256:
@@ -2826,22 +4054,39 @@ class ProductionResourceLifecycleAdapterV1:
             _attest_snapshot_resource(resource)
             require_dispatch_authority()
         try:
-            for resource in trusted_resources:
+            lease_hosts = (
+                (PilotHostV1.QWEN3_VL,)
+                if self._config.resource_topology
+                is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+                else (PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)
+            )
+            for host in lease_hosts:
                 gpu_index = (
                     self._config.qwen_gpu_index
-                    if resource.host is PilotHostV1.QWEN3_VL
+                    if host is PilotHostV1.QWEN3_VL
                     else self._config.mai_gpu_index
                 )
-                self._gpu_leases[resource.host] = (
+                self._gpu_leases[host] = (
                     _ExclusiveGpuLeaseV1(gpu_index)
                     if type(self._system) is _PosixProductionResourceSystemV1
                     else _CpuExclusiveGpuLeaseV1(gpu_index, seal=_MODULE_SEAL)
                 )
-        except Exception:
+        except Exception as exc:
+            lease_sha256s = tuple(lease.lease_sha256 for lease in self._gpu_leases.values())
             for lease in self._gpu_leases.values():
                 lease.close()
             self._gpu_leases.clear()
             self._resources.clear()
+            self._cache_reclaimed_cleanup(
+                trusted_context,
+                (None, lease_sha256s, None),
+            )
+            self._failure_evidence = self._resource_failure_preimage(
+                trusted_context,
+                failure_code=_exception_code(exc, "RESOURCE_ATTESTATION_FAILED"),
+                status="FAILED",
+                cleanup_status="RECLAIMED",
+            )
             raise
         deadline_ns = min(
             trusted_context.authority_deadline_monotonic_ns,
@@ -2868,11 +4113,26 @@ class ProductionResourceLifecycleAdapterV1:
                 )
                 for item in trusted_resources
             )
-        except Exception:
+            self._model_specs = {
+                resource.host: spec
+                for resource, spec in zip(trusted_resources, model_specs, strict=True)
+            }
+        except Exception as exc:
+            lease_sha256s = tuple(lease.lease_sha256 for lease in self._gpu_leases.values())
             for lease in self._gpu_leases.values():
                 lease.close()
             self._gpu_leases.clear()
             self._resources.clear()
+            self._cache_reclaimed_cleanup(
+                trusted_context,
+                (None, lease_sha256s, None),
+            )
+            self._failure_evidence = self._resource_failure_preimage(
+                trusted_context,
+                failure_code=_exception_code(exc, "RESOURCE_ATTESTATION_FAILED"),
+                status="FAILED",
+                cleanup_status="RECLAIMED",
+            )
             raise
         try:
             require_dispatch_authority()
@@ -2881,14 +4141,33 @@ class ProductionResourceLifecycleAdapterV1:
             backend_health = self._system.await_backend(self._backend, deadline_ns=deadline_ns)
             model_health: list[str] = []
             gpu_idle_attestations: list[str] = []
-            for resource, spec in zip(trusted_resources, model_specs, strict=True):
+            shared_gpu_attestations: list[ProductionSharedGpuAttestationV1] = []
+            startup_pairs = tuple(zip(trusted_resources, model_specs, strict=True))
+            if (
+                self._config.resource_topology
+                is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+            ):
+                startup_pairs = startup_pairs[:1]
+            for resource, spec in startup_pairs:
                 require_dispatch_authority()
                 gpu_index = (
                     self._config.qwen_gpu_index
                     if resource.host is PilotHostV1.QWEN3_VL
                     else self._config.mai_gpu_index
                 )
-                gpu_idle_attestations.append(self._system.attest_gpu_idle(gpu_index))
+                if (
+                    self._config.resource_topology
+                    is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+                ):
+                    baseline = self._system.attest_gpu_shared_capacity(
+                        gpu_index,
+                        minimum_free_memory_mib=self._config.minimum_free_gpu_memory_mib,
+                    )
+                    self._shared_gpu_baseline = baseline
+                    shared_gpu_attestations.append(baseline)
+                    _require_shared_gpu_capacity(baseline)
+                else:
+                    gpu_idle_attestations.append(self._system.attest_gpu_idle(gpu_index))
                 require_dispatch_authority()
                 owned = self._system.start_model(
                     spec, log_label=f"{trusted_context.run_id}-{resource.host.value.lower()}"
@@ -2899,6 +4178,21 @@ class ProductionResourceLifecycleAdapterV1:
                 # checked before Popen; a mutable snapshot may not race startup.
                 _attest_snapshot_resource(resource)
                 require_dispatch_authority()
+                if (
+                    self._config.resource_topology
+                    is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+                ):
+                    assert self._shared_gpu_baseline is not None
+                    ready_attestation = self._system.attest_gpu_shared_capacity(
+                        gpu_index,
+                        minimum_free_memory_mib=0,
+                    )
+                    _validate_shared_gpu_tenants(
+                        ready_attestation,
+                        baseline=self._shared_gpu_baseline,
+                        owned_identity=owned.identity,
+                    )
+                    shared_gpu_attestations.append(ready_attestation)
         except Exception as exc:
             failure_code = getattr(exc, "code", "RESOURCE_ADAPTER_FAILED")
             if type(failure_code) is not str:
@@ -2910,7 +4204,11 @@ class ProductionResourceLifecycleAdapterV1:
                 cleanup_status="PENDING",
             )
             try:
-                self._cleanup_owned()
+                cleanup_values = self._cleanup_owned()
+                final_attestation, _, _ = cleanup_values
+                if final_attestation is not None:
+                    self._last_shared_cleanup_attestation = final_attestation
+                self._cache_reclaimed_cleanup(trusted_context, cleanup_values)
             except Exception as cleanup_exc:
                 cleanup_failure_code = getattr(cleanup_exc, "code", "RESOURCE_CLEANUP_FAILED")
                 if type(cleanup_failure_code) is not str:
@@ -2944,16 +4242,17 @@ class ProductionResourceLifecycleAdapterV1:
             model_command_sha256s=cast(
                 tuple[str, str], tuple(production_command_spec_sha256(item) for item in model_specs)
             ),
-            model_processes=cast(
-                tuple[OwnedProcessIdentityV1, OwnedProcessIdentityV1],
-                tuple(self._models[item.host].identity for item in trusted_resources),
-            ),
-            model_health_sha256s=cast(tuple[str, str], tuple(model_health)),
-            gpu_lease_sha256s=cast(
-                tuple[str, str],
-                tuple(self._gpu_leases[item.host].lease_sha256 for item in trusted_resources),
-            ),
-            gpu_idle_attestation_sha256s=cast(tuple[str, str], tuple(gpu_idle_attestations)),
+            model_processes=tuple(self._models[item.host].identity for item, _ in startup_pairs),
+            model_health_sha256s=tuple(model_health),
+            gpu_lease_sha256s=tuple(lease.lease_sha256 for lease in self._gpu_leases.values()),
+            gpu_idle_attestation_sha256s=tuple(gpu_idle_attestations),
+            shared_gpu_attestations=tuple(shared_gpu_attestations),
+            active_hosts=tuple(item.host for item, _ in startup_pairs),
+            resource_topology=self._config.resource_topology,
+            vllm_gpu_memory_utilization=self._config.vllm_gpu_memory_utilization,
+            minimum_free_gpu_memory_mib=self._config.minimum_free_gpu_memory_mib,
+            sequence_execution_scope=trusted_context.sequence_execution_scope,
+            sequence_scope_authority_sha256=(trusted_context.sequence_scope_authority_sha256),
         )
         self._evidence = evidence
         evidence_preimage = _production_resource_stage_evidence_preimage(evidence)
@@ -2970,21 +4269,259 @@ class ProductionResourceLifecycleAdapterV1:
             provider_final_request_proven=False,
         )
 
-    def _cleanup_owned(self) -> None:
+    def handoff_to_mai(self, context: StageAdapterContextV1) -> AdapterStageResultV1:
+        """Replace Qwen with MAI on the same leased shared GPU exactly once."""
+
+        trusted_context = _snapshot_context(context)
+        progress: dict[str, JsonValue] = {
+            "manifest_sha256": trusted_context.manifest_sha256,
+            "resource_topology": self._config.resource_topology.value,
+            "runtime_config_sha256": production_runtime_config_sha256(self._config),
+            "sequence_execution_scope": trusted_context.sequence_execution_scope,
+            "sequence_scope_authority_sha256": (trusted_context.sequence_scope_authority_sha256),
+            "source_host": PilotHostV1.QWEN3_VL.value,
+            "status": "STARTED",
+            "target_host": PilotHostV1.MAI_UI.value,
+        }
+        if self._config.resource_topology is not (
+            ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        ):
+            progress["status"] = "NOT_REQUIRED_CONCURRENT"
+            preimage = canonical_json_bytes(
+                cast(
+                    JsonValue,
+                    {
+                        "domain": "production-model-handoff-evidence",
+                        "schema_version": PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1,
+                        "value": progress,
+                    },
+                )
+            )
+            return AdapterStageResultV1(
+                stage=RunStageV1.MAI_LIVE_SMOKE,
+                manifest_sha256=trusted_context.manifest_sha256,
+                evidence_sha256=hashlib.sha256(preimage).hexdigest(),
+                evidence_preimage=preimage,
+                actor_calls=0,
+                openai_calls=0,
+                actor_actions=0,
+                cost_usd_micros=0,
+                completed_units=("resource-handoff:not-required-concurrent",),
+                provider_final_request_proven=False,
+            )
+        if (
+            trusted_context.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY"
+            or self._manifest_sha256 != trusted_context.manifest_sha256
+            or self._evidence is None
+            or self._evidence.sequence_scope_authority_sha256
+            != trusted_context.sequence_scope_authority_sha256
+        ):
+            raise ProductionDriverError(
+                "RESOURCE_BINDING_MISMATCH", "shared handoff scope or manifest differs"
+            )
+        _require_sha256(
+            trusted_context.sequence_scope_authority_sha256,
+            "sequence_scope_authority_sha256",
+        )
+        with self._lock:
+            if (
+                self._handoff_evidence is not None
+                or self._shared_gpu_baseline is None
+                or set(self._models) != {PilotHostV1.QWEN3_VL}
+                or set(self._gpu_leases) != {PilotHostV1.QWEN3_VL}
+                or PilotHostV1.MAI_UI not in self._model_specs
+                or PilotHostV1.MAI_UI in self._disabled_hosts
+            ):
+                raise ProductionDriverError(
+                    "HANDOFF_INVALID_STATE", "Qwen-to-MAI handoff state differs"
+                )
+            if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                raise ProductionDriverError(
+                    "OWNER_AUTHORITY_EXPIRED", "handoff owner authority elapsed"
+                )
+            qwen = self._models[PilotHostV1.QWEN3_VL]
+            lease = self._gpu_leases[PilotHostV1.QWEN3_VL]
+            post_stop: ProductionSharedGpuAttestationV1 | None = None
+            target: _OwnedModelProcessV1 | None = None
+            target_health: str | None = None
+            target_ready: ProductionSharedGpuAttestationV1 | None = None
+            source_stop: ProductionModelStopEvidenceV1 | None = None
+            try:
+                source_stop = self._system.stop_model(qwen)
+                self._stop_evidence.append(source_stop)
+                self._models.pop(PilotHostV1.QWEN3_VL)
+                progress["source_stop"] = cast(
+                    JsonValue, production_model_stop_evidence_projection(source_stop)
+                )
+                if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                    raise ProductionDriverError(
+                        "OWNER_AUTHORITY_EXPIRED", "handoff owner authority elapsed"
+                    )
+                post_stop = self._system.attest_gpu_shared_capacity(
+                    self._config.qwen_gpu_index,
+                    minimum_free_memory_mib=self._config.minimum_free_gpu_memory_mib,
+                )
+                if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                    raise ProductionDriverError(
+                        "OWNER_AUTHORITY_EXPIRED",
+                        "handoff owner authority elapsed after Qwen-stop GPU attestation",
+                    )
+                progress["post_stop_shared_gpu_attestation"] = cast(
+                    JsonValue, production_shared_gpu_attestation_projection(post_stop)
+                )
+                _require_shared_gpu_capacity(post_stop)
+                _validate_shared_gpu_tenants(
+                    post_stop,
+                    baseline=self._shared_gpu_baseline,
+                    owned_identity=None,
+                )
+                mai_resource = self._resources[PilotHostV1.MAI_UI]
+                target_snapshot_attestation_sha256 = _attest_snapshot_resource(mai_resource)
+                progress["target_snapshot_attestation_sha256"] = target_snapshot_attestation_sha256
+                target_spec = self._model_specs[PilotHostV1.MAI_UI]
+                if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                    raise ProductionDriverError(
+                        "OWNER_AUTHORITY_EXPIRED",
+                        "handoff owner authority elapsed before MAI start",
+                    )
+                target = self._system.start_model(
+                    target_spec,
+                    log_label=f"{trusted_context.run_id}-{PilotHostV1.MAI_UI.value.lower()}",
+                )
+                self._models[PilotHostV1.MAI_UI] = target
+                progress["target_process"] = cast(
+                    JsonValue,
+                    {
+                        "pid": target.identity.pid,
+                        "process_group_id": target.identity.process_group_id,
+                        "session_id": target.identity.session_id,
+                        "starttime_ticks": target.identity.starttime_ticks,
+                        "uid": target.identity.uid,
+                    },
+                )
+                if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                    raise ProductionDriverError(
+                        "OWNER_AUTHORITY_EXPIRED",
+                        "handoff owner authority elapsed after MAI start",
+                    )
+                deadline_ns = min(
+                    trusted_context.authority_deadline_monotonic_ns,
+                    time.monotonic_ns() + self._config.startup_timeout_seconds * 1_000_000_000,
+                )
+                target_health = self._system.await_model(target, deadline_ns=deadline_ns)
+                if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                    raise ProductionDriverError(
+                        "OWNER_AUTHORITY_EXPIRED",
+                        "handoff owner authority elapsed during MAI readiness",
+                    )
+                progress["target_health_sha256"] = target_health
+                target_snapshot_attestation_after_sha256 = _attest_snapshot_resource(mai_resource)
+                if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                    raise ProductionDriverError(
+                        "OWNER_AUTHORITY_EXPIRED",
+                        "handoff owner authority elapsed during MAI snapshot re-attestation",
+                    )
+                if target_snapshot_attestation_after_sha256 != target_snapshot_attestation_sha256:
+                    raise ProductionDriverError(
+                        "SNAPSHOT_BINDING_MISMATCH", "MAI snapshot changed during startup"
+                    )
+                target_ready = self._system.attest_gpu_shared_capacity(
+                    self._config.mai_gpu_index,
+                    minimum_free_memory_mib=0,
+                )
+                if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                    raise ProductionDriverError(
+                        "OWNER_AUTHORITY_EXPIRED",
+                        "handoff owner authority elapsed during MAI-ready GPU attestation",
+                    )
+                progress["target_ready_shared_gpu_attestation"] = cast(
+                    JsonValue, production_shared_gpu_attestation_projection(target_ready)
+                )
+                _validate_shared_gpu_tenants(
+                    target_ready,
+                    baseline=self._shared_gpu_baseline,
+                    owned_identity=target.identity,
+                )
+                evidence = ProductionModelHandoffEvidenceV1(
+                    manifest_sha256=trusted_context.manifest_sha256,
+                    runtime_config_sha256=production_runtime_config_sha256(self._config),
+                    sequence_execution_scope=trusted_context.sequence_execution_scope,
+                    sequence_scope_authority_sha256=(
+                        trusted_context.sequence_scope_authority_sha256
+                    ),
+                    resource_topology=self._config.resource_topology,
+                    gpu_lease_sha256=lease.lease_sha256,
+                    source_host=PilotHostV1.QWEN3_VL,
+                    target_host=PilotHostV1.MAI_UI,
+                    source_stop=source_stop,
+                    baseline_shared_gpu_attestation=self._shared_gpu_baseline,
+                    post_stop_shared_gpu_attestation=post_stop,
+                    target_command_sha256=production_command_spec_sha256(target.spec),
+                    target_process=target.identity,
+                    target_health_sha256=target_health,
+                    target_snapshot_attestation_sha256=(target_snapshot_attestation_sha256),
+                    target_ready_shared_gpu_attestation=target_ready,
+                )
+                self._handoff_evidence = evidence
+                preimage = _production_model_handoff_evidence_preimage(evidence)
+                return AdapterStageResultV1(
+                    stage=RunStageV1.MAI_LIVE_SMOKE,
+                    manifest_sha256=trusted_context.manifest_sha256,
+                    evidence_sha256=production_model_handoff_evidence_sha256(evidence),
+                    evidence_preimage=preimage,
+                    actor_calls=0,
+                    openai_calls=0,
+                    actor_actions=0,
+                    cost_usd_micros=0,
+                    completed_units=("resource-handoff:QWEN3_VL:MAI_UI",),
+                    provider_final_request_proven=False,
+                )
+            except Exception as exc:
+                failure_code = _exception_code(exc, "RESOURCE_HANDOFF_FAILED")
+                progress.update(
+                    {
+                        "failure_code": failure_code,
+                        "gpu_lease_sha256": lease.lease_sha256,
+                        "residual_capabilities": self._system.residual_capabilities(),
+                        "status": "FAILED_CLEANUP_REQUIRED",
+                    }
+                )
+                self._handoff_failure_evidence = canonical_json_bytes(
+                    cast(
+                        JsonValue,
+                        {
+                            "domain": "production-model-handoff-failure-evidence",
+                            "schema_version": (PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1),
+                            "value": progress,
+                        },
+                    )
+                )
+                raise
+
+    def _cleanup_owned(
+        self,
+    ) -> tuple[ProductionSharedGpuAttestationV1 | None, tuple[str, ...], str | None]:
         failure = False
         stopped_hosts: list[PilotHostV1] = []
+        backend_container_id = None if self._backend is None else self._backend.container_id
+        lease_sha256s = tuple(lease.lease_sha256 for lease in self._gpu_leases.values())
         for host, owned in reversed(tuple(self._models.items())):
             try:
-                self._system.stop_model(owned)
+                stop_evidence = self._system.stop_model(owned)
             except Exception:
                 failure = True
             else:
+                self._stop_evidence.append(stop_evidence)
                 stopped_hosts.append(host)
         for host in stopped_hosts:
             self._models.pop(host, None)
-            lease = self._gpu_leases.pop(host, None)
-            if lease is not None:
-                lease.close()
+            if (
+                self._config.resource_topology
+                is ProductionResourceTopologyV1.INDEPENDENT_GPU_CONCURRENT
+            ):
+                lease = self._gpu_leases.pop(host, None)
+                if lease is not None:
+                    lease.close()
         try:
             self._system.retry_pending_cleanup()
         except Exception:
@@ -2997,23 +4534,63 @@ class ProductionResourceLifecycleAdapterV1:
                 failure = True
             else:
                 self._backend = None
+        final_shared_attestation: ProductionSharedGpuAttestationV1 | None = None
+        if (
+            self._config.resource_topology
+            is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+            and not self._models
+            and self._shared_gpu_baseline is not None
+            and self._gpu_leases
+        ):
+            try:
+                final_shared_attestation = self._system.attest_gpu_shared_capacity(
+                    self._config.qwen_gpu_index,
+                    minimum_free_memory_mib=0,
+                )
+                _validate_shared_gpu_cleanup(
+                    final_shared_attestation,
+                    baseline=self._shared_gpu_baseline,
+                    stopped_models=tuple(self._stop_evidence),
+                )
+                self._last_shared_cleanup_attestation = final_shared_attestation
+            except Exception:
+                failure = True
         if not failure and not self._models and self._backend is None:
             for lease in self._gpu_leases.values():
                 lease.close()
             self._gpu_leases.clear()
             self._resources.clear()
+            self._model_specs.clear()
         if failure:
             raise ProductionDriverError(
                 "RESOURCE_CLEANUP_FAILED",
                 "owned cleanup authority was retained for another attempt",
             )
+        return final_shared_attestation, lease_sha256s, backend_container_id
 
     def cleanup(self, context: StageAdapterContextV1) -> None:
         trusted_context = _snapshot_context(context)
         if self._manifest_sha256 != trusted_context.manifest_sha256:
             raise ProductionDriverError("RESOURCE_BINDING_MISMATCH", "cleanup manifest differs")
+        if self._evidence is not None and (
+            self._evidence.sequence_execution_scope != trusted_context.sequence_execution_scope
+            or self._evidence.sequence_scope_authority_sha256
+            != trusted_context.sequence_scope_authority_sha256
+        ):
+            raise ProductionDriverError(
+                "RESOURCE_BINDING_MISMATCH", "cleanup sequence scope differs"
+            )
+        if self._cleanup_success_evidence is not None:
+            return
         try:
-            self._cleanup_owned()
+            current_cleanup_values = self._cleanup_owned()
+            if self._reclaimed_cleanup_values is None:
+                self._cache_reclaimed_cleanup(trusted_context, current_cleanup_values)
+            cleanup_values = self._reclaimed_cleanup_values or current_cleanup_values
+            final_shared_attestation, lease_sha256s, backend_container_id = cleanup_values
+            final_shared_attestation = (
+                final_shared_attestation or self._last_shared_cleanup_attestation
+            )
         except Exception as exc:
             cleanup_failure_code = _exception_code(exc, "RESOURCE_CLEANUP_FAILED")
             self._failure_evidence = self._resource_failure_preimage(
@@ -3023,7 +4600,108 @@ class ProductionResourceLifecycleAdapterV1:
                 cleanup_status="RETRY_REQUIRED",
                 cleanup_failure_code=cleanup_failure_code,
             )
+            self._cleanup_failure_evidence = self._failure_evidence
             raise
+        residual = self._system.residual_capabilities()
+        projection: dict[str, JsonValue] = {
+            "backend_container_id": backend_container_id,
+            "gpu_lease_released": not self._gpu_leases,
+            "gpu_lease_sha256s": list(lease_sha256s),
+            "manifest_sha256": trusted_context.manifest_sha256,
+            "resource_topology": self._config.resource_topology.value,
+            "residual_capabilities": residual,
+            "residual_capabilities_sha256": _hash_projection(
+                "production-resource-residual-capabilities",
+                cast(JsonValue, residual),
+            ),
+            "runtime_config_sha256": production_runtime_config_sha256(self._config),
+            "reclaimed_cleanup_outcome": (
+                None
+                if self._reclaimed_cleanup_outcome is None
+                else cast(JsonValue, json.loads(self._reclaimed_cleanup_outcome))
+            ),
+            "reclaimed_cleanup_outcome_sha256": (
+                None
+                if self._reclaimed_cleanup_outcome is None
+                else hashlib.sha256(self._reclaimed_cleanup_outcome).hexdigest()
+            ),
+            "sequence_execution_scope": trusted_context.sequence_execution_scope,
+            "sequence_scope_authority_sha256": (trusted_context.sequence_scope_authority_sha256),
+            "status": "CLEANED",
+            "stopped_models": [
+                production_model_stop_evidence_projection(item) for item in self._stop_evidence
+            ],
+            "stopped_model_sha256s": [
+                production_model_stop_evidence_sha256(item) for item in self._stop_evidence
+            ],
+        }
+        if self._config.resource_topology is (
+            ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        ):
+            if self._shared_gpu_baseline is None:
+                if (
+                    self._evidence is not None
+                    or self._models
+                    or self._backend is not None
+                    or self._gpu_leases
+                    or any(cast(list[object], item) for item in residual.values())
+                    or self._failure_evidence is None
+                ):
+                    raise ProductionDriverError(
+                        "RESOURCE_CLEANUP_FAILED",
+                        "pre-baseline shared cleanup state is not provably empty",
+                    )
+                projection.update(
+                    {
+                        "cleanup_outcome": "PRE_BASELINE_NO_MODEL_RECLAIMED",
+                        "prepare_failure_evidence_sha256": hashlib.sha256(
+                            self._failure_evidence
+                        ).hexdigest(),
+                    }
+                )
+            elif final_shared_attestation is None:
+                raise ProductionDriverError(
+                    "RESOURCE_CLEANUP_FAILED", "shared GPU cleanup evidence is incomplete"
+                )
+            else:
+                projection.update(
+                    {
+                        "cleanup_outcome": "SHARED_MODELS_RECLAIMED",
+                        "baseline_shared_gpu_attestation": (
+                            production_shared_gpu_attestation_projection(self._shared_gpu_baseline)
+                        ),
+                        "final_shared_gpu_attestation": (
+                            production_shared_gpu_attestation_projection(final_shared_attestation)
+                        ),
+                        "final_shared_gpu_attestation_sha256": (
+                            production_shared_gpu_attestation_sha256(final_shared_attestation)
+                        ),
+                        "minimum_free_gpu_memory_mib": (self._config.minimum_free_gpu_memory_mib),
+                        "vllm_gpu_memory_utilization": (self._config.vllm_gpu_memory_utilization),
+                    }
+                )
+        self._cleanup_success_evidence = canonical_json_bytes(
+            cast(
+                JsonValue,
+                {
+                    "domain": "production-resource-cleanup-evidence",
+                    "schema_version": (PRODUCTION_RESOURCE_CLEANUP_EVIDENCE_SCHEMA_VERSION_V1),
+                    "value": projection,
+                },
+            )
+        )
+
+    def cleanup_success_evidence_preimage(self) -> bytes | None:
+        return self._cleanup_success_evidence
+
+    def handoff_failure_evidence_preimage(self) -> bytes | None:
+        return self._handoff_failure_evidence
+
+    def last_dispatch_evidence_preimage(self) -> bytes | None:
+        return self._last_dispatch_evidence
+
+    def last_dispatch_failure_evidence_preimage(self) -> bytes | None:
+        return self._last_dispatch_failure_evidence
 
     def disable_host(self, host: PilotHostV1) -> str:
         """Permanently disable one host for this adapter lifetime."""
@@ -3051,16 +4729,21 @@ class ProductionResourceLifecycleAdapterV1:
             if owned is None:
                 return disabled_sha256
             try:
-                self._system.stop_model(owned)
+                stop_evidence = self._system.stop_model(owned)
             except Exception as exc:
                 raise ProductionDriverError(
                     "HOST_KILL_CLEANUP_FAILED",
                     "host remains disabled and its process authority is retained",
                 ) from exc
+            self._stop_evidence.append(stop_evidence)
             self._models.pop(host, None)
-            lease = self._gpu_leases.pop(host, None)
-            if lease is not None:
-                lease.close()
+            if (
+                self._config.resource_topology
+                is ProductionResourceTopologyV1.INDEPENDENT_GPU_CONCURRENT
+            ):
+                lease = self._gpu_leases.pop(host, None)
+                if lease is not None:
+                    lease.close()
             return _hash_projection(
                 "production-host-killed",
                 cast(
@@ -3112,34 +4795,133 @@ class ProductionResourceLifecycleAdapterV1:
                 or not resource.independent_kill_switch
                 or model is None
                 or backend is None
-                or host not in self._gpu_leases
+                or (
+                    host not in self._gpu_leases
+                    and not (
+                        self._config.resource_topology
+                        is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+                        and PilotHostV1.QWEN3_VL in self._gpu_leases
+                    )
+                )
             ):
                 raise ProductionDriverError(
                     "RESOURCE_DISPATCH_UNAVAILABLE", "live resource ownership is incomplete"
                 )
-            backend_sha256 = self._system.attest_backend(backend)
-            model_sha256 = self._system.attest_model(model)
-            return _hash_projection(
-                "production-resource-dispatch",
+            self._last_dispatch_failure_evidence = None
+            shared_gpu_attestation: ProductionSharedGpuAttestationV1 | None = None
+            dispatch_projection: dict[str, JsonValue] = {
+                "host": host.value,
+                "kind": kind.value,
+                "manifest_sha256": self._manifest_sha256,
+                "resource_topology": self._config.resource_topology.value,
+                "runtime_config_sha256": production_runtime_config_sha256(self._config),
+                "sequence_execution_scope": self._evidence.sequence_execution_scope,
+                "sequence_scope_authority_sha256": (self._evidence.sequence_scope_authority_sha256),
+            }
+            try:
+                dispatch_projection["backend_attestation_sha256"] = self._system.attest_backend(
+                    backend
+                )
+                dispatch_projection["model_attestation_sha256"] = self._system.attest_model(model)
+                if (
+                    self._config.resource_topology
+                    is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+                ):
+                    if self._shared_gpu_baseline is None:
+                        raise ProductionDriverError(
+                            "RESOURCE_DISPATCH_UNAVAILABLE", "shared GPU baseline is absent"
+                        )
+                    shared_gpu_attestation = self._system.attest_gpu_shared_capacity(
+                        self._config.qwen_gpu_index,
+                        minimum_free_memory_mib=0,
+                    )
+                    dispatch_projection["shared_gpu_attestation"] = cast(
+                        JsonValue,
+                        production_shared_gpu_attestation_projection(shared_gpu_attestation),
+                    )
+                    dispatch_projection["shared_gpu_attestation_sha256"] = (
+                        production_shared_gpu_attestation_sha256(shared_gpu_attestation)
+                    )
+                    _validate_shared_gpu_tenants(
+                        shared_gpu_attestation,
+                        baseline=self._shared_gpu_baseline,
+                        owned_identity=model.identity,
+                    )
+            except Exception as exc:
+                if (
+                    self._config.resource_topology
+                    is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+                ):
+                    dispatch_projection["failure_code"] = _exception_code(
+                        exc, "RESOURCE_DISPATCH_FAILED"
+                    )
+                    dispatch_projection["status"] = "FAILED"
+                    self._last_dispatch_failure_evidence = canonical_json_bytes(
+                        cast(
+                            JsonValue,
+                            {
+                                "domain": "production-resource-dispatch-evidence",
+                                "schema_version": (
+                                    PRODUCTION_SHARED_RESOURCE_EVIDENCE_SCHEMA_VERSION_V2
+                                ),
+                                "value": dispatch_projection,
+                            },
+                        )
+                    )
+                raise
+            dispatch_projection["status"] = "PASSED"
+            self._last_dispatch_evidence = canonical_json_bytes(
                 cast(
                     JsonValue,
                     {
-                        "backend_attestation_sha256": backend_sha256,
-                        "host": host.value,
-                        "kind": kind.value,
-                        "model_attestation_sha256": model_sha256,
+                        "domain": "production-resource-dispatch-evidence",
+                        "schema_version": (
+                            PRODUCTION_SHARED_RESOURCE_EVIDENCE_SCHEMA_VERSION_V2
+                            if shared_gpu_attestation is not None
+                            else PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+                        ),
+                        "value": dispatch_projection,
                     },
-                ),
+                )
             )
+            assert self._last_dispatch_evidence is not None
+            return hashlib.sha256(self._last_dispatch_evidence).hexdigest()
 
     @property
     def evidence(self) -> ProductionResourceStageEvidenceV1 | None:
         return self._evidence
 
+    @property
+    def handoff_evidence(self) -> ProductionModelHandoffEvidenceV1 | None:
+        return self._handoff_evidence
+
+    @property
+    def resource_topology(self) -> ProductionResourceTopologyV1:
+        return self._config.resource_topology
+
+    @property
+    def runtime_config_sha256(self) -> str:
+        return production_runtime_config_sha256(self._config)
+
+    @property
+    def cleanup_upper_bound_seconds(self) -> int:
+        projection = _production_resource_cleanup_bound_projection(self._config)
+        return cast(int, projection["cleanup_upper_bound_seconds"])
+
+    @property
+    def cleanup_upper_bound_preimage(self) -> bytes:
+        return _production_resource_cleanup_bound_preimage(self._config)
+
+    @property
+    def cleanup_upper_bound_sha256(self) -> str:
+        return hashlib.sha256(self.cleanup_upper_bound_preimage).hexdigest()
+
     def failure_evidence_preimage(self, stage: RunStageV1) -> bytes | None:
-        if stage is not RunStageV1.RESOURCE_PREFLIGHT:
-            return None
-        return self._failure_evidence
+        if stage is RunStageV1.RESOURCE_PREFLIGHT:
+            return self._failure_evidence
+        if stage is RunStageV1.MAI_LIVE_SMOKE:
+            return self._cleanup_failure_evidence or self._handoff_failure_evidence
+        return None
 
     @property
     def cpu_trace(self) -> CpuResourceLifecycleTraceV1:
@@ -3436,6 +5218,86 @@ class DriverStageCensusV1:
 
 
 @dataclass(frozen=True, slots=True)
+class _ValidatedUnitJournalReferenceV1:
+    """Module-sealed proof that one compact journal reference was read back."""
+
+    expected_unit_id: str
+    reference_preimage_sha256: str
+    reference_sha256: str
+    blob_sha256: str
+    blob_byte_count: int
+    blob_safe_locator: str
+    owner_audit_root_identity_sha256: str
+    resource_dispatch_records_sha256: str
+    resource_dispatch_record_count: int
+    _resolver: object = field(repr=False, compare=False)
+    _seal: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _MODULE_SEAL:
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL", "unit journal validation seal differs"
+            )
+        _require_safe_id(self.expected_unit_id, "unit_journal.expected_unit_id")
+        for name in (
+            "reference_preimage_sha256",
+            "reference_sha256",
+            "blob_sha256",
+            "owner_audit_root_identity_sha256",
+            "resource_dispatch_records_sha256",
+        ):
+            _require_sha256(getattr(self, name), f"unit_journal.{name}")
+        if (
+            type(self.blob_byte_count) is not int
+            or self.blob_byte_count <= _MAX_INLINE_UNIT_EVIDENCE_JOURNAL_BYTES
+            or type(self.blob_safe_locator) is not str
+            or self.blob_safe_locator != f"{self.blob_sha256}{_UNIT_EVIDENCE_BLOB_SUFFIX}"
+            or type(self.resource_dispatch_record_count) is not int
+            or self.resource_dispatch_record_count < 1
+        ):
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL", "validated unit journal reference differs"
+            )
+
+    def revalidate(self, reference_raw: bytes, *, expected_unit_id: str) -> None:
+        resolver = self._resolver
+        if type(resolver) is not _ProductionFixedExecutionPortV1:
+            raise ProductionDriverError("INVALID_UNIT_JOURNAL", "unit journal resolver differs")
+        current = resolver._validated_smoke_unit_journal_reference(
+            reference_raw, expected_unit_id=expected_unit_id
+        )
+        if current is None or _validated_unit_journal_reference_projection(
+            current
+        ) != _validated_unit_journal_reference_projection(self):
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL", "unit journal validation binding differs"
+            )
+
+
+def _validated_unit_journal_reference_projection(
+    value: _ValidatedUnitJournalReferenceV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not _ValidatedUnitJournalReferenceV1:
+        raise ProductionDriverError("INVALID_UNIT_JOURNAL", "unit journal validation type differs")
+    return {
+        "blob": {
+            "algorithm": "sha256",
+            "byte_count": value.blob_byte_count,
+            "safe_locator": value.blob_safe_locator,
+            "sha256": value.blob_sha256,
+        },
+        "expected_unit_id": value.expected_unit_id,
+        "owner_audit_root_identity_sha256": value.owner_audit_root_identity_sha256,
+        "reference_preimage_sha256": value.reference_preimage_sha256,
+        "reference_sha256": value.reference_sha256,
+        "resource_dispatch_record_count": value.resource_dispatch_record_count,
+        "resource_dispatch_records_sha256": value.resource_dispatch_records_sha256,
+        "schema_version": _VALIDATED_UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION,
+        "validation_status": "EXACT_OWNER_ONLY_READBACK",
+    }
+
+
+@dataclass(frozen=True, slots=True)
 class SmokeCaseEvidenceV1:
     manifest_sha256: str
     run_id: str
@@ -3451,6 +5313,9 @@ class SmokeCaseEvidenceV1:
     request_fixture_byte_count: int
     decision: ActorDecisionEvidenceV1
     cleanup_receipt_sha256: str
+    unit_journal_preimage: bytes | None
+    unit_journal_sha256: str | None
+    unit_journal_validated_reference: _ValidatedUnitJournalReferenceV1 | None
     census: DriverStageCensusV1
 
     def __post_init__(self) -> None:
@@ -3478,6 +5343,70 @@ class SmokeCaseEvidenceV1:
             or type(self.census) is not DriverStageCensusV1
         ):
             raise ProductionDriverError("INVALID_EVIDENCE", "smoke evidence type differs")
+        if (self.unit_journal_preimage is None) != (self.unit_journal_sha256 is None):
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL", "smoke unit journal presence differs"
+            )
+        if self.unit_journal_preimage is None:
+            if self.unit_journal_validated_reference is not None:
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "orphan unit journal validation differs"
+                )
+            return
+        if self.unit_journal_preimage is not None:
+            assert self.unit_journal_sha256 is not None
+            if type(self.unit_journal_preimage) is not bytes:
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "smoke unit journal must use exact bytes"
+                )
+            try:
+                journal = json.loads(self.unit_journal_preimage)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "smoke unit journal is not JSON"
+                ) from exc
+            if (
+                hashlib.sha256(self.unit_journal_preimage).hexdigest() != self.unit_journal_sha256
+                or canonical_json_bytes(cast(JsonValue, journal)) != self.unit_journal_preimage
+                or type(journal) is not dict
+            ):
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "smoke unit journal binding differs"
+                )
+            expected_unit_id = f"smoke:{self.host.value}:{self.mode.value}"
+            is_blob_reference = (
+                journal.get("schema_version") == _UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION
+                or journal.get("storage") == _UNIT_EVIDENCE_BLOB_STORAGE_KIND
+            )
+            if is_blob_reference:
+                validation = self.unit_journal_validated_reference
+                if type(validation) is not _ValidatedUnitJournalReferenceV1:
+                    raise ProductionDriverError(
+                        "INVALID_UNIT_JOURNAL",
+                        "smoke unit journal blob lacks validated readback",
+                    )
+                validation.revalidate(self.unit_journal_preimage, expected_unit_id=expected_unit_id)
+            else:
+                if self.unit_journal_validated_reference is not None:
+                    raise ProductionDriverError(
+                        "INVALID_UNIT_JOURNAL",
+                        "inline smoke unit journal has an orphan blob validation",
+                    )
+                dispatches = journal.get("resource_dispatch_records")
+                if (
+                    journal.get("unit_id") != expected_unit_id
+                    or type(dispatches) is not list
+                    or not dispatches
+                    or journal.get("resource_dispatch_records_sha256")
+                    != _hash_projection(
+                        "production-unit-resource-dispatch-journal",
+                        cast(JsonValue, dispatches),
+                    )
+                ):
+                    raise ProductionDriverError(
+                        "INVALID_UNIT_JOURNAL",
+                        "smoke unit journal lacks its dispatch census",
+                    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3570,7 +5499,10 @@ class SmokeStageEvidenceV1:
     schema_version: str = PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION:
+        if self.schema_version not in {
+            PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
+            PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2,
+        }:
             raise ProductionDriverError("UNKNOWN_SCHEMA", "smoke evidence schema differs")
         _require_sha256(self.manifest_sha256, "manifest_sha256")
         _require_safe_id(self.run_id, "run_id")
@@ -3586,6 +5518,17 @@ class SmokeStageEvidenceV1:
             raise ProductionDriverError("INVALID_EVIDENCE", "smoke needs three exact cases")
         if type(self.census) is not DriverStageCensusV1:
             raise ProductionDriverError("INVALID_CENSUS", "smoke stage census type differs")
+        journals_present = tuple(item.unit_journal_preimage is not None for item in self.cases)
+        if (
+            self.schema_version == PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2
+            and not all(journals_present)
+        ) or (
+            self.schema_version == PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+            and any(journals_present)
+        ):
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL", "smoke stage schema/journal variant differs"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -3667,7 +5610,7 @@ def _decision_projection(value: ActorDecisionEvidenceV1) -> dict[str, JsonValue]
 
 
 def _smoke_case_evidence_projection(value: SmokeCaseEvidenceV1) -> dict[str, JsonValue]:
-    return {
+    projection: dict[str, JsonValue] = {
         "actor_resource_sha256": value.actor_resource_sha256,
         "case_id": value.case_id,
         "census": _census_projection(value.census),
@@ -3684,6 +5627,28 @@ def _smoke_case_evidence_projection(value: SmokeCaseEvidenceV1) -> dict[str, Jso
         "stage": value.stage.value,
         "task_id": value.task_id,
     }
+    if value.unit_journal_preimage is not None:
+        assert value.unit_journal_sha256 is not None
+        validated_reference = value.unit_journal_validated_reference
+        validation_projection: dict[str, JsonValue] | None = None
+        if validated_reference is not None:
+            validated_reference.revalidate(
+                value.unit_journal_preimage,
+                expected_unit_id=f"smoke:{value.host.value}:{value.mode.value}",
+            )
+            validation_projection = _validated_unit_journal_reference_projection(
+                validated_reference
+            )
+        projection.update(
+            {
+                "unit_journal": cast(JsonValue, json.loads(value.unit_journal_preimage)),
+                "unit_journal_byte_count": len(value.unit_journal_preimage),
+                "unit_journal_sha256": value.unit_journal_sha256,
+            }
+        )
+        if validation_projection is not None:
+            projection["unit_journal_validated_reference"] = cast(JsonValue, validation_projection)
+    return projection
 
 
 def _pilot_cell_evidence_projection(value: PilotCellEvidenceV1) -> dict[str, JsonValue]:
@@ -3776,6 +5741,12 @@ def _snapshot_context(value: StageAdapterContextV1) -> StageAdapterContextV1:
     if type(value) is not StageAdapterContextV1:
         raise ProductionDriverError("UNTRUSTED_TYPE", "adapter context must use exact type")
     _require_sha256(value.manifest_sha256, "context.manifest_sha256")
+    _require_sha256(
+        value.sequence_scope_authority_sha256,
+        "context.sequence_scope_authority_sha256",
+    )
+    if value.sequence_execution_scope not in {"R24_R25_FULL", "R24_LIVE_SMOKE_ONLY"}:
+        raise ProductionDriverError("INVALID_CONTEXT", "sequence execution scope differs")
     _require_safe_id(value.run_id, "context.run_id")
     if (
         type(value.source_commit) is not str
@@ -3798,6 +5769,8 @@ def _snapshot_context(value: StageAdapterContextV1) -> StageAdapterContextV1:
         raise ProductionDriverError("OWNER_AUTHORITY_EXPIRED", "stage authority elapsed")
     return StageAdapterContextV1(
         manifest_sha256=value.manifest_sha256,
+        sequence_execution_scope=value.sequence_execution_scope,
+        sequence_scope_authority_sha256=value.sequence_scope_authority_sha256,
         run_id=value.run_id,
         source_commit=value.source_commit,
         remaining_actor_calls=value.remaining_actor_calls,
@@ -4197,6 +6170,54 @@ class _PilotPortResultV1:
 @dataclass(frozen=True, slots=True)
 class _CleanupResultV1:
     cleanup_receipt_sha256: str
+    unit_journal_preimage: bytes | None = None
+    unit_journal_sha256: str | None = None
+    unit_journal_validated_reference: _ValidatedUnitJournalReferenceV1 | None = None
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.cleanup_receipt_sha256, "cleanup_receipt_sha256")
+        if (self.unit_journal_preimage is None) != (self.unit_journal_sha256 is None):
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL", "unit journal preimage/hash presence differs"
+            )
+        if self.unit_journal_preimage is not None:
+            assert self.unit_journal_sha256 is not None
+            if (
+                type(self.unit_journal_preimage) is not bytes
+                or hashlib.sha256(self.unit_journal_preimage).hexdigest()
+                != self.unit_journal_sha256
+            ):
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "unit journal preimage/hash differs"
+                )
+            try:
+                journal = json.loads(self.unit_journal_preimage)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "cleanup unit journal is not JSON"
+                ) from exc
+            is_blob_reference = type(journal) is dict and (
+                journal.get("schema_version") == _UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION
+                or journal.get("storage") == _UNIT_EVIDENCE_BLOB_STORAGE_KIND
+            )
+            if is_blob_reference:
+                validation = self.unit_journal_validated_reference
+                if type(validation) is not _ValidatedUnitJournalReferenceV1:
+                    raise ProductionDriverError(
+                        "INVALID_UNIT_JOURNAL", "cleanup blob journal lacks validated readback"
+                    )
+                validation.revalidate(
+                    self.unit_journal_preimage,
+                    expected_unit_id=validation.expected_unit_id,
+                )
+            elif self.unit_journal_validated_reference is not None:
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "cleanup inline journal has orphan blob validation"
+                )
+        elif self.unit_journal_validated_reference is not None:
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL", "cleanup journal validation lacks a preimage"
+            )
 
 
 def _deadline_projection(
@@ -4887,6 +6908,7 @@ class _ProductionUnitStateV1:
     terminal_audit_journal: list[dict[str, JsonValue]] = field(default_factory=list)
     terminal_audit_sha256s: set[str] = field(default_factory=set)
     cleanup_recovery_outcome: dict[str, JsonValue] | None = None
+    resource_dispatch_journal: list[dict[str, JsonValue]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5010,6 +7032,13 @@ class _ProductionFixedExecutionPortV1:
             raise ProductionDriverError("CASE_DEADLINE_EXCEEDED", "case wall deadline elapsed")
         return deadline_ns
 
+    def _require_pilot_scope_authorized(self) -> None:
+        if self._factory.sequence_execution_scope.value != "R24_R25_FULL":
+            raise ProductionDriverError(
+                "PILOT_SCOPE_UNAUTHORIZED",
+                "smoke-only authority cannot enter pilot execution",
+            )
+
     @property
     def shutdown_grace_seconds(self) -> int:
         return self._config.shutdown_grace_seconds
@@ -5052,6 +7081,7 @@ class _ProductionFixedExecutionPortV1:
         kind: ProductionDispatchKindV1,
         *,
         deadline_ns: int,
+        state: _ProductionUnitStateV1 | None = None,
     ) -> None:
         try:
             self._require_deadline(deadline_ns)
@@ -5063,11 +7093,40 @@ class _ProductionFixedExecutionPortV1:
             raise
         if kind is not ProductionDispatchKindV1.CLEANUP:
             self._require_run_dispatch_allowed()
-        self._resource_lifecycle.require_dispatch(
-            host,
-            kind,
-            authority_deadline_monotonic_ns=deadline_ns,
-        )
+        if type(self._resource_lifecycle) is ProductionResourceLifecycleAdapterV1 and state is None:
+            raise ProductionDriverError(
+                "RESOURCE_DISPATCH_EVIDENCE_INVALID",
+                "production resource dispatch requires a unit evidence journal",
+            )
+        try:
+            dispatch_sha256 = self._resource_lifecycle.require_dispatch(
+                host,
+                kind,
+                authority_deadline_monotonic_ns=deadline_ns,
+            )
+        except Exception:
+            failure_evidence = getattr(
+                self._resource_lifecycle,
+                "last_dispatch_failure_evidence_preimage",
+                None,
+            )
+            if callable(failure_evidence):
+                raw = failure_evidence()
+                if raw is not None and state is not None:
+                    state.resource_dispatch_journal.append(
+                        cast(dict[str, JsonValue], json.loads(raw))
+                    )
+            raise
+        if type(self._resource_lifecycle) is not ProductionResourceLifecycleAdapterV1:
+            return
+        raw = self._resource_lifecycle.last_dispatch_evidence_preimage()
+        if raw is None or hashlib.sha256(raw).hexdigest() != dispatch_sha256:
+            raise ProductionDriverError(
+                "RESOURCE_DISPATCH_EVIDENCE_INVALID",
+                "resource dispatch evidence hash differs",
+            )
+        assert state is not None
+        state.resource_dispatch_journal.append(cast(dict[str, JsonValue], json.loads(raw)))
 
     def _require_broker(self, broker: CaseAuthorityBrokerV1) -> None:
         if type(broker) is not _PostPreflightCaseAuthorityBrokerV1 or (
@@ -5881,6 +7940,70 @@ class _ProductionFixedExecutionPortV1:
             )
         return self._decode_full_unit_journal_raw(blob_raw, expected_unit_id=expected_unit_id)
 
+    def _validated_smoke_unit_journal_reference(
+        self, journal_raw: bytes, *, expected_unit_id: str
+    ) -> _ValidatedUnitJournalReferenceV1 | None:
+        """Resolve a smoke journal and seal exact owner-only blob readback evidence."""
+
+        full = self._decode_unit_journal_snapshot(journal_raw, expected_unit_id=expected_unit_id)
+        dispatches = full.get("resource_dispatch_records")
+        dispatches_sha256 = full.get("resource_dispatch_records_sha256")
+        if (
+            type(dispatches) is not list
+            or not dispatches
+            or type(dispatches_sha256) is not str
+            or dispatches_sha256
+            != _hash_projection(
+                "production-unit-resource-dispatch-journal",
+                cast(JsonValue, dispatches),
+            )
+        ):
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL",
+                "smoke unit journal lacks its dispatch census",
+            )
+        decoded = cast(dict[str, JsonValue], json.loads(journal_raw))
+        if decoded.get("schema_version") != _UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION:
+            return None
+        blob = cast(dict[str, JsonValue], decoded["blob"])
+        sink = getattr(self, "_audit_sink", None)
+        if type(sink) is not ExternalProductionRuntimeAuditSinkV1:
+            raise ProductionDriverError(
+                "UNIT_EVIDENCE_BLOB_SINK_UNAVAILABLE",
+                "validated journal reference lacks its exact owner-only root",
+            )
+        directory_fd = self._open_unit_evidence_blob_root()
+        try:
+            info = os.fstat(directory_fd)
+            root_identity_sha256 = _hash_projection(
+                "production-unit-evidence-owner-root-identity",
+                cast(
+                    JsonValue,
+                    {
+                        "canonical_path_sha256": hashlib.sha256(os.fsencode(sink.root)).hexdigest(),
+                        "device": info.st_dev,
+                        "gid": info.st_gid,
+                        "inode": info.st_ino,
+                        "uid": info.st_uid,
+                    },
+                ),
+            )
+        finally:
+            os.close(directory_fd)
+        return _ValidatedUnitJournalReferenceV1(
+            expected_unit_id=expected_unit_id,
+            reference_preimage_sha256=hashlib.sha256(journal_raw).hexdigest(),
+            reference_sha256=cast(str, decoded["reference_sha256"]),
+            blob_sha256=cast(str, blob["sha256"]),
+            blob_byte_count=cast(int, blob["byte_count"]),
+            blob_safe_locator=cast(str, blob["safe_locator"]),
+            owner_audit_root_identity_sha256=root_identity_sha256,
+            resource_dispatch_records_sha256=dispatches_sha256,
+            resource_dispatch_record_count=len(dispatches),
+            _resolver=self,
+            _seal=_MODULE_SEAL,
+        )
+
     @staticmethod
     def _decode_full_unit_journal_raw(raw: bytes, *, expected_unit_id: str) -> dict[str, JsonValue]:
         """Validate a complete canonical in-memory or blob-backed journal."""
@@ -5918,6 +8041,7 @@ class _ProductionFixedExecutionPortV1:
         cleanup_recovery_outcome = (
             None if state.cleanup_recovery_outcome is None else dict(state.cleanup_recovery_outcome)
         )
+        resource_dispatches = [dict(item) for item in state.resource_dispatch_journal]
         raw = canonical_json_bytes(
             cast(
                 JsonValue,
@@ -5949,6 +8073,11 @@ class _ProductionFixedExecutionPortV1:
                         None
                         if fatal_state is None
                         else production_run_fatal_state_sha256(fatal_state)
+                    ),
+                    "resource_dispatch_records": resource_dispatches,
+                    "resource_dispatch_records_sha256": _hash_projection(
+                        "production-unit-resource-dispatch-journal",
+                        cast(JsonValue, resource_dispatches),
                     ),
                     "unit_deadline": cast(
                         JsonValue,
@@ -6230,6 +8359,7 @@ class _ProductionFixedExecutionPortV1:
                     state.host,
                     ProductionDispatchKindV1.ACTOR,
                     deadline_ns=state.deadline_monotonic_ns,
+                    state=state,
                 )
                 with bind_sentinel_logical_call(call):
                     prediction = agent.openai_chat_completions_create(
@@ -6320,6 +8450,7 @@ class _ProductionFixedExecutionPortV1:
                 return prediction, action, decision_evidence
 
     def prepare_pilot(self, pilot: FrozenPilotManifestV1) -> None:
+        self._require_pilot_scope_authorized()
         with self._lock:
             if self._pilot_inputs is not None:
                 raise ProductionDriverError("PILOT_ALREADY_PREPARED", "pilot inputs repeat")
@@ -6342,6 +8473,7 @@ class _ProductionFixedExecutionPortV1:
             self._pilot_inputs = resolved
 
     def reset_pilot_cell(self, invocation: _PilotInvocationV1) -> _PilotResetResultV1:
+        self._require_pilot_scope_authorized()
         self._require_invocation_deadlines(invocation)
         self._require_run_dispatch_allowed()
         unit_id = self._unit_id(invocation)
@@ -6388,6 +8520,7 @@ class _ProductionFixedExecutionPortV1:
             invocation.cell.host,
             ProductionDispatchKindV1.BACKEND_RESET,
             deadline_ns=invocation.deadline_monotonic_ns,
+            state=state,
         )
         observation = environment.initialize_task(
             task_input.task_name,
@@ -6401,6 +8534,7 @@ class _ProductionFixedExecutionPortV1:
             invocation.cell.host,
             ProductionDispatchKindV1.BACKEND_TASK_GOAL,
             deadline_ns=invocation.deadline_monotonic_ns,
+            state=state,
         )
         task_goal = environment.get_task_goal(task_input.task_name)
         if type(task_goal) is not str or not task_goal:
@@ -6499,6 +8633,7 @@ class _ProductionFixedExecutionPortV1:
         invocation: _PilotInvocationV1,
         lease: CaseAuthorityBrokerV1,
     ) -> _PilotPortResultV1:
+        self._require_pilot_scope_authorized()
         self._require_broker(lease)
         self._require_run_dispatch_allowed()
         unit_id = self._unit_id(invocation)
@@ -6516,7 +8651,13 @@ class _ProductionFixedExecutionPortV1:
             initial_observation=state.observation,
         )
         decisions: list[ActorDecisionEvidenceV1] = []
-        for actor_call_index in range(1, self._manifest.pilot.max_steps_per_cell + 1):
+        pilot = getattr(self._manifest, "pilot", None)
+        if type(pilot) is not FrozenPilotManifestV1:
+            raise ProductionDriverError(
+                "PILOT_SCOPE_UNAUTHORIZED",
+                "smoke-only authority cannot enter pilot execution",
+            )
+        for actor_call_index in range(1, pilot.max_steps_per_cell + 1):
             self._require_deadline(invocation.deadline_monotonic_ns)
             self._require_run_dispatch_allowed()
             observation = state.observation
@@ -6540,6 +8681,7 @@ class _ProductionFixedExecutionPortV1:
                         state.host,
                         ProductionDispatchKindV1.ACTOR,
                         deadline_ns=state.deadline_monotonic_ns,
+                        state=state,
                     )
                     try:
                         with bind_sentinel_logical_call(call):
@@ -6571,6 +8713,7 @@ class _ProductionFixedExecutionPortV1:
                                 state.host,
                                 ProductionDispatchKindV1.ACTION,
                                 deadline_ns=state.deadline_monotonic_ns,
+                                state=state,
                             )
                             next_observation = state.environment.execute_action(action)
                         except Exception as exc:
@@ -6644,6 +8787,7 @@ class _ProductionFixedExecutionPortV1:
             state.host,
             ProductionDispatchKindV1.SCORE,
             deadline_ns=state.deadline_monotonic_ns,
+            state=state,
         )
         score, reason = state.environment.get_task_score(state.task_name)
         if (
@@ -6929,6 +9073,7 @@ class _ProductionFixedExecutionPortV1:
                         state.host,
                         ProductionDispatchKindV1.CLEANUP,
                         deadline_ns=state.cleanup_deadline_monotonic_ns,
+                        state=state,
                     )
 
                 def mark_teardown_dispatched() -> None:
@@ -7078,6 +9223,25 @@ class _ProductionFixedExecutionPortV1:
         ):
             cleanup_dispatch_failure_code = "CLEANUP_DEADLINE_EXCEEDED"
             failures.append(cleanup_dispatch_failure_code)
+        final_unit_journal_preimage: bytes | None = None
+        final_unit_journal_validation: _ValidatedUnitJournalReferenceV1 | None = None
+        resource_lifecycle = getattr(self, "_resource_lifecycle", None)
+        if (
+            not failures
+            and type(resource_lifecycle) is ProductionResourceLifecycleAdapterV1
+            and resource_lifecycle.resource_topology
+            is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        ):
+            try:
+                final_unit_journal_preimage = self._unit_journal_snapshot(state)
+                final_unit_journal_validation = self._validated_smoke_unit_journal_reference(
+                    final_unit_journal_preimage, expected_unit_id=unit_id
+                )
+                with self._lock:
+                    self._unit_journals[unit_id] = final_unit_journal_preimage
+            except Exception as exc:
+                journal_failure_code = _exception_code(exc, "UNIT_EVIDENCE_PUBLICATION_FAILED")
+                failures.append(journal_failure_code)
         if failures:
             if cleanup_dispatch_failure_code == "CLEANUP_DEADLINE_EXCEEDED":
                 with self._lock:
@@ -7088,6 +9252,11 @@ class _ProductionFixedExecutionPortV1:
             )
         with self._lock:
             self._units.pop(unit_id, None)
+        final_unit_journal_sha256 = (
+            None
+            if final_unit_journal_preimage is None
+            else hashlib.sha256(final_unit_journal_preimage).hexdigest()
+        )
         return _CleanupResultV1(
             cleanup_receipt_sha256=_hash_projection(
                 "production-unit-cleanup",
@@ -7113,10 +9282,14 @@ class _ProductionFixedExecutionPortV1:
                         "task_run_id": task_run_id,
                         "teardown_attempted": teardown_attempted,
                         "teardown_result_sha256": teardown_result_sha256,
+                        "unit_journal_sha256": final_unit_journal_sha256,
                         "unit_id": unit_id,
                     },
                 ),
-            )
+            ),
+            unit_journal_preimage=final_unit_journal_preimage,
+            unit_journal_sha256=final_unit_journal_sha256,
+            unit_journal_validated_reference=final_unit_journal_validation,
         )
 
 
@@ -7420,6 +9593,9 @@ class FixedLiveSmokeAdapterV1:
                         request_fixture_byte_count=port_result.request_fixture_byte_count,
                         decision=port_result.decision,
                         cleanup_receipt_sha256=cleanup.cleanup_receipt_sha256,
+                        unit_journal_preimage=cleanup.unit_journal_preimage,
+                        unit_journal_sha256=cleanup.unit_journal_sha256,
+                        unit_journal_validated_reference=(cleanup.unit_journal_validated_reference),
                         census=case_census,
                     )
                 except Exception as exc:
@@ -7483,6 +9659,11 @@ class FixedLiveSmokeAdapterV1:
                 history_policy_stage_sha256=policy_sha,
                 cases=tuple(records),
                 census=census,
+                schema_version=(
+                    PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2
+                    if any(item.unit_journal_preimage is not None for item in records)
+                    else PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+                ),
             )
             self._evidence[stage] = evidence
             evidence_preimage = canonical_json_bytes(
@@ -7537,6 +9718,11 @@ class FixedPilotAdapterV1:
             if self._evidence is not None:
                 raise ProductionDriverError("STAGE_ALREADY_RUN", "pilot already completed")
             trusted_context = _snapshot_context(context)
+            if trusted_context.sequence_execution_scope != "R24_R25_FULL":
+                raise ProductionDriverError(
+                    "PILOT_SCOPE_UNAUTHORIZED",
+                    "smoke-only authority cannot enter pilot execution",
+                )
             trusted_pilot = _snapshot_pilot(pilot)
             self._failure_evidence = canonical_json_bytes(
                 cast(
@@ -7942,6 +10128,31 @@ def build_production_driver_v1(
         raise ProductionDriverError(
             "RUNTIME_CONFIG_HASH_DRIFT", "confirmed runtime config hash differs"
         )
+    if type(resource_lifecycle) is not ProductionResourceLifecycleAdapterV1:
+        raise ProductionDriverError(
+            "RESOURCE_LIFECYCLE_REQUIRED",
+            "exact shared production resource lifecycle is required",
+        )
+    shared_binding_claimed = (
+        factory.sequence_execution_scope.value == "R24_LIVE_SMOKE_ONLY"
+        or runtime_config.resource_topology
+        is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        or resource_lifecycle.resource_topology
+        is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+    )
+    if shared_binding_claimed and (
+        factory.sequence_execution_scope.value != "R24_LIVE_SMOKE_ONLY"
+        or factory.runtime_config_sha256 != confirmed_runtime_config_sha256
+        or resource_lifecycle.runtime_config_sha256 != confirmed_runtime_config_sha256
+        or runtime_config.resource_topology
+        is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        or resource_lifecycle.resource_topology
+        is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+    ):
+        raise ProductionDriverError(
+            "SHARED_RESOURCE_AUTHORITY_MISMATCH",
+            "shared resource scope/runtime/lifecycle authority differs",
+        )
     if type(pricing) is not LiveAttemptPricingV1 or (
         confirmed_pricing_sha256 != live_attempt_pricing_sha256(pricing)
         or confirmed_pricing_sha256 != factory.pricing_binding_sha256
@@ -7952,11 +10163,6 @@ def build_production_driver_v1(
     if type(production_audit_sink) is not ExternalProductionRuntimeAuditSinkV1:
         raise ProductionDriverError(
             "PRODUCTION_AUDIT_SINK_REQUIRED", "exact external production audit sink is required"
-        )
-    if type(resource_lifecycle) is not ProductionResourceLifecycleAdapterV1:
-        raise ProductionDriverError(
-            "RESOURCE_LIFECYCLE_REQUIRED",
-            "exact shared production resource lifecycle is required",
         )
     port = _ProductionFixedExecutionPortV1(
         factory=factory,
@@ -7987,6 +10193,11 @@ def _pilot_protocol_assertion(value: FixedPilotAdapterV1) -> PilotAdapterPortV1:
 __all__ = [
     "OFFICIAL_RESULT_EVALUATOR_ID_V1",
     "PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION",
+    "PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1",
+    "PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1",
+    "PRODUCTION_RESOURCE_CLEANUP_EVIDENCE_SCHEMA_VERSION_V1",
+    "PRODUCTION_SHARED_RESOURCE_EVIDENCE_SCHEMA_VERSION_V2",
+    "PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2",
     "PRODUCTION_DRIVER_REQUIRED_BINDINGS_V1",
     "PRODUCTION_DRIVER_REQUIRED_HOOKS_V1",
     "ActorDecisionEvidenceV1",
@@ -8007,9 +10218,14 @@ __all__ = [
     "ProductionDriverError",
     "ProductionDriverHookV1",
     "ProductionDispatchKindV1",
+    "ProductionModelHandoffEvidenceV1",
+    "ProductionModelStopEvidenceV1",
     "ProductionResourceLifecycleAdapterV1",
     "ProductionResourceStageEvidenceV1",
+    "ProductionResourceTopologyV1",
     "ProductionRuntimeConfigV1",
+    "ProductionSharedGpuAttestationV1",
+    "SharedGpuProcessEvidenceV1",
     "SmokeCaseEvidenceV1",
     "SmokeStageEvidenceV1",
     "build_cpu_test_production_driver_v1",
@@ -8022,11 +10238,17 @@ __all__ = [
     "production_command_spec_projection",
     "production_command_spec_sha256",
     "production_driver_available_v1",
+    "production_model_handoff_evidence_projection",
+    "production_model_handoff_evidence_sha256",
+    "production_model_stop_evidence_projection",
+    "production_model_stop_evidence_sha256",
     "production_resource_stage_evidence_projection",
     "production_resource_stage_evidence_sha256",
     "parse_production_runtime_config",
     "production_runtime_config_projection",
     "production_runtime_config_sha256",
+    "production_shared_gpu_attestation_projection",
+    "production_shared_gpu_attestation_sha256",
     "smoke_stage_evidence_projection",
     "smoke_stage_evidence_sha256",
 ]
