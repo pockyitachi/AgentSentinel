@@ -1,6 +1,6 @@
 # Instructions for AgentSentinel coding agents
 
-Last synchronized with the owner-facing repository state: **2026-09-04 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-05 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
 This directory preserves the scientific contracts and provenance for the
@@ -85,14 +85,13 @@ CPU/offline/injected-fake, SHADOW-only checkpoint at commit
 `2aa0a268b7d709cf05d524e74c3fba8612f64003`. ALE-327 / R2.4 and ALE-328 /
 R2.5 have an initial joint CPU-only/offline/injected-fake repository-preparation
 implementation at `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
-**NO-GO**. The latest remediation candidate is
-`37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner
+**NO-GO**. The latest CPU/offline shared-GPU smoke-preparation candidate is
+`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
 re-review: R2.4 remains In Progress / NO-GO; do not merge or push it, and do not
-authorize live work. No repository-preparation or remediation checkpoint issued
-an `OWNER_AUTHORIZED` manifest or ran the six-case live smoke or any pilot. No
-persistent 117-row executable source, selected cohort, or
-frozen pilot manifest/hash exists; only tooling/protocol preparation is
-claimed. R2.1
+issue or use live authority. No repository-preparation or remediation checkpoint
+issued an `OWNER_AUTHORIZED` manifest or ran the six-case live smoke or any
+pilot. Only smoke-only tooling/protocol preparation and read-only environment
+facts are claimed. R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
 History-IR snapshots,
 precomputed renderer-result binding, worker-owned policy-evaluation census, and
@@ -274,8 +273,9 @@ history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified it **NO-GO**. The latest
-remediation candidate is `37bde84c33c885dd0a266d9b2a770501b9e0855b`
-and remains pending owner re-review. It retains the earlier strict SDK/HTTP
+CPU/offline shared-GPU smoke-preparation candidate is
+`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
+re-review. It retains the earlier strict SDK/HTTP
 logging suppression, type-sensitive canonical-byte sealed-schema comparison,
 module-owned request anchors, bounded cleanup, and fatal-dispatch repairs. It
 must not be merged or pushed and does not authorize live execution. No
@@ -326,6 +326,42 @@ hash-bound `NOT_INITIALIZED_NO_IO` outcome without a dispatch callback,
 resource re-attestation, or backend request. Local closure and any already-
 created audit finalization still run.
 
+The additive `R24_LIVE_SMOKE_ONLY` authority, preflight, executor, and CLI bind
+only this fixed lifecycle:
+
+```text
+single shared-GPU lease + backend + Qwen start
+  -> Qwen OFF / SHADOW / ACTIVE
+  -> stop/reap Qwen, prove port clear, re-attest GPU and MAI snapshot
+  -> start MAI
+  -> MAI OFF / SHADOW / ACTIVE
+  -> bounded cleanup
+```
+
+`SINGLE_GPU_SEQUENTIAL_SHARED` requires the same GPU index for both actors,
+vLLM `gpu_memory_utilization=0.24`, and at least 51,200 MiB free at each
+admission boundary. GPU process evidence includes PID, start time, process
+group, session, UID, user, and memory. One project lease protects the complete
+sequence; pre-existing co-tenants may remain, but new or identity-drifting
+tenants fail closed and cleanup reaps only project-owned processes. The shared
+handoff crosses no actor overlap: the next actor starts only after the prior
+service/session/processes are gone and GPU plus immutable snapshot have been
+re-attested.
+
+The smoke-only manifest has no pilot, cohort, task-source, score, cell, or GUI-
+action authority. Its executor and CLI do not import or invoke R2.5, and pilot
+methods reject smoke scope before snapshot reads, reset, or dispatch. Secure
+authority/input loading binds owner-only regular files and their path/inode
+identity; the parent performs secret metadata/path checks with zero secret
+reads. Every physical dispatch and terminal result has durable audit proof,
+with full recovery projections and owner-only CAS for oversized journals. The
+shared cleanup bound is independently recomputed as
+`5 * shutdown_grace_seconds + 3 * ceil(health_poll_interval_ms / 1000) + 225`;
+the default grace 10 seconds and poll 250 ms yield exactly 278 seconds, and a
+smaller reserve fails before resource I/O. The legacy independent two-GPU
+concurrent full-run path remains unchanged and is not reachable
+through the smoke-only entrypoint.
+
 These repository candidates made no live OpenAI/model/provider call; used no
 external network, GPU, Docker, model service or weights, MobileWorld backend/emulator,
 GUI/tool/action, or replay; issued no `OWNER_AUTHORIZED` manifest; and
@@ -335,6 +371,14 @@ hash was created; only tooling/protocol preparation exists. A DRAFT authority
 does not grant execution permission. The frozen G1.5 Codecs remain
 `live_ready=false`, R2.3 is accepted, Runtime Epic 2 remains 3/6 accepted, and
 Linear remains owner-managed.
+
+Candidate `46a176c6f523da34439a75fd10f3901644c52530` passed the CPU/offline
+R2.3--R2.5 gate 667/667 and the complete MobileWorld suite 2357/2357 in 606.62
+seconds. Ruff check/format passed over 15 changed Python files; configured mypy
+passed over 29 runtime source files and four operator scripts; all 23
+R2.2--R2.5 schemas passed; accepted R2.3 bytes remained exactly equal; Git diff
+checks passed; and independent shared-resource, smoke-CLI, and execution-
+boundary red teams reported GO. These checks are not an R2.4 live-smoke result.
 
 ## 5. Reusable implementation assets
 
@@ -403,6 +447,8 @@ Currently permitted:
 - the checked-in R2.4/R2.5 contracts, CPU orchestration, topology evidence,
   sealed production doubles, audit/analysis, and authority-building mechanics
   under CPU fixtures and injected fakes only;
+- the additive shared-single-GPU smoke-only authority, preflight, executor,
+  lifecycle, and CLI mechanics under CPU fixtures and injected fakes only;
 - existing in-process fake provider and secret-free fixtures;
 - read-only inspection and hash validation of historical artifacts.
 
@@ -559,18 +605,17 @@ owner-managed.
 
 The initial joint R2.4/R2.5 repository-preparation implementation is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
-**NO-GO**. Its latest remediation candidate is
-`37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner
-re-review. It is CPU-only, offline, injected-fake engineering
-evidence, is ready only for owner re-review, and must not be merged, pushed, or
-treated as live authority. The combined affected gate passed 247/247; R2.4
-passed 455/455; the combined R2.3--R2.5 gate passed 557/557; and the complete
-MobileWorld suite passed 2247/2247 in 604.38 seconds. Independent scoped
-red-team review reported GO for cancellation/success linearization and the
-non-completed history-policy admission boundary. Ruff check and format check
-passed over the four implementation/test files; configured mypy passed over 28
-source files; R2.2--R2.5 schemas passed 22/22; accepted R2.3 bytes remained
-exactly equal; and Git diff checks passed.
+**NO-GO**. Its latest CPU/offline shared-GPU smoke-preparation candidate is
+`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
+re-review. It is CPU-only, offline, injected-fake engineering evidence, is
+ready only for owner re-review, and must not be merged, pushed, or treated as
+live authority. The combined R2.3--R2.5 gate passed 667/667 and the complete
+MobileWorld suite passed 2357/2357 in 606.62 seconds. Ruff check and format
+check passed over 15 changed Python files; configured mypy passed over 29
+runtime source files and four scripts; R2.2--R2.5 schemas passed 23/23;
+accepted R2.3 bytes remained exactly equal; Git diff checks passed; and
+independent shared-resource, smoke-CLI, and execution-boundary red teams
+reported GO.
 
 No repository-preparation or remediation checkpoint issued live authority, ran
 a smoke or pilot, or created a persistent executable-task source, selected

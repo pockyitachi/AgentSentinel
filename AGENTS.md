@@ -1,6 +1,6 @@
 # AgentSentinel agent instructions
 
-Last synchronized with the owner-facing repository state: **2026-09-04 UTC**.
+Last synchronized with the owner-facing repository state: **2026-09-05 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
 This is the AgentSentinel monorepo. `MobileWorld/` is the active implementation
@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. The initial joint R2.4/R2.5 CPU repository-preparation implementation is `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it **NO-GO**. Its latest remediation candidate is `37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner re-review: R2.4 remains In Progress / NO-GO; do not merge or push it, and do not authorize live work. No `OWNER_AUTHORIZED` manifest was issued, no live smoke or pilot was run, and no persistent 117-row executable source, selected cohort, or frozen pilot manifest/hash exists. Only tooling/protocol preparation is claimed. Linear status remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. The initial joint R2.4/R2.5 CPU repository-preparation implementation is `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it **NO-GO**. Its latest CPU/offline shared-GPU smoke-preparation candidate is `46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner re-review: R2.4 remains In Progress / NO-GO; do not merge or push it, and do not issue or use live authority. No `OWNER_AUTHORIZED` manifest was issued and no GPU/model/network/API/backend/action smoke or pilot was run. Only smoke-only tooling/protocol preparation and read-only environment facts are claimed. Linear status remains owner-managed. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -230,8 +230,8 @@ history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified that candidate **NO-GO**.
-The latest remediation candidate is
-`37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner
+The latest CPU/offline shared-GPU smoke-preparation candidate is
+`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
 re-review. It retains the earlier strict-logging, type-sensitive-schema,
 request-anchor, run-fatal, bounded-cleanup, and no-cleanup-initialization
 repairs. It additionally binds every formed `RUBRIC` and `HISTORY_POLICY`
@@ -262,6 +262,32 @@ plan. The sole committed-receipt exception is a strict pre-response
 returned-model/response/output/proposal/plan/usage fields, and a zero semantic
 decision census.
 
+The additive smoke-only execution scope is `R24_LIVE_SMOKE_ONLY`. Its secure
+authority, preflight, executor, and CLI expose only the fixed sequence
+Qwen `OFF / SHADOW / ACTIVE`, stop/reap/port-clear and re-attest, MAI
+`OFF / SHADOW / ACTIVE`, then cleanup. The resource topology
+`SINGLE_GPU_SEQUENTIAL_SHARED` uses one exclusive project lease over the same
+GPU index, starts only one actor service at a time, pins vLLM
+`gpu_memory_utilization=0.24`, and requires at least 51,200 MiB free at each
+admission boundary. Shared-GPU census evidence binds GPU identity and each
+visible compute process's PID, start time, process group, session, UID, user,
+and memory. Pre-existing co-tenants may remain, but new or changed tenants fail
+closed; cleanup reaps only project-owned processes. The handoff re-attests the
+shared GPU and next immutable model snapshot before MAI starts.
+
+The smoke-only authority contains no cohort, pilot, task-source, cell, score,
+or GUI-action authority, and the smoke executor and CLI cannot reach R2.5.
+Pilot methods also fail before snapshot reads, reset, or dispatch when invoked
+under smoke scope. Input/authority handling uses owner-only, inode-bound files;
+the parent validates secret metadata and path identity without reading the
+secret. Per-dispatch, terminal, recovery, and oversized-journal CAS evidence is
+durable and bound into the smoke result. For the shared default runtime, the
+exact cleanup upper bound is
+`5 * shutdown_grace_seconds + 3 * ceil(health_poll_interval_ms / 1000) + 225`,
+or 278 seconds for grace 10 seconds and polling 250 ms; authority below that
+bound fails before resource I/O. The existing two-GPU concurrent full-run path
+and its semantics remain unchanged and separate from this smoke-only entrypoint.
+
 Production-audit `begin` failures now retain a module-sealed full pre-provider
 recovery receipt across root, destination, temporary-file, write, file-fsync,
 directory-fsync, sink-begin, and transaction-binding failures. Unit-evidence
@@ -284,6 +310,15 @@ task source, selected cohort, frozen pilot manifest, or corresponding content
 hash was created; only tooling/protocol preparation exists. The frozen G1.5
 Codecs remain `live_ready=false`. R2.3 is accepted, Runtime Epic 2 remains 3/6
 accepted, and Linear remains owner-managed.
+
+The final CPU/offline gates for candidate
+`46a176c6f523da34439a75fd10f3901644c52530` passed R2.3--R2.5 667/667 and the
+complete MobileWorld suite 2357/2357 in 606.62 seconds. Ruff check/format passed
+over 15 changed Python files; configured mypy passed over 29 runtime source
+files and four operator scripts; all 23 R2.2--R2.5 schemas passed; accepted
+R2.3 bytes remained exactly equal; Git diff checks passed; and independent
+shared-resource, smoke-CLI, and execution-boundary red teams reported GO.
+These are CPU/offline engineering results only, not live acceptance.
 
 ## Runtime Epic 2 sequence
 

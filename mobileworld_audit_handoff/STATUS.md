@@ -1,6 +1,6 @@
 # Project Status：GUI Agent Previous-Step Misleading Motivation Study
 
-Last updated: 2026-09-04 (UTC)
+Last updated: 2026-09-05 (UTC)
 
 ## 1. Project objective
 
@@ -15,9 +15,10 @@ Last updated: 2026-09-04 (UTC)
 ```
 
 该方向已在 accepted R2.3 CPU/offline/injected-fake checkpoint 与 R2.4
-CPU remediation candidate 中形成 rubric/tracking 与 runtime glue；R2.4 当前
-仍是 **NO-GO / In Progress**，不得 merge、push 或进入 live 授权。真实
-model-backed/live 执行尚未获授权，R2.5 pilot 也未运行。
+CPU/offline shared-GPU smoke-preparation candidate 中形成 rubric/tracking、
+runtime glue 与独立 smoke-only 入口；R2.4 当前仍是 **NO-GO / In Progress**，
+不得 merge、push 或进入 live 授权。真实 model-backed/live 执行尚未获授权，
+R2.5 pilot 也未运行。
 
 ## 2. Current stage and decision
 
@@ -81,8 +82,8 @@ GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 **Runtime ALE-327 / R2.4 与 ALE-328 / R2.5 的初始 joint
 CPU-only/offline/injected-fake repository engineering preparation implementation
 是 `344e1c42596a4dca717da66374eeca3d936c3f61`；owner review 结论为
-`NO-GO`。最新整改候选 commit 为
-`37bde84c33c885dd0a266d9b2a770501b9e0855b`，已完成 CPU-only/offline 代码整改但仍须
+`NO-GO`。最新 CPU/offline shared-GPU smoke-preparation 候选 commit 为
+`46a176c6f523da34439a75fd10f3901644c52530`，已完成 CPU-only/offline 代码整改但仍须
 owner 复审；R2.4 保持 In Progress / NO-GO，不得 merge/push，也不得进入 live 授权。** 最新
 候选保留此前 SDK/http logging、type-sensitive sealed schema、request anchor、bounded
 cleanup 与 fatal-dispatch 整改，并将每个 formed `RUBRIC`/`HISTORY_POLICY` attempt 的完整
@@ -113,11 +114,40 @@ transaction-binding 的失败均保留 module-sealed 完整 pre-provider recover
 `UNKNOWN` cost 与 `TERMINATION_UNCONFIRMED` 使用独立 run-fatal reason 阻断 actor/later
 dispatch。cleanup 只有在 client/backend `/init` 已在本地确认后才可 teardown dispatch；否则
 记录 `NOT_INITIALIZED_NO_IO`/zero-I/O recovery evidence。
+
+新增的 `R24_LIVE_SMOKE_ONLY` authority/preflight/executor/CLI 只允许固定顺序：同一
+shared-GPU project lease 下启动 backend 与 Qwen，依次执行 Qwen
+OFF/SHADOW/ACTIVE；随后停止并 reap Qwen、证明 port 已释放、重新核验 GPU 与 MAI
+immutable snapshot，再启动 MAI 并依次执行 OFF/SHADOW/ACTIVE，最后进入 bounded
+cleanup。`SINGLE_GPU_SEQUENTIAL_SHARED` 要求 Qwen/MAI 使用同一 GPU index，vLLM
+`gpu_memory_utilization=0.24`，每个 admission boundary 至少 51,200 MiB free。
+共享卡 census 绑定 GPU identity 以及所有 visible compute process 的 PID、starttime、
+pgrp、session、UID、user 和 memory；baseline co-tenant 可保留，但新增或 identity drift
+会 fail closed，cleanup 只处理 project-owned process。
+
+Smoke-only manifest 不含 pilot/cohort/117-row task source/cell/score/GUI-action authority，
+其 executor 与 CLI 不可到达 R2.5；pilot method 在 snapshot read、reset 或 dispatch 前即
+拒绝 smoke scope。secure loader 与 preflight 绑定 owner-only file 的 path/inode identity，
+parent 对 secret 保持 zero-read；每次 dispatch、terminal、recovery 与 oversized-journal
+CAS proof 均 durable。shared runtime 的 cleanup exact upper bound 为
+`5 * shutdown_grace_seconds + 3 * ceil(health_poll_interval_ms / 1000) + 225`，默认
+grace=10 秒、poll=250 ms 时为 278 秒；低于该 bound 的 authority 在 resource I/O 前失败。
+既有 independent dual-GPU concurrent full-run path 保持不变且不能从 smoke-only 入口到达。
+
+候选的 CPU/offline gate 已通过：R2.3--R2.5 667/667，完整 MobileWorld suite
+2357/2357（606.62 秒）；Ruff check/format 覆盖 15 个 changed Python files，configured
+mypy 覆盖 29 个 runtime source files 与 4 个 scripts，R2.2--R2.5 schemas 23/23，
+accepted R2.3 bytes exact equality 与 Git diff checks 均通过，独立 shared-resource、
+smoke-CLI、execution-boundary red teams 均为 GO。这些结果仅是 CPU/offline engineering
+evidence，不是 live-smoke 验收。
+
 当前只有 tooling/protocol preparation：没有持久化的 117-row executable task source、
 selected cohort、frozen pilot manifest 或对应 hash。R2.4 的 6 个 action-free live
 smoke cases 未运行；R2.5 的 80--120-cell pilot 未获授权且未执行。没有
-`OWNER_AUTHORIZED` manifest、live receipts 或 pilot outcome。R2.3 已接受，Runtime
-Epic 2 为 3/6 accepted；Linear 未修改。
+`OWNER_AUTHORIZED` manifest、live receipts 或 pilot outcome；没有启动 GPU process、
+加载 model、使用 network/API、启动 backend 或执行 action。GPU5/process/model/environment
+的只读 planning facts 不构成 preflight、resource admission 或 live 验收。R2.3 已接受，
+Runtime Epic 2 为 3/6 accepted；Linear 未修改。
 
 **Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
 并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
@@ -1517,4 +1547,67 @@ Only CPU/offline tooling and protocol preparation is claimed; no effectiveness
 or causal claim is established. Owner re-review is the next repository
 decision, and merge, push, live authorization, resource use, and Linear remain
 separate owner actions.
+```
+
+```text
+Date: 2026-09-05 UTC
+Latest ALE-327 / R2.4 CPU/offline shared-GPU smoke-preparation candidate:
+implementation commit `46a176c6f523da34439a75fd10f3901644c52530`
+supersedes `37bde84c33c885dd0a266d9b2a770501b9e0855b` after adding a narrow,
+pilot-free single-shared-GPU execution path for the six action-free live-smoke
+cases. This is repository engineering evidence for owner re-review, not an
+R2.4 live-smoke result. R2.4 remains In Progress / NO-GO, must not be merged or
+pushed, and grants no live authority. Runtime Epic 2 remains 3/6 accepted,
+R2.5 remains unauthorized, and Linear was not changed.
+
+Smoke-only lifecycle: `R24_LIVE_SMOKE_ONLY` and
+`SINGLE_GPU_SEQUENTIAL_SHARED` bind one project lease and one GPU index. The
+fixed sequence starts backend plus Qwen, runs Qwen OFF/SHADOW/ACTIVE, stops and
+reaps Qwen and proves its port clear, re-attests the shared GPU and immutable
+MAI snapshot, starts MAI, runs MAI OFF/SHADOW/ACTIVE, and finishes with bounded
+cleanup. Only one actor service may be live at a time. The runtime pins vLLM
+`gpu_memory_utilization=0.24` and requires at least 51,200 MiB free at each
+admission boundary. GPU census evidence binds index/UUID/capacity/use plus each
+visible compute process's PID, start time, process group, session, UID, user,
+and memory. Baseline co-tenants may remain; new or identity-drifting tenants
+fail closed, and cleanup targets only exact project-owned process identities.
+
+Authority and isolation boundary: the additive smoke-only authority,
+preflight, executor, and CLI contain no pilot, cohort, 117-row task source,
+cell, score, or GUI-action authority and cannot reach R2.5. Pilot methods reject
+smoke scope before snapshot reads, reset, or dispatch. Owner-only authority and
+input files are pinned by path/inode metadata; input alias, hard-link, symlink,
+or path-swap attacks fail before reading a secret, and the parent remains
+zero-read for the OpenAI key. The legacy independent two-GPU concurrent
+full-run path is unchanged and separate.
+
+Cleanup and proof boundary: the complete shared cleanup upper bound is
+`5 * shutdown_grace_seconds + 3 * ceil(health_poll_interval_ms / 1000) + 225`.
+The default grace 10 seconds and poll 250 ms require exactly 278 seconds; a
+smaller reserve fails before resource I/O. Canonical bound evidence is carried
+through authority, executor, terminal, failure, recovery, and cleanup. Resource
+preparation, handoff, every physical actor/Sentinel dispatch, case result,
+terminal, rollback, and cleanup are durable. Admission/write/fsync/rename and
+terminal-publication failures preserve full recovery proof, while oversized
+legal journals use owner-only content-addressed blobs with bound compact
+references.
+
+Verification: the combined R2.3--R2.5 CPU/offline gate passed 667/667 and the
+complete MobileWorld suite passed 2357/2357 in 606.62 seconds. Ruff check and
+format check passed over 15 changed Python files. Configured mypy passed over
+29 runtime source files and four operator scripts. All 23 R2.2--R2.5 schemas
+passed; accepted R2.3 implementation/schema bytes remained exactly equal; Git
+diff checks passed; and independent shared-resource, smoke-CLI, and execution-
+boundary red teams reported GO.
+
+Authority and resource boundary: no `OWNER_AUTHORIZED` manifest was issued.
+No GPU process/model service or weights, network, OpenAI/API/provider call,
+live credential, Docker/backend/emulator, GUI/tool/action, replay, smoke, or
+pilot was started or used. Read-only GPU5/process/model/environment facts are
+planning observations only and do not constitute preflight, resource
+admission, or acceptance. No persistent live-run artifact or receipt was
+created. Owner re-review remains the next repository decision; exact live
+authority, merge, push, resource use, and Linear remain separate owner actions.
+Owner approval required: yes before merge, push, live authority, live smoke,
+pilot, or any GPU/model/network/API/backend/action execution.
 ```

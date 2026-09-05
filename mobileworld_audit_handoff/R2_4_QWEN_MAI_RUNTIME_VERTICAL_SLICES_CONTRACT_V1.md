@@ -1,10 +1,13 @@
 # R2.4 Qwen and MAI Runtime Vertical Slices Contract v1
 
-Status: **IN PROGRESS; CPU REMEDIATION CANDIDATE; OWNER RE-REVIEW PENDING; LIVE AUTHORITY UNISSUED; MERGE/PUSH/LIVE NO-GO**
+Status: **IN PROGRESS; CPU/OFFLINE SHARED-GPU SMOKE-PREPARATION CANDIDATE; OWNER RE-REVIEW PENDING; LIVE AUTHORITY UNISSUED; MERGE/PUSH/LIVE NO-GO**
 
 Contract ID: `mobileworld.runtime.r2-4-qwen-mai-vertical-slices/contract-v1`
 
 Run-authority schema: `schemas/r2_4/run_authority_manifest.v1.schema.json`
+
+Smoke-only run-authority schema:
+`schemas/r2_4/smoke_run_authority.v1.schema.json`
 
 CPU-topology schemas:
 
@@ -20,7 +23,7 @@ Live rubric and history-policy schemas:
 - `schemas/r2_4/rubric_request_proof.v1.schema.json`
 - `schemas/r2_4/history_policy_request_proof.v1.schema.json`
 
-Decision date: 2026-09-04 UTC
+Decision date: 2026-09-05 UTC
 
 ## 1. Decision and claim boundary
 
@@ -40,8 +43,9 @@ Qwen3-VL or MAI assembles the exact actor request
 ```
 
 The repository candidate scaffolds this intended behavior with CPU fixtures,
-injected fake transports, sealed resource/execution doubles, and strict
-external-output contracts. It does **not** by itself establish that a live OpenAI request, GPU
+injected fake transports, sealed resource/execution doubles, strict external-
+output contracts, and an additive single-shared-GPU sequential smoke-only
+entrypoint. It does **not** by itself establish that a live OpenAI request, GPU
 model, MobileWorld backend, GUI action, smoke result, or task-effectiveness
 result exists. Those claims require an owner-authorized manifest, a passing
 production preflight, actual execution, and committed repo-external receipts.
@@ -230,37 +234,61 @@ operator supplies and confirms the exact DRAFT SHA-256. Promotion changes only
 the authorization status, writes a fresh repo-external mode-0600 file, and
 does not execute, inspect, or contact any resource.
 
-The live sequence is fixed:
+The additive `R24_LIVE_SMOKE_ONLY` sequence is fixed and terminates without an
+R2.5 transition:
 
 ```text
 deep resource preflight
+  -> acquire one shared-GPU project lease; start backend and Qwen
   -> Qwen OFF / SHADOW / ACTIVE smoke
+  -> stop and reap Qwen; prove port clear; re-attest GPU and MAI snapshot
+  -> start MAI
   -> MAI OFF / SHADOW / ACTIVE smoke
-  -> R2.5 pilot only if every smoke case passes
+  -> bounded cleanup and terminal smoke publication
 ```
 
-The manifest binds the exact source commit, two actor snapshots and logical
-tree digests, loopback endpoints/model IDs, two independent OpenAI Responses
-stages (`RUBRIC`, then `HISTORY_POLICY`), captured smoke fixtures, R2.5 frozen
-pilot, topology artifact, output root, expiry, and additive time/call/cost
-budgets. Arbitrary shell commands are not accepted as manifest input.
+The smoke-only manifest binds the exact source commit, runtime-configuration
+hash, two actor snapshots and logical tree digests, loopback endpoints/model
+IDs, two independent OpenAI Responses stages (`RUBRIC`, then
+`HISTORY_POLICY`), six captured smoke fixtures, output root, expiry, handoff,
+cleanup, and additive time/call/cost budgets. It contains no pilot, cohort,
+117-row task source, topology-comparison, cell, score, or GUI-action authority.
+Its executor and CLI cannot reach R2.5, and smoke-scoped pilot methods reject
+before snapshot reads, reset, or dispatch. The legacy independent-two-GPU
+concurrent full-run authority and execution path remain unchanged and separate;
+they are not reachable from the smoke-only entrypoint. Arbitrary shell commands
+are not accepted as manifest input.
 
-Production preflight is side-effect-free. It verifies the owner-confirmed
-manifest hash, clean/current Git authority, model trees, fixtures and pilot
-artifacts, loopback endpoint shape, output freshness, and the external
-secret's owner/mode/type metadata without reading the secret value. Executor
-construction and the resource stage separately attest the operator-confirmed
-pricing/runtime configuration, installed OpenAI SDK, vLLM executable, backend
-environment metadata, and GPU/Docker/model state. Each later case lease binds
-the passing preflight, task/reset/cell, logical call, raw request hash, and
-deadline. The per-attempt authority additionally binds role, transport, and
-call/token/cost limits.
+Production preflight is side-effect-free. For smoke-only authority it verifies
+the owner-confirmed manifest hash, clean/current Git authority, model trees,
+all six fixtures, loopback endpoint shape, output freshness, and the external
+secret's owner/mode/type/path/inode identity without opening its value for
+read. Every other operator input is opened and rebound before its first read;
+an input alias, hard link, symlink, path swap, or secret-path identity drift
+fails with zero secret reads. The parent process never receives the key value.
+Executor construction and the resource stage separately attest the operator-
+confirmed pricing/runtime configuration, installed OpenAI SDK, vLLM
+executable, backend environment metadata, and GPU/Docker/model state. Each
+later case lease binds the passing preflight, task/reset/cell, logical call,
+raw request hash, and deadline. The per-attempt authority additionally binds
+role, transport, and call/token/cost limits.
 
-Model and backend lifecycle code uses fixed commands, exclusive GPU leases,
-owned PID/container identity, exact model registry checks, loopback health,
-per-dispatch re-attestation, host-local disable/kill controls, bounded cleanup,
-and retained recovery evidence when cleanup cannot complete. No CPU test
-starts Docker, loads weights, opens the network, or executes a GUI action.
+For `SINGLE_GPU_SEQUENTIAL_SHARED`, Qwen and MAI bind the same GPU index under
+one project lease and are never live concurrently. The runtime pins vLLM
+`gpu_memory_utilization=0.24` and requires at least 51,200 MiB free. Every
+shared-GPU census binds GPU index/UUID/capacity/use/utilization plus each
+visible compute process's PID, start time, process group, session, UID, user,
+and memory. Pre-existing co-tenants may remain; a new tenant or identity drift
+fails closed at startup, dispatch, or handoff. Cleanup targets only exact
+project-owned process identities and never kills a co-tenant. The Qwen-to-MAI
+handoff reaps the Qwen session/leader/workers, proves the port clear, and
+re-attests both shared GPU and next immutable snapshot before starting MAI.
+
+Model and backend lifecycle code otherwise uses fixed commands, owned PID/
+container identity, exact model registry checks, loopback health, per-dispatch
+re-attestation, host-local disable/kill controls, bounded cleanup, and retained
+recovery evidence when cleanup cannot complete. No CPU test starts Docker,
+loads weights, opens the network, or executes a GUI action.
 
 Each production unit freezes separate execution and cleanup deadlines within
 the owner stage deadline. The reserved cleanup window is hash-bound to the
@@ -271,6 +299,14 @@ task-goal, actor, action, score, and later-cell work may use only the execution
 deadline; CLEANUP is the sole closed recovery stage that may use the cleanup
 deadline. Expiry or teardown failure remains typed, journaled failure evidence
 and cannot be promoted to success.
+
+For the shared default runtime, the complete cleanup upper bound is
+independently recomputed as
+`5 * shutdown_grace_seconds + 3 * ceil(health_poll_interval_ms / 1000) + 225`.
+Grace 10 seconds and polling 250 ms therefore require exactly 278 seconds.
+The canonical bound preimage/hash is cross-bound through authority, executor,
+terminal, failure, recovery, and cleanup evidence; a smaller owner reserve
+fails before resource I/O.
 
 Cleanup teardown is recovery-only and must never initialize or reinitialize the
 backend. If client/backend initialization (`/init`) was not locally confirmed,
@@ -403,6 +439,14 @@ closure, Collector finish, or already-created audit finalization. Thus rubric
 and history-policy request proof remains recoverable across audit admission,
 terminal commit, and oversized-journal publication failures.
 
+The smoke-only sequence durably binds resource preparation, every actor and
+Sentinel dispatch, Qwen-to-MAI handoff, each case result, cleanup, and one
+terminal outcome. Admission, write, fsync, rename, terminal-commit, rollback,
+and recovery faults retain the failed result and complete cleanup proof rather
+than allowing a second terminal or a success label. Oversized evidence follows
+the same owner-only content-addressed-blob path; the compact journal retains a
+validated hash/size/locator reference.
+
 ## 10. R2.4 live-smoke acceptance
 
 For each host, all three cases must pass under the exact frozen fixture and
@@ -421,6 +465,11 @@ zero target, uncertainty, invalid response, timeout, cancellation, provider
 failure, audit failure, or resource drift must be a typed Original/failure
 record with complete negative accounting. Any smoke failure stops the sequence
 before R2.5.
+
+Under `R24_LIVE_SMOKE_ONLY`, the sequence always stops after its own bounded
+cleanup and terminal publication even when all six cases pass. A later R2.5
+pilot would require a distinct authority and entrypoint; smoke success cannot
+implicitly supply it.
 
 Passing CPU tests is not a live-smoke result. Passing live smoke is transport,
 parser, isolation, and safety evidence; it is not task-success improvement or
@@ -450,16 +499,15 @@ artifacts, and cleanup census. Until the owner reviews that candidate and
 separately authorizes a frozen live manifest, R2.4 remains In Progress. The
 initial implementation commit is
 `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
-**NO-GO**. Its latest remediation candidate is
-`37bde84c33c885dd0a266d9b2a770501b9e0855b` and remains pending owner
-re-review. The combined affected gate passed 247/247; R2.4 passed 455/455;
-focused R2.3--R2.5 tests passed 557/557; and the complete MobileWorld suite
-passed 2247/2247 in 604.38 seconds. Independent scoped red-team review reported
-GO for cancellation/success linearization and the non-completed history-policy
-admission boundary. Ruff check and format check passed over the four changed
-implementation/test files; configured mypy passed over 28 source files; all 22
-R2.2--R2.5 schemas passed; accepted R2.3 bytes remained exactly equal; and Git
-diff checks passed. These CPU/offline checks
+**NO-GO**. Its latest CPU/offline shared-GPU smoke-preparation candidate is
+`46a176c6f523da34439a75fd10f3901644c52530` and remains pending owner
+re-review. The R2.3--R2.5 gate passed 667/667 and the complete MobileWorld
+suite passed 2357/2357 in 606.62 seconds. Ruff check and format check passed
+over 15 changed Python files; configured mypy passed over 29 runtime source
+files and four operator scripts; all 23 R2.2--R2.5 schemas passed; accepted
+R2.3 bytes remained exactly equal; Git diff checks passed; and independent
+shared-resource, smoke-CLI, and execution-boundary red teams reported GO.
+These CPU/offline checks
 make the remediation candidate ready only for owner re-review; they do not
 constitute owner approval, acceptance, a live-ready claim, or a live result.
 The candidate must not be merged or pushed, and the six live-smoke cases
@@ -468,7 +516,9 @@ remain unauthorized.
 No `OWNER_AUTHORIZED` manifest was issued and no live OpenAI/model/provider,
 external network, live credential or production secret, GPU, Docker, model
 service/weights, MobileWorld backend/emulator, GUI/tool/action, replay, smoke,
-or pilot resource was used.
+or pilot resource was used. Read-only GPU5/process/model/environment facts, if
+inspected for planning, are availability observations only and are not a
+preflight, resource admission, or acceptance result.
 No persistent 117-row executable source, selected cohort, frozen pilot
 manifest, 80--120-cell execution artifact, or corresponding content hash was
 created; only CPU/offline tooling and protocol preparation is claimed.
