@@ -4391,7 +4391,9 @@ def _parse_generated_rubric(
                 utf8_byte_start=cast(int, item["utf8_byte_start"]),
                 utf8_byte_end=cast(int, item["utf8_byte_end"]),
                 exact_text=cast(str, item["exact_text"]),
-                span_sha256=cast(str, item["span_sha256"]),
+                span_sha256=hashlib.sha256(
+                    cast(str, item["exact_text"]).encode("utf-8")
+                ).hexdigest(),
             )
             for item in (
                 _mapping(raw, "instruction span")
@@ -4404,7 +4406,9 @@ def _parse_generated_rubric(
                 kind=MilestoneKind(cast(str, item["kind"])),
                 predicate_kind=MilestonePredicateKind(cast(str, item["predicate_kind"])),
                 state_description=cast(str, item["state_description"]),
-                description_sha256=cast(str, item["description_sha256"]),
+                description_sha256=hashlib.sha256(
+                    cast(str, item["state_description"]).encode("utf-8")
+                ).hexdigest(),
                 instruction_span_id=cast(str | None, item["instruction_span_id"]),
             )
             for item in (

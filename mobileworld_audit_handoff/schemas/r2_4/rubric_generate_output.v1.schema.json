@@ -33,7 +33,6 @@
     }
   },
   "$defs": {
-    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "semanticId": {
       "type": "string",
       "minLength": 1,
@@ -43,7 +42,7 @@
     "instructionSpan": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["span_id", "role", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "exact_text", "span_sha256"],
+      "required": ["span_id", "role", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "exact_text"],
       "properties": {
         "span_id": {"$ref": "#/$defs/semanticId"},
         "role": {"enum": ["HARD_REQUIREMENT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
@@ -51,20 +50,18 @@
         "char_end": {"type": "integer", "minimum": 1},
         "utf8_byte_start": {"type": "integer", "minimum": 0},
         "utf8_byte_end": {"type": "integer", "minimum": 1},
-        "exact_text": {"type": "string", "minLength": 1, "maxLength": 32768},
-        "span_sha256": {"$ref": "#/$defs/sha256"}
+        "exact_text": {"type": "string", "minLength": 1, "maxLength": 32768}
       }
     },
     "milestone": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["milestone_id", "kind", "predicate_kind", "state_description", "description_sha256", "instruction_span_id"],
+      "required": ["milestone_id", "kind", "predicate_kind", "state_description", "instruction_span_id"],
       "properties": {
         "milestone_id": {"$ref": "#/$defs/semanticId"},
         "kind": {"enum": ["HARD_REQUIREMENT", "DERIVED_CHECKPOINT", "OPTIONAL_CHECKPOINT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
         "predicate_kind": {"enum": ["INSTRUCTION_REQUIREMENT", "GUI_STATE", "COMPLETED_TRANSITION", "USER_VISIBLE_RESULT", "DERIVED_STATE", "UNKNOWN"]},
         "state_description": {"type": "string", "minLength": 1, "maxLength": 2048},
-        "description_sha256": {"$ref": "#/$defs/sha256"},
         "instruction_span_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/semanticId"}]}
       }
     },

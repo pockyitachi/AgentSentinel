@@ -26,6 +26,7 @@ from mobile_world.runtime.sentinel.r2_3.contracts import (
     RubricBackendDescriptorV1,
     RubricBackendKind,
     RubricTransportAuthority,
+    TaskStartRubricRequestV1,
     multi_path_rubric_projection,
 )
 from mobile_world.runtime.sentinel.r2_3.packet import HistoryFreeTrackingPacketBuilderV1
@@ -168,7 +169,6 @@ def _generate_output(task_text: str) -> str:
                     "utf8_byte_start": 0,
                     "utf8_byte_end": len(task_text.encode("utf-8")),
                     "exact_text": task_text,
-                    "span_sha256": _sha(task_text),
                 }
             ],
             "milestones": [
@@ -177,7 +177,6 @@ def _generate_output(task_text: str) -> str:
                     "kind": "HARD_REQUIREMENT",
                     "predicate_kind": "INSTRUCTION_REQUIREMENT",
                     "state_description": task_text,
-                    "description_sha256": _sha(task_text),
                     "instruction_span_id": "task-goal",
                 }
             ],
@@ -227,6 +226,27 @@ def test_live_rubric_schemas_are_strict_and_checked_in() -> None:
         Draft202012Validator.check_schema(snapshot.as_dict())
         assert snapshot.sha256 == hashlib.sha256(snapshot.canonical_bytes).hexdigest()
 
+    generate_schema = live_rubric_generate_schema().as_dict()
+    definitions = cast(dict[str, JsonValue], generate_schema["$defs"])
+    instruction_span = cast(dict[str, JsonValue], definitions["instructionSpan"])
+    milestone = cast(dict[str, JsonValue], definitions["milestone"])
+    assert "span_sha256" not in cast(dict[str, JsonValue], instruction_span["properties"])
+    assert "span_sha256" not in cast(list[str], instruction_span["required"])
+    assert "description_sha256" not in cast(dict[str, JsonValue], milestone["properties"])
+    assert "description_sha256" not in cast(list[str], milestone["required"])
+
+    valid = cast(dict[str, JsonValue], json.loads(_generate_output("Adjust brightness.")))
+    validator = Draft202012Validator(generate_schema)
+    assert not tuple(validator.iter_errors(valid))
+    for container_name, legacy_field in (
+        ("instruction_spans", "span_sha256"),
+        ("milestones", "description_sha256"),
+    ):
+        legacy = deepcopy(valid)
+        containers = cast(list[dict[str, JsonValue]], legacy[container_name])
+        containers[0][legacy_field] = _sha("provider-supplied-derived-field")
+        assert tuple(validator.iter_errors(legacy))
+
 
 def test_cpu_fake_generate_once_and_track_current_collector_image(tmp_path: Path) -> None:
     bundle, context, history_ir = _collector_bundle(tmp_path)
@@ -253,6 +273,12 @@ def test_cpu_fake_generate_once_and_track_current_collector_image(tmp_path: Path
     assert session.start().status is RubricSessionStatus.ADMITTED
     assert generated.status is RubricSessionStatus.ADMITTED
     assert generated.rubric is not None and generated.state is not None
+    assert generated.rubric.instruction_spans[0].span_sha256 == _sha(
+        bundle.r23_snapshot.task.exact_text
+    )
+    assert generated.rubric.milestones[0].description_sha256 == _sha(
+        generated.rubric.milestones[0].state_description
+    )
     assert session.task_start_generation_calls == 1
     packet = HistoryFreeTrackingPacketBuilderV1().build(
         packet_id="r24-live-rubric-packet-1",
@@ -288,6 +314,85 @@ def test_cpu_fake_generate_once_and_track_current_collector_image(tmp_path: Path
     rubric_receipts = cast(Any, session.receipt_sink).receipts
     assert all(receipt.backend_kind == "INJECTED_FAKE" for receipt in rubric_receipts)
     assert all(receipt.external_network_attempted is False for receipt in rubric_receipts)
+
+
+@pytest.mark.parametrize("drift", ("char", "utf8", "text"))
+def test_generate_derives_hashes_but_still_rejects_instruction_span_drift(
+    tmp_path: Path,
+    drift: str,
+) -> None:
+    bundle, context, history_ir = _collector_bundle(tmp_path)
+    task_text = bundle.r23_snapshot.task.exact_text
+    output = cast(dict[str, JsonValue], json.loads(_generate_output(task_text)))
+    spans = cast(list[dict[str, JsonValue]], output["instruction_spans"])
+    span = spans[0]
+    if drift == "char":
+        span["char_end"] = cast(int, span["char_end"]) - 1
+    elif drift == "utf8":
+        span["utf8_byte_end"] = cast(int, span["utf8_byte_end"]) - 1
+    else:
+        span["exact_text"] = task_text[:-1]
+    port = CpuFakeRubricProviderPortV1(
+        generate_outputs=(json.dumps(output, ensure_ascii=False),),
+        track_outputs=(),
+    )
+    backend = LiveOpenAIRubricBackendV1(provider_port=port)
+    backend.bind_collector_call(
+        bundle=bundle,
+        logical_call_id=context.logical_call_id,
+        actor_request_sha256=history_ir.raw_request_sha256,
+        deadline_monotonic_ns=time.monotonic_ns() + 10_000_000_000,
+        max_cost_usd_micros=10,
+    )
+    request = TaskStartRubricRequestV1(
+        request_id=f"r24-live-rubric-{drift}-drift",
+        task_run_id=bundle.r23_snapshot.task_run_id,
+        task=bundle.r23_snapshot.task,
+        backend=backend.descriptor,
+    )
+
+    with pytest.raises(LiveRubricError, match="GENERATED_RUBRIC_REJECTED"):
+        backend.generate(request)
+
+
+@pytest.mark.parametrize("malformation", ("role", "unknown_graph_reference"))
+def test_generate_derivation_does_not_weaken_semantic_graph_validation(
+    tmp_path: Path,
+    malformation: str,
+) -> None:
+    bundle, context, history_ir = _collector_bundle(tmp_path)
+    output = cast(
+        dict[str, JsonValue],
+        json.loads(_generate_output(bundle.r23_snapshot.task.exact_text)),
+    )
+    if malformation == "role":
+        spans = cast(list[dict[str, JsonValue]], output["instruction_spans"])
+        spans[0]["role"] = "CONSTRAINT"
+    else:
+        paths = cast(list[dict[str, JsonValue]], output["paths"])
+        root = cast(dict[str, JsonValue], paths[0]["root"])
+        root["ref_id"] = "unknown-milestone"
+    port = CpuFakeRubricProviderPortV1(
+        generate_outputs=(json.dumps(output, ensure_ascii=False),),
+        track_outputs=(),
+    )
+    backend = LiveOpenAIRubricBackendV1(provider_port=port)
+    backend.bind_collector_call(
+        bundle=bundle,
+        logical_call_id=context.logical_call_id,
+        actor_request_sha256=history_ir.raw_request_sha256,
+        deadline_monotonic_ns=time.monotonic_ns() + 10_000_000_000,
+        max_cost_usd_micros=10,
+    )
+    request = TaskStartRubricRequestV1(
+        request_id=f"r24-live-rubric-{malformation}",
+        task_run_id=bundle.r23_snapshot.task_run_id,
+        task=bundle.r23_snapshot.task,
+        backend=backend.descriptor,
+    )
+
+    with pytest.raises(LiveRubricError, match="GENERATED_RUBRIC_REJECTED"):
+        backend.generate(request)
 
 
 def test_tracker_rejects_image_pixels_not_bound_to_packet(tmp_path: Path) -> None:

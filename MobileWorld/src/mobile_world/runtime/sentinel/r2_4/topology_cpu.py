@@ -839,7 +839,6 @@ def _rubric_generate_script(task_text: str) -> str:
                 "utf8_byte_start": 0,
                 "utf8_byte_end": len(task_text.encode("utf-8")),
                 "exact_text": task_text,
-                "span_sha256": hashlib.sha256(task_text.encode("utf-8")).hexdigest(),
             }
         ],
         "milestones": [
@@ -848,7 +847,6 @@ def _rubric_generate_script(task_text: str) -> str:
                 "kind": "HARD_REQUIREMENT",
                 "predicate_kind": "INSTRUCTION_REQUIREMENT",
                 "state_description": task_text,
-                "description_sha256": hashlib.sha256(task_text.encode("utf-8")).hexdigest(),
                 "instruction_span_id": "task-goal",
             }
         ],
