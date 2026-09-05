@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
+from pathlib import Path
 from typing import Any, Final, cast
 
 from mobile_world.runtime.sentinel.r2_4.live_run import OpenAIResponsesStageV1, OpenAIRoleV1
@@ -105,6 +106,27 @@ _PROVIDER_SDK_LOGGER_NAMES: Final[tuple[str, ...]] = (
     "httpcore.socks",
 )
 _ENV_VALUE_ABSENT: Final[object] = object()
+HISTORY_POLICY_TRANSPORT_SCHEMA_NAME_V1: Final[str] = "r24_history_policy_transport_output_v1"
+_OPENAI_STRICT_SCHEMA_FORBIDDEN_KEYWORDS_V1: Final[frozenset[str]] = frozenset(
+    {
+        "allOf",
+        "contains",
+        "dependentRequired",
+        "dependentSchemas",
+        "else",
+        "if",
+        "maxContains",
+        "minContains",
+        "not",
+        "oneOf",
+        "patternProperties",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+        "uniqueItems",
+    }
+)
 
 
 class LiveAttemptError(RuntimeError):
@@ -213,6 +235,115 @@ def _canonical_bytes(value: object) -> bytes:
         ).encode("utf-8")
     except (TypeError, ValueError, RecursionError) as exc:
         raise LiveAttemptError("CANONICALIZATION_FAILED", "provider request is invalid") from exc
+
+
+def _require_openai_supported_strict_schema_v1(value: object) -> None:
+    """Reject composition keywords outside the live Responses strict subset."""
+
+    if type(value) is not dict or value.get("type") != "object":
+        raise LiveAttemptError(
+            "INVALID_HISTORY_TRANSPORT_SCHEMA",
+            "history transport schema must have an object root",
+        )
+    stack: list[object] = [value]
+    while stack:
+        node = stack.pop()
+        if type(node) is list:
+            stack.extend(node)
+            continue
+        if type(node) is not dict:
+            continue
+        forbidden = _OPENAI_STRICT_SCHEMA_FORBIDDEN_KEYWORDS_V1.intersection(node)
+        if forbidden:
+            raise LiveAttemptError(
+                "UNSUPPORTED_HISTORY_TRANSPORT_SCHEMA",
+                "history transport schema contains an unsupported strict keyword",
+            )
+        stack.extend(node.values())
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryPolicyTransportSchemaSnapshotV1:
+    """Canonical R2.4 physical-output schema, separate from R2.2 admission."""
+
+    name: str
+    canonical_bytes: bytes
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if self.name != HISTORY_POLICY_TRANSPORT_SCHEMA_NAME_V1:
+            raise LiveAttemptError(
+                "INVALID_HISTORY_TRANSPORT_SCHEMA", "history transport schema name differs"
+            )
+        if type(self.canonical_bytes) is not bytes:
+            raise LiveAttemptError(
+                "INVALID_HISTORY_TRANSPORT_SCHEMA", "history transport schema bytes are mutable"
+            )
+        if hashlib.sha256(self.canonical_bytes).hexdigest() != _require_sha256(
+            self.sha256, "history transport schema sha256"
+        ):
+            raise LiveAttemptError(
+                "HISTORY_TRANSPORT_SCHEMA_HASH_DRIFT",
+                "history transport schema hash differs from its bytes",
+            )
+        try:
+            schema = json.loads(self.canonical_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise LiveAttemptError(
+                "INVALID_HISTORY_TRANSPORT_SCHEMA", "history transport schema is invalid JSON"
+            ) from exc
+        if type(schema) is not dict or _canonical_bytes(schema) != self.canonical_bytes:
+            raise LiveAttemptError(
+                "INVALID_HISTORY_TRANSPORT_SCHEMA", "history transport schema is not canonical"
+            )
+        _require_openai_supported_strict_schema_v1(schema)
+
+    @classmethod
+    def from_checked_in(cls) -> HistoryPolicyTransportSchemaSnapshotV1:
+        from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+            ProposalSchemaSnapshotV1,
+        )
+
+        path = (
+            Path(__file__).resolve().parents[6]
+            / "mobileworld_audit_handoff"
+            / "schemas"
+            / "r2_4"
+            / "history_policy_output.v1.schema.json"
+        )
+        try:
+            snapshot = ProposalSchemaSnapshotV1.from_checked_in(path)
+            return cls(
+                name=HISTORY_POLICY_TRANSPORT_SCHEMA_NAME_V1,
+                canonical_bytes=bytes(snapshot.canonical_bytes),
+                sha256=snapshot.sha256,
+            )
+        except LiveAttemptError:
+            raise
+        except Exception as exc:
+            raise LiveAttemptError(
+                "INVALID_HISTORY_TRANSPORT_SCHEMA",
+                "checked-in history transport schema is invalid",
+            ) from exc
+
+    def as_dict(self) -> dict[str, object]:
+        try:
+            value = json.loads(self.canonical_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise LiveAttemptError(
+                "INVALID_HISTORY_TRANSPORT_SCHEMA", "history transport schema is invalid JSON"
+            ) from exc
+        if type(value) is not dict:
+            raise LiveAttemptError(
+                "INVALID_HISTORY_TRANSPORT_SCHEMA", "history transport schema root differs"
+            )
+        return cast(dict[str, object], value)
+
+
+def history_policy_transport_schema_v1() -> HistoryPolicyTransportSchemaSnapshotV1:
+    """Load the checked-in physical schema used only at the R2.4 provider edge."""
+
+    return HistoryPolicyTransportSchemaSnapshotV1.from_checked_in()
 
 
 def _disable_provider_sdk_logging_for_child() -> tuple[
@@ -402,12 +533,19 @@ def _validate_sealed_provider_request(
     *,
     stage: OpenAIResponsesStageV1,
     role: LiveAttemptRoleV1,
+    _history_source_request: bool = False,
 ) -> dict[str, object]:
     """Rebuild and validate the exact role/stage request before any provider dispatch."""
 
     trusted_stage = _snapshot_openai_stage(stage)
     if type(role) is not LiveAttemptRoleV1 or role is LiveAttemptRoleV1.ACTOR:
         raise LiveAttemptError("PROVIDER_REQUEST_STAGE_MISMATCH", "provider role differs")
+    if type(cast(object, _history_source_request)) is not bool or (
+        _history_source_request and role is LiveAttemptRoleV1.RUBRIC
+    ):
+        raise LiveAttemptError(
+            "PROVIDER_REQUEST_STAGE_MISMATCH", "history source-request role differs"
+        )
     expected_stage_role = (
         OpenAIRoleV1.RUBRIC if role is LiveAttemptRoleV1.RUBRIC else OpenAIRoleV1.HISTORY_POLICY
     )
@@ -455,6 +593,7 @@ def _validate_sealed_provider_request(
                 "PROVIDER_REQUEST_STAGE_MISMATCH", "provider request config differs"
             )
 
+        expected_schema: object
         if role is LiveAttemptRoleV1.HISTORY_POLICY:
             from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
                 GPT56_OUTPUT_SCHEMA_NAME,
@@ -465,8 +604,13 @@ def _validate_sealed_provider_request(
 
             expected_instructions = GPT56_POLICY_INSTRUCTIONS
             expected_reasoning_effort = GPT56_REASONING_EFFORT
-            expected_schema_name = GPT56_OUTPUT_SCHEMA_NAME
-            expected_schema = ProposalSchemaSnapshotV1.from_checked_in().as_dict()
+            if _history_source_request:
+                expected_schema_name = GPT56_OUTPUT_SCHEMA_NAME
+                expected_schema = ProposalSchemaSnapshotV1.from_checked_in().as_dict()
+            else:
+                transport_schema = history_policy_transport_schema_v1()
+                expected_schema_name = transport_schema.name
+                expected_schema = transport_schema.as_dict()
             image_required = True
         else:
             from mobile_world.runtime.sentinel.r2_4.rubric_live import (
@@ -530,6 +674,42 @@ def _validate_sealed_provider_request(
             "PROVIDER_REQUEST_STAGE_MISMATCH", "sealed provider request validation failed"
         ) from exc
     return request
+
+
+def build_live_history_policy_transport_request_v1(
+    request: CanonicalHistoryPolicyRequestV1,
+    *,
+    stage: OpenAIResponsesStageV1,
+) -> CanonicalHistoryPolicyRequestV1:
+    """Replace only the full R2.2 schema with the R2.4 physical shape schema.
+
+    The input must still be the exact accepted R2.2 request.  Provider output
+    later traverses the unchanged full R2.2 Draft 2020-12 validator and
+    deterministic admission boundary; this projection only makes the physical
+    Responses request compatible with OpenAI's strict-schema subset.
+    """
+
+    trusted = snapshot_canonical_history_policy_request(request)
+    trusted_stage = _snapshot_openai_stage(stage)
+    source = _validate_sealed_provider_request(
+        trusted.canonical_bytes,
+        stage=trusted_stage,
+        role=LiveAttemptRoleV1.HISTORY_POLICY,
+        _history_source_request=True,
+    )
+    projected = cast(dict[str, object], json.loads(_canonical_bytes(source)))
+    text = cast(dict[str, object], projected["text"])
+    output_format = cast(dict[str, object], text["format"])
+    transport_schema = history_policy_transport_schema_v1()
+    output_format["name"] = transport_schema.name
+    output_format["schema"] = transport_schema.as_dict()
+    physical = build_canonical_history_policy_request(projected)
+    _validate_sealed_provider_request(
+        physical.canonical_bytes,
+        stage=trusted_stage,
+        role=LiveAttemptRoleV1.HISTORY_POLICY,
+    )
+    return physical
 
 
 CanonicalOpenAIRequestV1 = CanonicalHistoryPolicyRequestV1
@@ -3534,6 +3714,11 @@ class ProductionOpenAIAttemptRunnerV1:
         if lease.execution_scope is not CaseExecutionScopeV1.OWNER_AUTHORIZED_LIVE:
             raise LiveAttemptError("LIVE_SCOPE_REQUIRED", "case lease is not live")
         trusted_request = snapshot_canonical_history_policy_request(request)
+        if self._role is LiveAttemptRoleV1.HISTORY_POLICY:
+            trusted_request = build_live_history_policy_transport_request_v1(
+                trusted_request,
+                stage=self._stage,
+            )
         begin_observed_ns = time.monotonic_ns()
         deadline_binding: LiveAttemptDeadlineBindingV1 | None = None
         effective_deadline_ns = deadline_monotonic_ns
@@ -3874,7 +4059,9 @@ __all__ = [
     "CpuFixedCancellableAttemptRunnerV1",
     "CanonicalHistoryPolicyRequestV1",
     "CanonicalOpenAIRequestV1",
+    "HISTORY_POLICY_TRANSPORT_SCHEMA_NAME_V1",
     "HISTORY_POLICY_REQUEST_SCHEMA_VERSION",
+    "HistoryPolicyTransportSchemaSnapshotV1",
     "OPENAI_REQUEST_SCHEMA_VERSION",
     "PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1",
     "PRODUCTION_ATTEMPT_KILL_REAP_WAIT_MS_V1",
@@ -3915,6 +4102,8 @@ __all__ = [
     "parse_live_attempt_deadline_binding_projection",
     "build_canonical_history_policy_request",
     "build_canonical_openai_request",
+    "build_live_history_policy_transport_request_v1",
+    "history_policy_transport_schema_v1",
     "snapshot_canonical_openai_request",
     "snapshot_canonical_history_policy_request",
     "snapshot_live_attempt_authority",

@@ -23,6 +23,7 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     MemoryLiveAttemptReceiptSinkV1,
     ProductionOpenAIAttemptRunnerV1,
     build_canonical_openai_request,
+    build_live_history_policy_transport_request_v1,
     live_attempt_pricing_sha256,
     live_attempt_worst_case_cost_usd_micros,
 )
@@ -751,9 +752,15 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
         confirmed_pricing_sha256=pricing_sha256,
     )
     request = build_canonical_openai_request(_sealed_openai_request_kwargs(role))
+    reservation_request = request
+    if role is LiveAttemptRoleV1.HISTORY_POLICY:
+        reservation_request = build_live_history_policy_transport_request_v1(
+            request,
+            stage=runner.openai_stage,
+        )
     reservation = live_attempt_worst_case_cost_usd_micros(
         pricing,
-        request_byte_count=request.byte_count,
+        request_byte_count=reservation_request.byte_count,
         max_output_tokens=runner.openai_stage.max_output_tokens,
     )
 
@@ -798,6 +805,7 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
     assert rejected.cost_status is LiveAttemptCostStatusV1.EXACT
     assert rejected.cost_usd_micros == 0
     assert rejected.failure_code == "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY"
+    assert rejected.request_sha256 == reservation_request.request_sha256
     # Manifest/topology fixture construction may itself use sealed child
     # processes.  Observe only the production attempt launches below.
     process_start_methods.clear()
@@ -806,6 +814,10 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
         logical_call_id=f"logical-{role.value.lower()}",
         transport_binding_sha256=_sha(f"transport-{role.value}".encode()),
         max_cost_usd_micros=reservation,
+    )
+    assert call.authority.request_sha256 == reservation_request.request_sha256
+    assert (request.request_sha256 != reservation_request.request_sha256) is (
+        role is LiveAttemptRoleV1.HISTORY_POLICY
     )
 
     receipt = call.cancel_and_join()

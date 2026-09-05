@@ -21,6 +21,7 @@ Live rubric and history-policy schemas:
 - `schemas/r2_4/rubric_backend_extension.v1.schema.json`
 - `schemas/r2_4/rubric_call_receipt.v1.schema.json`
 - `schemas/r2_4/rubric_request_proof.v1.schema.json`
+- `schemas/r2_4/history_policy_output.v1.schema.json`
 - `schemas/r2_4/history_policy_request_proof.v1.schema.json`
 
 Decision date: 2026-09-05 UTC
@@ -128,12 +129,17 @@ table and observed token census. Legal zero-dispatch cost-reservation failures
 and post-dispatch bound violations remain typed proof rather than being
 discarded as invalid authority.
 
-For HISTORY_POLICY, the proof retains the canonical R2.2 request, observed
-Responses envelope, and R2.2 policy receipt independently. If the provider
-response arrives but R2.2 receipt preparation, publication, mutation checking,
-or deadline handling fails, the attempt and response remain proof-bound with a
-closed publication-failure code and `R22_RECEIPT_ABSENT_POST_DISPATCH`; the
-policy result is not admitted.
+For HISTORY_POLICY, the proof retains the canonical physical R2.4 Responses
+request and its provider-output shape-schema hash, plus the distinct accepted
+full R2.2 output-schema hash used for local validation and receipt binding. The
+R2.4 shape schema is a transport-only structural superset and grants no
+admission: every returned object still passes the unchanged full R2.2 schema
+and deterministic contracts before any plan can be admitted. The observed
+Responses envelope and R2.2 policy receipt remain independently bound. If the
+provider response arrives but R2.2 receipt preparation, publication, mutation
+checking, or deadline handling fails, the attempt and response remain
+proof-bound with a closed publication-failure code and
+`R22_RECEIPT_ABSENT_POST_DISPATCH`; the policy result is not admitted.
 
 If deadline or cancellation handling wins a race with an already-arrived valid
 `COMPLETED` Responses envelope, a terminal `FAILED`,
@@ -349,10 +355,13 @@ restored after the call and does not change ordinary non-production
 diagnostics. Request, task, evidence, image, or secret content must never reach
 ordinary production logs.
 
-Every sealed request component, including JSON Schema, is compared as
-canonical JSON bytes rather than with Python container equality. JSON numeric
-and boolean values are therefore type-distinct; a mutation such as `1` to
-`true` fails before secret access or provider dispatch.
+Every sealed request component, including the physical R2.4 JSON Schema, is
+compared as canonical JSON bytes rather than with Python container equality.
+The source-to-transport bridge first requires the exact accepted full R2.2
+schema, then replaces only the output-schema name and schema with the checked-in
+R2.4 transport shape. JSON numeric and boolean values are therefore
+type-distinct; a mutation such as `1` to `true` fails before secret access or
+provider dispatch.
 
 The accepted R2.3 v1 descriptor, receipt, and schema bytes remain unchanged and
 cannot represent a live Responses call. Live rubric execution uses additive,

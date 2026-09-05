@@ -6,11 +6,14 @@ import logging
 import os
 import threading
 import time
+from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
 import pytest
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from mobile_world.runtime.sentinel.r2_4 import (
     live_attempt as live_attempt_module,
@@ -39,6 +42,8 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     ProductionHistoryPolicyAttemptRunnerV1,
     ProductionOpenAIAttemptCallV1,
     build_canonical_history_policy_request,
+    build_live_history_policy_transport_request_v1,
+    history_policy_transport_schema_v1,
     live_attempt_authority_projection,
     live_attempt_authority_sha256,
     live_attempt_cost_usd_micros,
@@ -149,7 +154,7 @@ def _stage(role: LiveAttemptRoleV1) -> OpenAIResponsesStageV1:
     )
 
 
-def _history_policy_request_kwargs() -> dict[str, object]:
+def _history_policy_source_request_kwargs() -> dict[str, object]:
     from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
         GPT56_OUTPUT_SCHEMA_NAME,
         GPT56_POLICY_INSTRUCTIONS,
@@ -191,6 +196,17 @@ def _history_policy_request_kwargs() -> dict[str, object]:
         "truncation": "disabled",
         "max_output_tokens": 4096,
     }
+
+
+def _history_policy_request_kwargs() -> dict[str, object]:
+    source = build_canonical_history_policy_request(_history_policy_source_request_kwargs())
+    physical = build_live_history_policy_transport_request_v1(
+        source,
+        stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
+    )
+    value = json.loads(physical.canonical_bytes)
+    assert type(value) is dict
+    return cast(dict[str, object], value)
 
 
 def _rubric_request_kwargs(*, track: bool) -> dict[str, object]:
@@ -239,7 +255,7 @@ def _rubric_request_kwargs(*, track: bool) -> dict[str, object]:
 def _replace_first_integer_one_with_boolean_true(value: object) -> bool:
     if type(value) is dict:
         for key, child in value.items():
-            if key == "minItems" and type(child) is int and child == 1:
+            if key in {"minItems", "minLength"} and type(child) is int and child == 1:
                 value[key] = True
                 return True
             if _replace_first_integer_one_with_boolean_true(child):
@@ -635,6 +651,130 @@ def test_role_specific_sealed_requests_accept_only_exact_stage_config_and_schema
         assert validated["model"] == "gpt-5.6-sol"
         assert validated["store"] is False
         assert validated["max_output_tokens"] == _stage(role).max_output_tokens
+
+
+def test_history_transport_schema_is_supported_shape_and_r22_schema_stays_frozen() -> None:
+    from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+        ProposalSchemaSnapshotV1,
+    )
+
+    transport = history_policy_transport_schema_v1()
+    transport_schema = transport.as_dict()
+    full = ProposalSchemaSnapshotV1.from_checked_in()
+    repository_root = Path(__file__).resolve().parents[4]
+    full_path = (
+        repository_root
+        / "mobileworld_audit_handoff"
+        / "schemas"
+        / "r2_2"
+        / "policy_proposal.v1.schema.json"
+    )
+
+    Draft202012Validator.check_schema(transport_schema)
+    assert hashlib.sha256(full_path.read_bytes()).hexdigest() == (
+        "6d1372affafe5b93a923642c3448630ffa38ca5b08150e323ff8224222715a24"
+    )
+    assert full.sha256 == "f01edc79e0b27da14f7b712efd35bdf15ebefb1c6a136b6aea492c2b918cb5c7"
+    assert transport.sha256 != full.sha256
+
+    stack: list[object] = [transport_schema]
+    observed_keys: set[str] = set()
+    while stack:
+        node = stack.pop()
+        if type(node) is dict:
+            observed_keys.update(node)
+            stack.extend(node.values())
+        elif type(node) is list:
+            stack.extend(node)
+    assert not (observed_keys & live_attempt_module._OPENAI_STRICT_SCHEMA_FORBIDDEN_KEYWORDS_V1)
+
+    nested_unsupported = deepcopy(transport_schema)
+    decision = cast(
+        dict[str, object], cast(dict[str, object], nested_unsupported["$defs"])["decision"]
+    )
+    decision["allOf"] = []
+    with pytest.raises(LiveAttemptError) as unsupported:
+        live_attempt_module._require_openai_supported_strict_schema_v1(nested_unsupported)
+    assert unsupported.value.code == "UNSUPPORTED_HISTORY_TRANSPORT_SCHEMA"
+
+
+def test_history_transport_builder_requires_full_r22_source_then_binds_physical_shape() -> None:
+    from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+        GPT56_OUTPUT_SCHEMA_NAME,
+        ProposalSchemaSnapshotV1,
+    )
+
+    source = build_canonical_history_policy_request(_history_policy_source_request_kwargs())
+    physical = build_live_history_policy_transport_request_v1(
+        source,
+        stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
+    )
+    source_value = cast(dict[str, object], json.loads(source.canonical_bytes))
+    physical_value = cast(dict[str, object], json.loads(physical.canonical_bytes))
+    source_format = cast(dict[str, object], cast(dict[str, object], source_value["text"])["format"])
+    physical_format = cast(
+        dict[str, object], cast(dict[str, object], physical_value["text"])["format"]
+    )
+    transport = history_policy_transport_schema_v1()
+
+    assert source_format["name"] == GPT56_OUTPUT_SCHEMA_NAME
+    assert source_format["schema"] == ProposalSchemaSnapshotV1.from_checked_in().as_dict()
+    assert physical_format["name"] == transport.name
+    assert physical_format["schema"] == transport.as_dict()
+    assert source.request_sha256 != physical.request_sha256
+    source_format["name"] = physical_format["name"]
+    source_format["schema"] = physical_format["schema"]
+    assert source_value == physical_value
+
+    with pytest.raises(LiveAttemptError) as already_physical:
+        build_live_history_policy_transport_request_v1(
+            physical,
+            stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
+        )
+    assert already_physical.value.code == "PROVIDER_REQUEST_STAGE_MISMATCH"
+
+
+def test_history_transport_shape_does_not_weaken_full_r22_semantic_validation() -> None:
+    from jsonschema.exceptions import ValidationError  # type: ignore[import-untyped]
+
+    from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+        ProposalSchemaSnapshotV1,
+    )
+
+    # Structurally valid, but COMPLETE may not contain KEEP_UNCERTAIN under the
+    # accepted R2.2 semantic contract.  Only the local full validator owns that
+    # cross-field rule; the provider-facing schema is deliberately shape-only.
+    proposal = {
+        "schema_version": "mobileworld.runtime.sentinel-policy-proposal/v1",
+        "packet_id": "r22pkt:transport-shape-regression",
+        "evidence_packet_sha256": _digest("transport-shape-evidence"),
+        "status": "COMPLETE",
+        "automatic": True,
+        "curated": False,
+        "deployment_prediction": True,
+        "action_or_tool_authority": False,
+        "decisions": [
+            {
+                "decision_id": "decision-1",
+                "target_id": "target-1",
+                "factual_verdict": "UNVERIFIABLE",
+                "temporal_validity": "UNKNOWN",
+                "proposed_operation": "KEEP_UNCERTAIN",
+                "evidence_refs": [],
+                "confidence_millis": 0,
+                "reason_code": "INSUFFICIENT_EVIDENCE",
+                "uncertainty_codes": ["EVIDENCE_MISSING"],
+                "rationale_summary": "Insufficient current evidence.",
+                "replacement_fact_id": None,
+                "fallback_status": "ABSTAIN_TO_ORIGINAL",
+            }
+        ],
+    }
+    Draft202012Validator(history_policy_transport_schema_v1().as_dict()).validate(proposal)
+    with pytest.raises(ValidationError):
+        Draft202012Validator(ProposalSchemaSnapshotV1.from_checked_in().as_dict()).validate(
+            proposal
+        )
 
 
 def test_sealed_schema_comparison_distinguishes_json_integer_from_boolean() -> None:
@@ -1664,7 +1804,11 @@ def test_history_constraint_registration_is_one_shot_and_call_bound() -> None:
 
 
 def test_history_begin_cost_reservation_failure_retains_formed_proof_preimages() -> None:
-    request = build_canonical_history_policy_request(_history_policy_request_kwargs())
+    source_request = build_canonical_history_policy_request(_history_policy_source_request_kwargs())
+    request = build_live_history_policy_transport_request_v1(
+        source_request,
+        stage=_stage(LiveAttemptRoleV1.HISTORY_POLICY),
+    )
     history_stage = _stage(LiveAttemptRoleV1.HISTORY_POLICY)
     rubric_stage = _stage(LiveAttemptRoleV1.RUBRIC)
     pricing = _pricing()
@@ -1734,7 +1878,7 @@ def test_history_begin_cost_reservation_failure_retains_formed_proof_preimages()
             case_lease=lease,
             attempt_id=attempt_id,
             logical_call_id=logical_call_id,
-            request=request,
+            request=source_request,
             transport_binding_sha256=_digest("history-cost-failure-transport"),
             deadline_monotonic_ns=requested_deadline_ns,
             max_cost_usd_micros=1,

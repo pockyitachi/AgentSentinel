@@ -129,6 +129,8 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptTerminationV1,
     ProductionOpenAIAttemptRunnerV1,
     build_canonical_history_policy_request,
+    build_live_history_policy_transport_request_v1,
+    history_policy_transport_schema_v1,
     live_attempt_authority_sha256,
     live_attempt_pricing_sha256,
     live_attempt_receipt_projection,
@@ -945,8 +947,9 @@ def _complete_live_history_request_proof(
         evidence=bundle.gpt56_input,
         output_schema=schema,
     )
-    provider_request = build_canonical_history_policy_request(
-        responses_create_kwargs(responses_request)
+    provider_request = build_live_history_policy_transport_request_v1(
+        build_canonical_history_policy_request(responses_create_kwargs(responses_request)),
+        stage=_proof_history_stage(),
     )
     stage = _proof_history_stage()
     rubric_stage = _proof_openai_stage()
@@ -2055,6 +2058,9 @@ def test_durable_history_policy_request_proof_is_independently_reconstructable(
     assert proof["attempt_role"] == "HISTORY_POLICY"
     assert proof["attempt_status"] == "COMPLETED"
     assert proof["provider_request_sha256"] == attempt.request_sha256
+    assert proof["provider_output_schema_sha256"] == (history_policy_transport_schema_v1().sha256)
+    assert proof["r22_output_schema_sha256"] == ProposalSchemaSnapshotV1.from_checked_in().sha256
+    assert proof["provider_output_schema_sha256"] != proof["r22_output_schema_sha256"]
     assert (
         cast(dict[str, JsonValue], proof["attempt_authority"])["max_output_tokens"]
         == GPT56_MAX_OUTPUT_TOKENS
@@ -2064,6 +2070,16 @@ def test_durable_history_policy_request_proof_is_independently_reconstructable(
         == GPT56_MAX_OUTPUT_TOKENS
     )
     assert proof["r22_receipt_state"] == "R22_RECEIPT_COMMITTED"
+
+    for field in ("provider_output_schema_sha256", "r22_output_schema_sha256"):
+        drifted_schema_hash = deepcopy(proof)
+        drifted_schema_hash[field] = _sha(f"drifted:{field}")
+        with pytest.raises(R24ContractError, match="hashes or terminal state differ"):
+            validate_live_history_policy_request_proof_projection_v1(
+                cast(JsonValue, drifted_schema_hash),
+                attempt_receipt=live_attempt_receipt_projection(attempt),
+                **_expected_request_proof_roots(attempt, cast(JsonValue, proof)),
+            )
 
     for argument in (
         "expected_attempt_authority_sha256",

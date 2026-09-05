@@ -114,6 +114,7 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     MemoryLiveAttemptReceiptSinkV1,
     ProductionOpenAIAttemptRunnerV1,
     build_canonical_history_policy_request,
+    history_policy_transport_schema_v1,
     live_attempt_authority_projection,
     live_attempt_authority_sha256,
     live_attempt_cost_usd_micros,
@@ -1660,8 +1661,8 @@ def _validate_history_provider_request_v1(
     transport_binding: OpenAIResponsesTransportBindingV1,
     logical_call_id: str,
     actor_request_sha256: str,
-) -> tuple[str, str, str, str, str]:
-    """Rebuild exact R2.2 semantic/image/config provenance from request bytes."""
+) -> tuple[str, str, str, str, str, str, str]:
+    """Rebuild R2.2 semantics plus the exact R2.4 physical request provenance."""
 
     projection = _history_provider_request_projection(request)
     expected_fields = {
@@ -1769,6 +1770,7 @@ def _validate_history_provider_request_v1(
             "history image differs from its evidence-packet current observation",
         )
     checked_schema = ProposalSchemaSnapshotV1.from_checked_in()
+    transport_schema = history_policy_transport_schema_v1()
     expected_request: dict[str, JsonValue] = {
         "input": cast(JsonValue, input_value),
         "instructions": GPT56_POLICY_INSTRUCTIONS,
@@ -1780,8 +1782,8 @@ def _validate_history_provider_request_v1(
         "stream": False,
         "text": {
             "format": {
-                "name": GPT56_OUTPUT_SCHEMA_NAME,
-                "schema": checked_schema.as_dict(),
+                "name": transport_schema.name,
+                "schema": cast(JsonValue, transport_schema.as_dict()),
                 "strict": True,
                 "type": "json_schema",
             },
@@ -1796,7 +1798,7 @@ def _validate_history_provider_request_v1(
     ) != canonical_json_bytes(cast(JsonValue, expected_request)):
         raise R24ContractError(
             "INVALID_HISTORY_REQUEST_PROOF",
-            "history provider request differs from the fixed R2.2 request",
+            "history provider request differs from the fixed R2.4 transport request",
         )
     config: dict[str, JsonValue] = {
         "schema_version": "mobileworld.runtime.sentinel-gpt56-request/v1",
@@ -1827,6 +1829,8 @@ def _validate_history_provider_request_v1(
         canonical_sha256(config),
         packet_id,
         packet_host_id,
+        transport_schema.sha256,
+        checked_schema.sha256,
     )
 
 
@@ -1854,6 +1858,8 @@ def validate_live_history_policy_attempt_request_anchor_v1(
         request_config_sha256,
         packet_id,
         packet_host_id,
+        _provider_output_schema_sha256,
+        r22_output_schema_sha256,
     ) = _validate_history_provider_request_v1(
         request,
         transport_binding=transport,
@@ -2056,7 +2062,7 @@ def validate_live_history_policy_attempt_request_anchor_v1(
         or r22.transport_authority != "EXPLICIT_OWNER_AUTHORIZATION"
         or r22.prompt_sha256
         != hashlib.sha256(GPT56_POLICY_INSTRUCTIONS.encode("utf-8")).hexdigest()
-        or r22.output_schema_sha256 != ProposalSchemaSnapshotV1.from_checked_in().sha256
+        or r22.output_schema_sha256 != r22_output_schema_sha256
         or r22.request_config_sha256 != request_config_sha256
         or r22.evidence_packet_sha256 != packet_sha256
         or r22.current_image_sha256 != image_sha256
@@ -2108,6 +2114,8 @@ def live_history_policy_attempt_request_proof_projection(
     anchor = snapshot_live_history_policy_attempt_request_anchor(value)
     receipt = snapshot_live_attempt_receipt(attempt_receipt)
     validate_live_history_policy_attempt_request_anchor_v1(anchor, attempt_receipt=receipt)
+    provider_schema = history_policy_transport_schema_v1()
+    r22_schema = ProposalSchemaSnapshotV1.from_checked_in()
     proof: dict[str, JsonValue] = {
         "actor_request_sha256": anchor.actor_request_sha256,
         "attempt_authority": cast(
@@ -2133,11 +2141,13 @@ def live_history_policy_attempt_request_proof_projection(
         "openai_stage": cast(JsonValue, openai_stage_projection(anchor.openai_stage)),
         "rubric_openai_stage": cast(JsonValue, openai_stage_projection(anchor.rubric_openai_stage)),
         "pricing": cast(JsonValue, live_attempt_pricing_projection(anchor.pricing)),
+        "provider_output_schema_sha256": provider_schema.sha256,
         "provider_request": cast(
             JsonValue, _history_provider_request_projection(anchor.provider_request)
         ),
         "provider_request_byte_count": anchor.provider_request.byte_count,
         "provider_request_sha256": anchor.provider_request.request_sha256,
+        "r22_output_schema_sha256": r22_schema.sha256,
         "r22_policy_receipt": (
             None
             if anchor.r22_policy_receipt is None
@@ -2231,9 +2241,11 @@ def validate_live_history_policy_request_proof_projection_v1(
         "openai_stage",
         "rubric_openai_stage",
         "pricing",
+        "provider_output_schema_sha256",
         "provider_request",
         "provider_request_byte_count",
         "provider_request_sha256",
+        "r22_output_schema_sha256",
         "r22_policy_receipt",
         "r22_policy_receipt_sha256",
         "r22_receipt_failure_code",
@@ -2322,6 +2334,8 @@ def validate_live_history_policy_request_proof_projection_v1(
         or proof["attempt_receipt_sha256"] != live_attempt_receipt_sha256(receipt)
         or proof["attempt_authority_sha256"] != live_attempt_authority_sha256(authority)
         or proof["provider_request_sha256"] != request.request_sha256
+        or proof["provider_output_schema_sha256"] != history_policy_transport_schema_v1().sha256
+        or proof["r22_output_schema_sha256"] != ProposalSchemaSnapshotV1.from_checked_in().sha256
         or type(proof["provider_request_byte_count"]) is not int
         or proof["provider_request_byte_count"] != request.byte_count
         or proof["r22_policy_receipt_sha256"] != (None if r22 is None else r22.sha256)

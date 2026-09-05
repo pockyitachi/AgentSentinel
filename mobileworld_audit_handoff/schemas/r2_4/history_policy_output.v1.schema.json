@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/history_policy_output.v1.schema.json",
+  "title": "R2.4 OpenAI History Policy Transport Output v1",
+  "description": "OpenAI-supported structural superset used only to constrain the physical R2.4 Responses output. It grants no admission: every returned object must still pass the accepted full R2.2 policy proposal schema and deterministic admission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "packet_id",
+    "evidence_packet_sha256",
+    "status",
+    "automatic",
+    "curated",
+    "deployment_prediction",
+    "action_or_tool_authority",
+    "decisions"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["mobileworld.runtime.sentinel-policy-proposal/v1"]
+    },
+    "packet_id": {"$ref": "#/$defs/runtimeId"},
+    "evidence_packet_sha256": {"$ref": "#/$defs/sha256"},
+    "status": {
+      "type": "string",
+      "enum": ["COMPLETE", "PARTIAL_ABSTAIN", "ABSTAIN"]
+    },
+    "automatic": {"type": "boolean", "enum": [true]},
+    "curated": {"type": "boolean", "enum": [false]},
+    "deployment_prediction": {"type": "boolean", "enum": [true]},
+    "action_or_tool_authority": {"type": "boolean", "enum": [false]},
+    "decisions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/decision"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runtimeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "semanticId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "payload_sha256", "relation"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/semanticId"},
+        "payload_sha256": {"$ref": "#/$defs/sha256"},
+        "relation": {
+          "type": "string",
+          "enum": ["SUPPORTS", "REFUTES", "INVALIDATES"]
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_id",
+        "target_id",
+        "factual_verdict",
+        "temporal_validity",
+        "proposed_operation",
+        "evidence_refs",
+        "confidence_millis",
+        "reason_code",
+        "uncertainty_codes",
+        "rationale_summary",
+        "replacement_fact_id",
+        "fallback_status"
+      ],
+      "properties": {
+        "decision_id": {"$ref": "#/$defs/semanticId"},
+        "target_id": {"$ref": "#/$defs/semanticId"},
+        "factual_verdict": {
+          "type": "string",
+          "enum": ["SUPPORTED", "REFUTED", "UNVERIFIABLE"]
+        },
+        "temporal_validity": {
+          "type": "string",
+          "enum": ["ACTIVE", "INVALIDATED", "UNKNOWN", "N_A"]
+        },
+        "proposed_operation": {
+          "type": "string",
+          "enum": ["KEEP", "DROP", "REPLACE", "KEEP_UNCERTAIN"]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/evidenceRef"}
+        },
+        "confidence_millis": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "reason_code": {
+          "type": "string",
+          "enum": [
+            "DIRECT_EVIDENCE_SUPPORT",
+            "DIRECT_EVIDENCE_REFUTATION",
+            "LATER_EVIDENCE_INVALIDATES",
+            "INSUFFICIENT_EVIDENCE",
+            "CONFLICTING_EVIDENCE",
+            "TEMPORAL_PROVENANCE_MISSING",
+            "TARGET_AMBIGUOUS",
+            "CURRENT_SCREEN_ABSENCE_ONLY",
+            "EXECUTOR_STATUS_ONLY",
+            "CLEAN_HISTORY"
+          ]
+        },
+        "uncertainty_codes": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "enum": [
+              "EVIDENCE_MISSING",
+              "EVIDENCE_CONFLICT",
+              "TEMPORAL_PROVENANCE_MISSING",
+              "TARGET_AMBIGUOUS",
+              "COMPOUND_CLAIM",
+              "CURRENT_SCREEN_ABSENCE_ONLY",
+              "EXECUTOR_STATUS_ONLY",
+              "SEMANTIC_ENTAILMENT_UNCERTAIN"
+            ]
+          }
+        },
+        "rationale_summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "replacement_fact_id": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/semanticId"}
+          ]
+        },
+        "fallback_status": {
+          "type": "string",
+          "enum": ["NONE", "ABSTAIN_TO_ORIGINAL"]
+        }
+      }
+    }
+  }
+}
