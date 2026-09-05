@@ -155,7 +155,7 @@ _TRUST_ANCHOR_SEAL: Final[object] = object()
 
 _GENERATE_INSTRUCTIONS = """You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. For each instruction span, copy exact_text byte-for-byte and give only its zero-based Unicode char_start; the runtime derives all end and UTF-8 offsets. Every instruction span must be cited by exactly one instruction-bound milestone whose kind matches the span role, whose predicate_kind is INSTRUCTION_REQUIREMENT, and whose state_description exactly equals the span exact_text. Include every hard requirement, constraint, and terminal requirement without adding requirements. Every graph reference must resolve, every milestone and gate must be reachable, gates must be acyclic with at least two distinct children, and IDs must be unique. Include at least one LEGAL_ALTERNATIVE path with a non-null root and exactly one OTHER_UNKNOWN path with a null root. Use common_root only for requirements shared by every legal alternative. Do not infer factual truth, inspect history, recommend actions, or emit GUI action coordinates/tool calls. Return only JSON matching the supplied schema."""
 
-_TRACK_INSTRUCTIONS = """You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Cite exact evidence IDs and payload hashes. On ambiguity, conflict, or insufficiency use unknown; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."""
+_TRACK_INSTRUCTIONS = """You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Return exactly one state for every milestone ID. Cite exact evidence IDs; the runtime binds their payload hashes from the tracking packet. A pending state requires empty evidence_refs and NOT_STARTED. A satisfied state requires SUPPORTS_STATE evidence and a matching support reason; a violated state requires REFUTES_STATE evidence and a matching refutation reason; and an in_progress state requires OBSERVES_PROGRESS evidence and PROGRESS_OBSERVED. On ambiguity, conflict, or insufficiency use unknown with an uncertainty reason; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."""
 
 
 def live_rubric_operation_prompt_sha256(operation: LiveRubricOperationV1) -> str:
@@ -4475,33 +4475,71 @@ def _parse_generated_rubric(
         ) from exc
 
 
+def _parse_milestone_evidence_ref(
+    value: JsonValue,
+    *,
+    evidence_hashes: dict[str, str],
+) -> MilestoneEvidenceRefV1:
+    reference = _mapping(value, "evidence reference")
+    evidence_id = cast(str, reference["evidence_id"])
+    return MilestoneEvidenceRefV1(
+        evidence_id=evidence_id,
+        payload_sha256=evidence_hashes[evidence_id],
+        relation=MilestoneEvidenceRelation(cast(str, reference["relation"])),
+    )
+
+
+def _parse_milestone_state(
+    value: JsonValue,
+    *,
+    evidence_hashes: dict[str, str],
+    prior_states: dict[str, MilestoneStateRecordV1],
+) -> MilestoneStateRecordV1:
+    item = _mapping(value, "milestone state")
+    milestone_id = cast(str, item["milestone_id"])
+    state = MilestoneState(cast(str, item["state"]))
+    evidence_refs = tuple(
+        _parse_milestone_evidence_ref(raw, evidence_hashes=evidence_hashes)
+        for raw in _sequence(item["evidence_refs"], "evidence_refs")
+    )
+    reason_code = MilestoneReasonCode(cast(str, item["reason_code"]))
+    prior = prior_states.get(milestone_id)
+    if (
+        state is MilestoneState.PENDING
+        and not evidence_refs
+        and reason_code is MilestoneReasonCode.PRESERVE_PRIOR_STATE
+        and prior is not None
+        and prior.state is MilestoneState.PENDING
+        and not prior.evidence_refs
+        and prior.reason_code is MilestoneReasonCode.NOT_STARTED
+    ):
+        # R2.3 represents an unchanged pending state canonically as NOT_STARTED.
+        # The provider selected the same state with no new evidence, so only its
+        # redundant representation label is normalized; no semantic state moves.
+        reason_code = MilestoneReasonCode.NOT_STARTED
+    return MilestoneStateRecordV1(
+        milestone_id=milestone_id,
+        state=state,
+        evidence_refs=evidence_refs,
+        reason_code=reason_code,
+    )
+
+
 def _parse_tracker_proposal(
     value: dict[str, JsonValue],
     *,
     packet: RubricTrackingPacketV1,
 ) -> RubricTrackerProposalV1:
     try:
+        evidence_hashes = {item.evidence_id: item.payload_sha256 for item in packet.evidence_index}
+        prior_states = {item.milestone_id: item for item in packet.prior_state.milestone_states}
         milestone_states = tuple(
-            MilestoneStateRecordV1(
-                milestone_id=cast(str, item["milestone_id"]),
-                state=MilestoneState(cast(str, item["state"])),
-                evidence_refs=tuple(
-                    MilestoneEvidenceRefV1(
-                        evidence_id=cast(str, reference["evidence_id"]),
-                        payload_sha256=cast(str, reference["payload_sha256"]),
-                        relation=MilestoneEvidenceRelation(cast(str, reference["relation"])),
-                    )
-                    for reference in (
-                        _mapping(raw, "evidence reference")
-                        for raw in _sequence(item["evidence_refs"], "evidence_refs")
-                    )
-                ),
-                reason_code=MilestoneReasonCode(cast(str, item["reason_code"])),
+            _parse_milestone_state(
+                raw,
+                evidence_hashes=evidence_hashes,
+                prior_states=prior_states,
             )
-            for item in (
-                _mapping(raw, "milestone state")
-                for raw in _sequence(value["milestone_states"], "milestone_states")
-            )
+            for raw in _sequence(value["milestone_states"], "milestone_states")
         )
         packet_sha256 = tracking_packet_sha256(packet)
         output_sha256 = canonical_sha256(cast(JsonValue, value))

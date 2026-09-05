@@ -875,7 +875,6 @@ def _rubric_track_script(bundle: CollectorEvidenceBundleV1) -> str:
                 "evidence_refs": [
                     {
                         "evidence_id": evidence.evidence_id,
-                        "payload_sha256": evidence.payload_sha256,
                         "relation": "SUPPORTS_STATE",
                     }
                 ],

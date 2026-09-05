@@ -15,7 +15,6 @@
     }
   },
   "$defs": {
-    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "semanticId": {
       "type": "string",
       "minLength": 1,
@@ -25,10 +24,9 @@
     "evidenceRef": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["evidence_id", "payload_sha256", "relation"],
+      "required": ["evidence_id", "relation"],
       "properties": {
         "evidence_id": {"$ref": "#/$defs/semanticId"},
-        "payload_sha256": {"$ref": "#/$defs/sha256"},
         "relation": {"enum": ["SUPPORTS_STATE", "REFUTES_STATE", "OBSERVES_PROGRESS"]}
       }
     },

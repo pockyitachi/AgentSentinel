@@ -137,7 +137,7 @@
               {"$ref": "#/$defs/providerRequest"},
               {
                 "properties": {
-                  "instructions": {"const": "You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Cite exact evidence IDs and payload hashes. On ambiguity, conflict, or insufficiency use unknown; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."},
+                  "instructions": {"const": "You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Return exactly one state for every milestone ID. Cite exact evidence IDs; the runtime binds their payload hashes from the tracking packet. A pending state requires empty evidence_refs and NOT_STARTED. A satisfied state requires SUPPORTS_STATE evidence and a matching support reason; a violated state requires REFUTES_STATE evidence and a matching refutation reason; and an in_progress state requires OBSERVES_PROGRESS evidence and PROGRESS_OBSERVED. On ambiguity, conflict, or insufficiency use unknown with an uncertainty reason; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."},
                   "input": {"$ref": "#/$defs/trackInputMessages"},
                   "text": {"$ref": "#/$defs/trackTextConfiguration"}
                 }
@@ -730,15 +730,13 @@
                   "milestone_states": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/milestoneState"}}
                 },
                 "$defs": {
-                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
                   "semanticId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
                   "evidenceRef": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["evidence_id", "payload_sha256", "relation"],
+                    "required": ["evidence_id", "relation"],
                     "properties": {
                       "evidence_id": {"$ref": "#/$defs/semanticId"},
-                      "payload_sha256": {"$ref": "#/$defs/sha256"},
                       "relation": {"enum": ["SUPPORTS_STATE", "REFUTES_STATE", "OBSERVES_PROGRESS"]}
                     }
                   },
@@ -783,7 +781,7 @@
         "instructions": {
           "enum": [
             "You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. For each instruction span, copy exact_text byte-for-byte and give only its zero-based Unicode char_start; the runtime derives all end and UTF-8 offsets. Every instruction span must be cited by exactly one instruction-bound milestone whose kind matches the span role, whose predicate_kind is INSTRUCTION_REQUIREMENT, and whose state_description exactly equals the span exact_text. Include every hard requirement, constraint, and terminal requirement without adding requirements. Every graph reference must resolve, every milestone and gate must be reachable, gates must be acyclic with at least two distinct children, and IDs must be unique. Include at least one LEGAL_ALTERNATIVE path with a non-null root and exactly one OTHER_UNKNOWN path with a null root. Use common_root only for requirements shared by every legal alternative. Do not infer factual truth, inspect history, recommend actions, or emit GUI action coordinates/tool calls. Return only JSON matching the supplied schema.",
-            "You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Cite exact evidence IDs and payload hashes. On ambiguity, conflict, or insufficiency use unknown; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."
+            "You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Return exactly one state for every milestone ID. Cite exact evidence IDs; the runtime binds their payload hashes from the tracking packet. A pending state requires empty evidence_refs and NOT_STARTED. A satisfied state requires SUPPORTS_STATE evidence and a matching support reason; a violated state requires REFUTES_STATE evidence and a matching refutation reason; and an in_progress state requires OBSERVES_PROGRESS evidence and PROGRESS_OBSERVED. On ambiguity, conflict, or insufficiency use unknown with an uncertainty reason; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."
           ]
         },
         "input": {

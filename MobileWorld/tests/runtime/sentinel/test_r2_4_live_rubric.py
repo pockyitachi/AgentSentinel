@@ -25,6 +25,7 @@ from mobile_world.runtime.sentinel.r2_3.contracts import (
     R23ContractError,
     RubricBackendDescriptorV1,
     RubricBackendKind,
+    RubricTrackingPacketV1,
     RubricTransportAuthority,
     TaskStartRubricRequestV1,
     multi_path_rubric_projection,
@@ -266,7 +267,6 @@ def _track_output(bundle) -> str:
                     "evidence_refs": [
                         {
                             "evidence_id": evidence.evidence_id,
-                            "payload_sha256": evidence.payload_sha256,
                             "relation": "SUPPORTS_STATE",
                         }
                     ],
@@ -275,6 +275,45 @@ def _track_output(bundle) -> str:
             ],
         }
     )
+
+
+def _bound_tracking_case(
+    *,
+    bundle: Any,
+    context: SentinelContext,
+    history_ir: HistoryIR,
+    generate_output: str,
+    track_outputs: tuple[str, ...],
+) -> tuple[LiveOpenAIRubricBackendV1, RubricTaskSession, RubricTrackingPacketV1]:
+    port = CpuFakeRubricProviderPortV1(
+        generate_outputs=(generate_output,),
+        track_outputs=track_outputs,
+    )
+    backend = LiveOpenAIRubricBackendV1(provider_port=port)
+    backend.bind_collector_call(
+        bundle=bundle,
+        logical_call_id=context.logical_call_id,
+        actor_request_sha256=history_ir.raw_request_sha256,
+        deadline_monotonic_ns=time.monotonic_ns() + 10_000_000_000,
+        max_cost_usd_micros=10,
+    )
+    session = RubricTaskSession(
+        task_run_id=bundle.r23_snapshot.task_run_id,
+        task=bundle.r23_snapshot.task,
+        builder_backend=backend,
+        tracker_backend=backend,
+    )
+    generated = session.start()
+    assert generated.status is RubricSessionStatus.ADMITTED
+    assert generated.rubric is not None and generated.state is not None
+    packet = HistoryFreeTrackingPacketBuilderV1().build(
+        packet_id="r24-live-rubric-focused-track",
+        logical_call_id=context.logical_call_id,
+        rubric=generated.rubric,
+        prior_state=generated.state,
+        snapshot=bundle.r23_snapshot,
+    )
+    return backend, session, packet
 
 
 def test_live_rubric_schemas_are_strict_and_checked_in() -> None:
@@ -333,12 +372,50 @@ def test_live_rubric_schemas_are_strict_and_checked_in() -> None:
         cast(JsonValue, generate_schema)
     )
 
+    track_schema = live_rubric_track_schema().as_dict()
+    track_definitions = cast(dict[str, JsonValue], track_schema["$defs"])
+    evidence_ref = cast(dict[str, JsonValue], track_definitions["evidenceRef"])
+    assert "sha256" not in track_definitions
+    assert "payload_sha256" not in cast(dict[str, JsonValue], evidence_ref["properties"])
+    assert "payload_sha256" not in cast(list[str], evidence_ref["required"])
+    valid_track = cast(
+        dict[str, JsonValue],
+        {
+            "proposal_status": "COMPLETE",
+            "milestone_states": [
+                {
+                    "milestone_id": "task-goal-state",
+                    "state": "satisfied",
+                    "evidence_refs": [{"evidence_id": "screen", "relation": "SUPPORTS_STATE"}],
+                    "reason_code": "CURRENT_GUI_SUPPORT",
+                }
+            ],
+        },
+    )
+    track_validator = Draft202012Validator(track_schema)
+    assert not tuple(track_validator.iter_errors(valid_track))
+    legacy_track = deepcopy(valid_track)
+    legacy_states = cast(list[dict[str, JsonValue]], legacy_track["milestone_states"])
+    legacy_refs = cast(list[dict[str, JsonValue]], legacy_states[0]["evidence_refs"])
+    legacy_refs[0]["payload_sha256"] = _sha("provider-supplied-evidence-payload")
+    assert tuple(track_validator.iter_errors(legacy_track))
+
+    track_text = cast(dict[str, JsonValue], request_proof_definitions["trackTextConfiguration"])
+    track_text_properties = cast(dict[str, JsonValue], track_text["properties"])
+    track_format = cast(dict[str, JsonValue], track_text_properties["format"])
+    track_format_properties = cast(dict[str, JsonValue], track_format["properties"])
+    embedded_track_schema = cast(dict[str, JsonValue], track_format_properties["schema"])["const"]
+    assert canonical_json_bytes(cast(JsonValue, embedded_track_schema)) == canonical_json_bytes(
+        cast(JsonValue, track_schema)
+    )
+
 
 def test_cpu_fake_generate_once_and_track_current_collector_image(tmp_path: Path) -> None:
     bundle, context, history_ir = _collector_bundle(tmp_path)
+    track_output = _track_output(bundle)
     port = CpuFakeRubricProviderPortV1(
         generate_outputs=(_generate_output(bundle.r23_snapshot.task.exact_text),),
-        track_outputs=(_track_output(bundle),),
+        track_outputs=(track_output,),
     )
     backend = LiveOpenAIRubricBackendV1(provider_port=port)
     backend.bind_collector_call(
@@ -385,6 +462,11 @@ def test_cpu_fake_generate_once_and_track_current_collector_image(tmp_path: Path
     assert tracked.status is RubricSessionStatus.ADMITTED
     assert tracked.state is not None
     assert tracked.state.milestone_states[0].state is MilestoneState.SATISFIED
+    cited = tracked.state.milestone_states[0].evidence_refs[0]
+    packet_evidence = next(
+        item for item in packet.evidence_index if item.evidence_id == cited.evidence_id
+    )
+    assert cited.payload_sha256 == packet_evidence.payload_sha256
     assert [receipt.operation for receipt in backend.call_receipts] == [
         LiveRubricOperationV1.GENERATE,
         LiveRubricOperationV1.TRACK,
@@ -407,6 +489,203 @@ def test_cpu_fake_generate_once_and_track_current_collector_image(tmp_path: Path
     rubric_receipts = cast(Any, session.receipt_sink).receipts
     assert all(receipt.backend_kind == "INJECTED_FAKE" for receipt in rubric_receipts)
     assert all(receipt.external_network_attempted is False for receipt in rubric_receipts)
+    track_call_receipt = backend.call_receipts[1]
+    track_r23_receipt = next(
+        receipt for receipt in rubric_receipts if receipt.operation is RubricReceiptOperation.TRACK
+    )
+    assert track_call_receipt.provider_output_sha256 == _sha(track_output)
+    assert track_r23_receipt.raw_backend_output_sha256 is not None
+    assert track_r23_receipt.raw_backend_output_sha256 != track_call_receipt.provider_output_sha256
+
+
+def test_track_normalizes_exact_live_pending_preserve_output(tmp_path: Path) -> None:
+    bundle, context, history_ir = _collector_bundle(tmp_path)
+    generated_value = cast(
+        dict[str, JsonValue],
+        json.loads(_generate_output(bundle.r23_snapshot.task.exact_text)),
+    )
+    milestones = cast(list[dict[str, JsonValue]], generated_value["milestones"])
+    milestones[0]["milestone_id"] = "m_adjust_brightness"
+    paths = cast(list[dict[str, JsonValue]], generated_value["paths"])
+    legal_root = cast(dict[str, JsonValue], paths[0]["root"])
+    legal_root["ref_id"] = "m_adjust_brightness"
+    recovered_output = (
+        '{"milestone_states":[{"evidence_refs":[],"milestone_id":'
+        '"m_adjust_brightness","reason_code":"PRESERVE_PRIOR_STATE","state":"pending"}],'
+        '"proposal_status":"COMPLETE"}'
+    )
+    recovered_sha256 = "5e612326a4fda3e07507ab9f5f14e3ef7bc3196b26ba9cab2bce95d4698b5011"
+    assert len(recovered_output.encode("utf-8")) == 164
+    assert _sha(recovered_output) == recovered_sha256
+    backend, session, packet = _bound_tracking_case(
+        bundle=bundle,
+        context=context,
+        history_ir=history_ir,
+        generate_output=json.dumps(generated_value, ensure_ascii=False),
+        track_outputs=(recovered_output,),
+    )
+
+    tracked = session.track(packet)
+
+    assert tracked.status is RubricSessionStatus.ADMITTED
+    assert tracked.state is not None and tracked.proposal is not None
+    state = tracked.state.milestone_states[0]
+    assert state.state is MilestoneState.PENDING
+    assert state.evidence_refs == ()
+    assert state.reason_code.value == "NOT_STARTED"
+    call_receipt = backend.call_receipts[-1]
+    assert call_receipt.provider_output_sha256 == recovered_sha256
+    r23_receipt = next(
+        receipt
+        for receipt in cast(Any, session.receipt_sink).receipts
+        if receipt.operation is RubricReceiptOperation.TRACK
+    )
+    assert r23_receipt.raw_backend_output_sha256 is not None
+    assert r23_receipt.raw_backend_output_sha256 != recovered_sha256
+
+
+def test_track_keeps_valid_abstain_with_empty_evidence(tmp_path: Path) -> None:
+    bundle, context, history_ir = _collector_bundle(tmp_path)
+    abstain_output = json.dumps(
+        {
+            "proposal_status": "ABSTAIN",
+            "milestone_states": [
+                {
+                    "milestone_id": "task-goal-state",
+                    "state": "unknown",
+                    "evidence_refs": [],
+                    "reason_code": "INSUFFICIENT_EVIDENCE",
+                }
+            ],
+        }
+    )
+    _, session, packet = _bound_tracking_case(
+        bundle=bundle,
+        context=context,
+        history_ir=history_ir,
+        generate_output=_generate_output(bundle.r23_snapshot.task.exact_text),
+        track_outputs=(abstain_output,),
+    )
+
+    tracked = session.track(packet)
+
+    assert tracked.status is RubricSessionStatus.ADMITTED
+    assert tracked.state is not None
+    state = tracked.state.milestone_states[0]
+    assert state.state is MilestoneState.UNKNOWN
+    assert state.evidence_refs == ()
+    assert state.reason_code.value == "INSUFFICIENT_EVIDENCE"
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    (
+        "unknown_evidence",
+        "duplicate_evidence",
+        "wrong_relation",
+        "wrong_reason",
+        "wrong_milestone",
+        "preserve_with_evidence",
+        "abstain_nonunknown",
+    ),
+)
+def test_track_hydration_preserves_r23_semantic_rejections(
+    tmp_path: Path,
+    malformation: str,
+) -> None:
+    bundle, context, history_ir = _collector_bundle(tmp_path)
+    output = cast(dict[str, JsonValue], json.loads(_track_output(bundle)))
+    states = cast(list[dict[str, JsonValue]], output["milestone_states"])
+    state = states[0]
+    refs = cast(list[dict[str, JsonValue]], state["evidence_refs"])
+    if malformation == "unknown_evidence":
+        refs[0]["evidence_id"] = "unknown-evidence"
+    elif malformation == "duplicate_evidence":
+        refs.append(deepcopy(refs[0]))
+    elif malformation == "wrong_relation":
+        refs[0]["relation"] = "REFUTES_STATE"
+    elif malformation == "wrong_reason":
+        state["reason_code"] = "COMPLETED_TRANSITION_SUPPORT"
+    elif malformation == "wrong_milestone":
+        state["milestone_id"] = "unknown-milestone"
+    elif malformation == "preserve_with_evidence":
+        state["state"] = "pending"
+        state["reason_code"] = "PRESERVE_PRIOR_STATE"
+    else:
+        output["proposal_status"] = "ABSTAIN"
+    backend, session, packet = _bound_tracking_case(
+        bundle=bundle,
+        context=context,
+        history_ir=history_ir,
+        generate_output=_generate_output(bundle.r23_snapshot.task.exact_text),
+        track_outputs=(json.dumps(output, ensure_ascii=False),),
+    )
+
+    if malformation in {
+        "unknown_evidence",
+        "duplicate_evidence",
+        "wrong_relation",
+        "preserve_with_evidence",
+        "abstain_nonunknown",
+    }:
+        with pytest.raises(LiveRubricError, match="TRACKER_PROPOSAL_REJECTED"):
+            backend.track(packet)
+    else:
+        tracked = session.track(packet)
+        assert tracked.status is RubricSessionStatus.FALLBACK
+        assert tracked.state == packet.prior_state
+        assert tracked.proposal is None
+
+
+def test_track_does_not_normalize_pending_preserve_from_nonpending_prior(
+    tmp_path: Path,
+) -> None:
+    bundle, context, history_ir = _collector_bundle(tmp_path)
+    first_output = _track_output(bundle)
+    pending_preserve = json.dumps(
+        {
+            "proposal_status": "COMPLETE",
+            "milestone_states": [
+                {
+                    "milestone_id": "task-goal-state",
+                    "state": "pending",
+                    "evidence_refs": [],
+                    "reason_code": "PRESERVE_PRIOR_STATE",
+                }
+            ],
+        }
+    )
+    backend, session, first_packet = _bound_tracking_case(
+        bundle=bundle,
+        context=context,
+        history_ir=history_ir,
+        generate_output=_generate_output(bundle.r23_snapshot.task.exact_text),
+        track_outputs=(first_output, pending_preserve),
+    )
+    first = session.track(first_packet)
+    assert first.status is RubricSessionStatus.ADMITTED
+    assert first.state is not None and first.rubric is not None
+    second_logical_call_id = f"{context.logical_call_id}-second"
+    backend.bind_collector_projection(
+        stimulus=bundle.r23_snapshot,
+        current_image_data_url=bundle.gpt56_input.current_image_data_url,
+        current_image_sha256=bundle.gpt56_input.current_image_sha256,
+        logical_call_id=second_logical_call_id,
+        actor_request_sha256=history_ir.raw_request_sha256,
+    )
+    second_packet = HistoryFreeTrackingPacketBuilderV1().build(
+        packet_id="r24-live-rubric-nonpending-prior",
+        logical_call_id=second_logical_call_id,
+        rubric=first.rubric,
+        prior_state=first.state,
+        snapshot=bundle.r23_snapshot,
+    )
+
+    second = session.track(second_packet)
+
+    assert second.status is RubricSessionStatus.FALLBACK
+    assert second.state == second_packet.prior_state
+    assert second.proposal is None
 
 
 def test_generate_derives_multispan_unicode_and_utf8_coordinates(tmp_path: Path) -> None:
