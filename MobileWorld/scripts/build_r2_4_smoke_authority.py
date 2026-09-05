@@ -212,6 +212,7 @@ def _validate_fixture(
     raw: bytes,
     *,
     host: PilotHostV1,
+    served_model_id: str,
     validator: Draft202012Validator,
 ) -> None:
     try:
@@ -234,10 +235,21 @@ def _validate_fixture(
         ):
             raise _BuildError("SMOKE_FIXTURE_SCHEMA_REJECTED")
         request = decoded.get("application_request")
+        request_sha256 = (
+            None
+            if type(request) is not dict
+            else hashlib.sha256(canonical_json_bytes(cast(JsonValue, request))).hexdigest()
+        )
+        span_bindings = decoded.get("curated_span_bindings")
         if (
             type(request) is not dict
-            or decoded.get("fixture_request_sha256")
-            != hashlib.sha256(canonical_json_bytes(cast(JsonValue, request))).hexdigest()
+            or request.get("model") != served_model_id
+            or decoded.get("fixture_request_sha256") != request_sha256
+            or type(span_bindings) is not list
+            or any(
+                type(binding) is not dict or binding.get("source_request_sha256") != request_sha256
+                for binding in span_bindings
+            )
         ):
             raise _BuildError("SMOKE_FIXTURE_SCHEMA_REJECTED")
         messages = request.get("messages")
@@ -338,10 +350,16 @@ def _plan(
     validator: Draft202012Validator,
 ) -> HostLiveSmokePlanV1:
     cases: list[LiveSmokeCaseV1] = []
+    served_model_id = cast(str, getattr(arguments, f"{prefix}_served_model_id"))
     for mode in SmokeModeV1:
         path = cast(Path, getattr(arguments, f"{prefix}_{mode.value.lower()}_fixture"))
         digest, size, raw = _hash_fixture(path, secret_identity=secret_identity)
-        _validate_fixture(raw, host=host, validator=validator)
+        _validate_fixture(
+            raw,
+            host=host,
+            served_model_id=served_model_id,
+            validator=validator,
+        )
         cases.append(
             LiveSmokeCaseV1(
                 case_id=f"{prefix}-{mode.value.lower()}",

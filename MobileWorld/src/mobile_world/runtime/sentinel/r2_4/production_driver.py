@@ -5253,7 +5253,7 @@ class _ValidatedUnitJournalReferenceV1:
             or type(self.blob_safe_locator) is not str
             or self.blob_safe_locator != f"{self.blob_sha256}{_UNIT_EVIDENCE_BLOB_SUFFIX}"
             or type(self.resource_dispatch_record_count) is not int
-            or self.resource_dispatch_record_count < 1
+            or self.resource_dispatch_record_count < 0
         ):
             raise ProductionDriverError(
                 "INVALID_UNIT_JOURNAL", "validated unit journal reference differs"
@@ -5386,6 +5386,11 @@ class SmokeCaseEvidenceV1:
                         "smoke unit journal blob lacks validated readback",
                     )
                 validation.revalidate(self.unit_journal_preimage, expected_unit_id=expected_unit_id)
+                if validation.resource_dispatch_record_count < 1:
+                    raise ProductionDriverError(
+                        "INVALID_UNIT_JOURNAL",
+                        "smoke unit journal lacks its dispatch census",
+                    )
             else:
                 if self.unit_journal_validated_reference is not None:
                     raise ProductionDriverError(
@@ -7950,7 +7955,6 @@ class _ProductionFixedExecutionPortV1:
         dispatches_sha256 = full.get("resource_dispatch_records_sha256")
         if (
             type(dispatches) is not list
-            or not dispatches
             or type(dispatches_sha256) is not str
             or dispatches_sha256
             != _hash_projection(
@@ -8623,7 +8627,7 @@ class _ProductionFixedExecutionPortV1:
         state.final_step_index = 1
         state.completed = True
         return _SmokePortResultV1(
-            request_fixture_sha256=fixture.request_sha256,
+            request_fixture_sha256=invocation.case.request_fixture_sha256,
             request_fixture_byte_count=fixture.byte_count,
             decision=decision,
         )

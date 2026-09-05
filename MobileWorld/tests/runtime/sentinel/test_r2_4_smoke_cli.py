@@ -56,6 +56,7 @@ def _builder_arguments(tmp_path: Path) -> list[str]:
     fixtures.mkdir()
     fixture_arguments: list[str] = []
     for host in ("qwen", "mai"):
+        served_model_id = f"{host}-smoke-model"
         fixture_name = (
             "qwen_flat_progress.captured.v1.json"
             if host == "qwen"
@@ -72,6 +73,12 @@ def _builder_arguments(tmp_path: Path) -> list[str]:
                 / fixture_name
             ).read_text(encoding="utf-8")
         )
+        request = captured["application_request"]
+        request["model"] = served_model_id
+        request_sha256 = _sha(canonical_json_bytes(cast(JsonValue, request)))
+        captured["fixture_request_sha256"] = request_sha256
+        for binding in captured["curated_span_bindings"]:
+            binding["source_request_sha256"] = request_sha256
         for mode in ("off", "shadow", "active"):
             path = fixtures / f"{host}-{mode}.json"
             path.write_bytes(canonical_json_bytes(cast(JsonValue, captured)))
@@ -646,6 +653,43 @@ def test_smoke_authority_builder_rejects_noncanonical_or_wrong_host_fixture(
     value = json.loads(qwen_fixture.read_bytes())
     value["codec_id"] = "mobileworld.g1.history-codec.mai-raw-replay"
     qwen_fixture.write_text(json.dumps(value, indent=2), encoding="utf-8")
+
+    assert module.main(arguments) == 2
+    assert json.loads(capsys.readouterr().err)["error_code"] == ("SMOKE_FIXTURE_SCHEMA_REJECTED")
+    assert not (tmp_path / "draft.json").exists()
+
+
+def test_smoke_authority_builder_rejects_fixture_for_another_served_model(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_script("build_r2_4_smoke_authority")
+    arguments = _builder_arguments(tmp_path)
+    fixture = tmp_path / "fixtures" / "qwen-off.json"
+    value = json.loads(fixture.read_bytes())
+    request = value["application_request"]
+    request["model"] = "surrogate-model-not-authorized-for-live-smoke"
+    request_sha256 = _sha(canonical_json_bytes(cast(JsonValue, request)))
+    value["fixture_request_sha256"] = request_sha256
+    for binding in value["curated_span_bindings"]:
+        binding["source_request_sha256"] = request_sha256
+    fixture.write_bytes(canonical_json_bytes(cast(JsonValue, value)))
+
+    assert module.main(arguments) == 2
+    assert json.loads(capsys.readouterr().err)["error_code"] == ("SMOKE_FIXTURE_SCHEMA_REJECTED")
+    assert not (tmp_path / "draft.json").exists()
+
+
+def test_smoke_authority_builder_rejects_stale_curated_request_binding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_script("build_r2_4_smoke_authority")
+    arguments = _builder_arguments(tmp_path)
+    fixture = tmp_path / "fixtures" / "qwen-off.json"
+    value = json.loads(fixture.read_bytes())
+    value["curated_span_bindings"][0]["source_request_sha256"] = "0" * 64
+    fixture.write_bytes(canonical_json_bytes(cast(JsonValue, value)))
 
     assert module.main(arguments) == 2
     assert json.loads(capsys.readouterr().err)["error_code"] == ("SMOKE_FIXTURE_SCHEMA_REJECTED")

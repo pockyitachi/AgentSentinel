@@ -1621,6 +1621,200 @@ def test_successful_shared_dispatch_attestation_enters_full_unit_journal(
     adapter.cleanup(context)
 
 
+def test_shared_predispatch_failure_cleanup_preserves_dispatch_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _shared_context()
+    config = _shared_runtime_config(tmp_path)
+    resources = _resources(tmp_path)
+    resource_lifecycle = build_cpu_test_resource_lifecycle_adapter_v1(config)
+    resource_lifecycle.prepare(resources, context)
+    port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(port, "_config", config)
+    object.__setattr__(port, "_resource_lifecycle", resource_lifecycle)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
+    object.__setattr__(port, "_lock", threading.RLock())
+    object.__setattr__(port, "_units", {})
+    object.__setattr__(port, "_unit_journals", {})
+    object.__setattr__(port, "_unpublished_unit_evidence", {})
+
+    def reject_fixture_before_dispatch(
+        exact_port: production_driver_module._ProductionFixedExecutionPortV1,
+        invocation: production_driver_module._SmokeInvocationV1,
+        _: object,
+    ) -> None:
+        state = production_driver_module._ProductionUnitStateV1(
+            unit_id=exact_port._unit_id(invocation),
+            host=invocation.host,
+            task_name=invocation.case.task_id,
+            deadline_monotonic_ns=invocation.deadline_monotonic_ns,
+            cleanup_deadline_monotonic_ns=invocation.cleanup_deadline_monotonic_ns,
+            authority_deadline_monotonic_ns=invocation.authority_deadline_monotonic_ns,
+            attempt_termination_upper_bound_ns=invocation.attempt_termination_upper_bound_ns,
+            environment=None,
+            observation=None,
+        )
+        exact_port._units[state.unit_id] = state
+        raise ProductionDriverError(
+            "SMOKE_FIXTURE_MISMATCH",
+            "fixture actor binding differs",
+        )
+
+    monkeypatch.setattr(
+        production_driver_module._ProductionFixedExecutionPortV1,
+        "run_smoke_case",
+        reject_fixture_before_dispatch,
+    )
+    adapter = production_driver_module.FixedLiveSmokeAdapterV1(
+        port,
+        seal=production_driver_module._MODULE_SEAL,
+    )
+
+    with pytest.raises(ProductionDriverError) as raised:
+        adapter.run_host(
+            PilotHostV1.QWEN3_VL,
+            _smoke_plan(tmp_path, PilotHostV1.QWEN3_VL),
+            resources[0],
+            _live_stages(),
+            context,
+            _Lease(context.manifest_sha256),
+        )
+
+    assert raised.value.code == "SMOKE_CASE_EXECUTION_FAILED"
+    failure_raw = adapter.failure_evidence_preimage(RunStageV1.QWEN_LIVE_SMOKE)
+    assert failure_raw is not None
+    failure = cast(dict[str, Any], json.loads(failure_raw))
+    assert failure["failure_phase"] == "DISPATCH"
+    assert failure["failure_code"] == "SMOKE_CASE_EXECUTION_FAILED"
+    assert failure["dispatch_failure_code"] == "SMOKE_FIXTURE_MISMATCH"
+    assert failure["current_unit"]["cleanup"]["status"] == "SUCCEEDED"
+    unit_failure = cast(dict[str, Any], failure["unit_failure_evidence"])
+    assert unit_failure["resource_dispatch_records"] == []
+    assert unit_failure["resource_dispatch_records_sha256"] == _journal_sha(
+        "production-unit-resource-dispatch-journal",
+        [],
+    )
+    assert port._units == {}
+    assert tuple(port._unit_journals) == ("smoke:QWEN3_VL:OFF",)
+    resource_lifecycle.cleanup(context)
+
+
+def test_production_smoke_port_keeps_fixture_and_actor_request_hashes_distinct(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_source = (
+        Path(__file__).resolve().parents[2]
+        / "offline"
+        / "fixtures"
+        / "g1_5_history_codecs"
+        / "qwen_flat_progress.captured.v1.json"
+    )
+    fixture_value = cast(dict[str, Any], json.loads(fixture_source.read_bytes()))
+    fixture_raw = production_driver_module.canonical_json_bytes(cast(Any, fixture_value))
+    actor_request_sha256 = cast(str, fixture_value["fixture_request_sha256"])
+    fixture_artifact_sha256 = hashlib.sha256(fixture_raw).hexdigest()
+    assert actor_request_sha256 != fixture_artifact_sha256
+
+    config = _shared_runtime_config(tmp_path)
+    fixture_root = Path(config.authorized_pilot_input_root)
+    fixture_root.mkdir(parents=True)
+    Path(config.repository_root).mkdir(parents=True)
+    fixture_path = fixture_root / "qwen-off.captured.v1.json"
+    fixture_path.write_bytes(fixture_raw)
+    case = replace(
+        _smoke_plan(tmp_path, PilotHostV1.QWEN3_VL).cases[0],
+        request_fixture_path=str(fixture_path),
+        request_fixture_sha256=fixture_artifact_sha256,
+        request_fixture_byte_count=len(fixture_raw),
+    )
+    now = time.monotonic_ns()
+    invocation = production_driver_module._SmokeInvocationV1(
+        manifest_sha256="a" * 64,
+        run_id="fixture-artifact-hash-run",
+        source_commit="b" * 40,
+        host=PilotHostV1.QWEN3_VL,
+        sequence_index=0,
+        case=case,
+        actor_resource_sha256="c" * 64,
+        history_policy_stage_sha256="d" * 64,
+        deadline_monotonic_ns=now + 10_000_000_000,
+        cleanup_deadline_monotonic_ns=now + 18_000_000_000,
+        authority_deadline_monotonic_ns=now + 20_000_000_000,
+        attempt_termination_upper_bound_ns=(
+            production_driver_module._PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+        ),
+    )
+    port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(port, "_config", config)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
+    object.__setattr__(port, "_lock", threading.RLock())
+    object.__setattr__(port, "_units", {})
+
+    def return_actor_request_evidence(
+        _: production_driver_module._ProductionFixedExecutionPortV1,
+        state: production_driver_module._ProductionUnitStateV1,
+        fixture: production_driver_module._LoadedSmokeFixtureV1,
+    ) -> tuple[str, object, production_driver_module.ActorDecisionEvidenceV1]:
+        assert fixture.request_sha256 == actor_request_sha256
+        base = _semantic_decision(actor_call_index=1, rubric_calls=2, history_policy_calls=1)
+        decision = replace(
+            base,
+            logical_call_id="fixture-artifact-hash-call",
+            raw_request_sha256=fixture.request_sha256,
+            final_request_sha256=fixture.request_sha256,
+            provider_request_sha256=fixture.request_sha256,
+            pre_provider_status=(
+                production_audit_module.ProductionRuntimeAuditPreProviderStatusV1.OFF
+            ),
+            pre_provider_outcome=(
+                production_audit_module.ProductionRuntimeAuditPreProviderOutcomeV1.OFF
+            ),
+            fallback_reason=None,
+            fallback_check=None,
+            case_execution_lease_sha256=None,
+            live_policy_authority_sha256=None,
+            rubric_attempt_receipt_sha256s=(),
+            history_policy_attempt_receipt_sha256=None,
+            census=production_driver_module.DriverCallCensusV1(
+                actor_calls=1,
+                offline_rubric_evaluations=0,
+                rubric_openai_calls=0,
+                history_policy_openai_calls=0,
+                openai_calls=0,
+                actor_actions=0,
+                cost_usd_micros=0,
+                wall_time_ms=1,
+            ),
+        )
+        state.decision_journal.append(decision)
+        return "actor output", object(), decision
+
+    monkeypatch.setattr(
+        production_driver_module._ProductionFixedExecutionPortV1,
+        "_require_broker",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        production_driver_module._ProductionFixedExecutionPortV1,
+        "_begin_task_runtime",
+        lambda *_, **__: None,
+    )
+    monkeypatch.setattr(
+        production_driver_module._ProductionFixedExecutionPortV1,
+        "_dispatch_smoke_fixture",
+        return_actor_request_evidence,
+    )
+
+    result = port.run_smoke_case(invocation, cast(Any, object()))
+
+    assert result.request_fixture_sha256 == fixture_artifact_sha256
+    assert result.request_fixture_sha256 == invocation.case.request_fixture_sha256
+    assert result.request_fixture_byte_count == len(fixture_raw)
+    assert result.decision.raw_request_sha256 == actor_request_sha256
+
+
 def test_shared_cleanup_records_persistent_foreign_tenant_without_signaling_it(
     tmp_path: Path,
 ) -> None:
@@ -2863,6 +3057,51 @@ def test_large_smoke_case_cas_reference_is_read_back_and_durably_bound(
     assert binding["resource_dispatch_record_count"] == 1
     assert binding == production_driver_module._validated_unit_journal_reference_projection(
         validated
+    )
+
+
+def test_empty_dispatch_blob_is_valid_recovery_but_not_success_evidence(
+    tmp_path: Path,
+    large_legal_rubric_provider_request: dict[str, Any],
+) -> None:
+    port, state, invocation, _ = _large_unit_journal_port(
+        tmp_path,
+        large_legal_rubric_provider_request,
+    )
+    journal_raw = port._unit_journal_snapshot(state)
+    validated = port._validated_smoke_unit_journal_reference(
+        journal_raw,
+        expected_unit_id=state.unit_id,
+    )
+    assert validated is not None
+    assert validated.resource_dispatch_record_count == 0
+
+    decision = _semantic_decision(actor_call_index=1, rubric_calls=2, history_policy_calls=1)
+    with pytest.raises(ProductionDriverError) as raised:
+        production_driver_module.SmokeCaseEvidenceV1(
+            manifest_sha256=invocation.manifest_sha256,
+            run_id=invocation.run_id,
+            stage=RunStageV1.QWEN_LIVE_SMOKE,
+            host=invocation.host,
+            sequence_index=invocation.sequence_index,
+            case_id=invocation.case.case_id,
+            task_id=invocation.case.task_id,
+            mode=invocation.case.mode,
+            actor_resource_sha256=invocation.actor_resource_sha256,
+            history_policy_stage_sha256=invocation.history_policy_stage_sha256,
+            request_fixture_sha256=invocation.case.request_fixture_sha256,
+            request_fixture_byte_count=invocation.case.request_fixture_byte_count,
+            decision=decision,
+            cleanup_receipt_sha256="e" * 64,
+            unit_journal_preimage=journal_raw,
+            unit_journal_sha256=hashlib.sha256(journal_raw).hexdigest(),
+            unit_journal_validated_reference=validated,
+            census=production_driver_module._sum_census((decision.census,)),
+        )
+
+    assert raised.value.code == "INVALID_UNIT_JOURNAL"
+    assert str(raised.value) == (
+        "INVALID_UNIT_JOURNAL: smoke unit journal lacks its dispatch census"
     )
 
 
