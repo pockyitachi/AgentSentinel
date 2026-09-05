@@ -20,6 +20,7 @@ from typing import Any, cast
 import pytest
 from PIL import Image
 
+from mobile_world.runtime.audit.integrity import check_run_integrity
 from mobile_world.runtime.client import (
     CleanupTaskTeardownResultV1,
     CleanupTaskTeardownStatusV1,
@@ -751,6 +752,276 @@ def _shared_runtime_config(tmp_path: Path) -> ProductionRuntimeConfigV1:
         vllm_gpu_memory_utilization="0.24",
         minimum_free_gpu_memory_mib=51_200,
     )
+
+
+def _scoreless_smoke_collector_unit(
+    tmp_path: Path,
+    *,
+    host: PilotHostV1,
+    mode: SmokeModeV1,
+) -> tuple[
+    production_driver_module._ProductionFixedExecutionPortV1,
+    production_driver_module._ProductionUnitStateV1,
+    production_driver_module._SmokeInvocationV1,
+    production_driver_module.AuditLifecycle,
+    list[str],
+]:
+    case = next(item for item in _smoke_plan(tmp_path, host).cases if item.mode is mode)
+    now_ns = time.monotonic_ns()
+    invocation = production_driver_module._SmokeInvocationV1(
+        manifest_sha256="a" * 64,
+        run_id=f"scoreless-smoke-{host.value.lower()}-{mode.value.lower()}",
+        source_commit="b" * 40,
+        host=host,
+        sequence_index=tuple(SmokeModeV1).index(mode),
+        case=case,
+        actor_resource_sha256="c" * 64,
+        history_policy_stage_sha256="d" * 64,
+        deadline_monotonic_ns=now_ns + 60_000_000_000,
+        cleanup_deadline_monotonic_ns=now_ns + 90_000_000_000,
+        authority_deadline_monotonic_ns=now_ns + 120_000_000_000,
+        attempt_termination_upper_bound_ns=(
+            production_driver_module._PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
+        ),
+    )
+    repository_root = Path(__file__).resolve().parents[4]
+    lifecycle = production_driver_module.bootstrap_audit_run(
+        production_driver_module.AuditConfig(
+            enabled=True,
+            log_root=tmp_path / "collector",
+            store_stream_chunks=True,
+        ),
+        repository_root=repository_root,
+        repository_commit=invocation.source_commit,
+        repository_dirty=False,
+        resolved_cli_config={"unit_id": f"smoke:{host.value}:{mode.value}"},
+        resolved_agent_runtime_config={"sentinel_production": True},
+        agent_type="ScorelessSmokeParserFixture",
+        model_name=f"fixture-{host.value.lower()}",
+        suite_family="mobile_world",
+        environment_image="fixture-only",
+        worker_id="r24-scoreless-smoke-regression",
+    )
+    assert type(lifecycle) is production_driver_module.AuditLifecycle
+    binding = lifecycle.start_task_attempt(
+        task_name=case.task_id,
+        task_index=invocation.sequence_index + 1,
+        suite_family="mobile_world",
+        agent={"adapter": host.value, "model": f"fixture-{host.value.lower()}"},
+        environment={"backend_id": "fixture-only", "device_id": "none"},
+        whole_task_attempt_index=1,
+    )
+    assert type(binding) is production_driver_module.TaskAuditBinding
+    started = binding.capture.start_task(
+        task_name=case.task_id,
+        task_goal="Parse exactly one inert smoke response.",
+        task_goal_status="resolved",
+        task_index=invocation.sequence_index + 1,
+        suite_family="mobile_world",
+        agent={"host": host.value, "model": f"fixture-{host.value.lower()}"},
+        environment={"backend": "fixture-only", "device": "none"},
+        whole_task_attempt_index=1,
+    )
+    assert started is not None
+    screenshot = Image.new("RGB", (2, 2), color=(17, 34, 51))
+    screenshot_raw = io.BytesIO()
+    screenshot.save(screenshot_raw, format="PNG")
+    step = binding.capture.start_step(
+        step_index=1,
+        observation={
+            "screenshot": screenshot,
+            "accessibility_tree": None,
+            "tool_call": None,
+            "ask_user_response": None,
+        },
+        source_screenshot_bytes=screenshot_raw.getvalue(),
+    )
+    assert step is not None
+    action = production_driver_module.JSONAction(action_type=production_driver_module.WAIT)
+    decision = binding.capture.record_decision(
+        prediction="wait()",
+        action=action,
+        step=step,
+        source_model_call_ids=(),
+    )
+    assert decision is not None and decision.event_id is not None
+    transition = binding.capture.transition_not_executed(
+        reason="R2.4 live smoke forbids GUI actions",
+        decision=decision,
+    )
+    assert transition is not None
+    assert binding.capture.capture_complete
+
+    close_events: list[str] = []
+    unit_id = f"smoke:{host.value}:{mode.value}"
+    state = production_driver_module._ProductionUnitStateV1(
+        unit_id=unit_id,
+        host=host,
+        task_name=case.task_id,
+        deadline_monotonic_ns=invocation.deadline_monotonic_ns,
+        cleanup_deadline_monotonic_ns=invocation.cleanup_deadline_monotonic_ns,
+        authority_deadline_monotonic_ns=invocation.authority_deadline_monotonic_ns,
+        attempt_termination_upper_bound_ns=invocation.attempt_termination_upper_bound_ns,
+        environment=None,
+        observation=None,
+        lifecycle=lifecycle,
+        task_binding=binding,
+        agent=cast(
+            Any,
+            SimpleNamespace(
+                done=lambda: close_events.append("agent-done"),
+                openai_client=SimpleNamespace(close=lambda: close_events.append("client-close")),
+                get_total_token_usage=lambda: {},
+            ),
+        ),
+        final_step_index=1,
+        score=None,
+        score_reason=None,
+        completed=True,
+    )
+    port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
+    object.__setattr__(port, "_lock", threading.RLock())
+    object.__setattr__(port, "_units", {unit_id: state})
+    object.__setattr__(port, "_unit_journals", {})
+    object.__setattr__(port, "_unpublished_unit_evidence", {})
+    return port, state, invocation, lifecycle, close_events
+
+
+def _collector_terminal_documents(
+    lifecycle: production_driver_module.AuditLifecycle,
+    state: production_driver_module._ProductionUnitStateV1,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    run_root = lifecycle.recorder.run_root
+    binding = state.task_binding
+    assert type(binding) is production_driver_module.TaskAuditBinding
+    task_events = [
+        json.loads(line)
+        for line in (run_root / "tasks" / binding.metadata.task_run_id / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    run_events = [
+        json.loads(line)
+        for line in (run_root / "run.events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    task_ended = next(event for event in task_events if event["event_type"] == "task_ended")
+    run_ended = next(event for event in run_events if event["event_type"] == "run_ended")
+    final = json.loads((run_root / "manifest.final.json").read_bytes())
+    return task_ended["payload"], run_ended["payload"], final
+
+
+@pytest.mark.parametrize("host", tuple(PilotHostV1))
+@pytest.mark.parametrize("mode", tuple(SmokeModeV1))
+def test_scoreless_parser_smoke_closes_as_aborted_task_in_completed_valid_raw_run(
+    tmp_path: Path,
+    host: PilotHostV1,
+    mode: SmokeModeV1,
+) -> None:
+    port, state, invocation, lifecycle, close_events = _scoreless_smoke_collector_unit(
+        tmp_path,
+        host=host,
+        mode=mode,
+    )
+    run_root = lifecycle.recorder.run_root
+
+    cleanup = port.cleanup_unit(invocation)
+
+    report = check_run_integrity(run_root)
+    task_ended, run_ended, final = _collector_terminal_documents(lifecycle, state)
+
+    assert report["valid"] is True, report["errors"]
+    assert report["errors"] == []
+    assert report["counts"]["decision_count"] == 1
+    assert report["counts"]["action_execution_count"] == 0
+    assert task_ended["runtime_status"] == "aborted"
+    assert task_ended["termination"] == {
+        "exception": None,
+        "source": "r2_4_parser_smoke_no_action",
+        "step_index": 1,
+    }
+    assert task_ended["environment_evaluation"] == {
+        "exception": None,
+        "reason": None,
+        "score": None,
+    }
+    assert task_ended["capture_complete"] is True
+    assert final["runtime_status"] == "completed"
+    assert final["capture_complete"] is True
+    assert final["task_streams"][0]["runtime_status"] == "aborted"
+    assert run_ended["runtime_status"] == "completed"
+    assert run_ended["task_counts"] == {
+        "completed": 0,
+        "crashed": 1,
+        "started": 1,
+    }
+    assert close_events == ["agent-done", "client-close"]
+    assert cleanup.unit_journal_preimage is None
+    assert state.unit_id not in port._units
+
+
+def test_failed_scoreless_smoke_closes_task_and_run_as_crashed(tmp_path: Path) -> None:
+    port, state, invocation, lifecycle, _ = _scoreless_smoke_collector_unit(
+        tmp_path,
+        host=PilotHostV1.QWEN3_VL,
+        mode=SmokeModeV1.OFF,
+    )
+    state.completed = False
+    run_root = lifecycle.recorder.run_root
+
+    port.cleanup_unit(invocation)
+
+    report = check_run_integrity(run_root)
+    task_ended, run_ended, final = _collector_terminal_documents(lifecycle, state)
+    assert report["valid"] is True, report["errors"]
+    assert task_ended["runtime_status"] == "crashed"
+    assert task_ended["environment_evaluation"]["score"] is None
+    assert run_ended["runtime_status"] == "crashed"
+    assert final["runtime_status"] == "crashed"
+
+
+def test_numeric_score_pilot_closes_task_and_run_as_completed(tmp_path: Path) -> None:
+    port, state, smoke_invocation, lifecycle, _ = _scoreless_smoke_collector_unit(
+        tmp_path,
+        host=PilotHostV1.MAI_UI,
+        mode=SmokeModeV1.ACTIVE,
+    )
+    cell = next(item for item in _pilot(tmp_path).cells if item.host is state.host)
+    invocation = production_driver_module._PilotInvocationV1(
+        manifest_sha256=smoke_invocation.manifest_sha256,
+        run_id=smoke_invocation.run_id,
+        source_commit=smoke_invocation.source_commit,
+        sequence_index=0,
+        cell=cell,
+        actor_resource_sha256=smoke_invocation.actor_resource_sha256,
+        history_policy_stage_sha256=smoke_invocation.history_policy_stage_sha256,
+        deadline_monotonic_ns=smoke_invocation.deadline_monotonic_ns,
+        cleanup_deadline_monotonic_ns=smoke_invocation.cleanup_deadline_monotonic_ns,
+        authority_deadline_monotonic_ns=smoke_invocation.authority_deadline_monotonic_ns,
+        attempt_termination_upper_bound_ns=smoke_invocation.attempt_termination_upper_bound_ns,
+    )
+    old_unit_id = state.unit_id
+    state.unit_id = port._unit_id(invocation)
+    state.task_name = cell.task_id
+    state.score = 0.75
+    state.score_reason = "official fixture result"
+    port._units = {state.unit_id: state}
+    assert state.unit_id != old_unit_id
+    run_root = lifecycle.recorder.run_root
+
+    port.cleanup_unit(invocation)
+
+    report = check_run_integrity(run_root)
+    task_ended, run_ended, final = _collector_terminal_documents(lifecycle, state)
+    assert report["valid"] is True, report["errors"]
+    assert task_ended["runtime_status"] == "completed"
+    assert task_ended["environment_evaluation"] == {
+        "exception": None,
+        "reason": "official fixture result",
+        "score": 0.75,
+    }
+    assert run_ended["runtime_status"] == "completed"
+    assert final["runtime_status"] == "completed"
 
 
 def test_runtime_config_rejects_grace_without_post_termination_teardown_budget(

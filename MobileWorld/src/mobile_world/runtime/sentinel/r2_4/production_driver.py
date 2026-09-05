@@ -9281,21 +9281,33 @@ class _ProductionFixedExecutionPortV1:
         if state.lifecycle is not None and state.task_binding is not None:
             binding = state.task_binding
             task_run_id = binding.metadata.task_run_id
-            runtime_status = "completed" if state.completed and not failures else "crashed"
+            if not binding.capture.capture_complete:
+                failures.append("COLLECTOR_INCOMPLETE")
+            unit_completed = state.completed and not failures
+            smoke_invocation = type(invocation) is _SmokeInvocationV1
+            smoke_parser_completed = unit_completed and smoke_invocation
+            task_runtime_status = (
+                "aborted"
+                if smoke_parser_completed
+                else ("completed" if unit_completed else "crashed")
+            )
+            termination_source = (
+                "r2_4_parser_smoke_no_action" if smoke_parser_completed else "production_driver"
+            )
             try:
                 binding.capture.end_task(
-                    runtime_status=runtime_status,
-                    termination_source="production_driver",
+                    runtime_status=task_runtime_status,
+                    termination_source=termination_source,
                     final_step_index=state.final_step_index,
-                    score=state.score,
-                    reason=state.score_reason,
+                    score=(None if smoke_invocation else state.score),
+                    reason=(None if smoke_invocation else state.score_reason),
                     teardown_attempted=teardown_attempted,
                     teardown_result=teardown_result,
                     token_usage=(
                         {} if state.agent is None else state.agent.get_total_token_usage()
                     ),
                 )
-                if not binding.capture.capture_complete:
+                if not binding.capture.capture_complete and "COLLECTOR_INCOMPLETE" not in failures:
                     failures.append("COLLECTOR_INCOMPLETE")
             except Exception:
                 failures.append("COLLECTOR_END_TASK_FAILED")
@@ -9305,12 +9317,13 @@ class _ProductionFixedExecutionPortV1:
                     result=None,
                     exception=None,
                     retry_planned=False,
-                    runtime_status=runtime_status,
+                    runtime_status=task_runtime_status,
                 )
             except Exception:
                 failures.append("COLLECTOR_FINISH_ATTEMPT_FAILED")
             try:
-                final_path = state.lifecycle.finalize(runtime_status=runtime_status)
+                run_runtime_status = "completed" if unit_completed and not failures else "crashed"
+                final_path = state.lifecycle.finalize(runtime_status=run_runtime_status)
                 if final_path is None or not final_path.is_file() or final_path.is_symlink():
                     failures.append("COLLECTOR_FINALIZE_FAILED")
                 else:
