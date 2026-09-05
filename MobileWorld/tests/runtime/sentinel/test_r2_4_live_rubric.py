@@ -39,6 +39,7 @@ from mobile_world.runtime.sentinel.r2_3.sidecar import (
     rubric_receipt_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.capabilities import build_runtime_history_codec_resolver
+from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes
 from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
 from mobile_world.runtime.sentinel.r2_4.orchestration import (
     R24OrchestrationError,
@@ -165,9 +166,6 @@ def _generate_output(task_text: str) -> str:
                     "span_id": "task-goal",
                     "role": "HARD_REQUIREMENT",
                     "char_start": 0,
-                    "char_end": len(task_text),
-                    "utf8_byte_start": 0,
-                    "utf8_byte_end": len(task_text.encode("utf-8")),
                     "exact_text": task_text,
                 }
             ],
@@ -187,6 +185,64 @@ def _generate_output(task_text: str) -> str:
                     "path_id": "direct-path",
                     "kind": "LEGAL_ALTERNATIVE",
                     "root": {"ref_kind": "MILESTONE", "ref_id": "task-goal-state"},
+                },
+                {"path_id": "other-unknown", "kind": "OTHER_UNKNOWN", "root": None},
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _multi_span_generate_output(task_text: str) -> str:
+    assert task_text == "调整显示亮度。"
+    return json.dumps(
+        {
+            "instruction_spans": [
+                {
+                    "span_id": "adjust",
+                    "role": "HARD_REQUIREMENT",
+                    "char_start": 0,
+                    "exact_text": "调整",
+                },
+                {
+                    "span_id": "brightness",
+                    "role": "HARD_REQUIREMENT",
+                    "char_start": 2,
+                    "exact_text": "显示亮度",
+                },
+            ],
+            "milestones": [
+                {
+                    "milestone_id": "adjust-state",
+                    "kind": "HARD_REQUIREMENT",
+                    "predicate_kind": "INSTRUCTION_REQUIREMENT",
+                    "state_description": "调整",
+                    "instruction_span_id": "adjust",
+                },
+                {
+                    "milestone_id": "brightness-state",
+                    "kind": "HARD_REQUIREMENT",
+                    "predicate_kind": "INSTRUCTION_REQUIREMENT",
+                    "state_description": "显示亮度",
+                    "instruction_span_id": "brightness",
+                },
+            ],
+            "gates": [
+                {
+                    "gate_id": "all-requirements",
+                    "operator": "AND",
+                    "children": [
+                        {"ref_kind": "MILESTONE", "ref_id": "adjust-state"},
+                        {"ref_kind": "MILESTONE", "ref_id": "brightness-state"},
+                    ],
+                }
+            ],
+            "common_root": None,
+            "paths": [
+                {
+                    "path_id": "direct-path",
+                    "kind": "LEGAL_ALTERNATIVE",
+                    "root": {"ref_kind": "GATE", "ref_id": "all-requirements"},
                 },
                 {"path_id": "other-unknown", "kind": "OTHER_UNKNOWN", "root": None},
             ],
@@ -230,22 +286,52 @@ def test_live_rubric_schemas_are_strict_and_checked_in() -> None:
     definitions = cast(dict[str, JsonValue], generate_schema["$defs"])
     instruction_span = cast(dict[str, JsonValue], definitions["instructionSpan"])
     milestone = cast(dict[str, JsonValue], definitions["milestone"])
-    assert "span_sha256" not in cast(dict[str, JsonValue], instruction_span["properties"])
-    assert "span_sha256" not in cast(list[str], instruction_span["required"])
+    for derived_field in (
+        "char_end",
+        "utf8_byte_start",
+        "utf8_byte_end",
+        "span_sha256",
+    ):
+        assert derived_field not in cast(dict[str, JsonValue], instruction_span["properties"])
+        assert derived_field not in cast(list[str], instruction_span["required"])
     assert "description_sha256" not in cast(dict[str, JsonValue], milestone["properties"])
     assert "description_sha256" not in cast(list[str], milestone["required"])
 
     valid = cast(dict[str, JsonValue], json.loads(_generate_output("Adjust brightness.")))
     validator = Draft202012Validator(generate_schema)
     assert not tuple(validator.iter_errors(valid))
-    for container_name, legacy_field in (
-        ("instruction_spans", "span_sha256"),
-        ("milestones", "description_sha256"),
+    for container_name, legacy_field, legacy_value in (
+        ("instruction_spans", "char_end", 18),
+        ("instruction_spans", "utf8_byte_start", 0),
+        ("instruction_spans", "utf8_byte_end", 18),
+        ("instruction_spans", "span_sha256", _sha("provider-supplied-derived-field")),
+        ("milestones", "description_sha256", _sha("provider-supplied-derived-field")),
     ):
         legacy = deepcopy(valid)
         containers = cast(list[dict[str, JsonValue]], legacy[container_name])
-        containers[0][legacy_field] = _sha("provider-supplied-derived-field")
+        containers[0][legacy_field] = cast(JsonValue, legacy_value)
         assert tuple(validator.iter_errors(legacy))
+
+    request_proof_schema = cast(
+        dict[str, JsonValue],
+        json.loads(
+            (
+                REPO_ROOT
+                / "mobileworld_audit_handoff/schemas/r2_4/rubric_request_proof.v1.schema.json"
+            ).read_text(encoding="utf-8")
+        ),
+    )
+    request_proof_definitions = cast(dict[str, JsonValue], request_proof_schema["$defs"])
+    generate_text = cast(
+        dict[str, JsonValue], request_proof_definitions["generateTextConfiguration"]
+    )
+    generate_text_properties = cast(dict[str, JsonValue], generate_text["properties"])
+    generate_format = cast(dict[str, JsonValue], generate_text_properties["format"])
+    generate_format_properties = cast(dict[str, JsonValue], generate_format["properties"])
+    embedded_schema = cast(dict[str, JsonValue], generate_format_properties["schema"])["const"]
+    assert canonical_json_bytes(cast(JsonValue, embedded_schema)) == canonical_json_bytes(
+        cast(JsonValue, generate_schema)
+    )
 
 
 def test_cpu_fake_generate_once_and_track_current_collector_image(tmp_path: Path) -> None:
@@ -275,6 +361,13 @@ def test_cpu_fake_generate_once_and_track_current_collector_image(tmp_path: Path
     assert generated.rubric is not None and generated.state is not None
     assert generated.rubric.instruction_spans[0].span_sha256 == _sha(
         bundle.r23_snapshot.task.exact_text
+    )
+    assert generated.rubric.instruction_spans[0].char_end == len(
+        bundle.r23_snapshot.task.exact_text
+    )
+    assert generated.rubric.instruction_spans[0].utf8_byte_start == 0
+    assert generated.rubric.instruction_spans[0].utf8_byte_end == len(
+        bundle.r23_snapshot.task.exact_text.encode("utf-8")
     )
     assert generated.rubric.milestones[0].description_sha256 == _sha(
         generated.rubric.milestones[0].state_description
@@ -316,20 +409,67 @@ def test_cpu_fake_generate_once_and_track_current_collector_image(tmp_path: Path
     assert all(receipt.external_network_attempted is False for receipt in rubric_receipts)
 
 
-@pytest.mark.parametrize("drift", ("char", "utf8", "text"))
-def test_generate_derives_hashes_but_still_rejects_instruction_span_drift(
+def test_generate_derives_multispan_unicode_and_utf8_coordinates(tmp_path: Path) -> None:
+    bundle, context, history_ir = _collector_bundle(tmp_path)
+    task_text = bundle.r23_snapshot.task.exact_text
+    port = CpuFakeRubricProviderPortV1(
+        generate_outputs=(_multi_span_generate_output(task_text),),
+        track_outputs=(),
+    )
+    backend = LiveOpenAIRubricBackendV1(provider_port=port)
+    backend.bind_collector_call(
+        bundle=bundle,
+        logical_call_id=context.logical_call_id,
+        actor_request_sha256=history_ir.raw_request_sha256,
+        deadline_monotonic_ns=time.monotonic_ns() + 10_000_000_000,
+        max_cost_usd_micros=10,
+    )
+    generated = backend.generate(
+        TaskStartRubricRequestV1(
+            request_id="r24-live-rubric-multispan",
+            task_run_id=bundle.r23_snapshot.task_run_id,
+            task=bundle.r23_snapshot.task,
+            backend=backend.descriptor,
+        )
+    )
+
+    assert tuple(
+        (
+            span.char_start,
+            span.char_end,
+            span.utf8_byte_start,
+            span.utf8_byte_end,
+            span.exact_text,
+        )
+        for span in generated.instruction_spans
+    ) == ((0, 2, 0, 6, "调整"), (2, 6, 6, 18, "显示亮度"))
+
+
+@pytest.mark.parametrize("drift", ("char_start", "out_of_range", "overlap", "text"))
+def test_generate_derives_coordinates_and_hashes_but_rejects_instruction_span_drift(
     tmp_path: Path,
     drift: str,
 ) -> None:
     bundle, context, history_ir = _collector_bundle(tmp_path)
     task_text = bundle.r23_snapshot.task.exact_text
-    output = cast(dict[str, JsonValue], json.loads(_generate_output(task_text)))
+    output = cast(
+        dict[str, JsonValue],
+        json.loads(
+            _multi_span_generate_output(task_text)
+            if drift == "overlap"
+            else _generate_output(task_text)
+        ),
+    )
     spans = cast(list[dict[str, JsonValue]], output["instruction_spans"])
     span = spans[0]
-    if drift == "char":
-        span["char_end"] = cast(int, span["char_end"]) - 1
-    elif drift == "utf8":
-        span["utf8_byte_end"] = cast(int, span["utf8_byte_end"]) - 1
+    if drift == "char_start":
+        span["char_start"] = 1
+    elif drift == "out_of_range":
+        span["char_start"] = len(task_text) + 1
+    elif drift == "overlap":
+        span["exact_text"] = "调整显示"
+        milestones = cast(list[dict[str, JsonValue]], output["milestones"])
+        milestones[0]["state_description"] = "调整显示"
     else:
         span["exact_text"] = task_text[:-1]
     port = CpuFakeRubricProviderPortV1(

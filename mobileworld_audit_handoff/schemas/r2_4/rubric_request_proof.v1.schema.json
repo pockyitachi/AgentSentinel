@@ -118,7 +118,7 @@
               {"$ref": "#/$defs/providerRequest"},
               {
                 "properties": {
-                  "instructions": {"const": "You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. Preserve instruction-bound requirement text byte-for-byte and provide exact Unicode character and UTF-8 byte offsets. Include every hard requirement, constraint, and terminal requirement; model legitimate alternatives explicitly and include exactly one OTHER_UNKNOWN path. Do not infer factual truth, inspect history, recommend actions, emit coordinates/tools, or add requirements. Return only JSON matching the supplied schema."},
+                  "instructions": {"const": "You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. For each instruction span, copy exact_text byte-for-byte and give only its zero-based Unicode char_start; the runtime derives all end and UTF-8 offsets. Every instruction span must be cited by exactly one instruction-bound milestone whose kind matches the span role, whose predicate_kind is INSTRUCTION_REQUIREMENT, and whose state_description exactly equals the span exact_text. Include every hard requirement, constraint, and terminal requirement without adding requirements. Every graph reference must resolve, every milestone and gate must be reachable, gates must be acyclic with at least two distinct children, and IDs must be unique. Include at least one LEGAL_ALTERNATIVE path with a non-null root and exactly one OTHER_UNKNOWN path with a null root. Use common_root only for requirements shared by every legal alternative. Do not infer factual truth, inspect history, recommend actions, or emit GUI action coordinates/tool calls. Return only JSON matching the supplied schema."},
                   "input": {"$ref": "#/$defs/generateInputMessages"},
                   "text": {"$ref": "#/$defs/generateTextConfiguration"}
                 }
@@ -647,14 +647,11 @@
                   "instructionSpan": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["span_id", "role", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "exact_text"],
+                    "required": ["span_id", "role", "char_start", "exact_text"],
                     "properties": {
                       "span_id": {"$ref": "#/$defs/semanticId"},
                       "role": {"enum": ["HARD_REQUIREMENT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
                       "char_start": {"type": "integer", "minimum": 0},
-                      "char_end": {"type": "integer", "minimum": 1},
-                      "utf8_byte_start": {"type": "integer", "minimum": 0},
-                      "utf8_byte_end": {"type": "integer", "minimum": 1},
                       "exact_text": {"type": "string", "minLength": 1, "maxLength": 32768}
                     }
                   },
@@ -785,7 +782,7 @@
         "model": {"const": "gpt-5.6-sol"},
         "instructions": {
           "enum": [
-            "You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. Preserve instruction-bound requirement text byte-for-byte and provide exact Unicode character and UTF-8 byte offsets. Include every hard requirement, constraint, and terminal requirement; model legitimate alternatives explicitly and include exactly one OTHER_UNKNOWN path. Do not infer factual truth, inspect history, recommend actions, emit coordinates/tools, or add requirements. Return only JSON matching the supplied schema.",
+            "You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. For each instruction span, copy exact_text byte-for-byte and give only its zero-based Unicode char_start; the runtime derives all end and UTF-8 offsets. Every instruction span must be cited by exactly one instruction-bound milestone whose kind matches the span role, whose predicate_kind is INSTRUCTION_REQUIREMENT, and whose state_description exactly equals the span exact_text. Include every hard requirement, constraint, and terminal requirement without adding requirements. Every graph reference must resolve, every milestone and gate must be reachable, gates must be acyclic with at least two distinct children, and IDs must be unique. Include at least one LEGAL_ALTERNATIVE path with a non-null root and exactly one OTHER_UNKNOWN path with a null root. Use common_root only for requirements shared by every legal alternative. Do not infer factual truth, inspect history, recommend actions, or emit GUI action coordinates/tool calls. Return only JSON matching the supplied schema.",
             "You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Cite exact evidence IDs and payload hashes. On ambiguity, conflict, or insufficiency use unknown; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."
           ]
         },

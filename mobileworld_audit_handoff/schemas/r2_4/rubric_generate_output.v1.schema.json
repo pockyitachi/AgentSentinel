@@ -42,14 +42,11 @@
     "instructionSpan": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["span_id", "role", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "exact_text"],
+      "required": ["span_id", "role", "char_start", "exact_text"],
       "properties": {
         "span_id": {"$ref": "#/$defs/semanticId"},
         "role": {"enum": ["HARD_REQUIREMENT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
         "char_start": {"type": "integer", "minimum": 0},
-        "char_end": {"type": "integer", "minimum": 1},
-        "utf8_byte_start": {"type": "integer", "minimum": 0},
-        "utf8_byte_end": {"type": "integer", "minimum": 1},
         "exact_text": {"type": "string", "minLength": 1, "maxLength": 32768}
       }
     },

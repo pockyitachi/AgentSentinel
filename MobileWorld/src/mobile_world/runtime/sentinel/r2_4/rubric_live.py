@@ -153,7 +153,7 @@ _MAX_PROVIDER_REQUEST_BYTES = 8 * 1024 * 1024
 _MAX_REQUEST_PROOF_BYTES = 256 * 1024 * 1024
 _TRUST_ANCHOR_SEAL: Final[object] = object()
 
-_GENERATE_INSTRUCTIONS = """You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. Preserve instruction-bound requirement text byte-for-byte and provide exact Unicode character and UTF-8 byte offsets. Include every hard requirement, constraint, and terminal requirement; model legitimate alternatives explicitly and include exactly one OTHER_UNKNOWN path. Do not infer factual truth, inspect history, recommend actions, emit coordinates/tools, or add requirements. Return only JSON matching the supplied schema."""
+_GENERATE_INSTRUCTIONS = """You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. For each instruction span, copy exact_text byte-for-byte and give only its zero-based Unicode char_start; the runtime derives all end and UTF-8 offsets. Every instruction span must be cited by exactly one instruction-bound milestone whose kind matches the span role, whose predicate_kind is INSTRUCTION_REQUIREMENT, and whose state_description exactly equals the span exact_text. Include every hard requirement, constraint, and terminal requirement without adding requirements. Every graph reference must resolve, every milestone and gate must be reachable, gates must be acyclic with at least two distinct children, and IDs must be unique. Include at least one LEGAL_ALTERNATIVE path with a non-null root and exactly one OTHER_UNKNOWN path with a null root. Use common_root only for requirements shared by every legal alternative. Do not infer factual truth, inspect history, recommend actions, or emit GUI action coordinates/tool calls. Return only JSON matching the supplied schema."""
 
 _TRACK_INSTRUCTIONS = """You are the isolated MobileWorld rubric tracker. Evaluate every frozen milestone only from the supplied history-free packet and the current screenshot. Actor history, History IR, policy output, future events, benchmark checker results, and replay outcomes are absent and forbidden. Generic transition success, screenshot change, and free-form tool text are weak evidence and cannot alone establish satisfaction or violation. Cite exact evidence IDs and payload hashes. On ambiguity, conflict, or insufficiency use unknown; ABSTAIN requires every milestone unknown. Do not recommend or execute an action. Return only JSON matching the supplied schema."""
 
@@ -4375,6 +4375,27 @@ def _graph_ref(value: JsonValue) -> GraphRefV1:
     )
 
 
+def _parse_instruction_span(
+    value: JsonValue,
+    *,
+    task_text: str,
+) -> InstructionSpanV1:
+    item = _mapping(value, "instruction span")
+    char_start = cast(int, item["char_start"])
+    exact_text = cast(str, item["exact_text"])
+    utf8_byte_start = len(task_text[:char_start].encode("utf-8"))
+    return InstructionSpanV1(
+        span_id=cast(str, item["span_id"]),
+        role=InstructionSpanRole(cast(str, item["role"])),
+        char_start=char_start,
+        char_end=char_start + len(exact_text),
+        utf8_byte_start=utf8_byte_start,
+        utf8_byte_end=utf8_byte_start + len(exact_text.encode("utf-8")),
+        exact_text=exact_text,
+        span_sha256=hashlib.sha256(exact_text.encode("utf-8")).hexdigest(),
+    )
+
+
 def _parse_generated_rubric(
     value: dict[str, JsonValue],
     *,
@@ -4383,22 +4404,11 @@ def _parse_generated_rubric(
 ) -> MultiPathRubricV1:
     try:
         spans = tuple(
-            InstructionSpanV1(
-                span_id=cast(str, item["span_id"]),
-                role=InstructionSpanRole(cast(str, item["role"])),
-                char_start=cast(int, item["char_start"]),
-                char_end=cast(int, item["char_end"]),
-                utf8_byte_start=cast(int, item["utf8_byte_start"]),
-                utf8_byte_end=cast(int, item["utf8_byte_end"]),
-                exact_text=cast(str, item["exact_text"]),
-                span_sha256=hashlib.sha256(
-                    cast(str, item["exact_text"]).encode("utf-8")
-                ).hexdigest(),
+            _parse_instruction_span(
+                raw,
+                task_text=request.task.exact_text,
             )
-            for item in (
-                _mapping(raw, "instruction span")
-                for raw in _sequence(value["instruction_spans"], "instruction_spans")
-            )
+            for raw in _sequence(value["instruction_spans"], "instruction_spans")
         )
         milestones = tuple(
             MilestoneV1(

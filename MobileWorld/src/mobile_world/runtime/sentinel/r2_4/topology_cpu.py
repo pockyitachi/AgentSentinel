@@ -835,9 +835,6 @@ def _rubric_generate_script(task_text: str) -> str:
                 "span_id": "task-goal",
                 "role": "HARD_REQUIREMENT",
                 "char_start": 0,
-                "char_end": len(task_text),
-                "utf8_byte_start": 0,
-                "utf8_byte_end": len(task_text.encode("utf-8")),
                 "exact_text": task_text,
             }
         ],
