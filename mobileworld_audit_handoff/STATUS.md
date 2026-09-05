@@ -14,13 +14,12 @@ Last updated: 2026-09-05 (UTC)
 风险：该旧历史仍进入下一步prompt，模型可能以它为前提继续行动或提前结束
 ```
 
-该方向已在 accepted R2.3 CPU/offline/injected-fake checkpoint 与 R2.4
-runtime vertical slice 中形成 rubric/tracking、runtime glue 与独立 smoke-only
-入口。R2.4 当前是 **LIVE-SMOKE EVIDENCE GATE PASSED；OWNER RE-REVIEW
-PENDING；NO CURRENT LIVE AUTHORITY；MERGE/PUSH/R2.5 NO-GO**。新六-case
-action-free run 及六份官方 Collector integrity report 已通过，但这不会自动
-改变 repository acceptance 或 Linear：Runtime Epic 2 仍为 3/6 accepted，
-R2.5 pilot 未获授权且未运行。
+该方向已在 accepted R2.3 CPU/offline/injected-fake checkpoint 与 accepted
+R2.4 runtime vertical slice 中形成 rubric/tracking、runtime glue 与独立
+smoke-only 入口。R2.4 已由 owner 接受并关闭；新六-case action-free run 及
+六份官方 Collector integrity report 均通过。因此 Runtime Epic 2 现为 4/6
+accepted。已消费的 smoke authority 不提供重跑或 R2.5 权限；R2.5 pilot
+仍未获授权且未运行。
 
 ## 2. Current stage and decision
 
@@ -71,8 +70,9 @@ MobileWorld backend/GUI/tool/action 或 replay；没有把两个 G1.5 v1 Codec �
 
 **Runtime ALE-326 / R2.3 corrected repository engineering checkpoint commit
 `54381b7b56b06d5aa262005af62b65269b4cf0a6` 已通过 mainline merge
-`2aa0a268b7d709cf05d524e74c3fba8612f64003` 接受，Runtime Epic 2 因此为
-3/6 accepted。** 接受范围严格限定为 CPU/offline/injected-fake、SHADOW-only：versioned
+`2aa0a268b7d709cf05d524e74c3fba8612f64003` 接受；该里程碑当时使 Runtime
+Epic 2 达到 3/6，当前连同 accepted R2.4 已为 4/6。** 接受范围严格限定为
+CPU/offline/injected-fake、SHADOW-only：versioned
 exact-span `AND`/`OR` rubric、generate-once cache、显式 revision、history-free causal packet、
 milestone/path/frontier tracking、post-state relevance、hash-only receipt 与 low-cardinality
 metrics。共享 DAG 派生已 memoize 且以显式 stack/topological DP 覆盖完整 512-gate 上限，state validator
@@ -81,13 +81,12 @@ metrics。共享 DAG 派生已 memoize 且以显式 stack/topological DP 覆盖�
 Qwen/MAI 只使用 captured fixtures；没有真实模型/provider、网络、GPU、MobileWorld backend/
 GUI/tool/action 或 replay。Linear 仍由 owner 管理。**
 
-**Runtime ALE-327 / R2.4 当前 implementation/source checkpoint 为
-`2f5eae0dba43908a44017bf8f3ab6916b56db095`。状态是
-`LIVE-SMOKE EVIDENCE GATE PASSED / OWNER RE-REVIEW PENDING / NO CURRENT
-LIVE AUTHORITY / MERGE-PUSH-R2.5 NO-GO`。** 初始 joint R2.4/R2.5
+**Runtime ALE-327 / R2.4 已由 owner 接受并关闭；implementation/source
+checkpoint 为 `2f5eae0dba43908a44017bf8f3ab6916b56db095`。当前没有新的 live
+或 R2.5 authority。** 初始 joint R2.4/R2.5
 CPU-only/offline preparation `344e1c42596a4dca717da66374eeca3d936c3f61`
-曾被 owner 判为 NO-GO；后续整改、exact-authority live smoke 与官方 Collector
-integrity gate 现已完成，但尚未自动接受或关闭 R2.4。当前候选保留此前
+曾被 owner 判为 NO-GO；后续整改、exact-authority live smoke、官方 Collector
+integrity gate 与最终 owner 复审均已完成。accepted checkpoint 保留此前
 SDK/http logging、type-sensitive sealed schema、request anchor、bounded
 cleanup 与 fatal-dispatch 整改，并将每个 formed `RUBRIC`/`HISTORY_POLICY` attempt 的完整
 authority、deadline/constraint、case lease、精确双-stage set、pricing、transport 与 canonical
@@ -155,7 +154,7 @@ action=0，exact cost `$0.173954`，Qwen→reap→MAI 顺序与 bounded cleanup 
 仅证明链路可运行，不证明 material transformation、task effectiveness 或 causality。
 使用过的 authority 已消费；没有当前 live authority、持久化 117-row executable
 task source、selected cohort、frozen pilot manifest 或 pilot artifact。R2.5 未授权，
-Runtime Epic 2 仍为 3/6 accepted；Linear 未修改。
+Runtime Epic 2 现为 4/6 accepted。
 
 **Historical superseded checkpoint — former ALE-324 / G1.6 曾获 D-029 CPU-only 人工标注授权，
 并形成 private loopback-only manual annotation workspace checkpoint，并在 D-031 下部署三路已冻结
@@ -199,9 +198,9 @@ Evaluation
 
 因此，第一次错误 taxonomy即使设计不合理，只需重跑离线 evaluator，不需要重新运行昂贵的 MobileWorld任务。
 
-当前仍未运行 live claim extraction/verdict prediction、在线 filter、active archive
-或自然轨迹干预；R2.3 rubric 仅在上述 accepted CPU/offline/injected-fake 范围内，
-R2.4/R2.5 runtime/pilot 链只有待复审的 CPU remediation 与 tooling/protocol。
+当前仍未运行 active archive 或自然轨迹干预。R2.3 rubric 的独立 repository
+checkpoint 仍是 accepted CPU/offline/injected-fake 范围；R2.4 已完成并接受
+Qwen/MAI action-free live vertical slice，而 R2.5 real MobileWorld pilot 尚未授权或运行。
 
 ## 3. Canonical notation
 
@@ -1726,4 +1725,40 @@ exact smoke authority has been consumed and cannot authorize a rerun. No GUI
 action, R2.5/pilot, merge, push, release, Linear change, task-effectiveness
 measurement, or causal evaluation occurred. Owner review of the exact source
 commit and evidence digests is the next required repository decision.
+```
+
+```text
+Date: 2026-09-05 UTC
+ALE-327 / R2.4 owner disposition: ACCEPTED / DONE. Runtime Epic 2 is now
+4/6 accepted. The exact reviewed implementation/source checkpoint is
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`; run
+`r24-smoke-gpu5-integrity-retry-20260905t181000z` and the evidence hashes in
+the preceding ledger are the accepted live-smoke basis. Owner review found no
+remaining P0/P1 and authorized the reviewed repository branch for PR/merge and
+the ALE-327 Linear completion update.
+
+Independent acceptance replayed the complete R2.4 CPU gate at 646/646, read
+the terminal through `AtomicR24SmokeOutputTransactionV1`, revalidated all six
+new Collector roots with `check_run_integrity(..., write_report=False)`, and
+recomputed the manifest, stage, terminal, result, integrity-report, and cost
+bindings. Qwen and MAI each completed OFF/SHADOW/ACTIVE; all six actor outputs
+parsed, all 12 Sentinel attempts completed and were reaped, exact cost was
+173,954 micros, and GUI/action execution remained zero. The old six invalid
+Collector roots remain excluded and unmodified.
+
+Evidence-language clarification: explicit hash-bound model-service evidence
+proves ports 18007 and 18008 available and both project model identities
+reaped. Port 6960 clearance follows from the bound backend/container cleanup
+and empty residual-capability census rather than a separate hashed port probe.
+Likewise, the co-tenant's `Evolution complete` text and 18:43:43 timestamp are
+operator observations; the durable claim used for acceptance is narrower:
+PID/PGID/SID 27625 retained stable identity through the bound censuses and was
+absent from the project stopped-model set.
+
+Acceptance boundary: ACTIVE produced an admitted `KEEP_UNCERTAIN` no-op. R2.4
+therefore proves the bounded runtime transport/parser/isolation/safety chain,
+not a material history edit, task-effectiveness improvement, or causal effect.
+The smoke authority is consumed. No new live run, API/GPU/backend/GUI action,
+R2.5 pilot, or release is authorized by this acceptance. R2.5 is mechanically
+next but requires a separate exact owner decision and authority.
 ```

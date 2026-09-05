@@ -75,7 +75,7 @@ revived as a separate causal-evaluation effort after an explicit owner decision.
 
 ### Active runtime work
 
-Runtime Epic 2 has 3/6 repository engineering stories accepted. ALE-324 / R2.1
+Runtime Epic 2 has 4/6 repository engineering stories accepted. ALE-324 / R2.1
 has an accepted CPU/fake checkpoint at commit
 `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`. ALE-325 / R2.2 has an accepted
 CPU/offline/injected-fake-Responses, SHADOW-only checkpoint at commit
@@ -87,11 +87,10 @@ R2.5 have an initial joint CPU-only/offline/injected-fake repository-preparation
 implementation at `344e1c42596a4dca717da66374eeca3d936c3f61`; owner review classified it
 **NO-GO**. The current R2.4 implementation/source checkpoint is
 `2f5eae0dba43908a44017bf8f3ab6916b56db095`. Its six-case action-free live
-smoke and all six official Collector integrity checks passed, so the status is
-**LIVE-SMOKE EVIDENCE GATE PASSED; OWNER RE-REVIEW PENDING; NO CURRENT LIVE
-AUTHORITY; MERGE/PUSH/R2.5 NO-GO**. The exact authority used by that run is
-consumed; it grants no rerun or pilot permission. This is not automatic owner
-acceptance: Runtime Epic 2 remains 3/6 accepted and Linear remains owner-managed.
+smoke and all six official Collector integrity checks passed, and the owner has
+accepted the bounded R2.4 runtime vertical slice. The exact authority used by
+that run is consumed; it grants no rerun or pilot permission. Runtime Epic 2 is
+therefore 4/6 accepted; R2.5 remains a separately authorized next stage.
 R2.1
 supersedes the `58820a8` checkpoint after recursively trusted policy-output and
 History-IR snapshots,
@@ -247,15 +246,17 @@ Python recursion limit and gate declaration order.
 
 This checkpoint has no trusted record-level R2.2 `SUPPORTED + KEEP` resolver.
 Support hashes are input-bound but have no archive authority; every relevance
-result is `RETAIN`, and `ARCHIVE_SHADOW` remains schema-reserved for R2.4.
+result is `RETAIN`, and `ARCHIVE_SHADOW` remains schema-reserved. The accepted
+R2.4 vertical slice did not install that resolver.
 Receipts are hash-only, include measured backend-failure latency, call census is
 cumulative, cache reuse is measured, and calibration labels are accepted only
 as explicit frozen offline inputs. Qwen and MAI coverage uses captured CPU
 fixtures and no host/model-specific runtime branch. This checkpoint is
 owner-accepted within that bounded repository scope; Linear remains
 owner-managed.
-R2.4 is mechanically next, but live/model/provider, network, GPU,
-backend, GUI/tool/action, replay, and resource authority remain separate.
+R2.4 is owner-accepted. R2.5 is mechanically next, but every new live/model/
+provider, network, GPU, backend, GUI/tool/action, replay, and resource operation
+still requires separate owner authority.
 
 The shared candidate hook is
 `../MobileWorld/src/mobile_world/agents/base.py::BaseAgent.openai_chat_completions_create`.
@@ -265,7 +266,7 @@ editing. First-host prompt builders are under:
 - `../MobileWorld/src/mobile_world/agents/implementations/qwen3vl.py`
 - `../MobileWorld/src/mobile_world/agents/implementations/mai_ui_agent.py`
 
-## 4C. Candidate scope: R2.4/R2.5 CPU-only repository preparation
+## 4C. Accepted R2.4 scope and candidate R2.5 repository preparation
 
 The initial implementation commit
 `344e1c42596a4dca717da66374eeca3d936c3f61` prepared the two-host runtime
@@ -274,15 +275,14 @@ history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified it **NO-GO**. The current
-remediation and live-smoke source checkpoint is
-`2f5eae0dba43908a44017bf8f3ab6916b56db095`; its live-smoke evidence gate has
-passed, but it remains pending owner re-review and must not be merged or pushed.
-It retains the earlier strict SDK/HTTP
+remediation and live-smoke source checkpoint
+`2f5eae0dba43908a44017bf8f3ab6916b56db095` is owner-accepted for R2.4. It
+retains the earlier strict SDK/HTTP
 logging suppression, type-sensitive canonical-byte sealed-schema comparison,
-module-owned request anchors, bounded cleanup, and fatal-dispatch repairs. It
-must not be merged or pushed. The checkpoint itself grants no live execution;
-the successful smoke below used a separate exact authority that is now
-consumed. It is not an R2.5 pilot result.
+module-owned request anchors, bounded cleanup, and fatal-dispatch repairs. The
+reviewed repository branch is authorized for PR/merge. The checkpoint itself
+grants no live execution; the successful smoke below used a separate exact
+authority that is now consumed. It is not an R2.5 pilot result.
 
 Every formed `RUBRIC` and `HISTORY_POLICY` attempt now retains the complete
 authority, deadline/constraint, case lease, exact two-stage set, pricing,
@@ -391,8 +391,9 @@ effectiveness, or causal effect.
 
 The used authority is consumed and grants no further execution. No persistent
 117-row executable source, selected cohort, frozen pilot manifest, or pilot
-artifact was created. The frozen G1.5 Codecs remain `live_ready=false`, R2.3 is
-accepted, Runtime Epic 2 remains 3/6 accepted, and Linear remains owner-managed.
+artifact was created. The frozen G1.5 Codecs remain `live_ready=false`; R2.3
+and R2.4 are accepted, Runtime Epic 2 is 4/6 accepted, and R2.5 remains
+separately unauthorized.
 
 ## 5. Reusable implementation assets
 
@@ -623,11 +624,13 @@ The initial joint R2.4/R2.5 repository-preparation implementation is
 `2f5eae0dba43908a44017bf8f3ab6916b56db095`. Its complete MobileWorld
 CPU/offline suite passed 2438/2438, and its exact-authority live run
 `r24-smoke-gpu5-integrity-retry-20260905t181000z` plus six official Collector
-integrity reports passed the evidence gate. This is ready only for owner
-re-review: it must not be merged or pushed and is not current live authority.
+integrity reports passed the evidence gate. The owner accepted this bounded
+R2.4 result and authorized the reviewed branch for PR/merge; there is no current
+live authority.
 
 The consumed smoke authority created no persistent executable-task source,
 selected cohort, frozen pilot manifest/hash, GUI action, or pilot artifact.
 R2.5 remains unauthorized. R2.3 is accepted through merge
-`2aa0a268b7d709cf05d524e74c3fba8612f64003`; Runtime Epic 2 remains 3/6
-accepted, and Linear remains owner-managed.
+`2aa0a268b7d709cf05d524e74c3fba8612f64003`; R2.4 is accepted at
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`, and Runtime Epic 2 is 4/6
+accepted.

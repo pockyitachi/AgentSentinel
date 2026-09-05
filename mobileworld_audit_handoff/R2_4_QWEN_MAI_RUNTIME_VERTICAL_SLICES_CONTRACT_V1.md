@@ -1,6 +1,6 @@
 # R2.4 Qwen and MAI Runtime Vertical Slices Contract v1
 
-Status: **LIVE-SMOKE EVIDENCE GATE PASSED; OWNER RE-REVIEW PENDING; NO CURRENT LIVE AUTHORITY; MERGE/PUSH/R2.5 NO-GO**
+Status: **OWNER ACCEPTED / DONE; RUNTIME EPIC 2 4/6; NO CURRENT LIVE OR R2.5 AUTHORITY**
 
 Contract ID: `mobileworld.runtime.r2-4-qwen-mai-vertical-slices/contract-v1`
 
@@ -43,16 +43,16 @@ Qwen3-VL or MAI assembles the exact actor request
   -> unchanged actor provider, parser, and action path
 ```
 
-The repository candidate implements this behavior with CPU fixtures, injected
-fake transports, sealed resource/execution doubles, strict external-output
+The accepted repository checkpoint implements this behavior with CPU fixtures,
+injected fake transports, sealed resource/execution doubles, strict external-output
 contracts, and an additive single-shared-GPU sequential smoke-only entrypoint.
 At source commit `2f5eae0dba43908a44017bf8f3ab6916b56db095`, an exact
 owner-authorized, action-free Qwen-then-MAI live smoke completed and all six
 Collector raw roots passed the official integrity checker. That establishes
 bounded transport, parser, isolation, accounting, durability, handoff, and
-cleanup evidence. It does **not** establish task effectiveness, a material
-ACTIVE edit, a causal result, R2.5 readiness, automatic owner acceptance, or
-authority for another live run.
+cleanup evidence. Owner review accepted that exact R2.4 scope on 2026-09-05.
+It does **not** establish task effectiveness, a material ACTIVE edit, a causal
+result, R2.5 live readiness, or authority for another live run.
 
 The Sentinel edits only model-bound history. It does not select, recommend,
 parse, or execute an actor action. The rubric is an independent task-path
@@ -536,10 +536,11 @@ This contract does not authorize:
 - unbounded SDK retries, arbitrary commands, proxy-routed loopback traffic, or
   continuation after unknown cost/termination/resource ownership;
 - active archive execution;
-- merge, push, release, Linear mutation, or automatic owner acceptance; or
+- a new live run, release, automatic R2.5 transition, or authority beyond the
+  owner's separately approved R2.4 repository merge and Linear completion; or
 - any claim that R2.4 or R2.5 has run before its committed receipts exist.
 
-## 12. Repository-candidate handoff and current disposition
+## 12. Accepted repository handoff and current disposition
 
 The current implementation and live source commit is
 `2f5eae0dba43908a44017bf8f3ab6916b56db095`. It closes the scoreless-smoke
@@ -574,15 +575,17 @@ and cleanup-file hash
 All six new Collector raw roots have owner-only official integrity reports
 with `valid=true`, `errors=[]`, and `warnings=[]`.
 
-The live-smoke evidence gate is therefore passed. The result is limited:
+The live-smoke evidence gate is therefore passed and owner-accepted. The result
+is limited:
 ACTIVE produced an admitted `KEEP_UNCERTAIN` no-op, so no material history
 transformation or effectiveness/causal claim was demonstrated. The used
 authority is consumed; no current live authority, R2.5/pilot authority,
 persistent executable task source, selected cohort, frozen pilot manifest, or
-pilot artifact exists. The checkpoint remains pending owner re-review, must
-not be merged or pushed, and does not change Linear automatically.
+pilot artifact exists. The owner authorized the exact reviewed branch for
+PR/merge and ALE-327 completion; that authorization grants no new live run or
+R2.5 pilot authority.
 
 R2.3 commit `54381b7b56b06d5aa262005af62b65269b4cf0a6` remains accepted through
-mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`; Runtime Epic 2 remains
-3/6 accepted. Owner review is required to change repository acceptance, and
-Linear workflow remains owner-managed.
+mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`; R2.4 is accepted at
+`2f5eae0dba43908a44017bf8f3ab6916b56db095`, and Runtime Epic 2 is 4/6
+accepted. R2.5 is mechanically next but remains separately unauthorized.

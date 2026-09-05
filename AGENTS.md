@@ -39,7 +39,7 @@ Those operations still require a separate, explicit owner authorization.
 | G1.4 / ALE-322 | **Engineering scope closed** as `NONFORMAL_LIVE_SMOKE_PASSED`; formal Provider Codec, isolation, treatment, and replay proof remain `DEFERRED_TO_G1_7_NOT_AUTHORIZED`. |
 | G1.5 / ALE-323 | **Engineering scope closed** as `CPU_CODEC_IMPLEMENTATION_COMPLETE_NONFORMAL_COMPATIBILITY_PASSED`; Qwen flat-progress and MAI raw-replay Codecs remain `live_ready=false`. |
 | Old G1.6+ causal-replay path | **Superseded/deferred**, not deleted and not completed. Four owner solo locks plus 186 D-033 AI-only labels are historical non-formal research artifacts, not gold or a current prerequisite. |
-| Runtime Epic 2 / ALE-318 | **In progress: 3/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`. ALE-327 / R2.4 is now **LIVE-SMOKE EVIDENCE GATE PASSED; OWNER RE-REVIEW PENDING; NO CURRENT LIVE AUTHORITY; MERGE/PUSH/R2.5 NO-GO** at implementation/source commit `2f5eae0dba43908a44017bf8f3ab6916b56db095`. Fresh run `r24-smoke-gpu5-integrity-retry-20260905t181000z` completed the fixed Qwen then MAI `OFF / SHADOW / ACTIVE` sequence with 6 parsed actor calls, 12 completed Sentinel OpenAI calls, 0 actions, exact cost `$0.173954`, successful bounded cleanup, and six official Collector integrity reports with `valid=true`, `errors=[]`, and `warnings=[]`. This evidence is not automatic owner acceptance or an effectiveness/causal result; Runtime Epic 2 remains 3/6 accepted and Linear remains owner-managed. |
+| Runtime Epic 2 / ALE-318 | **In progress: 4/6 repository engineering stories accepted.** ALE-324 / R2.1 is accepted at `18a4d9e6c8a3ed4ddac7cab5392a3335bae45b46`; ALE-325 / R2.2 is accepted in its CPU/offline/injected-fake-Responses, SHADOW-only scope at `3940ff7484c0236ac321ea210fc8266e282e5d27`; ALE-326 / R2.3 is accepted at `54381b7b56b06d5aa262005af62b65269b4cf0a6` through mainline merge `2aa0a268b7d709cf05d524e74c3fba8612f64003`; ALE-327 / R2.4 is owner-accepted at implementation/source commit `2f5eae0dba43908a44017bf8f3ab6916b56db095`. Fresh run `r24-smoke-gpu5-integrity-retry-20260905t181000z` completed the fixed Qwen then MAI `OFF / SHADOW / ACTIVE` sequence with 6 parsed actor calls, 12 completed Sentinel OpenAI calls, 0 actions, exact cost `$0.173954`, successful bounded cleanup, and six official Collector integrity reports with `valid=true`, `errors=[]`, and `warnings=[]`. Acceptance is limited to the R2.4 runtime vertical-slice and live-smoke contract; it is not an effectiveness/causal result. The consumed authority grants no rerun or R2.5 permission. |
 
 Canonical Epic 1 deliverables are under `motivation study/`. Do not turn their
 observational associations into causal or cross-model ranking claims.
@@ -209,19 +209,20 @@ so legal graphs through the 512-gate limit do not consume Python call-stack
 depth and are independent of gate declaration order.
 Post-state record relevance remains derived, but this checkpoint has no trusted
 record-level R2.2 `SUPPORTED + KEEP` resolver: arbitrary support hashes have no
-archive authority, every record remains `RETAIN`, and `ARCHIVE_SHADOW` is
-schema-reserved until R2.4 supplies that resolver. Hash-only receipts include
+archive authority, every record remains `RETAIN`, and `ARCHIVE_SHADOW` remains
+schema-reserved. The accepted R2.4 vertical slice did not install that resolver.
+Hash-only receipts include
 measured backend-failure latency; cumulative call census, cache metrics, and
 frozen-label-only calibration remain derived sidecars. Qwen and MAI are
 represented only by captured CPU fixtures; there is no host/model-specific
 runtime branch.
 
-R2.4 is now the next mechanically available repository dependency, but any
-live vertical slice, provider/model use,
-resource provisioning, GPU, backend, GUI, tool, action, or replay still needs
-separate explicit owner authorization.
+R2.4 is owner-accepted. R2.5 is now the next mechanically available repository
+dependency, but any new live run, provider/model use, resource provisioning,
+GPU, backend, GUI, tool, action, or replay still needs separate explicit owner
+authorization.
 
-## Candidate repository-preparation boundary: ALE-327 / R2.4 and ALE-328 / R2.5
+## Accepted ALE-327 / R2.4 boundary and candidate ALE-328 / R2.5 preparation
 
 The initial implementation commit
 `344e1c42596a4dca717da66374eeca3d936c3f61` prepared the two-host runtime
@@ -230,10 +231,9 @@ history-policy orchestration, typed no-history behavior, sealed
 authority/preflight/resource/attempt/audit/cleanup contracts, CPU topology
 evidence, and tooling/protocol for a future 20-task / 80-cell pilot under CPU
 fixtures and injected fakes. Owner review classified that candidate **NO-GO**.
-The remediation and live-smoke source checkpoint is now
-`2f5eae0dba43908a44017bf8f3ab6916b56db095`. Its live-smoke evidence gate has
-passed, but the checkpoint remains pending owner re-review and is not accepted
-or merge-ready. It retains the earlier strict-logging, type-sensitive-schema,
+The remediation and live-smoke source checkpoint
+`2f5eae0dba43908a44017bf8f3ab6916b56db095` is owner-accepted for R2.4. It
+retains the earlier strict-logging, type-sensitive-schema,
 request-anchor, run-fatal, bounded-cleanup, and no-cleanup-initialization
 repairs. It additionally binds every formed `RUBRIC` and `HISTORY_POLICY`
 attempt to the complete authority, deadline/constraint, case lease, exact
@@ -301,8 +301,8 @@ cannot initialize or reinitialize a backend: when client/backend `/init` was
 not locally confirmed, it records the hash-bound `NOT_INITIALIZED_NO_IO`
 outcome with zero backend I/O. Repository commits do not themselves authorize
 live execution. The exact smoke authority used below is consumed; any new live
-run requires a fresh exact authority. This checkpoint must not be merged or
-pushed, and it is not an R2.5 pilot result.
+run requires a fresh exact authority. The reviewed repository branch is
+authorized for PR/merge, but this is not an R2.5 pilot result or live authority.
 
 The first six-case transport-success run,
 `r24-smoke-gpu5-20260905t115136z` at source
@@ -333,8 +333,8 @@ was exercised but produced an admitted `KEEP_UNCERTAIN` no-op, so this proves
 the bounded transport/parser/isolation/safety chain, not a material edit,
 effectiveness improvement, or causal effect. No persistent 117-row executable
 task source, selected cohort, frozen pilot manifest, or pilot artifact exists.
-The frozen G1.5 Codecs remain `live_ready=false`; R2.3 is accepted, Runtime
-Epic 2 remains 3/6 accepted, and Linear remains owner-managed.
+The frozen G1.5 Codecs remain `live_ready=false`; R2.3 and R2.4 are accepted,
+Runtime Epic 2 is 4/6 accepted, and R2.5 remains separately unauthorized.
 
 ## Runtime Epic 2 sequence
 
