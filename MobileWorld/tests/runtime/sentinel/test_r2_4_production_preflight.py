@@ -701,7 +701,7 @@ def test_r25_request_cost_budget_admits_representative_request_under_25_dollars(
         max_output_tokens=_rubric_stage().max_output_tokens,
     )
 
-    assert worst_case > descriptor.max_cost_usd_micros // descriptor.max_openai_calls
+    assert descriptor.max_cost_usd_micros == manifest.pilot.max_total_cost_usd_micros
     assert worst_case < descriptor.max_cost_usd_micros
     reservation = ledger.reserve_call(
         descriptor,
@@ -788,35 +788,32 @@ def test_r25_request_cost_budget_freezes_unknown_and_rejects_global_exhaustion(
         )
 
     global_ledger = build_production_live_budget_ledger_v1(factory)
-    for ordinal, cell_index in enumerate(joint_indices):
-        descriptor = _pilot_budget_descriptor(manifest, factory, global_ledger, cell_index)
-        logical_call_id = f"r25-global-fill-{ordinal:02d}"
-        attempt_id = f"r25-global-fill-rubric-{ordinal:02d}"
-        reservation = global_ledger.reserve_call(
-            descriptor,
-            logical_call_id=logical_call_id,
-            actor_call_index=1,
-            attempt_count=1,
-        )
-        global_ledger.reserve_request_cost(
-            stage=RunStageV1.R25_PILOT.value,
-            case_id=descriptor.case_id,
-            logical_call_id=logical_call_id,
-            attempt_id=attempt_id,
-            request_worst_case_cost_usd_micros=descriptor.max_cost_usd_micros,
-            attempt_cost_ceiling_usd_micros=descriptor.max_cost_usd_micros,
-        )
-        global_ledger.settle_request_cost(
-            stage=RunStageV1.R25_PILOT.value,
-            case_id=descriptor.case_id,
-            logical_call_id=logical_call_id,
-            attempt_id=attempt_id,
-            exact_cost_usd_micros=descriptor.max_cost_usd_micros,
-        )
-        global_ledger.settle_call(
-            reservation,
-            exact_cost_usd_micros=descriptor.max_cost_usd_micros,
-        )
+    descriptor = _pilot_budget_descriptor(manifest, factory, global_ledger, joint_indices[0])
+    reservation = global_ledger.reserve_call(
+        descriptor,
+        logical_call_id="r25-global-fill",
+        actor_call_index=1,
+        attempt_count=1,
+    )
+    global_ledger.reserve_request_cost(
+        stage=RunStageV1.R25_PILOT.value,
+        case_id=descriptor.case_id,
+        logical_call_id="r25-global-fill",
+        attempt_id="r25-global-fill-rubric",
+        request_worst_case_cost_usd_micros=descriptor.max_cost_usd_micros,
+        attempt_cost_ceiling_usd_micros=descriptor.max_cost_usd_micros,
+    )
+    global_ledger.settle_request_cost(
+        stage=RunStageV1.R25_PILOT.value,
+        case_id=descriptor.case_id,
+        logical_call_id="r25-global-fill",
+        attempt_id="r25-global-fill-rubric",
+        exact_cost_usd_micros=descriptor.max_cost_usd_micros,
+    )
+    global_ledger.settle_call(
+        reservation,
+        exact_cost_usd_micros=descriptor.max_cost_usd_micros,
+    )
 
     descriptor = _pilot_budget_descriptor(manifest, factory, global_ledger, joint_indices[0])
     logical_call_id = "r25-global-exhaustion"

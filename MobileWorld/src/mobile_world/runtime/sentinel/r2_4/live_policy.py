@@ -3139,12 +3139,12 @@ class _LiveBudgetReservationV1:
 class ProductionLiveBudgetLedgerV1:
     """Run-owned atomic budget grants for all live Sentinel cases.
 
-    Pilot authority is partitioned once across the owner-pinned JOINT cells;
-    no independently constructed cell policy can inherit the whole-run cost
-    ceiling.  After each canonical pilot request is formed, its exact
-    worst-case cost is atomically reserved against both the remaining cell
-    grant and the remaining pilot-wide grant before a provider child may be
-    dispatched.  R2.4 smoke keeps its accepted fixed per-attempt grant.
+    Pilot cells share the owner-pinned pilot cost ceiling.  After each
+    canonical pilot request is formed, its exact worst-case cost is atomically
+    reserved against the remaining pilot-wide grant before a provider child
+    may be dispatched.  Per-cell accounting remains available for evidence,
+    but does not mechanically divide the run budget across cells.  R2.4 smoke
+    keeps its accepted fixed per-attempt grant.
     Failed/unknown calls retain reservations and close the ledger fail-closed.
     """
 
@@ -3193,10 +3193,9 @@ class ProductionLiveBudgetLedgerV1:
                 raise R24ContractError("INVALID_PILOT_BUDGET", "pilot has no live cells")
             total = manifest.pilot.max_total_cost_usd_micros
             global_grant = total
-            base, remainder = divmod(total, len(joint_cells))
-            for ordinal, (index, _) in enumerate(joint_cells):
+            for index, _ in joint_cells:
                 key = f"{RunStageV1.R25_PILOT.value}:pilot-cell-{index:03d}"
-                case_grants[key] = base + (1 if ordinal < remainder else 0)
+                case_grants[key] = total
                 pilot_case_keys.add(key)
         elif type(manifest) is not R24SmokeRunAuthorityManifestV1:
             raise R24ContractError("UNTRUSTED_LIVE_AUTHORITY", "budget manifest type differs")
