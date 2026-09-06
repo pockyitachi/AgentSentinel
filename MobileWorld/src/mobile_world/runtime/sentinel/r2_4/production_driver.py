@@ -57,6 +57,7 @@ from mobile_world.runtime.audit.context import (
     ModelCallTrace,
     bind_audit_context,
 )
+from mobile_world.runtime.audit.execution_io import ExecutionEvidenceTrace
 from mobile_world.runtime.audit.lifecycle import (
     AuditLifecycle,
     TaskAuditBinding,
@@ -9143,6 +9144,7 @@ class _ProductionUnitStateV1:
     agent: BaseAgent | None = None
     policy: OwnerAuthorizedLivePerCallPolicyV1 | None = None
     runtime_audit: ProductionRuntimeAuditV1 | None = None
+    execution_evidence_trace: ExecutionEvidenceTrace | None = None
     final_step_index: int = 0
     score: float | None = None
     score_reason: str | None = None
@@ -9645,6 +9647,7 @@ class _ProductionFixedExecutionPortV1:
         state.agent = agent
         state.policy = policy
         state.runtime_audit = runtime_audit
+        state.execution_evidence_trace = ExecutionEvidenceTrace(binding.task_recorder)
 
     def _step_context(
         self,
@@ -9679,6 +9682,7 @@ class _ProductionFixedExecutionPortV1:
             decision_id=step.decision_id,
             store_stream_chunks=binding.store_stream_chunks,
             model_call_trace=ModelCallTrace(),
+            execution_evidence_trace=state.execution_evidence_trace,
             known_secrets=(),
             parent_event_id=step.step_started_event_id,
         )
@@ -11028,6 +11032,12 @@ class _ProductionFixedExecutionPortV1:
                     action_ns = 0
                     if executable:
                         execution = binding.capture.execution_started(decision=decision_ref)
+                        execution_trace = state.execution_evidence_trace
+                        if type(execution_trace) is not ExecutionEvidenceTrace:
+                            raise ProductionDriverError(
+                                "COLLECTOR_EXECUTION_TRACE_MISSING",
+                                "pilot GUI execution evidence trace is unavailable",
+                            )
                         started_ns = time.monotonic_ns()
                         try:
                             self._require_resource_dispatch(
@@ -11036,13 +11046,18 @@ class _ProductionFixedExecutionPortV1:
                                 deadline_ns=state.deadline_monotonic_ns,
                                 state=state,
                             )
+                            execution_trace.begin_execution(
+                                execution_kind=execution.execution_kind,
+                            )
                             next_observation = state.environment.execute_action(action)
                         except Exception as exc:
                             action_ns = max(0, time.monotonic_ns() - started_ns)
+                            execution_evidence = execution_trace.fail_execution(exc)
                             binding.capture.transition_failed(
                                 exception=exc,
                                 execution=execution,
-                                duration_ns=action_ns,
+                                available_execution_result=(execution_evidence.execution_result),
+                                duration_ns=execution_evidence.duration_ns,
                             )
                             failed_action_receipt = self._receipt_for_action(
                                 state,
@@ -11077,10 +11092,14 @@ class _ProductionFixedExecutionPortV1:
                             raise ProductionDriverError(
                                 "INVALID_OBSERVATION", "action observation type differs"
                             )
+                        execution_evidence = execution_trace.finish_execution(
+                            observation=next_observation,
+                        )
                         binding.capture.transition_completed(
                             post_observation=next_observation.model_dump(),
                             execution=execution,
-                            duration_ns=action_ns,
+                            execution_result=execution_evidence.execution_result,
+                            duration_ns=execution_evidence.duration_ns,
                             source_screenshot_bytes=_pil_png_bytes(next_observation.screenshot),
                         )
                         state.observation = next_observation
