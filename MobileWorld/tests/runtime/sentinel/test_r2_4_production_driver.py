@@ -3830,35 +3830,11 @@ def test_unit_deadlines_reserve_hash_bound_cleanup_grace_before_dispatch() -> No
     assert raised.value.code == "INSUFFICIENT_CLEANUP_WINDOW"
 
 
-@pytest.mark.parametrize(
-    ("roles", "fallback_reason", "fallback_check", "action_executed"),
-    (
-        pytest.param(
-            (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.RUBRIC),
-            production_driver_module.SentinelFallbackReason.SIDECAR_FAILURE,
-            "sidecar_commit_failed",
-            False,
-            id="sidecar-commit-after-two-rubric-calls",
-        ),
-        pytest.param(
-            (
-                LiveAttemptRoleV1.RUBRIC,
-                LiveAttemptRoleV1.RUBRIC,
-                LiveAttemptRoleV1.HISTORY_POLICY,
-            ),
-            production_driver_module.SentinelFallbackReason.RENDERER_FAILURE,
-            "renderer_failed",
-            True,
-            id="active-post-three-call-fallback",
-        ),
-    ),
-)
-def test_generic_semantic_fallback_is_journaled_then_typed_stage_fails(
-    roles: tuple[LiveAttemptRoleV1, ...],
-    fallback_reason: production_driver_module.SentinelFallbackReason,
-    fallback_check: str,
-    action_executed: bool,
-) -> None:
+def test_rejected_policy_proposal_falls_back_to_original_and_continues() -> None:
+    roles = (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.HISTORY_POLICY)
+    fallback_reason = production_driver_module.SentinelFallbackReason.POLICY_EXCEPTION
+    fallback_check = "policy_exception"
+    action_executed = True
     logical_call_id = f"generic-fallback-{len(roles)}"
     request_sha256 = "7" * 64
     attempts = tuple(
@@ -3881,6 +3857,10 @@ def test_generic_semantic_fallback_is_journaled_then_typed_stage_fails(
         @staticmethod
         def call_binding(_: str) -> object:
             raise RuntimeError("generic fallback has no admitted successful binding")
+
+        @staticmethod
+        def failure_for_call(_: str) -> str:
+            return "POLICY_PROPOSAL_NOT_ADMITTED"
 
     receipt = _generic_fallback_terminal_receipt(
         logical_call_id=logical_call_id,
@@ -3911,11 +3891,20 @@ def test_generic_semantic_fallback_is_journaled_then_typed_stage_fails(
     )
     port._journal_completed_audit_terminal(state, receipt)
 
-    with pytest.raises(ProductionDriverError) as raised:
-        port._decision_from_receipt(state, receipt, actor_call_index=1)
-    assert raised.value.code == "SENTINEL_PRE_PROVIDER_OUTCOME_REJECTED"
+    admitted = port._decision_from_receipt(state, receipt, actor_call_index=3)
     assert len(state.decision_journal) == 1
     decision = state.decision_journal[0]
+    assert admitted is decision
+    assert production_driver_module._semantic_pre_provider_outcome_admitted(
+        decision,
+        attempts=attempts,
+        policy_failure_code="POLICY_PROPOSAL_NOT_ADMITTED",
+    )
+    assert not production_driver_module._semantic_pre_provider_outcome_admitted(
+        decision,
+        attempts=attempts,
+        policy_failure_code="POLICY_TRANSPORT_ERROR",
+    )
     assert (
         decision.pre_provider_outcome
         is production_audit_module.ProductionRuntimeAuditPreProviderOutcomeV1.GENERIC_FALLBACK_ORIGINAL

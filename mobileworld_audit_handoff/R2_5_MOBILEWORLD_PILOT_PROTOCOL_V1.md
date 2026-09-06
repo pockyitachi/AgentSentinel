@@ -227,9 +227,16 @@ smokes, pilot cells, every switch, cleanup, and post-run integrity; none of
 those budgets may be restarted or counted twice.
 
 One stage-owned atomic ledger reserves worst-case OpenAI cost before every
-dispatch and settles it from terminal usage. A per-cell view cannot reuse the
-entire pilot budget. Owner authorization expiry is converted into a monotonic
-sequence deadline and rechecked at every external dispatch.
+dispatch and settles it from terminal usage. Per-cell views share that one
+pilot ledger and cannot exceed its aggregate owner cap. Owner authorization
+expiry is converted into a monotonic sequence deadline and rechecked at every
+external dispatch.
+
+A deterministically rejected semantic proposal is an observed Sentinel
+fallback, not a failed actor decision, when the exact Original request reaches
+the actor and the complete attempted-call and cost census is durable. The pilot
+continues and reports that fallback. Missing or incomplete semantic-call
+evidence does not receive this treatment.
 
 A timeout, provider error, parser error, invalid Sentinel output, action
 failure, score failure, audit failure, cleanup failure, or evidence-publication

@@ -2318,6 +2318,24 @@ def _detail_facts(
         raise R25AnalysisContractError(
             "TRACE_BINDING_MISMATCH", "restricted stage projection hash differs"
         )
+    actor_call_index = cast(int, decision["actor_call_index"])
+    admitted_generic_fallback = (
+        actor_call_index > 1
+        and pre.get("status") == "FALLBACK_ORIGINAL"
+        and pre.get("outcome") == "GENERIC_FALLBACK_ORIGINAL"
+        and pre.get("fallback_reason") == "POLICY_EXCEPTION"
+        and pre.get("fallback_check") == "policy_exception"
+        and restricted.get("live_failure_code") == "POLICY_PROPOSAL_NOT_ADMITTED"
+    )
+    if (
+        require_production_restricted_proof
+        and pre.get("outcome") == "GENERIC_FALLBACK_ORIGINAL"
+        and not admitted_generic_fallback
+    ):
+        raise R25AnalysisContractError(
+            "INVALID_PRE_PROVIDER_OUTCOME",
+            "production generic fallback is not an admitted proposal rejection",
+        )
     for field in ("raw_request_sha256", "final_request_sha256", "exact_diff_sha256"):
         if pre.get(field) != decision[field]:
             raise R25AnalysisContractError("TRACE_BINDING_MISMATCH", f"audit {field} differs")
@@ -2402,7 +2420,11 @@ def _detail_facts(
             )
     expected_preflight = decision["preflight_report_sha256"] if expected_live_receipts else None
     expected_factory = (
-        decision["live_policy_factory_binding_sha256"] if expected_live_receipts else None
+        None
+        if admitted_generic_fallback
+        else decision["live_policy_factory_binding_sha256"]
+        if expected_live_receipts
+        else None
     )
     if (
         pre.get("preflight_report_sha256") != expected_preflight
@@ -2420,7 +2442,7 @@ def _detail_facts(
         source_transport = pre.get("source_transport_binding_sha256")
         invalid_source_transport = (
             source_transport is not None
-            if history_receipt is None
+            if history_receipt is None or admitted_generic_fallback
             else type(source_transport) is not str or _SHA256.fullmatch(source_transport) is None
         )
         expected_roles = [LiveAttemptRoleV1.RUBRIC] * len(
@@ -2428,7 +2450,6 @@ def _detail_facts(
         )
         if history_receipt is not None:
             expected_roles.append(LiveAttemptRoleV1.HISTORY_POLICY)
-        actor_call_index = cast(int, decision["actor_call_index"])
         allowed_role_sequence = (
             (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.RUBRIC)
             if actor_call_index == 1
@@ -2437,7 +2458,7 @@ def _detail_facts(
         observed_roles = tuple(attempt.role for attempt in trusted_live_attempts)
         role_sequence_invalid = (
             observed_roles != allowed_role_sequence
-            if pre.get("status") == "READY"
+            if pre.get("status") == "READY" or admitted_generic_fallback
             else observed_roles != allowed_role_sequence[: len(observed_roles)]
         )
         if (
@@ -2460,10 +2481,11 @@ def _detail_facts(
             )
             or (
                 history_receipt is not None
+                and not admitted_generic_fallback
                 and trusted_live_attempts[-1].transport_binding_sha256 != source_transport
             )
             or (
-                pre.get("status") == "READY"
+                (pre.get("status") == "READY" or admitted_generic_fallback)
                 and any(attempt.status.value != "COMPLETED" for attempt in trusted_live_attempts)
             )
             or len({attempt.attempt_id for attempt in trusted_live_attempts})
@@ -2516,6 +2538,7 @@ def _detail_facts(
             require_complete=(
                 pre.get("status") == "READY"
                 or pre.get("outcome") == "NO_HISTORY_RUBRIC_FALLBACK_ORIGINAL"
+                or admitted_generic_fallback
             ),
         )
     elif (

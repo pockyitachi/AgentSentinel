@@ -1393,6 +1393,8 @@ def _parse_durable_live_attempt_projection(value: JsonValue) -> LiveAttemptRecei
 def _validate_restricted_common_requests(
     restricted: dict[str, JsonValue],
     pre: ProductionRuntimeAuditPreProviderV1,
+    *,
+    allow_unbound_completed_children: bool = False,
 ) -> tuple[
     JsonValue,
     JsonValue,
@@ -1439,7 +1441,23 @@ def _validate_restricted_common_requests(
         else _parse_durable_rubric_backend_extension_projection(extension_value)
     )
     if binding is None:
-        if pre.live_call_binding_sha256 is not None or calls or extension is not None:
+        rubric_attempt_hashes = tuple(
+            live_attempt_receipt_sha256(item)
+            for item in attempts
+            if item.role is LiveAttemptRoleV1.RUBRIC
+        )
+        if (
+            pre.live_call_binding_sha256 is not None
+            or (not allow_unbound_completed_children and (calls or extension is not None))
+            or (
+                allow_unbound_completed_children
+                and (
+                    not attempts
+                    or extension is None
+                    or tuple(item.attempt_receipt_sha256 for item in calls) != rubric_attempt_hashes
+                )
+            )
+        ):
             raise ProductionRuntimeAuditError(
                 "TRACE_BINDING_MISMATCH", "absent live binding has child evidence"
             )
@@ -2665,8 +2683,11 @@ def validate_production_runtime_audit_restricted_stage_projection_v1(
             raise ProductionRuntimeAuditError(
                 "INVALID_RESTRICTED_STAGE", "fallback restricted stage differs"
             )
+        proposal_rejected = restricted["live_failure_code"] == "POLICY_PROPOSAL_NOT_ADMITTED"
         raw, final, binding, attempts, _calls, _extension = _validate_restricted_common_requests(
-            restricted, pre
+            restricted,
+            pre,
+            allow_unbound_completed_children=proposal_rejected,
         )
         receipt = _validate_restricted_sentinel_receipt(restricted, detail)
         validator = _durable_object(restricted["validator_result"], "fallback validator result")
@@ -2683,7 +2704,18 @@ def validate_production_runtime_audit_restricted_stage_projection_v1(
             or receipt.fallback_reason is None
             or restricted["live_failure_code"] is not None
             and type(restricted["live_failure_code"]) is not str
-            or (binding is None) != (not attempts)
+            or (
+                proposal_rejected
+                and (
+                    binding is not None
+                    or pre.fallback_reason is not SentinelFallbackReason.POLICY_EXCEPTION
+                    or pre.fallback_check != "policy_exception"
+                    or tuple(item.role for item in attempts)
+                    != (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.HISTORY_POLICY)
+                    or any(item.status is not LiveAttemptStatusV1.COMPLETED for item in attempts)
+                )
+            )
+            or (not proposal_rejected and (binding is None) != (not attempts))
         ):
             raise ProductionRuntimeAuditError(
                 "TRACE_BINDING_MISMATCH", "fallback restricted bindings differ"

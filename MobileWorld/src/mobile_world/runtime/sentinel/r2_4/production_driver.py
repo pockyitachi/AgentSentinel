@@ -83,8 +83,11 @@ from mobile_world.runtime.sentinel.r2_4.capabilities import build_runtime_histor
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes, canonical_sha256
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1,
+    LiveAttemptCostStatusV1,
     LiveAttemptPricingV1,
+    LiveAttemptReceiptV1,
     LiveAttemptRoleV1,
+    LiveAttemptStatusV1,
     live_attempt_pricing_sha256,
     live_attempt_receipt_projection,
     live_attempt_receipt_sha256,
@@ -6933,9 +6936,41 @@ class ActorDecisionEvidenceV1:
             )
 
 
-def _semantic_pre_provider_outcome_admitted(value: ActorDecisionEvidenceV1) -> bool:
+def _semantic_pre_provider_outcome_admitted(
+    value: ActorDecisionEvidenceV1,
+    *,
+    attempts: tuple[LiveAttemptReceiptV1, ...] = (),
+    policy_failure_code: str | None = None,
+) -> bool:
     if value.pre_provider_outcome is ProductionRuntimeAuditPreProviderOutcomeV1.READY:
         return value.pre_provider_status is ProductionRuntimeAuditPreProviderStatusV1.READY
+    if (
+        value.pre_provider_outcome
+        is ProductionRuntimeAuditPreProviderOutcomeV1.GENERIC_FALLBACK_ORIGINAL
+    ):
+        return (
+            value.pre_provider_status is ProductionRuntimeAuditPreProviderStatusV1.FALLBACK_ORIGINAL
+            and value.actor_call_index > 1
+            and value.fallback_reason is SentinelFallbackReason.POLICY_EXCEPTION
+            and value.fallback_check == "policy_exception"
+            and policy_failure_code == "POLICY_PROPOSAL_NOT_ADMITTED"
+            and value.raw_request_sha256 == value.final_request_sha256
+            and tuple(item.role for item in attempts)
+            == (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.HISTORY_POLICY)
+            and all(
+                item.status is LiveAttemptStatusV1.COMPLETED
+                and item.dispatch_count == 1
+                and item.worker_reaped
+                and item.cost_status is LiveAttemptCostStatusV1.EXACT
+                and item.cost_usd_micros is not None
+                for item in attempts
+            )
+            and value.census.rubric_openai_calls == len(value.rubric_attempt_receipt_sha256s)
+            and value.census.history_policy_openai_calls
+            == int(value.history_policy_attempt_receipt_sha256 is not None)
+            and value.census.openai_calls
+            == value.census.rubric_openai_calls + value.census.history_policy_openai_calls
+        )
     if (
         value.pre_provider_outcome
         is not ProductionRuntimeAuditPreProviderOutcomeV1.NO_HISTORY_RUBRIC_FALLBACK_ORIGINAL
@@ -10525,6 +10560,8 @@ class _ProductionFixedExecutionPortV1:
                 "post-dispatch unknown cost cannot enter a successful stage decision",
             )
         policy = state.policy
+        attempts: tuple[LiveAttemptReceiptV1, ...] = ()
+        policy_failure_code: str | None = None
         if policy is None:
             rubric_hashes: tuple[str, ...] = ()
             history_hash = None
@@ -10575,6 +10612,10 @@ class _ProductionFixedExecutionPortV1:
                 binding = policy.call_binding(receipt.logical_call_id)
             except Exception:
                 binding = None
+            try:
+                policy_failure_code = policy.failure_for_call(receipt.logical_call_id)
+            except Exception:
+                policy_failure_code = None
             if binding is not None:
                 if binding.actor_call_index != actor_call_index:
                     raise ProductionDriverError(
@@ -10633,7 +10674,11 @@ class _ProductionFixedExecutionPortV1:
         if (
             type(state) is _ProductionUnitStateV1
             and policy is not None
-            and not _semantic_pre_provider_outcome_admitted(decision)
+            and not _semantic_pre_provider_outcome_admitted(
+                decision,
+                attempts=attempts,
+                policy_failure_code=policy_failure_code,
+            )
         ):
             raise ProductionDriverError(
                 "SENTINEL_PRE_PROVIDER_OUTCOME_REJECTED",

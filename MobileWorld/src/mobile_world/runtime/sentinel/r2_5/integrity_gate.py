@@ -1339,6 +1339,13 @@ def _require_decision_projection(
             if index == 1 and allow_first_call_history_policy
             else (0 if index == 1 else 1)
         )
+        generic_original_fallback = (
+            status == "FALLBACK_ORIGINAL"
+            and outcome == "GENERIC_FALLBACK_ORIGINAL"
+            and fallback_reason == "POLICY_EXCEPTION"
+            and fallback_check == "policy_exception"
+            and decision.get("raw_request_sha256") == decision.get("final_request_sha256")
+        )
         if (
             census.get("offline_rubric_evaluations") != 0
             or census.get("rubric_openai_calls") != expected_rubric_calls
@@ -1356,7 +1363,11 @@ def _require_decision_projection(
                     or fallback_check != "r2_4_no_history_r21_v1_compatibility"
                 )
             )
-            or (expected_history_calls == 1 and (status != "READY" or outcome != "READY"))
+            or (
+                expected_history_calls == 1
+                and not generic_original_fallback
+                and (status != "READY" or outcome != "READY")
+            )
         ):
             raise R25PostRunIntegrityError(
                 code, "joint decision rubric/history call topology differs"
