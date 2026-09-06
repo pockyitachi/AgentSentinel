@@ -115,6 +115,7 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptStatusV1,
     MemoryLiveAttemptReceiptSinkV1,
     ProductionOpenAIAttemptRunnerV1,
+    _bind_live_attempt_request_cost_budget_v1,
     build_canonical_history_policy_request,
     history_policy_transport_schema_v1,
     live_attempt_authority_projection,
@@ -1912,6 +1913,36 @@ def validate_live_history_policy_attempt_request_anchor_v1(
         and receipt.dispatch_count == 0
         and receipt.failure_code == "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY"
     )
+    worst_case_cost = live_attempt_worst_case_cost_usd_micros(
+        pricing,
+        request_byte_count=request.byte_count,
+        max_output_tokens=authority.max_output_tokens,
+    )
+    pilot_request_cost_bound = constraint.case_stage == RunStageV1.R25_PILOT.value
+    attempt_cost_authority_valid = (
+        (
+            authority.max_cost_usd_micros == worst_case_cost
+            and authority.max_cost_usd_micros <= deadline.max_cost_usd_micros
+            and deadline.max_cost_usd_micros == constraint.attempt_max_cost_usd_micros
+            and not cost_reservation_failure
+        )
+        or (
+            authority.max_cost_usd_micros
+            == deadline.max_cost_usd_micros
+            == constraint.attempt_max_cost_usd_micros
+            and worst_case_cost > authority.max_cost_usd_micros
+            and cost_reservation_failure
+        )
+        if pilot_request_cost_bound
+        else authority.max_cost_usd_micros
+        == deadline.max_cost_usd_micros
+        == constraint.attempt_max_cost_usd_micros
+    )
+    cost_reservation_valid = (
+        True
+        if pilot_request_cost_bound
+        else (worst_case_cost > authority.max_cost_usd_micros) is cost_reservation_failure
+    )
     if (
         receipt.role is not LiveAttemptRoleV1.HISTORY_POLICY
         or authority.role is not LiveAttemptRoleV1.HISTORY_POLICY
@@ -1947,8 +1978,7 @@ def validate_live_history_policy_attempt_request_anchor_v1(
         or receipt.request_sha256 != request.request_sha256
         or authority.request_sha256 != request.request_sha256
         or authority.deadline_monotonic_ns != deadline.effective_deadline_monotonic_ns
-        or authority.max_cost_usd_micros != deadline.max_cost_usd_micros
-        or authority.max_cost_usd_micros != constraint.attempt_max_cost_usd_micros
+        or not attempt_cost_authority_valid
         or deadline.case_execution_deadline_monotonic_ns
         != constraint.effective_deadline_monotonic_ns
         or deadline.request_timeout_ns != transport.transport_timeout_ns
@@ -1991,15 +2021,7 @@ def validate_live_history_policy_attempt_request_anchor_v1(
                 model_on_call=True,
             )
         )
-        or (
-            live_attempt_worst_case_cost_usd_micros(
-                pricing,
-                request_byte_count=request.byte_count,
-                max_output_tokens=authority.max_output_tokens,
-            )
-            > authority.max_cost_usd_micros
-        )
-        is not cost_reservation_failure
+        or not cost_reservation_valid
         or packet_sha256 != anchor.coordinator_evidence_packet_sha256
     ):
         raise R24ContractError(
@@ -3109,6 +3131,8 @@ def _manifest_case_descriptor(
 class _LiveBudgetReservationV1:
     reservation_id: str
     case_key: str
+    logical_call_id: str
+    expected_attempt_count: int
     reserved_cost_usd_micros: int
 
 
@@ -3117,9 +3141,11 @@ class ProductionLiveBudgetLedgerV1:
 
     Pilot authority is partitioned once across the owner-pinned JOINT cells;
     no independently constructed cell policy can inherit the whole-run cost
-    ceiling.  Each actor call reserves its complete worst-case attempt grant
-    before a provider child may be dispatched.  Failed/unknown calls retain
-    the reservation and close the ledger fail-closed.
+    ceiling.  After each canonical pilot request is formed, its exact
+    worst-case cost is atomically reserved against both the remaining cell
+    grant and the remaining pilot-wide grant before a provider child may be
+    dispatched.  R2.4 smoke keeps its accepted fixed per-attempt grant.
+    Failed/unknown calls retain reservations and close the ledger fail-closed.
     """
 
     __slots__ = (
@@ -3128,8 +3154,17 @@ class ProductionLiveBudgetLedgerV1:
         "_case_spent",
         "_factory_binding_sha256",
         "_failed",
+        "_global_grant",
+        "_global_reserved",
+        "_global_spent",
         "_manifest_sha256",
+        "_pilot_case_keys",
         "_reservations",
+        "_attempt_reservations",
+        "_reservation_attempt_ids",
+        "_reservation_costs",
+        "_reservation_id_by_logical_call",
+        "_reservation_settled_costs",
         "_lock",
     )
 
@@ -3146,6 +3181,8 @@ class ProductionLiveBudgetLedgerV1:
             raise PermissionError("production live budget ledger is module-owned")
         manifest = factory.manifest_snapshot()
         case_grants: dict[str, int] = {}
+        pilot_case_keys: set[str] = set()
+        global_grant: int | None = None
         if type(manifest) is R24R25RunAuthorityManifestV1:
             joint_cells = tuple(
                 (index, cell)
@@ -3155,11 +3192,12 @@ class ProductionLiveBudgetLedgerV1:
             if not joint_cells:
                 raise R24ContractError("INVALID_PILOT_BUDGET", "pilot has no live cells")
             total = manifest.pilot.max_total_cost_usd_micros
+            global_grant = total
             base, remainder = divmod(total, len(joint_cells))
             for ordinal, (index, _) in enumerate(joint_cells):
-                case_grants[f"{RunStageV1.R25_PILOT.value}:pilot-cell-{index:03d}"] = base + (
-                    1 if ordinal < remainder else 0
-                )
+                key = f"{RunStageV1.R25_PILOT.value}:pilot-cell-{index:03d}"
+                case_grants[key] = base + (1 if ordinal < remainder else 0)
+                pilot_case_keys.add(key)
         elif type(manifest) is not R24SmokeRunAuthorityManifestV1:
             raise R24ContractError("UNTRUSTED_LIVE_AUTHORITY", "budget manifest type differs")
         for plan in manifest.smoke_plans:
@@ -3181,6 +3219,15 @@ class ProductionLiveBudgetLedgerV1:
         self._case_reserved = {key: 0 for key in case_grants}
         self._case_spent = {key: 0 for key in case_grants}
         self._reservations: dict[str, _LiveBudgetReservationV1] = {}
+        self._attempt_reservations: dict[str, tuple[str, int]] = {}
+        self._reservation_attempt_ids: dict[str, set[str]] = {}
+        self._reservation_costs: dict[str, int] = {}
+        self._reservation_id_by_logical_call: dict[str, str] = {}
+        self._reservation_settled_costs: dict[str, int] = {}
+        self._pilot_case_keys = frozenset(pilot_case_keys)
+        self._global_grant = global_grant
+        self._global_reserved = 0
+        self._global_spent = 0
         self._failed = False
         self._lock = Lock()
 
@@ -3212,7 +3259,11 @@ class ProductionLiveBudgetLedgerV1:
             grant = self._case_grants.get(key)
             if grant != descriptor.max_cost_usd_micros or grant is None:
                 raise R24ContractError("LIVE_BUDGET_AUTHORITY_MISMATCH", "case grant differs")
-        ceiling = grant // descriptor.max_openai_calls
+        ceiling = (
+            grant
+            if descriptor.stage is RunStageV1.R25_PILOT
+            else grant // descriptor.max_openai_calls
+        )
         if ceiling <= 0:
             raise R24ContractError("LIVE_BUDGET_TOO_SMALL", "attempt cost grant is zero")
         return ceiling
@@ -3229,7 +3280,7 @@ class ProductionLiveBudgetLedgerV1:
         if type(attempt_count) is not int or not 1 <= attempt_count <= 3:
             raise R24ContractError("INVALID_LIVE_BUDGET", "attempt reservation count differs")
         ceiling = self.attempt_ceiling(descriptor)
-        amount = ceiling * attempt_count
+        amount = 0 if descriptor.stage is RunStageV1.R25_PILOT else ceiling * attempt_count
         key = self._case_key(descriptor)
         reservation_id = canonical_sha256(
             cast(
@@ -3239,20 +3290,153 @@ class ProductionLiveBudgetLedgerV1:
                     "case_key": key,
                     "factory_binding_sha256": self._factory_binding_sha256,
                     "logical_call_id": logical_call_id,
+                    "expected_attempt_count": attempt_count,
                     "reserved_cost_usd_micros": amount,
                 },
             )
         )
         with self._lock:
-            if self._failed or reservation_id in self._reservations:
+            if (
+                self._failed
+                or reservation_id in self._reservations
+                or logical_call_id in self._reservation_id_by_logical_call
+            ):
                 raise R24ContractError("LIVE_BUDGET_UNAVAILABLE", "budget reservation unavailable")
             grant = self._case_grants[key]
             if self._case_spent[key] + self._case_reserved[key] + amount > grant:
                 raise R24ContractError("LIVE_CASE_COST_BUDGET_EXCEEDED", "case budget exhausted")
-            reservation = _LiveBudgetReservationV1(reservation_id, key, amount)
+            reservation = _LiveBudgetReservationV1(
+                reservation_id,
+                key,
+                logical_call_id,
+                attempt_count,
+                amount,
+            )
             self._reservations[reservation_id] = reservation
+            self._reservation_attempt_ids[reservation_id] = set()
+            self._reservation_costs[reservation_id] = amount
+            self._reservation_settled_costs[reservation_id] = 0
+            self._reservation_id_by_logical_call[logical_call_id] = reservation_id
             self._case_reserved[key] += amount
             return reservation
+
+    def reserve_request_cost(
+        self,
+        *,
+        stage: str,
+        case_id: str,
+        logical_call_id: str,
+        attempt_id: str,
+        request_worst_case_cost_usd_micros: int,
+        attempt_cost_ceiling_usd_micros: int,
+    ) -> int:
+        """Reserve one formed request and return its exact attempt cost authority."""
+
+        _require_id(case_id, "case_id")
+        _require_id(logical_call_id, "logical_call_id")
+        _require_id(attempt_id, "attempt_id")
+        for value, label in (
+            (request_worst_case_cost_usd_micros, "request_worst_case_cost_usd_micros"),
+            (attempt_cost_ceiling_usd_micros, "attempt_cost_ceiling_usd_micros"),
+        ):
+            if type(value) is not int or value <= 0:
+                raise R24ContractError("INVALID_LIVE_BUDGET", f"{label} differs")
+        key = f"{stage}:{case_id}"
+        with self._lock:
+            if self._failed:
+                raise R24ContractError("LIVE_BUDGET_UNAVAILABLE", "request budget ledger is closed")
+            reservation_id = self._reservation_id_by_logical_call.get(logical_call_id)
+            reservation = None if reservation_id is None else self._reservations.get(reservation_id)
+            grant = self._case_grants.get(key)
+            expected_ceiling = (
+                grant
+                if key in self._pilot_case_keys
+                else (
+                    None
+                    if reservation is None
+                    else reservation.reserved_cost_usd_micros // reservation.expected_attempt_count
+                )
+            )
+            if (
+                reservation is None
+                or reservation.case_key != key
+                or expected_ceiling != attempt_cost_ceiling_usd_micros
+            ):
+                raise R24ContractError(
+                    "LIVE_BUDGET_AUTHORITY_MISMATCH", "request budget authority differs"
+                )
+            # R2.4 keeps its accepted fixed per-attempt authority and aggregate
+            # call reservation.  Only R2.5 replaces the artificial uniform
+            # slice with request-specific reservation.
+            if key not in self._pilot_case_keys:
+                return attempt_cost_ceiling_usd_micros
+            attempt_ids = self._reservation_attempt_ids[reservation.reservation_id]
+            if attempt_id in attempt_ids or len(attempt_ids) >= reservation.expected_attempt_count:
+                raise R24ContractError(
+                    "LIVE_BUDGET_UNAVAILABLE", "request budget reservation is unavailable"
+                )
+            grant = self._case_grants[key]
+            amount = request_worst_case_cost_usd_micros
+            if (
+                self._global_grant is None
+                or self._global_spent + self._global_reserved + amount > self._global_grant
+            ):
+                self._failed = True
+                raise R24ContractError("LIVE_GLOBAL_COST_BUDGET_EXCEEDED", "pilot budget exhausted")
+            if self._case_spent[key] + self._case_reserved[key] + amount > grant:
+                self._failed = True
+                raise R24ContractError("LIVE_CASE_COST_BUDGET_EXCEEDED", "case budget exhausted")
+            attempt_ids.add(attempt_id)
+            self._attempt_reservations[attempt_id] = (reservation.reservation_id, amount)
+            self._reservation_costs[reservation.reservation_id] += amount
+            self._case_reserved[key] += amount
+            self._global_reserved += amount
+            return amount
+
+    def settle_request_cost(
+        self,
+        *,
+        stage: str,
+        case_id: str,
+        logical_call_id: str,
+        attempt_id: str,
+        exact_cost_usd_micros: int | None,
+    ) -> None:
+        """Release one request reserve only for a known exact terminal cost."""
+
+        key = f"{stage}:{case_id}"
+        with self._lock:
+            if key not in self._pilot_case_keys:
+                return
+            reservation_id = self._reservation_id_by_logical_call.get(logical_call_id)
+            reservation = None if reservation_id is None else self._reservations.get(reservation_id)
+            attempt_reservation = self._attempt_reservations.get(attempt_id)
+            if (
+                reservation is None
+                or reservation.case_key != key
+                or attempt_reservation is None
+                or attempt_reservation[0] != reservation.reservation_id
+            ):
+                self._failed = True
+                raise R24ContractError(
+                    "LIVE_BUDGET_AUTHORITY_MISMATCH", "request settlement authority differs"
+                )
+            amount = attempt_reservation[1]
+            if (
+                exact_cost_usd_micros is None
+                or type(exact_cost_usd_micros) is not int
+                or exact_cost_usd_micros < 0
+                or exact_cost_usd_micros > amount
+            ):
+                self._failed = True
+                return
+            del self._attempt_reservations[attempt_id]
+            self._reservation_costs[reservation.reservation_id] -= amount
+            self._reservation_settled_costs[reservation.reservation_id] += exact_cost_usd_micros
+            self._case_reserved[key] -= amount
+            self._case_spent[key] += exact_cost_usd_micros
+            self._global_reserved -= amount
+            self._global_spent += exact_cost_usd_micros
 
     def settle_call(
         self,
@@ -3265,17 +3449,40 @@ class ProductionLiveBudgetLedgerV1:
         ):
             raise R24ContractError("INVALID_LIVE_BUDGET", "budget settlement differs")
         with self._lock:
-            current = self._reservations.pop(reservation.reservation_id, None)
+            current = self._reservations.get(reservation.reservation_id)
+            reserved_cost = self._reservation_costs.get(reservation.reservation_id)
+            settled_cost = self._reservation_settled_costs.get(reservation.reservation_id)
+            attempt_ids = self._reservation_attempt_ids.get(reservation.reservation_id)
             if (
                 current != reservation
-                or exact_cost_usd_micros > reservation.reserved_cost_usd_micros
+                or reserved_cost is None
+                or settled_cost is None
+                or attempt_ids is None
+                or (
+                    reservation.case_key in self._pilot_case_keys
+                    and (
+                        len(attempt_ids) != reservation.expected_attempt_count
+                        or reserved_cost != 0
+                        or exact_cost_usd_micros != settled_cost
+                    )
+                )
+                or (
+                    reservation.case_key not in self._pilot_case_keys
+                    and exact_cost_usd_micros > reserved_cost
+                )
             ):
                 self._failed = True
                 raise R24ContractError(
                     "LIVE_COST_RESERVATION_EXCEEDED", "terminal cost exceeds reserve"
                 )
-            self._case_reserved[reservation.case_key] -= reservation.reserved_cost_usd_micros
-            self._case_spent[reservation.case_key] += exact_cost_usd_micros
+            del self._reservations[reservation.reservation_id]
+            del self._reservation_attempt_ids[reservation.reservation_id]
+            del self._reservation_costs[reservation.reservation_id]
+            del self._reservation_settled_costs[reservation.reservation_id]
+            del self._reservation_id_by_logical_call[reservation.logical_call_id]
+            if reservation.case_key not in self._pilot_case_keys:
+                self._case_reserved[reservation.case_key] -= reserved_cost
+                self._case_spent[reservation.case_key] += exact_cost_usd_micros
 
     def freeze_failed_call(self, reservation: _LiveBudgetReservationV1) -> None:
         if type(reservation) is not _LiveBudgetReservationV1:
@@ -3393,12 +3600,18 @@ class OwnerAuthorizedLivePerCallPolicyV1:
         self._descriptor_sha256 = transport_descriptor_sha256(live_descriptor)
         self._attempt_cost_ceiling = budget_ledger.attempt_ceiling(descriptor)
         self._attempt_sink = MemoryLiveAttemptReceiptSinkV1()
+        request_cost_budget = _bind_live_attempt_request_cost_budget_v1(
+            factory_binding_sha256=factory.factory_binding_sha256,
+            reserve=budget_ledger.reserve_request_cost,
+            settle=budget_ledger.settle_request_cost,
+        )
         self._history_runner = ProductionOpenAIAttemptRunnerV1(
             factory=factory,
             role=LiveAttemptRoleV1.HISTORY_POLICY,
             sink=self._attempt_sink,
             pricing=pricing,
             confirmed_pricing_sha256=pricing_sha256,
+            request_cost_budget=request_cost_budget,
         )
         rubric_runner = ProductionOpenAIAttemptRunnerV1(
             factory=factory,
@@ -3406,6 +3619,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
             sink=self._attempt_sink,
             pricing=pricing,
             confirmed_pricing_sha256=pricing_sha256,
+            request_cost_budget=request_cost_budget,
         )
         rubric_port = ProductionRubricProviderPortV1(runner=rubric_runner)
         self._rubric_backend = LiveOpenAIRubricBackendV1(provider_port=rubric_port)

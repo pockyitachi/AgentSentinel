@@ -1128,7 +1128,11 @@ class LiveRubricAttemptConstraintBindingV1:
         timeout_ms = min(history_stage.timeout_ms, self.rubric_stage_timeout_ms)
         requested_deadline = self.issued_monotonic_ns + timeout_ms * 1_000_000
         effective_deadline = min(requested_deadline, self.case_execution_deadline_monotonic_ns)
-        attempt_ceiling = self.case_max_cost_usd_micros // self.max_openai_calls
+        attempt_ceiling = (
+            self.case_max_cost_usd_micros
+            if self.case_stage == "R25_PILOT"
+            else self.case_max_cost_usd_micros // self.max_openai_calls
+        )
         if (
             requested_deadline > (1 << 63) - 1
             or self.requested_call_deadline_monotonic_ns != requested_deadline
@@ -1179,7 +1183,13 @@ def build_live_rubric_attempt_constraint_binding_v1(
     effective_deadline = min(requested_deadline, case_execution_deadline_monotonic_ns)
     if type(case_max_cost_usd_micros) is not int or type(max_openai_calls) is not int:
         raise LiveRubricError("UNTRUSTED_ATTEMPT_CONSTRAINT", "attempt cost source is invalid")
-    attempt_ceiling = case_max_cost_usd_micros // max_openai_calls if max_openai_calls else 0
+    attempt_ceiling = (
+        case_max_cost_usd_micros
+        if case_stage == "R25_PILOT"
+        else case_max_cost_usd_micros // max_openai_calls
+        if max_openai_calls
+        else 0
+    )
     return LiveRubricAttemptConstraintBindingV1(
         issued_monotonic_ns=issued_monotonic_ns,
         requested_call_deadline_monotonic_ns=requested_deadline,
@@ -1953,13 +1963,33 @@ def _validate_live_rubric_attempt_authority_components_v1(
         request_byte_count=provider_request.byte_count,
         max_output_tokens=authority.max_output_tokens,
     )
+    pilot_request_cost_bound = constraint.case_stage == "R25_PILOT"
+    attempt_cost_authority_valid = (
+        (
+            authority.max_cost_usd_micros == worst_case_cost
+            and authority.max_cost_usd_micros <= constraint.attempt_max_cost_usd_micros
+            and not allow_cost_reservation_failure
+        )
+        or (
+            authority.max_cost_usd_micros == constraint.attempt_max_cost_usd_micros
+            and worst_case_cost > authority.max_cost_usd_micros
+            and allow_cost_reservation_failure
+        )
+        if pilot_request_cost_bound
+        else authority.max_cost_usd_micros == constraint.attempt_max_cost_usd_micros
+    )
+    cost_reservation_valid = (
+        True
+        if pilot_request_cost_bound
+        else (worst_case_cost > authority.max_cost_usd_micros) is allow_cost_reservation_failure
+    )
     if (
         authority.attempt_id != attempt_id
         or authority.role is not LiveAttemptRoleV1.RUBRIC
         or authority.logical_call_id != logical_call_id
         or authority.request_sha256 != request_sha256
         or authority.deadline_monotonic_ns != constraint.effective_deadline_monotonic_ns
-        or authority.max_cost_usd_micros != constraint.attempt_max_cost_usd_micros
+        or not attempt_cost_authority_valid
         or authority.case_execution_lease_sha256 != canonical_sha256(cast(JsonValue, lease))
         or authority.stage_sha256 != openai_stage_sha256(stage)
         or authority.case_id != lease["case_id"]
@@ -1994,7 +2024,7 @@ def _validate_live_rubric_attempt_authority_components_v1(
         or request_max_output_tokens != stage.max_output_tokens
         or request_max_output_tokens != authority.max_output_tokens
         or stage.max_attempts != 1
-        or (worst_case_cost > authority.max_cost_usd_micros) is not allow_cost_reservation_failure
+        or not cost_reservation_valid
     ):
         raise LiveRubricError(
             "ATTEMPT_AUTHORITY_BINDING_MISMATCH",
@@ -3291,9 +3321,11 @@ class _BaseRubricProviderPortV1:
                 provider_input=provider_input,
                 provider_request=provider_request,
             )
-            if (
-                anchor.attempt_authority.deadline_monotonic_ns != expected_deadline_monotonic_ns
-                or anchor.attempt_authority.max_cost_usd_micros != expected_max_cost_usd_micros
+            pilot_request_cost_bound = anchor.constraint_binding.case_stage == "R25_PILOT"
+            if anchor.attempt_authority.deadline_monotonic_ns != expected_deadline_monotonic_ns or (
+                anchor.attempt_authority.max_cost_usd_micros > expected_max_cost_usd_micros
+                if pilot_request_cost_bound
+                else anchor.attempt_authority.max_cost_usd_micros != expected_max_cost_usd_micros
             ):
                 raise LiveRubricError(
                     "ATTEMPT_AUTHORITY_BINDING_MISMATCH",

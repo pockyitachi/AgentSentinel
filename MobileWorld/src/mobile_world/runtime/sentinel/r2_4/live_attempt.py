@@ -21,6 +21,7 @@ import re
 import signal
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import InitVar, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -81,6 +82,7 @@ _MAX_DURATION_NS: Final[int] = 7 * 24 * 60 * 60 * 1_000_000_000
 _MAX_PROVIDER_REQUEST_BYTES: Final[int] = 8 * 1024 * 1024
 _REQUEST_SEAL: Final[object] = object()
 _DEADLINE_BINDING_SEAL: Final[object] = object()
+_REQUEST_COST_BUDGET_SEAL: Final[object] = object()
 _RESPONSES_REQUEST_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "input",
@@ -161,6 +163,89 @@ class LiveAttemptError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class LiveAttemptRequestCostBudgetV1:
+    """Identity-sealed bridge to the run-shared request-cost ledger."""
+
+    __slots__ = ("_factory_binding_sha256", "_reserve", "_settle")
+
+    def __init__(
+        self,
+        *,
+        factory_binding_sha256: str,
+        reserve: object,
+        settle: object,
+        seal: object,
+    ) -> None:
+        if seal is not _REQUEST_COST_BUDGET_SEAL:
+            raise PermissionError("live request-cost budget is module-owned")
+        self._factory_binding_sha256 = _require_sha256(
+            factory_binding_sha256, "factory_binding_sha256"
+        )
+        if not callable(reserve) or not callable(settle):
+            raise TypeError("live request-cost budget callbacks are unavailable")
+        self._reserve = cast(Callable[..., int], reserve)
+        self._settle = cast(Callable[..., None], settle)
+
+    @property
+    def factory_binding_sha256(self) -> str:
+        return self._factory_binding_sha256
+
+    def reserve_request_cost(
+        self,
+        *,
+        stage: str,
+        case_id: str,
+        logical_call_id: str,
+        attempt_id: str,
+        request_worst_case_cost_usd_micros: int,
+        attempt_cost_ceiling_usd_micros: int,
+    ) -> int:
+        value = self._reserve(
+            stage=stage,
+            case_id=case_id,
+            logical_call_id=logical_call_id,
+            attempt_id=attempt_id,
+            request_worst_case_cost_usd_micros=request_worst_case_cost_usd_micros,
+            attempt_cost_ceiling_usd_micros=attempt_cost_ceiling_usd_micros,
+        )
+        if type(value) is not int or value <= 0:
+            raise LiveAttemptError(
+                "LIVE_BUDGET_AUTHORITY_MISMATCH", "request budget returned an invalid authority"
+            )
+        return value
+
+    def settle_request_cost(
+        self,
+        *,
+        stage: str,
+        case_id: str,
+        logical_call_id: str,
+        attempt_id: str,
+        exact_cost_usd_micros: int | None,
+    ) -> None:
+        self._settle(
+            stage=stage,
+            case_id=case_id,
+            logical_call_id=logical_call_id,
+            attempt_id=attempt_id,
+            exact_cost_usd_micros=exact_cost_usd_micros,
+        )
+
+
+def _bind_live_attempt_request_cost_budget_v1(
+    *,
+    factory_binding_sha256: str,
+    reserve: Callable[..., int],
+    settle: Callable[..., None],
+) -> LiveAttemptRequestCostBudgetV1:
+    return LiveAttemptRequestCostBudgetV1(
+        factory_binding_sha256=factory_binding_sha256,
+        reserve=reserve,
+        settle=settle,
+        seal=_REQUEST_COST_BUDGET_SEAL,
+    )
 
 
 def production_attempt_termination_upper_bound_ns_v1(
@@ -2744,6 +2829,8 @@ class ProductionOpenAIAttemptCallV1:
         execution_kind: LiveAttemptExecutionKindV1,
         request: CanonicalHistoryPolicyRequestV1 | None = None,
         stage: OpenAIResponsesStageV1 | None = None,
+        case_stage: str | None = None,
+        request_cost_budget: LiveAttemptRequestCostBudgetV1 | None = None,
     ) -> None:
         self._authority = snapshot_live_attempt_authority(authority)
         self._authority_sha256 = live_attempt_authority_sha256(self._authority)
@@ -2762,6 +2849,7 @@ class ProductionOpenAIAttemptCallV1:
             if (
                 type(request) is not CanonicalHistoryPolicyRequestV1
                 or type(stage) is not OpenAIResponsesStageV1
+                or type(case_stage) is not str
             ):
                 raise LiveAttemptError(
                     "PROVIDER_REQUEST_STAGE_MISMATCH",
@@ -2779,13 +2867,20 @@ class ProductionOpenAIAttemptCallV1:
                     "production call request or stage authority differs",
                 )
         else:
-            if request is not None or stage is not None:
+            if (
+                request is not None
+                or stage is not None
+                or case_stage is not None
+                or request_cost_budget is not None
+            ):
                 raise LiveAttemptError(
                     "PROVIDER_REQUEST_STAGE_MISMATCH",
                     "CPU call cannot retain a production request or stage",
                 )
             self._request = None
             self._stage = None
+        self._case_stage = case_stage
+        self._request_cost_budget = request_cost_budget
         self._dispatch_count = 0
         self._dispatch_command_sent = False
         self._execute_started = False
@@ -3051,6 +3146,19 @@ class ProductionOpenAIAttemptCallV1:
             self._connection = None
         if connection is not None:
             connection.close()
+        budget = self._request_cost_budget
+        if budget is not None:
+            budget.settle_request_cost(
+                stage=cast(str, self._case_stage),
+                case_id=trusted.case_id,
+                logical_call_id=trusted.logical_call_id,
+                attempt_id=trusted.attempt_id,
+                exact_cost_usd_micros=(
+                    trusted.cost_usd_micros
+                    if trusted.cost_status is LiveAttemptCostStatusV1.EXACT
+                    else None
+                ),
+            )
         return snapshot_live_attempt_receipt(trusted)
 
     def _failed(self, code: str) -> LiveAttemptReceiptV1:
@@ -3617,6 +3725,7 @@ class ProductionOpenAIAttemptRunnerV1:
         sink: MemoryLiveAttemptReceiptSinkV1,
         pricing: LiveAttemptPricingV1,
         confirmed_pricing_sha256: str,
+        request_cost_budget: LiveAttemptRequestCostBudgetV1 | None = None,
         startup_timeout_ms: int = 5_000,
         cancel_grace_ms: int = PRODUCTION_ATTEMPT_CANCEL_GRACE_MS_V1,
     ) -> None:
@@ -3639,6 +3748,13 @@ class ProductionOpenAIAttemptRunnerV1:
                 "PRICING_AUTHORITY_MISMATCH",
                 "pricing differs from the post-preflight factory",
             )
+        if request_cost_budget is not None and (
+            type(request_cost_budget) is not LiveAttemptRequestCostBudgetV1
+            or request_cost_budget.factory_binding_sha256 != factory.factory_binding_sha256
+        ):
+            raise LiveAttemptError(
+                "LIVE_BUDGET_AUTHORITY_MISMATCH", "request budget differs from the factory"
+            )
         stage_role = (
             OpenAIRoleV1.RUBRIC if role is LiveAttemptRoleV1.RUBRIC else OpenAIRoleV1.HISTORY_POLICY
         )
@@ -3657,6 +3773,7 @@ class ProductionOpenAIAttemptRunnerV1:
         self._sink = sink
         self._pricing = snapshot_live_attempt_pricing(pricing)
         self._pricing_sha256 = pricing_sha256
+        self._request_cost_budget = request_cost_budget
         self._startup_timeout_ns = startup_timeout_ms * 1_000_000
         self._cancel_grace_seconds = cancel_grace_ms / 1_000
         self._constraint_lock = threading.Lock()
@@ -3911,6 +4028,49 @@ class ProductionOpenAIAttemptRunnerV1:
             max_cost_usd_micros=pending.max_cost_usd_micros,
         )
 
+    def _commit_zero_cost_begin_failure(
+        self,
+        authority: LiveAttemptAuthorityV1,
+        *,
+        started_ns: int,
+        failure_code: str,
+    ) -> None:
+        self._sink._commit(
+            LiveAttemptReceiptV1(
+                attempt_id=authority.attempt_id,
+                role=authority.role,
+                authority_sha256=live_attempt_authority_sha256(authority),
+                manifest_sha256=authority.manifest_sha256,
+                preflight_sha256=authority.preflight_sha256,
+                case_execution_lease_sha256=authority.case_execution_lease_sha256,
+                stage_sha256=authority.stage_sha256,
+                case_id=authority.case_id,
+                logical_call_id=authority.logical_call_id,
+                actor_request_sha256=authority.actor_request_sha256,
+                request_sha256=authority.request_sha256,
+                transport_binding_sha256=authority.transport_binding_sha256,
+                pricing_binding_sha256=authority.pricing_binding_sha256,
+                execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
+                status=LiveAttemptStatusV1.FAILED,
+                dispatch_count=0,
+                response_envelope_sha256=None,
+                input_tokens=None,
+                cached_input_tokens=None,
+                output_tokens=None,
+                total_tokens=None,
+                cost_status=LiveAttemptCostStatusV1.EXACT,
+                cost_usd_micros=0,
+                cancellation_requested=False,
+                termination=LiveAttemptTerminationV1.NONE,
+                worker_pid=None,
+                worker_exit_code=None,
+                worker_reaped=False,
+                late_output_detected=False,
+                duration_ns=min(_MAX_DURATION_NS, max(0, time.monotonic_ns() - started_ns)),
+                failure_code=failure_code,
+            )
+        )
+
     def begin(
         self,
         *,
@@ -3946,6 +4106,17 @@ class ProductionOpenAIAttemptRunnerV1:
                 begin_observed_monotonic_ns=begin_observed_ns,
             )
             effective_deadline_ns = deadline_binding.effective_deadline_monotonic_ns
+        reserved_cost = live_attempt_worst_case_cost_usd_micros(
+            self._pricing,
+            request_byte_count=trusted_request.byte_count,
+            max_output_tokens=self._stage.max_output_tokens,
+        )
+        pilot_request_cost_bound = lease.stage.value == "R25_PILOT"
+        authority_cost = (
+            min(reserved_cost, max_cost_usd_micros)
+            if pilot_request_cost_bound
+            else max_cost_usd_micros
+        )
         authority = LiveAttemptAuthorityV1(
             attempt_id=attempt_id,
             role=self._role,
@@ -3962,15 +4133,10 @@ class ProductionOpenAIAttemptRunnerV1:
             ),
             pricing_binding_sha256=lease.pricing_binding_sha256,
             deadline_monotonic_ns=effective_deadline_ns,
-            max_cost_usd_micros=max_cost_usd_micros,
+            max_cost_usd_micros=authority_cost,
             max_output_tokens=self._stage.max_output_tokens,
         )
         started_ns = time.monotonic_ns()
-        reserved_cost = live_attempt_worst_case_cost_usd_micros(
-            self._pricing,
-            request_byte_count=trusted_request.byte_count,
-            max_output_tokens=authority.max_output_tokens,
-        )
         self._sink._reserve(authority)
         if deadline_binding is not None:
             with self._constraint_lock:
@@ -3989,88 +4155,59 @@ class ProductionOpenAIAttemptRunnerV1:
                     trusted_request
                 )
         if started_ns >= authority.deadline_monotonic_ns:
-            self._sink._commit(
-                LiveAttemptReceiptV1(
-                    attempt_id=authority.attempt_id,
-                    role=authority.role,
-                    authority_sha256=live_attempt_authority_sha256(authority),
-                    manifest_sha256=authority.manifest_sha256,
-                    preflight_sha256=authority.preflight_sha256,
-                    case_execution_lease_sha256=authority.case_execution_lease_sha256,
-                    stage_sha256=authority.stage_sha256,
-                    case_id=authority.case_id,
-                    logical_call_id=authority.logical_call_id,
-                    actor_request_sha256=authority.actor_request_sha256,
-                    request_sha256=authority.request_sha256,
-                    transport_binding_sha256=authority.transport_binding_sha256,
-                    pricing_binding_sha256=authority.pricing_binding_sha256,
-                    execution_kind=(LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS),
-                    status=LiveAttemptStatusV1.FAILED,
-                    dispatch_count=0,
-                    response_envelope_sha256=None,
-                    input_tokens=None,
-                    cached_input_tokens=None,
-                    output_tokens=None,
-                    total_tokens=None,
-                    cost_status=LiveAttemptCostStatusV1.EXACT,
-                    cost_usd_micros=0,
-                    cancellation_requested=False,
-                    termination=LiveAttemptTerminationV1.NONE,
-                    worker_pid=None,
-                    worker_exit_code=None,
-                    worker_reaped=False,
-                    late_output_detected=False,
-                    duration_ns=min(
-                        _MAX_DURATION_NS,
-                        max(0, time.monotonic_ns() - started_ns),
-                    ),
-                    failure_code="ATTEMPT_DEADLINE_ELAPSED",
-                )
+            self._commit_zero_cost_begin_failure(
+                authority,
+                started_ns=started_ns,
+                failure_code="ATTEMPT_DEADLINE_ELAPSED",
             )
             raise LiveAttemptError("ATTEMPT_DEADLINE_ELAPSED", "attempt deadline elapsed")
         if reserved_cost > authority.max_cost_usd_micros:
-            self._sink._commit(
-                LiveAttemptReceiptV1(
-                    attempt_id=authority.attempt_id,
-                    role=authority.role,
-                    authority_sha256=live_attempt_authority_sha256(authority),
-                    manifest_sha256=authority.manifest_sha256,
-                    preflight_sha256=authority.preflight_sha256,
-                    case_execution_lease_sha256=authority.case_execution_lease_sha256,
-                    stage_sha256=authority.stage_sha256,
-                    case_id=authority.case_id,
-                    logical_call_id=authority.logical_call_id,
-                    actor_request_sha256=authority.actor_request_sha256,
-                    request_sha256=authority.request_sha256,
-                    transport_binding_sha256=authority.transport_binding_sha256,
-                    pricing_binding_sha256=authority.pricing_binding_sha256,
-                    execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
-                    status=LiveAttemptStatusV1.FAILED,
-                    dispatch_count=0,
-                    response_envelope_sha256=None,
-                    input_tokens=None,
-                    cached_input_tokens=None,
-                    output_tokens=None,
-                    total_tokens=None,
-                    cost_status=LiveAttemptCostStatusV1.EXACT,
-                    cost_usd_micros=0,
-                    cancellation_requested=False,
-                    termination=LiveAttemptTerminationV1.NONE,
-                    worker_pid=None,
-                    worker_exit_code=None,
-                    worker_reaped=False,
-                    late_output_detected=False,
-                    duration_ns=min(
-                        _MAX_DURATION_NS,
-                        max(0, time.monotonic_ns() - started_ns),
-                    ),
-                    failure_code="ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
-                )
+            self._commit_zero_cost_begin_failure(
+                authority,
+                started_ns=started_ns,
+                failure_code="ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
             )
             raise LiveAttemptError(
                 "ATTEMPT_COST_RESERVATION_EXCEEDS_AUTHORITY",
                 "worst-case request cost exceeds attempt authority",
             )
+        budget = self._request_cost_budget
+        if pilot_request_cost_bound and budget is None:
+            self._commit_zero_cost_begin_failure(
+                authority,
+                started_ns=started_ns,
+                failure_code="LIVE_REQUEST_BUDGET_REQUIRED",
+            )
+            raise LiveAttemptError(
+                "LIVE_REQUEST_BUDGET_REQUIRED", "pilot request lacks the shared budget"
+            )
+        if budget is not None:
+            try:
+                authorized_cost = budget.reserve_request_cost(
+                    stage=lease.stage.value,
+                    case_id=lease.case_id,
+                    logical_call_id=logical_call_id,
+                    attempt_id=attempt_id,
+                    request_worst_case_cost_usd_micros=reserved_cost,
+                    attempt_cost_ceiling_usd_micros=max_cost_usd_micros,
+                )
+                if authorized_cost != authority.max_cost_usd_micros:
+                    raise LiveAttemptError(
+                        "LIVE_BUDGET_AUTHORITY_MISMATCH",
+                        "request reservation differs from attempt authority",
+                    )
+            except Exception as exc:
+                failure_code = getattr(exc, "code", "LIVE_REQUEST_COST_BUDGET_EXCEEDED")
+                if type(failure_code) is not str or _FAILURE_CODE.fullmatch(failure_code) is None:
+                    failure_code = "LIVE_REQUEST_COST_BUDGET_EXCEEDED"
+                self._commit_zero_cost_begin_failure(
+                    authority,
+                    started_ns=started_ns,
+                    failure_code=failure_code,
+                )
+                raise LiveAttemptError(
+                    failure_code, "request cost exceeds the remaining live budget"
+                ) from exc
         # Production attempts may be prepared from the Sentinel worker thread.
         # A clean spawned interpreter avoids inheriting unrelated thread locks,
         # clients, loggers, or allocator state as POSIX ``fork`` would.
@@ -4151,6 +4288,8 @@ class ProductionOpenAIAttemptRunnerV1:
             execution_kind=LiveAttemptExecutionKindV1.OPENAI_RESPONSES_CHILD_PROCESS,
             request=trusted_request,
             stage=self._stage,
+            case_stage=lease.stage.value,
+            request_cost_budget=budget,
         )
         with self._constraint_lock:
             self._attempt_calls[attempt_id] = call

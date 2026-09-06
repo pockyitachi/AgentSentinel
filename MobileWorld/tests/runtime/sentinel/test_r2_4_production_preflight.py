@@ -14,6 +14,7 @@ from typing import cast
 import pytest
 from _r2_4_topology_fixture import write_cpu_topology_artifact
 
+from mobile_world.runtime.sentinel.r2_4.contracts import R24ContractError
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptCostStatusV1,
     LiveAttemptError,
@@ -22,10 +23,17 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptStatusV1,
     MemoryLiveAttemptReceiptSinkV1,
     ProductionOpenAIAttemptRunnerV1,
+    _bind_live_attempt_request_cost_budget_v1,
     build_canonical_openai_request,
     build_live_history_policy_transport_request_v1,
     live_attempt_pricing_sha256,
     live_attempt_worst_case_cost_usd_micros,
+)
+from mobile_world.runtime.sentinel.r2_4.live_policy import (
+    OwnerAuthorizedLiveCaseDescriptorV1,
+    ProductionLiveBudgetLedgerV1,
+    _manifest_case_descriptor,
+    build_production_live_budget_ledger_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.live_run import (
     R24_R25_RUN_AUTHORITY_SCHEMA_VERSION,
@@ -50,6 +58,7 @@ from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     CASE_EXECUTION_LEASE_SCHEMA_VERSION,
     CaseExecutionLeaseV1,
     CaseExecutionScopeV1,
+    ProductionPostPreflightFactoryV1,
     SecureOpenAISecretLeaseV1,
     case_execution_lease_projection,
     production_activation_available_v1,
@@ -566,6 +575,312 @@ def _runtime_confirmation_kwargs(
             manifest.resource_cleanup_upper_bound_sha256
         ),
     }
+
+
+def _budget_factory(
+    tmp_path: Path,
+    *,
+    pilot_cost_usd_micros: int = 24_000_000,
+) -> tuple[
+    R24R25RunAuthorityManifestV1,
+    ProductionPostPreflightFactoryV1,
+    LiveAttemptPricingV1,
+]:
+    manifest, repo = _manifest(tmp_path)
+    pricing = LiveAttemptPricingV1(
+        pricing_id="r25-request-budget-fixture",
+        model="gpt-5.6-sol",
+        input_usd_micros_per_million_tokens=4_000_000,
+        cached_input_usd_micros_per_million_tokens=1_000_000,
+        output_usd_micros_per_million_tokens=20_000_000,
+        source_sha256=_sha(b"r25-request-budget-pricing"),
+        effective_at_utc="2026-09-03T00:00:00Z",
+    )
+    manifest = replace(
+        manifest,
+        pilot=replace(
+            manifest.pilot,
+            max_total_cost_usd_micros=pilot_cost_usd_micros,
+        ),
+        pricing_sha256=live_attempt_pricing_sha256(pricing),
+        max_sequence_cost_usd_micros=pilot_cost_usd_micros + 600,
+    )
+    report = run_production_preflight_v1(
+        manifest,
+        confirmed_manifest_sha256=authority_manifest_sha256(manifest),
+        repository_root=repo,
+        now=_NOW,
+        **_runtime_confirmation_kwargs(manifest),
+    )
+    factory = require_production_post_preflight_factory_v1(
+        manifest,
+        report,
+        confirmed_manifest_sha256=authority_manifest_sha256(manifest),
+        confirmed_preflight_report_sha256=production_preflight_report_sha256(report),
+        confirmed_pricing_sha256=live_attempt_pricing_sha256(pricing),
+    )
+    return manifest, factory, pricing
+
+
+def _pilot_budget_descriptor(
+    manifest: R24R25RunAuthorityManifestV1,
+    factory: ProductionPostPreflightFactoryV1,
+    ledger: ProductionLiveBudgetLedgerV1,
+    cell_index: int,
+) -> OwnerAuthorizedLiveCaseDescriptorV1:
+    cell = manifest.pilot.cells[cell_index]
+    return ledger.grant_descriptor(
+        factory,
+        _manifest_case_descriptor(
+            manifest,
+            stage=RunStageV1.R25_PILOT,
+            host=cell.host,
+            mode=SmokeModeV1.ACTIVE,
+            case_id=f"pilot-cell-{cell_index:03d}",
+        ),
+    )
+
+
+def _budget_runner(
+    factory: ProductionPostPreflightFactoryV1,
+    pricing: LiveAttemptPricingV1,
+    ledger: ProductionLiveBudgetLedgerV1,
+) -> tuple[MemoryLiveAttemptReceiptSinkV1, ProductionOpenAIAttemptRunnerV1]:
+    sink = MemoryLiveAttemptReceiptSinkV1()
+    budget = _bind_live_attempt_request_cost_budget_v1(
+        factory_binding_sha256=factory.factory_binding_sha256,
+        reserve=ledger.reserve_request_cost,
+        settle=ledger.settle_request_cost,
+    )
+    return sink, ProductionOpenAIAttemptRunnerV1(
+        factory=factory,
+        role=LiveAttemptRoleV1.RUBRIC,
+        sink=sink,
+        pricing=pricing,
+        confirmed_pricing_sha256=live_attempt_pricing_sha256(pricing),
+        request_cost_budget=budget,
+    )
+
+
+def _pilot_budget_lease(
+    factory: ProductionPostPreflightFactoryV1,
+    descriptor: OwnerAuthorizedLiveCaseDescriptorV1,
+    label: bytes,
+) -> CaseExecutionLeaseV1:
+    return factory.issue_case_execution_lease(
+        stage=RunStageV1.R25_PILOT,
+        host=descriptor.host,
+        mode=descriptor.mode,
+        case_id=descriptor.case_id,
+        task_id=descriptor.task_id,
+        task_parameters_sha256=descriptor.task_parameters_sha256,
+        reset_seed=descriptor.reset_seed,
+        actor_call_index=1,
+        request_sha256=_sha(label),
+        now=_NOW,
+    )
+
+
+def test_r25_request_cost_budget_admits_representative_request_under_25_dollars(
+    tmp_path: Path,
+) -> None:
+    manifest, factory, pricing = _budget_factory(tmp_path, pilot_cost_usd_micros=25_000_000)
+    ledger = build_production_live_budget_ledger_v1(factory)
+    cell_index = next(
+        index
+        for index, cell in enumerate(manifest.pilot.cells)
+        if cell.arm is PilotArmV1.JOINT_SENTINEL
+    )
+    descriptor = _pilot_budget_descriptor(manifest, factory, ledger, cell_index)
+    request = build_canonical_openai_request(
+        _sealed_openai_request_kwargs(LiveAttemptRoleV1.RUBRIC)
+    )
+    worst_case = live_attempt_worst_case_cost_usd_micros(
+        pricing,
+        request_byte_count=request.byte_count,
+        max_output_tokens=_rubric_stage().max_output_tokens,
+    )
+
+    assert worst_case > descriptor.max_cost_usd_micros // descriptor.max_openai_calls
+    assert worst_case < descriptor.max_cost_usd_micros
+    reservation = ledger.reserve_call(
+        descriptor,
+        logical_call_id="r25-budget-positive",
+        actor_call_index=1,
+        attempt_count=2,
+    )
+    lease = _pilot_budget_lease(factory, descriptor, b"r25-budget-positive-actor-request")
+    _sink, runner = _budget_runner(factory, pricing, ledger)
+    call = runner.begin(
+        case_lease=lease,
+        attempt_id="r25-budget-positive-rubric",
+        logical_call_id="r25-budget-positive",
+        request=request,
+        transport_binding_sha256=_sha(b"r25-budget-positive-transport"),
+        deadline_monotonic_ns=time.monotonic_ns() + 2_000_000_000,
+        max_cost_usd_micros=descriptor.max_cost_usd_micros,
+    )
+    assert call.authority.max_cost_usd_micros == worst_case
+    assert call.cancel_and_join().cost_usd_micros == 0
+    released_headroom = descriptor.max_cost_usd_micros - 1
+    assert (
+        ledger.reserve_request_cost(
+            stage=RunStageV1.R25_PILOT.value,
+            case_id=descriptor.case_id,
+            logical_call_id="r25-budget-positive",
+            attempt_id="r25-budget-positive-history",
+            request_worst_case_cost_usd_micros=released_headroom,
+            attempt_cost_ceiling_usd_micros=descriptor.max_cost_usd_micros,
+        )
+        == released_headroom
+    )
+    ledger.settle_request_cost(
+        stage=RunStageV1.R25_PILOT.value,
+        case_id=descriptor.case_id,
+        logical_call_id="r25-budget-positive",
+        attempt_id="r25-budget-positive-history",
+        exact_cost_usd_micros=1,
+    )
+    ledger.settle_call(reservation, exact_cost_usd_micros=1)
+
+
+def test_r25_request_cost_budget_freezes_unknown_and_rejects_global_exhaustion(
+    tmp_path: Path,
+) -> None:
+    manifest, factory, pricing = _budget_factory(tmp_path)
+    joint_indices = tuple(
+        index
+        for index, cell in enumerate(manifest.pilot.cells)
+        if cell.arm is PilotArmV1.JOINT_SENTINEL
+    )
+
+    unknown_ledger = build_production_live_budget_ledger_v1(factory)
+    descriptor = _pilot_budget_descriptor(manifest, factory, unknown_ledger, joint_indices[0])
+    unknown_ledger.reserve_call(
+        descriptor,
+        logical_call_id="r25-unknown-cost",
+        actor_call_index=1,
+        attempt_count=2,
+    )
+    unknown_ledger.reserve_request_cost(
+        stage=RunStageV1.R25_PILOT.value,
+        case_id=descriptor.case_id,
+        logical_call_id="r25-unknown-cost",
+        attempt_id="r25-unknown-cost-rubric",
+        request_worst_case_cost_usd_micros=1,
+        attempt_cost_ceiling_usd_micros=descriptor.max_cost_usd_micros,
+    )
+    unknown_ledger.settle_request_cost(
+        stage=RunStageV1.R25_PILOT.value,
+        case_id=descriptor.case_id,
+        logical_call_id="r25-unknown-cost",
+        attempt_id="r25-unknown-cost-rubric",
+        exact_cost_usd_micros=None,
+    )
+    with pytest.raises(R24ContractError, match="LIVE_BUDGET_UNAVAILABLE"):
+        unknown_ledger.reserve_request_cost(
+            stage=RunStageV1.R25_PILOT.value,
+            case_id=descriptor.case_id,
+            logical_call_id="r25-unknown-cost",
+            attempt_id="r25-unknown-cost-history",
+            request_worst_case_cost_usd_micros=1,
+            attempt_cost_ceiling_usd_micros=descriptor.max_cost_usd_micros,
+        )
+
+    global_ledger = build_production_live_budget_ledger_v1(factory)
+    for ordinal, cell_index in enumerate(joint_indices):
+        descriptor = _pilot_budget_descriptor(manifest, factory, global_ledger, cell_index)
+        logical_call_id = f"r25-global-fill-{ordinal:02d}"
+        attempt_id = f"r25-global-fill-rubric-{ordinal:02d}"
+        reservation = global_ledger.reserve_call(
+            descriptor,
+            logical_call_id=logical_call_id,
+            actor_call_index=1,
+            attempt_count=1,
+        )
+        global_ledger.reserve_request_cost(
+            stage=RunStageV1.R25_PILOT.value,
+            case_id=descriptor.case_id,
+            logical_call_id=logical_call_id,
+            attempt_id=attempt_id,
+            request_worst_case_cost_usd_micros=descriptor.max_cost_usd_micros,
+            attempt_cost_ceiling_usd_micros=descriptor.max_cost_usd_micros,
+        )
+        global_ledger.settle_request_cost(
+            stage=RunStageV1.R25_PILOT.value,
+            case_id=descriptor.case_id,
+            logical_call_id=logical_call_id,
+            attempt_id=attempt_id,
+            exact_cost_usd_micros=descriptor.max_cost_usd_micros,
+        )
+        global_ledger.settle_call(
+            reservation,
+            exact_cost_usd_micros=descriptor.max_cost_usd_micros,
+        )
+
+    descriptor = _pilot_budget_descriptor(manifest, factory, global_ledger, joint_indices[0])
+    logical_call_id = "r25-global-exhaustion"
+    global_ledger.reserve_call(
+        descriptor,
+        logical_call_id=logical_call_id,
+        actor_call_index=1,
+        attempt_count=1,
+    )
+    request = build_canonical_openai_request(
+        _sealed_openai_request_kwargs(LiveAttemptRoleV1.RUBRIC)
+    )
+    lease = _pilot_budget_lease(factory, descriptor, b"r25-global-exhaustion-actor-request")
+    sink, runner = _budget_runner(factory, pricing, global_ledger)
+    with pytest.raises(LiveAttemptError) as exhausted:
+        runner.begin(
+            case_lease=lease,
+            attempt_id="r25-global-exhaustion-rubric",
+            logical_call_id=logical_call_id,
+            request=request,
+            transport_binding_sha256=_sha(b"r25-global-exhaustion-transport"),
+            deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+            max_cost_usd_micros=descriptor.max_cost_usd_micros,
+        )
+    assert exhausted.value.code == "LIVE_GLOBAL_COST_BUDGET_EXCEEDED"
+    receipt = sink.receipt_for("r25-global-exhaustion-rubric")
+    assert receipt.status is LiveAttemptStatusV1.FAILED
+    assert receipt.dispatch_count == 0
+    assert receipt.cost_usd_micros == 0
+    assert receipt.failure_code == "LIVE_GLOBAL_COST_BUDGET_EXCEEDED"
+    authority = runner.attempt_authority_for_attempt("r25-global-exhaustion-rubric")
+    assert authority is not None
+    assert authority.request_sha256 == request.request_sha256
+    assert authority.max_cost_usd_micros == live_attempt_worst_case_cost_usd_micros(
+        pricing,
+        request_byte_count=request.byte_count,
+        max_output_tokens=_rubric_stage().max_output_tokens,
+    )
+
+
+def test_r24_smoke_budget_keeps_fixed_attempt_slice(tmp_path: Path) -> None:
+    manifest, factory, _pricing = _budget_factory(tmp_path)
+    ledger = build_production_live_budget_ledger_v1(factory)
+    plan = manifest.smoke_plans[0]
+    case = plan.cases[1]
+    descriptor = ledger.grant_descriptor(
+        factory,
+        _manifest_case_descriptor(
+            manifest,
+            stage=RunStageV1.QWEN_LIVE_SMOKE,
+            host=plan.host,
+            mode=case.mode,
+            case_id=case.case_id,
+        ),
+    )
+    ceiling = case.max_cost_usd_micros // case.max_openai_calls
+    assert ledger.attempt_ceiling(descriptor) == ceiling
+    reservation = ledger.reserve_call(
+        descriptor,
+        logical_call_id="r24-smoke-budget-compatibility",
+        actor_call_index=1,
+        attempt_count=case.max_openai_calls,
+    )
+    assert reservation.reserved_cost_usd_micros == ceiling * case.max_openai_calls
 
 
 def test_preflight_is_deep_sealed_and_never_reads_secret_or_connects(
