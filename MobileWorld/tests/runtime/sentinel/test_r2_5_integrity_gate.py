@@ -1060,7 +1060,13 @@ def _build_sequence(
             "trial": 1,
         }
         effective_sha256 = integrity_gate._production_hash(
-            "production-pilot-effective-reset-state", effective_value
+            "production-pilot-effective-reset-state",
+            cast(
+                JsonValue,
+                integrity_gate._pilot_effective_reset_match_projection(
+                    cast(dict[str, JsonValue], effective_value)
+                ),
+            ),
         )
         reset_value: dict[str, JsonValue] = {
             "backend_endpoint": "http://127.0.0.1:6800",

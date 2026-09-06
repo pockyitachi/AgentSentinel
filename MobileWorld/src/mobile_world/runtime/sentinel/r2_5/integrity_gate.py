@@ -2216,7 +2216,11 @@ def validate_pilot_stage_durable_evidence_projection_v2(
             != effective_reset.get("observation_screenshot_sha256")
             or reset.get("effective_reset_state_sha256")
             != _production_hash(
-                "production-pilot-effective-reset-state", cast(JsonValue, effective_reset)
+                "production-pilot-effective-reset-state",
+                cast(
+                    JsonValue,
+                    _pilot_effective_reset_match_projection(effective_reset),
+                ),
             )
             or effective_reset.get("reset_seed") != cell.get("reset_seed")
             or effective_reset.get("task_id") != cell.get("task_id")
@@ -4268,6 +4272,19 @@ def _production_hash(domain: str, value: JsonValue) -> str:
     return _sha_json(cast(JsonValue, _production_preimage(domain, value)))
 
 
+def _pilot_effective_reset_match_projection(
+    value: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    return {
+        "reset_seed": value["reset_seed"],
+        "task_goal_sha256": value["task_goal_sha256"],
+        "task_id": value["task_id"],
+        "task_name": value["task_name"],
+        "task_parameters_sha256": value["task_parameters_sha256"],
+        "trial": value["trial"],
+    }
+
+
 def _read_json_lines(path: Path, *, maximum_bytes: int, code: str) -> list[dict[str, JsonValue]]:
     raw, _ = _read_owner_file(
         path,
@@ -4466,7 +4483,13 @@ def _require_reset_semantics(
         or reset.get("task_name") != locator.task_id
         or reset.get("observation_screenshot_sha256") != screenshot_sha256
         or reset.get("effective_reset_state_sha256")
-        != _production_hash("production-pilot-effective-reset-state", expected_effective)
+        != _production_hash(
+            "production-pilot-effective-reset-state",
+            cast(
+                JsonValue,
+                _pilot_effective_reset_match_projection(expected_effective),
+            ),
+        )
     ):
         raise R25PostRunIntegrityError(
             "RESET_COLLECTOR_BINDING_MISMATCH", "reset commitment differs from Collector"

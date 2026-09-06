@@ -118,13 +118,15 @@ mode, sequence index, resource identity, and run authority. No cell may be
 silently skipped, retried as a replacement observation, resumed from an old
 result, or reordered.
 
-Matching is exact at the input level. The reset receipt separately binds an
-observable initial-state commitment consisting of screenshot pixels, task-goal
-hash, task/trial/parameter hash, and seed. It does not prove equality of all
-hidden Android, application, backend, or third-party state. All four cells for
-a task must meet the frozen observable matching rule before comparative
-analysis; otherwise that matched group is invalid rather than assumed
-equivalent, and the hidden-state limitation remains explicit.
+Matching is exact at the input level. The reset receipt separately binds the
+complete initial screenshot as evidence. The cross-cell reset match commits to
+the stable task-goal hash, task/trial/parameter hash, and seed; it excludes
+status-bar pixels that may change between otherwise identical independent
+resets. It does not prove equality of all hidden Android, application, backend,
+or third-party state. All four cells for a task must meet this frozen matching
+rule before comparative analysis; otherwise that matched group is invalid
+rather than assumed equivalent, and the hidden-state limitation remains
+explicit.
 
 ## 5. Environment and action lifecycle
 
