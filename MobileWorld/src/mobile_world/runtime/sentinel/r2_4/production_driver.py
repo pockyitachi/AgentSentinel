@@ -8,6 +8,7 @@ actual I/O remains reachable only through an owner-confirmed authority chain.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import http.client
 import importlib.metadata
@@ -2884,6 +2885,23 @@ def _assert_loopback_port_free(port: int) -> None:
         probe.close()
 
 
+def _assert_loopback_port_not_listening(port: int) -> None:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.25)
+        result = probe.connect_ex(("127.0.0.1", port))
+        if result == 0:
+            raise ProductionDriverError(
+                "LOOPBACK_PORT_BUSY", "an authorized loopback port is still listening"
+            )
+        if result != errno.ECONNREFUSED:
+            raise ProductionDriverError(
+                "LOOPBACK_PORT_BUSY", "loopback listener state could not be confirmed"
+            )
+    finally:
+        probe.close()
+
+
 def _require_monotonic_deadline(
     deadline_monotonic_ns: int | None,
     *,
@@ -3851,7 +3869,7 @@ class _PosixProductionResourceSystemV1:
             port_deadline_ns = min(port_deadline_ns, deadline_monotonic_ns)
         while time.monotonic_ns() < port_deadline_ns:
             try:
-                _assert_loopback_port_free(port)
+                _assert_loopback_port_not_listening(port)
             except ProductionDriverError:
                 port_available = False
             else:
