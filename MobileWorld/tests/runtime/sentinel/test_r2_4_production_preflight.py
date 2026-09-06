@@ -44,6 +44,7 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     SnapshotResourceV1,
     authority_manifest_sha256,
     compute_snapshot_tree_digest,
+    production_sentinel_config_sha256_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     CASE_EXECUTION_LEASE_SCHEMA_VERSION,
@@ -282,6 +283,7 @@ def _pilot(tmp_path: Path) -> FrozenPilotManifestV1:
         ),
         encoding="utf-8",
     )
+    cohort_source.chmod(0o600)
     selection = select_gui_only_cohort(cohort_source, registry)
     parameters = tuple(
         MobileWorldTaskParametersV1(task_name=member.task_id, trial=member.trial)
@@ -320,8 +322,10 @@ def _pilot(tmp_path: Path) -> FrozenPilotManifestV1:
     ).encode()
     path = declared_inputs / "pilot-tasks.json"
     digest, size = _write(path, raw)
+    path.chmod(0o600)
     topology_path = tmp_path / "declared-inputs" / "topology.json"
     topology_sha256, topology_byte_count = write_cpu_topology_artifact(topology_path)
+    topology_path.chmod(0o600)
     selection_path = declared_inputs / "cohort-selection.json"
     selection_raw = json.dumps(
         cohort_selection_projection(selection),
@@ -331,6 +335,7 @@ def _pilot(tmp_path: Path) -> FrozenPilotManifestV1:
         separators=(",", ":"),
     ).encode()
     selection_sha256, selection_byte_count = _write(selection_path, selection_raw)
+    selection_path.chmod(0o600)
     return FrozenPilotManifestV1(
         schema_version=FROZEN_PILOT_SCHEMA_VERSION,
         cohort_id="production-preflight-fixture",
@@ -361,8 +366,8 @@ def _pilot(tmp_path: Path) -> FrozenPilotManifestV1:
         max_steps_per_cell=3,
         per_cell_timeout_seconds=60,
         max_total_wall_time_seconds=10_000,
-        max_total_actor_calls=80,
-        max_total_openai_calls=80,
+        max_total_actor_calls=240,
+        max_total_openai_calls=240,
         max_total_cost_usd_micros=1_000_000,
     )
 
@@ -525,15 +530,42 @@ def _manifest(tmp_path: Path) -> tuple[R24R25RunAuthorityManifestV1, Path]:
             smoke_plans=smokes,
             pilot=pilot,
             topology_comparison_artifact_sha256=(pilot.topology_comparison_artifact_sha256),
+            resource_topology="SINGLE_GPU_SEQUENTIAL_SHARED",
+            runtime_config_sha256=_sha(b"runtime-config"),
+            pricing_sha256=_sha(b"pricing"),
+            sentinel_config_sha256=production_sentinel_config_sha256_v1(),
             output_root=str(tmp_path / "outputs" / "fresh-run"),
             max_resource_preflight_wall_time_seconds=100,
-            max_sequence_wall_time_seconds=10_820,
-            max_sequence_openai_calls=92,
-            max_sequence_actor_calls=86,
+            max_resource_cleanup_wall_time_seconds=8,
+            resource_cleanup_upper_bound_sha256=_sha(b"cleanup-upper-bound"),
+            max_model_switches=41,
+            max_model_switch_wall_time_seconds=1,
+            max_total_model_switch_wall_time_seconds=41,
+            max_post_run_integrity_wall_time_seconds=1,
+            max_sequence_wall_time_seconds=10_870,
+            max_sequence_openai_calls=252,
+            max_sequence_actor_calls=246,
             max_sequence_cost_usd_micros=1_000_600,
         )
 
     return construct((_rubric_stage(), _history_policy_stage())), repo
+
+
+def _runtime_confirmation_kwargs(
+    manifest: R24R25RunAuthorityManifestV1,
+) -> dict[str, object]:
+    return {
+        "confirmed_runtime_config_sha256": manifest.runtime_config_sha256,
+        "confirmed_pricing_sha256": manifest.pricing_sha256,
+        "confirmed_sentinel_config_sha256": manifest.sentinel_config_sha256,
+        "confirmed_resource_topology": manifest.resource_topology,
+        "confirmed_resource_cleanup_upper_bound_seconds": (
+            manifest.max_resource_cleanup_wall_time_seconds
+        ),
+        "confirmed_resource_cleanup_upper_bound_sha256": (
+            manifest.resource_cleanup_upper_bound_sha256
+        ),
+    }
 
 
 def test_preflight_is_deep_sealed_and_never_reads_secret_or_connects(
@@ -565,6 +597,7 @@ def test_preflight_is_deep_sealed_and_never_reads_secret_or_connects(
         confirmed_manifest_sha256=authority_manifest_sha256(manifest),
         repository_root=repo,
         now=_NOW,
+        **_runtime_confirmation_kwargs(manifest),
     )
     projection = production_preflight_report_projection(report)
     serialized = json.dumps(projection, sort_keys=True)
@@ -601,6 +634,7 @@ def test_preflight_rejects_wrong_owner_pin_before_any_secret_read(
             confirmed_manifest_sha256="0" * 64,
             repository_root=repo,
             now=_NOW,
+            **_runtime_confirmation_kwargs(manifest),
         )
 
 
@@ -615,6 +649,7 @@ def test_preflight_reports_dirty_source_and_changed_snapshot(tmp_path: Path) -> 
         confirmed_manifest_sha256=authority_manifest_sha256(manifest),
         repository_root=repo,
         now=_NOW,
+        **_runtime_confirmation_kwargs(manifest),
     )
     by_id = {check.check_id: check.passed for check in report.checks}
 
@@ -655,6 +690,7 @@ def test_preflight_secret_metadata_fails_closed_without_reading(
         confirmed_manifest_sha256=authority_manifest_sha256(manifest),
         repository_root=repo,
         now=_NOW,
+        **_runtime_confirmation_kwargs(manifest),
     )
     by_id = {check.check_id: check.passed for check in report.checks}
     assert by_id["openai_secret_external_regular_0600"] is False
@@ -669,11 +705,12 @@ def test_report_seal_and_factory_use_one_owner_preflight_pricing_chain(tmp_path:
         confirmed_manifest_sha256=authority_manifest_sha256(manifest),
         repository_root=repo,
         now=_NOW,
+        **_runtime_confirmation_kwargs(manifest),
     )
     with pytest.raises(PermissionError, match="module-owned"):
         replace(report, _seal=object())
     assert production_activation_available_v1() is True
-    pricing_sha256 = "5" * 64
+    pricing_sha256 = cast(str, manifest.pricing_sha256)
     factory = require_production_post_preflight_factory_v1(
         manifest,
         report,
@@ -788,12 +825,6 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
     monkeypatch.setattr(live_attempt_module.multiprocessing, "get_context", observed_get_context)
     lease_now = datetime.now(UTC).replace(microsecond=0)
     manifest, repo = _manifest(tmp_path)
-    report = run_production_preflight_v1(
-        manifest,
-        confirmed_manifest_sha256=authority_manifest_sha256(manifest),
-        repository_root=repo,
-        now=_NOW,
-    )
     pricing = LiveAttemptPricingV1(
         pricing_id="owner-cli-pin",
         model="gpt-5.6-sol",
@@ -804,6 +835,14 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
         effective_at_utc="2026-09-03T00:00:00Z",
     )
     pricing_sha256 = live_attempt_pricing_sha256(pricing)
+    manifest = replace(manifest, pricing_sha256=pricing_sha256)
+    report = run_production_preflight_v1(
+        manifest,
+        confirmed_manifest_sha256=authority_manifest_sha256(manifest),
+        repository_root=repo,
+        now=_NOW,
+        **_runtime_confirmation_kwargs(manifest),
+    )
     factory = require_production_post_preflight_factory_v1(
         manifest,
         report,

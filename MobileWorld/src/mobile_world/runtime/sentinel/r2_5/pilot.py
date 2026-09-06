@@ -7,6 +7,7 @@ owner-authorized production executor must consume.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -24,7 +25,9 @@ from mobile_world.runtime.sentinel.r2_4.topology_artifact import (
     r24_cpu_topology_artifact_sha256,
 )
 
-FROZEN_PILOT_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.5-frozen-pilot/v1"
+FROZEN_PILOT_SCHEMA_VERSION_V1 = "mobileworld.runtime.sentinel-r2.5-frozen-pilot/v1"
+FROZEN_PILOT_SCHEMA_VERSION_V2 = "mobileworld.runtime.sentinel-r2.5-frozen-pilot/v2"
+FROZEN_PILOT_SCHEMA_VERSION = FROZEN_PILOT_SCHEMA_VERSION_V2
 PILOT_TASK_SOURCE_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.5-task-source/v1"
 EXECUTABLE_PILOT_TASK_SOURCE_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.5-executable-task-source/v1"
@@ -32,6 +35,9 @@ EXECUTABLE_PILOT_TASK_SOURCE_SCHEMA_VERSION = (
 RESOLVED_PILOT_TASK_INPUTS_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.5-resolved-task-inputs/v1"
 )
+OFFICIAL_SUCCESS_METRIC_ID_V1 = "mobileworld.core.eval-score-gt/v1"
+OFFICIAL_SUCCESS_OPERATOR_V1 = "GT"
+OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1 = "0x1.fae147ae147aep-1"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}")
@@ -329,9 +335,15 @@ class FrozenPilotManifestV1:
     max_total_actor_calls: int
     max_total_openai_calls: int
     max_total_cost_usd_micros: int
+    official_success_metric_id: str = OFFICIAL_SUCCESS_METRIC_ID_V1
+    official_success_operator: str = OFFICIAL_SUCCESS_OPERATOR_V1
+    official_success_threshold_float_hex: str = OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1
 
     def __post_init__(self) -> None:
-        if self.schema_version != FROZEN_PILOT_SCHEMA_VERSION:
+        if self.schema_version not in {
+            FROZEN_PILOT_SCHEMA_VERSION_V1,
+            FROZEN_PILOT_SCHEMA_VERSION_V2,
+        }:
             raise R25PilotContractError("UNKNOWN_SCHEMA", "unknown frozen-pilot schema")
         _require_id(self.cohort_id, "cohort_id")
         if type(self.frozen_at_utc) is not str or _UTC_SECOND.fullmatch(self.frozen_at_utc) is None:
@@ -413,8 +425,31 @@ class FrozenPilotManifestV1:
             raise R25PilotContractError(
                 "MATCHING_REQUIRED", "pilot matching/reset/accounting is required"
             )
+        if (
+            type(self.official_success_metric_id) is not str
+            or type(self.official_success_operator) is not str
+            or type(self.official_success_threshold_float_hex) is not str
+            or self.official_success_metric_id != OFFICIAL_SUCCESS_METRIC_ID_V1
+            or self.official_success_operator != OFFICIAL_SUCCESS_OPERATOR_V1
+            or self.official_success_threshold_float_hex != OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1
+            or float.fromhex(self.official_success_threshold_float_hex).hex()
+            != self.official_success_threshold_float_hex
+        ):
+            raise R25PilotContractError(
+                "INVALID_SUCCESS_METRIC",
+                "official success must bind the exact raw-score > 0.99 evaluator",
+            )
         cell_count = len(self.tasks) * len(self.hosts) * len(self.arms)
-        _require_positive_int(self.max_steps_per_cell, "max_steps_per_cell", 200)
+        # The v1 durable cell/stage envelopes are admitted under a 64 MiB
+        # adapter-evidence ceiling and the shared canonical graph walker.  Eight
+        # decisions per cell is the largest reviewed production shape; accepting
+        # the historical schema ceiling of 200 creates manifests that cannot be
+        # serialized or independently reopened at the 80--120-cell cohort size.
+        _require_positive_int(
+            self.max_steps_per_cell,
+            "max_steps_per_cell",
+            8 if self.schema_version == FROZEN_PILOT_SCHEMA_VERSION_V2 else 200,
+        )
         _require_positive_int(self.per_cell_timeout_seconds, "per_cell_timeout_seconds", 14_400)
         _require_positive_int(
             self.max_total_wall_time_seconds, "max_total_wall_time_seconds", 604_800
@@ -429,14 +464,17 @@ class FrozenPilotManifestV1:
         if self.max_total_actor_calls > cell_count * self.max_steps_per_cell:
             raise R25PilotContractError("INVALID_BOUND", "actor-call cap exceeds the cell/step cap")
         _require_positive_int(self.max_total_openai_calls, "max_total_openai_calls", 2_000_000)
-        baseline_cell_count = len(self.tasks) * len(self.hosts)
-        # The isolated pilot may spend one task-start rubric generation per
-        # Joint-Sentinel cell, then one history-free rubric tracking call and
-        # one history-policy call per Joint-Sentinel actor decision.  Baseline
-        # cells consume at least one actor call apiece and make no OpenAI call.
-        max_isolated_openai_calls = (
-            2 * (self.max_total_actor_calls - baseline_cell_count) + baseline_cell_count
-        )
+        if self.schema_version == FROZEN_PILOT_SCHEMA_VERSION_V2:
+            joint_cell_count = len(self.tasks) * len(self.hosts)
+            # Every Joint-Sentinel logical decision has exactly two semantic calls:
+            # first decision GENERATE -> TRACK, later decisions TRACK -> HISTORY.
+            # Baseline cells make no semantic OpenAI call.
+            max_isolated_openai_calls = 2 * joint_cell_count * self.max_steps_per_cell
+        else:
+            baseline_cell_count = len(self.tasks) * len(self.hosts)
+            max_isolated_openai_calls = (
+                2 * (self.max_total_actor_calls - baseline_cell_count) + baseline_cell_count
+            )
         if self.max_total_openai_calls > max_isolated_openai_calls:
             raise R25PilotContractError(
                 "INVALID_BOUND",
@@ -473,11 +511,12 @@ def _task_projection(value: PilotTaskV1) -> dict[str, JsonValue]:
         task_parameters_sha256=value.task_parameters_sha256,
         reset_seed=value.reset_seed,
     )
-    return {
+    projection: dict[str, JsonValue] = {
         "reset_seed": value.reset_seed,
         "task_id": value.task_id,
         "task_parameters_sha256": value.task_parameters_sha256,
     }
+    return projection
 
 
 def frozen_pilot_manifest_projection(value: FrozenPilotManifestV1) -> dict[str, JsonValue]:
@@ -487,7 +526,7 @@ def frozen_pilot_manifest_projection(value: FrozenPilotManifestV1) -> dict[str, 
     trusted = FrozenPilotManifestV1(
         **{field.name: getattr(value, field.name) for field in fields(FrozenPilotManifestV1)}
     )
-    return {
+    projection: dict[str, JsonValue] = {
         "arms": [arm.value for arm in trusted.arms],
         "baseline_mode": trusted.baseline_mode,
         "cohort_id": trusted.cohort_id,
@@ -523,6 +562,17 @@ def frozen_pilot_manifest_projection(value: FrozenPilotManifestV1) -> dict[str, 
         "topology_comparison_artifact_path": trusted.topology_comparison_artifact_path,
         "topology_comparison_artifact_sha256": trusted.topology_comparison_artifact_sha256,
     }
+    if trusted.schema_version == FROZEN_PILOT_SCHEMA_VERSION_V2:
+        projection.update(
+            {
+                "official_success_metric_id": trusted.official_success_metric_id,
+                "official_success_operator": trusted.official_success_operator,
+                "official_success_threshold_float_hex": (
+                    trusted.official_success_threshold_float_hex
+                ),
+            }
+        )
+    return projection
 
 
 def frozen_pilot_manifest_sha256(value: FrozenPilotManifestV1) -> str:
@@ -715,7 +765,7 @@ def resolved_pilot_task_inputs_sha256(value: ResolvedPilotTaskInputsV1) -> str:
     return canonical_sha256(cast(JsonValue, resolved_pilot_task_inputs_projection(value)))
 
 
-_PILOT_FIELDS = frozenset(
+_PILOT_FIELDS_V2 = frozenset(
     {
         "arms",
         "baseline_mode",
@@ -737,6 +787,9 @@ _PILOT_FIELDS = frozenset(
         "max_total_openai_calls",
         "max_total_wall_time_seconds",
         "official_success_metric_required",
+        "official_success_metric_id",
+        "official_success_operator",
+        "official_success_threshold_float_hex",
         "per_cell_timeout_seconds",
         "schema_version",
         "seed_policy",
@@ -751,11 +804,31 @@ _PILOT_FIELDS = frozenset(
         "topology_comparison_artifact_sha256",
     }
 )
+_PILOT_SUCCESS_METRIC_FIELDS = frozenset(
+    {
+        "official_success_metric_id",
+        "official_success_operator",
+        "official_success_threshold_float_hex",
+    }
+)
+_PILOT_FIELDS_V1 = _PILOT_FIELDS_V2 - _PILOT_SUCCESS_METRIC_FIELDS
 _TASK_FIELDS = frozenset({"reset_seed", "task_id", "task_parameters_sha256"})
 
 
 def parse_frozen_pilot_manifest(value: object) -> FrozenPilotManifestV1:
-    mapping = _require_exact_keys(value, _PILOT_FIELDS, "pilot")
+    if type(value) is not dict:
+        raise R25PilotContractError("UNTRUSTED_TYPE", "pilot must be an exact object")
+    schema_version = value.get("schema_version")
+    fields_for_version = (
+        _PILOT_FIELDS_V1
+        if schema_version == FROZEN_PILOT_SCHEMA_VERSION_V1
+        else _PILOT_FIELDS_V2
+        if schema_version == FROZEN_PILOT_SCHEMA_VERSION_V2
+        else frozenset()
+    )
+    if not fields_for_version:
+        raise R25PilotContractError("UNKNOWN_SCHEMA", "unknown frozen-pilot schema")
+    mapping = _require_exact_keys(value, fields_for_version, "pilot")
     raw_tasks = mapping["tasks"]
     if type(raw_tasks) is not list or not 20 <= len(raw_tasks) <= 30:
         raise R25PilotContractError("INVALID_COHORT_SIZE", "pilot needs 20--30 task objects")
@@ -814,6 +887,19 @@ def parse_frozen_pilot_manifest(value: object) -> FrozenPilotManifestV1:
         matched_task_ids=cast(bool, mapping["matched_task_ids"]),
         matched_task_parameters=cast(bool, mapping["matched_task_parameters"]),
         official_success_metric_required=cast(bool, mapping["official_success_metric_required"]),
+        official_success_metric_id=cast(
+            str, mapping.get("official_success_metric_id", OFFICIAL_SUCCESS_METRIC_ID_V1)
+        ),
+        official_success_operator=cast(
+            str, mapping.get("official_success_operator", OFFICIAL_SUCCESS_OPERATOR_V1)
+        ),
+        official_success_threshold_float_hex=cast(
+            str,
+            mapping.get(
+                "official_success_threshold_float_hex",
+                OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1,
+            ),
+        ),
         max_steps_per_cell=cast(int, mapping["max_steps_per_cell"]),
         per_cell_timeout_seconds=cast(int, mapping["per_cell_timeout_seconds"]),
         max_total_wall_time_seconds=cast(int, mapping["max_total_wall_time_seconds"]),
@@ -962,53 +1048,103 @@ def _read_authorized_file(
     _require_positive_int(expected_byte_count, f"{name} byte_count", maximum_byte_count)
 
     root = authorized_input_root
-    candidate, relative_parts = _path_under_authorized_root(Path(declared_path), root, name)
-    try:
-        root_info = root.lstat()
-    except FileNotFoundError as exc:
-        raise R25PilotContractError(
-            "TASK_SOURCE_MISSING", "authorized input root does not exist"
-        ) from exc
-    except OSError as exc:
-        raise R25PilotContractError("TASK_SOURCE_UNREADABLE", "cannot inspect input root") from exc
-    if stat.S_ISLNK(root_info.st_mode):
-        raise R25PilotContractError("TASK_SOURCE_SYMLINK", "authorized input root is a symlink")
-    if not stat.S_ISDIR(root_info.st_mode):
-        raise R25PilotContractError("INVALID_PATH", "authorized input root is not a directory")
-
-    current = root
-    for offset, component in enumerate(relative_parts):
-        current = current / component
-        try:
-            info = current.lstat()
-        except FileNotFoundError as exc:
-            raise R25PilotContractError("TASK_SOURCE_MISSING", f"{name} does not exist") from exc
-        except OSError as exc:
-            raise R25PilotContractError("TASK_SOURCE_UNREADABLE", f"cannot inspect {name}") from exc
-        if stat.S_ISLNK(info.st_mode):
-            raise R25PilotContractError("TASK_SOURCE_SYMLINK", f"{name} crosses a symlink")
-        is_last = offset == len(relative_parts) - 1
-        if is_last and not stat.S_ISREG(info.st_mode):
-            raise R25PilotContractError("INVALID_PATH", f"{name} is not a regular file")
-        if not is_last and not stat.S_ISDIR(info.st_mode):
-            raise R25PilotContractError("INVALID_PATH", f"{name} has a non-directory parent")
-
-    try:
-        root_real = root.resolve(strict=True)
-        candidate_real = candidate.resolve(strict=True)
-        candidate_real.relative_to(root_real)
-    except (OSError, ValueError) as exc:
-        raise R25PilotContractError(
-            "TASK_SOURCE_OUTSIDE_ROOT", f"{name} resolves outside the authorized input root"
-        ) from exc
-
+    _, relative_parts = _path_under_authorized_root(Path(declared_path), root, name)
+    directory_descriptors: list[tuple[int, str | None, int, int]] = []
     descriptor = -1
     try:
+        directory_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        current_descriptor = os.open("/", directory_flags)
+        root_metadata = os.fstat(current_descriptor)
+        directory_descriptors.append(
+            (current_descriptor, None, root_metadata.st_dev, root_metadata.st_ino)
+        )
+        for component in root.parts[1:]:
+            current_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=directory_descriptors[-1][0],
+            )
+            opened_directory = os.fstat(current_descriptor)
+            named_directory = os.stat(
+                component,
+                dir_fd=directory_descriptors[-1][0],
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(opened_directory.st_mode)
+                or not stat.S_ISDIR(named_directory.st_mode)
+                or (opened_directory.st_dev, opened_directory.st_ino)
+                != (named_directory.st_dev, named_directory.st_ino)
+            ):
+                os.close(current_descriptor)
+                raise R25PilotContractError(
+                    "TASK_SOURCE_SYMLINK", "authorized input root crosses an alias"
+                )
+            directory_descriptors.append(
+                (
+                    current_descriptor,
+                    component,
+                    opened_directory.st_dev,
+                    opened_directory.st_ino,
+                )
+            )
+        for component in relative_parts[:-1]:
+            current_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=directory_descriptors[-1][0],
+            )
+            opened_directory = os.fstat(current_descriptor)
+            named_directory = os.stat(
+                component,
+                dir_fd=directory_descriptors[-1][0],
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(opened_directory.st_mode)
+                or not stat.S_ISDIR(named_directory.st_mode)
+                or (opened_directory.st_dev, opened_directory.st_ino)
+                != (named_directory.st_dev, named_directory.st_ino)
+            ):
+                os.close(current_descriptor)
+                raise R25PilotContractError(
+                    "TASK_SOURCE_SYMLINK", f"{name} crosses a directory alias"
+                )
+            directory_descriptors.append(
+                (
+                    current_descriptor,
+                    component,
+                    opened_directory.st_dev,
+                    opened_directory.st_ino,
+                )
+            )
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(candidate, flags)
+        leaf_name = relative_parts[-1]
+        descriptor = os.open(leaf_name, flags, dir_fd=directory_descriptors[-1][0])
         opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode):
-            raise R25PilotContractError("INVALID_PATH", f"{name} is not a regular file")
+        named = os.stat(
+            leaf_name,
+            dir_fd=directory_descriptors[-1][0],
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(named.st_mode)
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+            or opened.st_nlink != 1
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or opened.st_uid != os.geteuid()
+            or opened.st_gid != os.getegid()
+        ):
+            raise R25PilotContractError(
+                "TASK_SOURCE_PERMISSION_MISMATCH",
+                f"{name} must be one owner-only, unaliased regular file",
+            )
         if opened.st_size != expected_byte_count:
             raise R25PilotContractError("TASK_SOURCE_DRIFT", f"{name} byte count changed")
         chunks: list[bytes] = []
@@ -1024,14 +1160,53 @@ def _read_authorized_file(
             raise R25PilotContractError("TASK_SOURCE_DRIFT", f"{name} byte count changed")
         if hashlib.sha256(raw).hexdigest() != expected_sha256:
             raise R25PilotContractError("TASK_SOURCE_DRIFT", f"{name} content hash changed")
+        for index, (opened_descriptor, bound_component, device, inode) in enumerate(
+            directory_descriptors
+        ):
+            current = os.fstat(opened_descriptor)
+            if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (
+                device,
+                inode,
+            ):
+                raise R25PilotContractError(
+                    "TASK_SOURCE_IDENTITY_DRIFT", f"{name} parent identity changed"
+                )
+            if index:
+                assert bound_component is not None
+                rebound = os.stat(
+                    bound_component,
+                    dir_fd=directory_descriptors[index - 1][0],
+                    follow_symlinks=False,
+                )
+                if (rebound.st_dev, rebound.st_ino) != (device, inode):
+                    raise R25PilotContractError(
+                        "TASK_SOURCE_IDENTITY_DRIFT", f"{name} parent path changed"
+                    )
+        rebound_leaf = os.stat(
+            leaf_name,
+            dir_fd=directory_descriptors[-1][0],
+            follow_symlinks=False,
+        )
+        if (rebound_leaf.st_dev, rebound_leaf.st_ino) != (opened.st_dev, opened.st_ino):
+            raise R25PilotContractError(
+                "TASK_SOURCE_IDENTITY_DRIFT", f"{name} path changed while reading"
+            )
         return raw
     except R25PilotContractError:
         raise
+    except FileNotFoundError as exc:
+        raise R25PilotContractError("TASK_SOURCE_MISSING", f"{name} does not exist") from exc
     except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise R25PilotContractError(
+                "TASK_SOURCE_SYMLINK", f"{name} crosses a symlink or directory alias"
+            ) from exc
         raise R25PilotContractError("TASK_SOURCE_UNREADABLE", f"cannot read {name}") from exc
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+        for opened_descriptor, _, _, _ in reversed(directory_descriptors):
+            os.close(opened_descriptor)
 
 
 def _parse_mobileworld_parameters(
@@ -1303,6 +1478,11 @@ def resolve_pilot_task_inputs_v1(
 __all__ = [
     "EXECUTABLE_PILOT_TASK_SOURCE_SCHEMA_VERSION",
     "FROZEN_PILOT_SCHEMA_VERSION",
+    "FROZEN_PILOT_SCHEMA_VERSION_V1",
+    "FROZEN_PILOT_SCHEMA_VERSION_V2",
+    "OFFICIAL_SUCCESS_METRIC_ID_V1",
+    "OFFICIAL_SUCCESS_OPERATOR_V1",
+    "OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1",
     "PILOT_TASK_SOURCE_SCHEMA_VERSION",
     "RESOLVED_PILOT_TASK_INPUTS_SCHEMA_VERSION",
     "ExternalPilotTaskParametersV1",

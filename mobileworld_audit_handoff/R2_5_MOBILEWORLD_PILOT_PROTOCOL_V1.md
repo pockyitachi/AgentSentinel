@@ -1,6 +1,6 @@
 # R2.5 Frozen MobileWorld Pilot Protocol v1
 
-Status: **BLOCKED ON R2.4 GO; CPU TOOLING/PROTOCOL PREPARED; PILOT NOT AUTHORIZED OR EXECUTED**
+Status: **R2.4 ACCEPTED; R2.5 CPU/OFFLINE EXECUTION FOUNDATIONS UNDER REVIEW; PILOT NOT EXECUTED**
 
 Contract ID: `mobileworld.runtime.r2-5-mobileworld-pilot/contract-v1`
 
@@ -9,17 +9,22 @@ Schemas:
 - `schemas/r2_5/cohort_selection.v1.schema.json`
 - `schemas/r2_5/executable_task_source.v1.schema.json`
 - `schemas/r2_5/frozen_pilot_manifest.v1.schema.json`
+- `schemas/r2_5/frozen_pilot_manifest.v2.schema.json`
 - `schemas/r2_5/artifact_bundle.v1.schema.json`
 - `schemas/r2_5/pilot_analysis.v1.schema.json`
+- `schemas/r2_5/post_run_integrity.v1.schema.json`
 
 Decision date: 2026-09-03 UTC
 
 ## 1. Decision and dependency
 
-R2.5 is a small, frozen, matched MobileWorld pilot. It may begin only in the
-same owner-authorized sequence after both Qwen and MAI R2.4 OFF/SHADOW/ACTIVE
-live-smoke matrices pass. A failed, incomplete, expired, or unaccounted smoke
-stops before any R2.5 reset or GUI action.
+R2.5 is a small, frozen, matched MobileWorld pilot. R2.4 is owner-accepted, but
+its consumed smoke-only authority cannot authorize R2.5. A fresh full-sequence
+v2 authority must bind the exact source, cohort, runtime, pricing, prompts,
+schemas, topology, deadlines, cleanup and post-run integrity gate. Within that
+sequence both Qwen and MAI OFF/SHADOW/ACTIVE smokes must pass again before any
+R2.5 reset or GUI action. A failed, incomplete, expired, or unaccounted smoke
+stops before the pilot.
 
 The pilot compares two arms for each selected task and host:
 
@@ -33,11 +38,12 @@ arm. It does not mean the joint-provider topology is used. The production pilot
 topology is frozen to `ISOLATED_HISTORY_FREE`: rubric and history-policy model
 calls remain independent.
 
-The CPU candidate provides tooling and protocol for selection, authority,
-reset/input binding, execution, audit, and analysis. It contains no persisted
-executable-task source, selected cohort, frozen pilot manifest, pilot outcome,
-or corresponding artifact hash. Success rate, error reduction, or causal-effect
-claims require actual owner-authorized execution and committed evidence.
+The current CPU candidate provides tooling and protocol for selection,
+authority, reset/input binding, execution, audit, integrity checking, and
+analysis. A repository implementation or DRAFT artifact does not itself prove
+that the live sequence ran. Success rate, error reduction, or causal-effect
+claims require an exact promoted authority, completed live evidence, successful
+cleanup, official integrity acceptance, and committed analysis evidence.
 
 ## 2. Source cohort and static-time eligibility
 
@@ -129,6 +135,11 @@ retry. A bounded, serialized in-request device recovery may reinitialize an
 unhealthy emulator; it is recorded as infrastructure recovery and does not
 create a replacement observation.
 
+The generic R2.5 contract does not reserve or hard-code a physical GPU index.
+The confirmed runtime configuration names the candidate GPU resource(s), and
+production preflight binds their exact identity and then-current capacity to
+the owner manifest before any model, backend, secret, or provider I/O.
+
 The cell lifecycle is:
 
 ```text
@@ -175,8 +186,10 @@ history-policy operation. Provider or parse retries reuse the same Sentinel
 result and do not advance rubric state.
 
 The R2.3 path component observes task progress without reading actor history.
-The R2.2 component edits only admitted history spans. There is no actor-action
-authority and no active history archive in v1.
+The R2.2 component edits only admitted history spans. Sentinel has no
+actor-action-selection authority and there is no active history archive in v1;
+the unchanged actor is separately authorized to execute only the closed pilot
+GUI action vocabulary.
 
 ## 7. Bounds and fail-stop behavior
 
@@ -189,6 +202,27 @@ The frozen pilot declares exact per-cell and sequence maxima for:
 - per-attempt output-token limits, observed input/cached-input/output token
   census, and owner-pinned cost caps; and
 - GUI actions, which cannot exceed admitted actor decisions.
+
+Production v2 fixes `max_steps_per_cell=8`. For `N` tasks it therefore binds
+exact pilot caps of `4 * N * 8` actor calls and the same number of Sentinel
+OpenAI calls. Each of the `2N` JOINT cells makes exactly two semantic calls per
+decision: first `GENERATE -> TRACK` with no history call, then
+`TRACK + HISTORY_POLICY` on later decisions. At `N=20`, both pilot caps are
+exactly 640. The six fresh smoke cases add 6 actor calls and at most 12 Sentinel
+OpenAI calls, so the full-sequence caps are exactly 646 and 652 respectively.
+A handwritten wider cap fails authority admission.
+
+Actor-provider attempt v2 persists `cached_input_tokens` as a nullable measured
+value. Missing SDK detail remains `null` and is reported as missing measurement;
+it is never silently converted to zero.
+
+Under `SINGLE_GPU_SEQUENTIAL_SHARED`, the `2N` pilot host blocks each have one
+independently bounded model switch, and the Qwen-smoke to MAI-smoke handoff adds
+one, for `2N+1` total switches (41 at `N=20`). The per-cell clock starts only
+after its host switch completes. `INDEPENDENT_GPU_CONCURRENT` retains zero
+switches. Sequence wall authority is additive across resource preflight, six
+smokes, pilot cells, every switch, cleanup, and post-run integrity; none of
+those budgets may be restarted or counted twice.
 
 One stage-owned atomic ledger reserves worst-case OpenAI cost before every
 dispatch and settles it from terminal usage. A per-cell view cannot reuse the
@@ -214,6 +248,9 @@ The pilot stage persists one canonical cell/census projection containing:
 - per-decision production-audit-detail hashes, parsed/executed action hashes,
   and termination status;
 - official score/success and a reason hash with its validated backend binding;
+  production v2 freezes the metric as raw finite MobileWorld evaluation score
+  strictly greater than `0.99`, persists canonical `float.hex()` losslessly,
+  and treats integer ppm only as a display/aggregate projection;
   and
 - per-cell and stage latency and resource/audit roots.
 
@@ -241,6 +278,21 @@ experimental results live only in the access-controlled sidecar/output root.
 Secrets and hidden provider chain-of-thought are excluded, but observable actor
 output remains losslessly captured; model-emitted thought-like text may
 therefore appear as ordinary output or later host-native history.
+
+After the four-stage sequence has published execution `COMPLETE` and its bounded
+resource cleanup proof, its terminal is still explicitly
+`acceptance_status=EXECUTION_COMPLETE_INTEGRITY_PENDING`; that terminal alone is
+never an R2.5 acceptance claim. A separate action-free post-run gate reopens the
+six exact fresh smoke Collector locators plus all 80--120 exact per-cell pilot
+Collector locators. It runs the repository's official
+`mobileworld.audit.integrity/v1` checker once per raw run and admits only
+`valid=true`, `errors=[]`, and, under the explicit v1 warning policy,
+`warnings=[]`. Every fresh owner-only report, raw final manifest, path identity,
+byte count, and SHA-256 is bound into separate ordered smoke and pilot roots and
+one ordered aggregate acceptance root.
+The gate has its own manifest-authorized wall-time bound and cannot use the
+network, model, GPU, backend, secret, or action capabilities. Analysis may not
+claim a complete pilot until this acceptance artifact strictly reopens.
 
 ## 9. Analysis contract
 
@@ -304,11 +356,10 @@ add the promoted authority hash, preflight/runtime/pricing hashes, resource
 receipts, smoke evidence, full pilot evidence, analysis artifact, cost/token
 census, cleanup/recovery state, and exact stop condition.
 
-At the current checkpoint there is no persistent 117-row executable source,
-cohort-selection artifact, frozen pilot manifest, 80--120-cell matrix artifact,
-or corresponding content hash. The checked-in code prepares tooling/protocol;
-it does not freeze an actual cohort or pilot. R2.5 is blocked on an owner-reviewed
-R2.4 GO, and R2.4 currently remains In Progress / NO-GO. Until the required
-artifacts exist, R2.4 passes re-review, and the owner separately authorizes the
-live sequence, R2.5 must not be described as run, successful, Done, accepted,
-or ready to execute.
+R2.4 is owner-accepted. The current checkpoint is still a CPU/offline R2.5
+candidate under review: it does not record a completed 80--120-cell live matrix,
+post-run integrity acceptance, or pilot analysis result. The exact source and
+authority bundle must be generated, independently validated, promoted, and
+preflighted before live I/O. Until the full sequence, cleanup, 6+80--120
+official Collector checks, and strict analysis publication all complete, R2.5
+must not be described as successful, Done, accepted, or an effectiveness result.

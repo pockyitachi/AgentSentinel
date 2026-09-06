@@ -9,6 +9,7 @@ import pytest
 from _r2_4_topology_fixture import write_cpu_topology_artifact
 
 import mobile_world.runtime.sentinel.r2_5.artifact_builder as artifact_builder
+import mobile_world.runtime.sentinel.r2_5.pilot as pilot_module
 from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes
 from mobile_world.runtime.sentinel.r2_5.artifact_builder import (
@@ -58,6 +59,7 @@ def _manifest(
         ),
         encoding="utf-8",
     )
+    cohort_source_path.chmod(0o600)
     selection = select_gui_only_cohort(cohort_source_path, registry)
     tasks: list[PilotTaskV1] = []
     bindings: list[InlinePilotTaskParametersV1 | ExternalPilotTaskParametersV1] = []
@@ -79,6 +81,7 @@ def _manifest(
         )
         if index == 0:
             external_blob.write_bytes(parameter_raw)
+            external_blob.chmod(0o600)
             bindings.append(
                 ExternalPilotTaskParametersV1(
                     task_id=task_id,
@@ -96,11 +99,14 @@ def _manifest(
     source_raw = canonical_json_bytes(source)
     source_path = input_root / "pilot-task-source.json"
     source_path.write_bytes(source_raw)
+    source_path.chmod(0o600)
     topology_path = input_root / "topology.json"
     topology_sha256, topology_byte_count = write_cpu_topology_artifact(topology_path)
+    topology_path.chmod(0o600)
     selection_path = input_root / "cohort-selection.json"
     selection_raw = canonical_json_bytes(cohort_selection_projection(selection))
     selection_path.write_bytes(selection_raw)
+    selection_path.chmod(0o600)
     selection_sha256 = _sha(selection_raw)
     manifest = FrozenPilotManifestV1(
         schema_version=FROZEN_PILOT_SCHEMA_VERSION,
@@ -143,6 +149,7 @@ def _bind_source_bytes(
     manifest: FrozenPilotManifestV1, path: Path, raw: bytes
 ) -> FrozenPilotManifestV1:
     path.write_bytes(raw)
+    path.chmod(0o600)
     return replace(
         manifest,
         task_manifest_path=str(path),
@@ -312,6 +319,56 @@ def test_task_source_symlink_fails_closed(tmp_path: Path) -> None:
         _resolve(manifest, input_root)
 
 
+@pytest.mark.parametrize("alias_kind", ("mode", "hardlink"))
+def test_task_source_requires_owner_only_unaliased_file(
+    tmp_path: Path,
+    alias_kind: str,
+) -> None:
+    manifest, input_root, _, _ = _manifest(tmp_path)
+    source = Path(manifest.task_manifest_path)
+    if alias_kind == "mode":
+        source.chmod(0o640)
+    else:
+        (source.parent / "task-source-hardlink.json").hardlink_to(source)
+
+    with pytest.raises(R25PilotContractError) as raised:
+        _resolve(manifest, input_root)
+    assert raised.value.code == "TASK_SOURCE_PERMISSION_MISMATCH"
+
+
+def test_task_source_parent_swap_during_read_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, input_root, _, _ = _manifest(tmp_path)
+    source = Path(manifest.task_manifest_path)
+    retained = input_root.with_name("retained-authorized-inputs")
+    original_read = pilot_module.os.read
+    swapped = False
+
+    def read_after_parent_swap(descriptor: int, byte_count: int) -> bytes:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            input_root.rename(retained)
+            input_root.mkdir()
+        return original_read(descriptor, byte_count)
+
+    monkeypatch.setattr(pilot_module.os, "read", read_after_parent_swap)
+    with pytest.raises(R25PilotContractError) as raised:
+        pilot_module._read_authorized_file(
+            str(source),
+            authorized_input_root=input_root,
+            expected_sha256=manifest.task_manifest_sha256,
+            expected_byte_count=manifest.task_manifest_byte_count,
+            maximum_byte_count=16_777_216,
+            name="pilot task source",
+        )
+    assert raised.value.code == "TASK_SOURCE_IDENTITY_DRIFT"
+    assert list(input_root.iterdir()) == []
+    assert (retained / source.name).is_file()
+
+
 def test_authorized_input_root_must_be_repo_external(tmp_path: Path) -> None:
     manifest, input_root, _, _ = _manifest(tmp_path)
 
@@ -326,9 +383,14 @@ def test_authorized_input_root_must_be_repo_external(tmp_path: Path) -> None:
 def test_openai_budget_covers_isolated_rubric_and_history_policy(tmp_path: Path) -> None:
     manifest, _, _, _ = _manifest(tmp_path)
 
-    # 160 total actor calls minus the 40 mandatory Baseline cells leaves at
-    # most 120 Joint-Sentinel decisions.  Those allow one rubric tracking and
-    # one history-policy call each, plus 40 task-start rubric generations.
-    assert replace(manifest, max_total_openai_calls=280).max_total_openai_calls == 280
+    # Forty Joint-Sentinel cells, three decisions apiece, and exactly two
+    # semantic calls per decision admit at most 240 OpenAI calls.
+    assert replace(manifest, max_total_openai_calls=240).max_total_openai_calls == 240
     with pytest.raises(R25PilotContractError, match="INVALID_BOUND"):
-        replace(manifest, max_total_openai_calls=281)
+        replace(manifest, max_total_openai_calls=241)
+
+
+def test_durable_pilot_shape_rejects_more_than_eight_steps(tmp_path: Path) -> None:
+    manifest, _, _, _ = _manifest(tmp_path)
+    with pytest.raises(R25PilotContractError, match="max_steps_per_cell"):
+        replace(manifest, max_steps_per_cell=9)

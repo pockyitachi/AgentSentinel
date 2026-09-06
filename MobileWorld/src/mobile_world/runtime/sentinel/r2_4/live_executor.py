@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Final, Protocol, cast, runtime_checkable
 
 from mobile_world.runtime.sentinel.r2_4.live_run import (
+    R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2,
+    R24_R25_SEQUENCE_RESULT_SCHEMA_VERSION,
     HostLiveSmokePlanV1,
     LiveRunContractError,
     OpenAIResponsesStageV1,
@@ -34,6 +36,7 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     RunAuthorizationStatusV1,
     RunStageV1,
     SecretFileReferenceV1,
+    SequenceRunResultV1,
     SequenceStageExecutorV1,
     SequenceStatusV1,
     SmokeModeV1,
@@ -81,11 +84,13 @@ class CpuTestFaultV1(StrEnum):
     PILOT_ACTOR_BUDGET_OVERRUN = "PILOT_ACTOR_BUDGET_OVERRUN"
     SECRET_LEASE_UNAVAILABLE = "SECRET_LEASE_UNAVAILABLE"
     RESOURCE_CLEANUP_FAILURE = "RESOURCE_CLEANUP_FAILURE"
+    RESOURCE_CLEANUP_TENANT_DRIFT = "RESOURCE_CLEANUP_TENANT_DRIFT"
     QWEN_SMOKE_AND_RESOURCE_CLEANUP_FAILURE = "QWEN_SMOKE_AND_RESOURCE_CLEANUP_FAILURE"
     QWEN_TO_MAI_HANDOFF_FAILURE = "QWEN_TO_MAI_HANDOFF_FAILURE"
     MAI_SMOKE_FAILURE = "MAI_SMOKE_FAILURE"
     QWEN_CASE_BROKER_CLOSE_FAILURE = "QWEN_CASE_BROKER_CLOSE_FAILURE"
     MAI_CASE_BROKER_CLOSE_FAILURE = "MAI_CASE_BROKER_CLOSE_FAILURE"
+    PILOT_CASE_BROKER_CLOSE_FAILURE = "PILOT_CASE_BROKER_CLOSE_FAILURE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -576,6 +581,20 @@ def _receipt_projection(receipt: StageExecutionReceiptV1) -> dict[str, object]:
     }
 
 
+def _sequence_result_projection(value: SequenceRunResultV1) -> dict[str, object]:
+    if type(value) is not SequenceRunResultV1:
+        raise TypeError("full sequence result must use the exact trusted type")
+    return {
+        "failed_stage": None if value.failed_stage is None else value.failed_stage.value,
+        "failure_code": value.failure_code,
+        "manifest_sha256": value.manifest_sha256,
+        "receipts": [_receipt_projection(receipt) for receipt in value.receipts],
+        "run_id": value.run_id,
+        "schema_version": value.schema_version,
+        "status": value.status.value,
+    }
+
+
 class AtomicExternalOutputTransactionV1:
     """One all-or-nothing, repository-external sequence output transaction."""
 
@@ -586,6 +605,64 @@ class AtomicExternalOutputTransactionV1:
         RunStageV1.R25_PILOT: "03-r25-pilot.json",
     }
 
+    @staticmethod
+    def _open_directory_chain(
+        path: Path,
+    ) -> tuple[Path, tuple[tuple[int, str | None, int, int], ...]]:
+        """Open and retain every path component so rename/symlink swaps are visible."""
+
+        resolved = path.resolve(strict=True)
+        if not resolved.is_absolute():
+            raise ValueError("output parent must be absolute")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        opened: list[tuple[int, str | None, int, int]] = []
+        try:
+            descriptor = os.open("/", flags)
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError("filesystem root is not a directory")
+            opened.append((descriptor, None, metadata.st_dev, metadata.st_ino))
+            for component in resolved.parts[1:]:
+                descriptor = os.open(component, flags, dir_fd=opened[-1][0])
+                metadata = os.fstat(descriptor)
+                named = os.stat(component, dir_fd=opened[-1][0], follow_symlinks=False)
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or not stat.S_ISDIR(named.st_mode)
+                    or (metadata.st_dev, metadata.st_ino) != (named.st_dev, named.st_ino)
+                ):
+                    os.close(descriptor)
+                    raise ValueError("output parent component identity differs")
+                opened.append((descriptor, component, metadata.st_dev, metadata.st_ino))
+            return resolved, tuple(opened)
+        except Exception:
+            for descriptor, _, _, _ in reversed(opened):
+                os.close(descriptor)
+            raise
+
+    @staticmethod
+    def _close_directory_chain(
+        chain: tuple[tuple[int, str | None, int, int], ...],
+    ) -> None:
+        for descriptor, _, _, _ in reversed(chain):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _entry_exists(directory_descriptor: int, name: str) -> bool:
+        try:
+            os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        return True
+
     def __init__(
         self,
         *,
@@ -594,39 +671,198 @@ class AtomicExternalOutputTransactionV1:
         run_id: str,
         source_commit: str,
         manifest_sha256: str,
+        pricing_sha256: str | None = None,
+        sentinel_config_sha256: str | None = None,
+        runtime_config_sha256: str | None = None,
+        preflight_report_sha256: str | None = None,
+        factory_binding_sha256: str | None = None,
+        resource_topology: str = "INDEPENDENT_GPU_CONCURRENT",
+        resource_cleanup_upper_bound_seconds: int = 1,
+        resource_cleanup_upper_bound_preimage: bytes | None = None,
+        resource_cleanup_upper_bound_sha256: str | None = None,
+        max_model_switches: int = 0,
+        max_model_switch_wall_time_seconds: int = 0,
+        max_total_model_switch_wall_time_seconds: int = 0,
+        production_evidence_required: bool = False,
+        pilot_switch_authority_sha256: str | None = None,
     ) -> None:
-        if not _is_lower_hex(manifest_sha256, 64) or not _is_lower_hex(source_commit, 40):
-            raise ValueError("transaction hashes are invalid")
+        legacy_defaults = (
+            runtime_config_sha256 is None
+            and pricing_sha256 is None
+            and sentinel_config_sha256 is None
+            and preflight_report_sha256 is None
+            and factory_binding_sha256 is None
+            and resource_cleanup_upper_bound_preimage is None
+            and resource_cleanup_upper_bound_sha256 is None
+            and not production_evidence_required
+        )
+        if production_evidence_required and any(
+            value is None
+            for value in (
+                runtime_config_sha256,
+                pricing_sha256,
+                sentinel_config_sha256,
+                preflight_report_sha256,
+                factory_binding_sha256,
+                resource_cleanup_upper_bound_preimage,
+                resource_cleanup_upper_bound_sha256,
+            )
+        ):
+            raise ValueError("production output transaction bindings are incomplete")
+        if legacy_defaults:
+            runtime_config_sha256 = "0" * 64
+            pricing_sha256 = "0" * 64
+            sentinel_config_sha256 = "0" * 64
+            preflight_report_sha256 = "0" * 64
+            factory_binding_sha256 = "0" * 64
+            resource_cleanup_upper_bound_preimage = _canonical_bytes(
+                {
+                    "domain": "legacy-cpu-resource-cleanup-bound",
+                    "schema_version": LIVE_EXECUTOR_BINDING_SCHEMA_VERSION,
+                    "value": {
+                        "cleanup_upper_bound_seconds": resource_cleanup_upper_bound_seconds,
+                        "resource_topology": resource_topology,
+                        "runtime_config_sha256": runtime_config_sha256,
+                    },
+                }
+            )
+            resource_cleanup_upper_bound_sha256 = hashlib.sha256(
+                resource_cleanup_upper_bound_preimage
+            ).hexdigest()
+        assert runtime_config_sha256 is not None
+        assert pricing_sha256 is not None
+        assert sentinel_config_sha256 is not None
+        assert preflight_report_sha256 is not None
+        assert factory_binding_sha256 is not None
+        assert resource_cleanup_upper_bound_preimage is not None
+        assert resource_cleanup_upper_bound_sha256 is not None
+        for value, name, length in (
+            (source_commit, "source_commit", 40),
+            (manifest_sha256, "manifest_sha256", 64),
+            (runtime_config_sha256, "runtime_config_sha256", 64),
+            (pricing_sha256, "pricing_sha256", 64),
+            (sentinel_config_sha256, "sentinel_config_sha256", 64),
+            (preflight_report_sha256, "preflight_report_sha256", 64),
+            (factory_binding_sha256, "factory_binding_sha256", 64),
+            (
+                resource_cleanup_upper_bound_sha256,
+                "resource_cleanup_upper_bound_sha256",
+                64,
+            ),
+        ):
+            if not _is_lower_hex(value, length):
+                raise ValueError(f"{name} is invalid")
         if type(run_id) is not str or not run_id:
             raise ValueError("transaction run_id is invalid")
+        if resource_topology not in {
+            "INDEPENDENT_GPU_CONCURRENT",
+            "SINGLE_GPU_SEQUENTIAL_SHARED",
+        }:
+            raise ValueError("transaction resource topology is invalid")
+        if (
+            type(resource_cleanup_upper_bound_seconds) is not int
+            or not 1 <= resource_cleanup_upper_bound_seconds <= 86_400
+            or type(resource_cleanup_upper_bound_preimage) is not bytes
+            or not resource_cleanup_upper_bound_preimage
+            or hashlib.sha256(resource_cleanup_upper_bound_preimage).hexdigest()
+            != resource_cleanup_upper_bound_sha256
+        ):
+            raise ValueError("transaction resource cleanup proof is invalid")
+        try:
+            cleanup_bound = json.loads(resource_cleanup_upper_bound_preimage.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError("transaction resource cleanup proof is invalid") from exc
+        if (
+            type(cleanup_bound) is not dict
+            or _canonical_bytes(cleanup_bound) != resource_cleanup_upper_bound_preimage
+            or type(cleanup_bound.get("value")) is not dict
+            or cleanup_bound["value"].get("cleanup_upper_bound_seconds")
+            != resource_cleanup_upper_bound_seconds
+            or cleanup_bound["value"].get("resource_topology") != resource_topology
+            or cleanup_bound["value"].get("runtime_config_sha256") != runtime_config_sha256
+        ):
+            raise ValueError("transaction resource cleanup proof binding is invalid")
+        for integer_value, name in (
+            (max_model_switches, "max_model_switches"),
+            (max_model_switch_wall_time_seconds, "max_model_switch_wall_time_seconds"),
+            (
+                max_total_model_switch_wall_time_seconds,
+                "max_total_model_switch_wall_time_seconds",
+            ),
+        ):
+            if type(integer_value) is not int or integer_value < 0:
+                raise ValueError(f"{name} is invalid")
+        if max_total_model_switch_wall_time_seconds != (
+            max_model_switches * max_model_switch_wall_time_seconds
+        ):
+            raise ValueError("transaction model switch budget is not additive")
+        if type(production_evidence_required) is not bool:
+            raise ValueError("transaction evidence mode is invalid")
+        if pilot_switch_authority_sha256 is not None and not _is_lower_hex(
+            pilot_switch_authority_sha256, 64
+        ):
+            raise ValueError("pilot switch authority hash is invalid")
         repository = repository_root.resolve(strict=True)
         if not repository.is_dir():
             raise ValueError("repository_root must be a directory")
-        parent = output_root.parent.resolve(strict=True)
-        resolved_output = output_root.resolve(strict=False)
+        if not output_root.is_absolute() or output_root.name in {"", ".", ".."}:
+            raise ValueError("output_root must be one absolute fresh directory")
+        parent, directory_chain = self._open_directory_chain(output_root.parent)
+        parent_descriptor = directory_chain[-1][0]
+        resolved_output = parent / output_root.name
         if (
-            output_root.exists()
-            or output_root.is_symlink()
+            self._entry_exists(parent_descriptor, output_root.name)
             or _is_within(resolved_output, repository)
+            or self._entry_exists(
+                parent_descriptor,
+                f".{output_root.name}.{manifest_sha256[:16]}.partial",
+            )
         ):
-            raise ValueError("output_root must be fresh and repository-external")
-        if not parent.is_dir():
-            raise ValueError("output_root parent must be a directory")
+            self._close_directory_chain(directory_chain)
+            raise ValueError(
+                "output_root must be fresh, repository-external, and without a stale transaction"
+            )
         self._output_root = resolved_output
         self._parent = parent
-        self._staging = parent / f".{output_root.name}.{manifest_sha256[:16]}.partial"
-        if self._staging.exists() or self._staging.is_symlink():
-            raise ValueError("stale output transaction exists")
+        self._output_name = output_root.name
+        self._staging_name = f".{output_root.name}.{manifest_sha256[:16]}.partial"
+        self._staging = parent / self._staging_name
+        self._directory_chain = directory_chain
+        self._parent_descriptor = parent_descriptor
+        self._root_descriptor = -1
+        self._root_identity: tuple[int, int] | None = None
         self._binding = {
+            "authorized_stages": [stage.value for stage in self._STAGE_FILES],
+            "execution_scope": SequenceExecutionScopeV1.R24_R25_FULL.value,
+            "factory_binding_sha256": factory_binding_sha256,
             "manifest_sha256": manifest_sha256,
+            "max_model_switch_wall_time_seconds": max_model_switch_wall_time_seconds,
+            "max_model_switches": max_model_switches,
+            "max_total_model_switch_wall_time_seconds": (max_total_model_switch_wall_time_seconds),
+            "preflight_report_sha256": preflight_report_sha256,
+            "pricing_sha256": pricing_sha256,
+            "pilot_switch_authority_sha256": pilot_switch_authority_sha256,
+            "production_evidence_required": production_evidence_required,
+            "resource_cleanup_upper_bound": cleanup_bound,
+            "resource_cleanup_upper_bound_seconds": resource_cleanup_upper_bound_seconds,
+            "resource_cleanup_upper_bound_sha256": resource_cleanup_upper_bound_sha256,
+            "resource_topology": resource_topology,
             "run_id": run_id,
+            "runtime_config_sha256": runtime_config_sha256,
+            "sentinel_config_sha256": sentinel_config_sha256,
             "schema_version": LIVE_EXECUTOR_BINDING_SCHEMA_VERSION,
             "source_commit": source_commit,
         }
+        self._legacy_binding = legacy_defaults
         self._begun = False
         self._committed = False
         self._failed = False
+        self._moved_to_output = False
         self._recorded: list[RunStageV1] = []
+        self._stage_file_sha256s: dict[RunStageV1, str] = {}
+        self._cleanup_evidence_sha256: str | None = None
+        self._cleanup_file_sha256: str | None = None
+        self._pending_failure_payload: bytes | None = None
 
     @property
     def committed(self) -> bool:
@@ -636,41 +872,227 @@ class AtomicExternalOutputTransactionV1:
     def output_root(self) -> Path:
         return self._output_root
 
-    def _write_once(self, name: str, payload: bytes) -> None:
-        target = self._staging / name
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(target, flags, 0o600)
-        try:
-            with os.fdopen(descriptor, "wb", closefd=False) as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-        finally:
-            os.close(descriptor)
-        self._fsync_directory(self._staging)
+    def _active_root(self) -> Path:
+        return self._output_root if self._moved_to_output else self._staging
 
-    @staticmethod
-    def _fsync_directory(path: Path) -> None:
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags)
+    def _verify_directory_chain(self) -> None:
+        for index, (descriptor, component, expected_device, expected_inode) in enumerate(
+            self._directory_chain
+        ):
+            opened = os.fstat(descriptor)
+            if not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+                expected_device,
+                expected_inode,
+            ):
+                raise RuntimeError("output parent descriptor identity drifted")
+            if index == 0:
+                continue
+            assert component is not None
+            named = os.stat(
+                component,
+                dir_fd=self._directory_chain[index - 1][0],
+                follow_symlinks=False,
+            )
+            if not stat.S_ISDIR(named.st_mode) or (named.st_dev, named.st_ino) != (
+                expected_device,
+                expected_inode,
+            ):
+                raise RuntimeError("output parent path identity drifted")
+
+    def _verify_root_binding(self) -> None:
+        self._verify_directory_chain()
+        if self._root_descriptor < 0 or self._root_identity is None:
+            raise RuntimeError("output transaction directory is not open")
+        opened = os.fstat(self._root_descriptor)
+        expected_name = self._output_name if self._moved_to_output else self._staging_name
+        named = os.stat(
+            expected_name,
+            dir_fd=self._parent_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(named.st_mode)
+            or (opened.st_dev, opened.st_ino) != self._root_identity
+            or (named.st_dev, named.st_ino) != self._root_identity
+            or stat.S_IMODE(opened.st_mode) != 0o700
+            or opened.st_uid != os.geteuid()
+        ):
+            raise RuntimeError("output transaction directory identity drifted")
+
+    def _fsync_root(self) -> None:
+        self._verify_root_binding()
+        os.fsync(self._root_descriptor)
+
+    def _fsync_parent(self) -> None:
+        self._verify_directory_chain()
+        os.fsync(self._parent_descriptor)
+
+    def _verify_regular_entry(
+        self,
+        name: str,
+        opened: os.stat_result,
+    ) -> None:
+        named = os.stat(name, dir_fd=self._root_descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(named.st_mode)
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+            or opened.st_nlink != 1
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or opened.st_uid != os.geteuid()
+        ):
+            raise RuntimeError("output evidence file identity differs")
+
+    def _write_once(self, name: str, payload: bytes) -> str:
+        if (
+            type(name) is not str
+            or not name
+            or "/" in name
+            or name in {".", ".."}
+            or type(payload) is not bytes
+        ):
+            raise RuntimeError("output evidence file name or payload differs")
+        self._verify_root_binding()
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(name, flags, 0o600, dir_fd=self._root_descriptor)
         try:
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISDIR(metadata.st_mode):
-                raise RuntimeError("output transaction directory changed type")
+            os.fchmod(descriptor, 0o600)
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("output evidence write made no progress")
+                view = view[written:]
             os.fsync(descriptor)
+            opened = os.fstat(descriptor)
+            self._verify_regular_entry(name, opened)
         finally:
             os.close(descriptor)
+        self._fsync_root()
+        return hashlib.sha256(payload).hexdigest()
+
+    def _write_atomic_terminal(self, name: str, payload: bytes) -> str:
+        if type(name) is not str or "/" in name or type(payload) is not bytes:
+            raise RuntimeError("full terminal marker name or payload differs")
+        self._verify_root_binding()
+        temporary = f".{name}.{hashlib.sha256(payload).hexdigest()[:16]}.partial"
+        if self._entry_exists(self._root_descriptor, name) or self._entry_exists(
+            self._root_descriptor, temporary
+        ):
+            raise RuntimeError("full terminal marker is not fresh")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(temporary, flags, 0o600, dir_fd=self._root_descriptor)
+        try:
+            os.fchmod(descriptor, 0o600)
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("terminal write made no progress")
+                view = view[written:]
+            os.fsync(descriptor)
+            opened = os.fstat(descriptor)
+            self._verify_regular_entry(temporary, opened)
+        finally:
+            os.close(descriptor)
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=self._root_descriptor,
+            dst_dir_fd=self._root_descriptor,
+        )
+        named = os.stat(name, dir_fd=self._root_descriptor, follow_symlinks=False)
+        if (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+            raise RuntimeError("terminal rename identity differs")
+        self._fsync_root()
+        return hashlib.sha256(payload).hexdigest()
+
+    def _revoke_success_terminal(self, payload: bytes) -> bool:
+        if not self._moved_to_output:
+            return True
+        try:
+            self._verify_root_binding()
+            if self._entry_exists(self._root_descriptor, "terminal.json"):
+                descriptor = os.open(
+                    "terminal.json",
+                    os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=self._root_descriptor,
+                )
+                try:
+                    opened = os.fstat(descriptor)
+                    self._verify_regular_entry("terminal.json", opened)
+                    with os.fdopen(os.dup(descriptor), "rb") as stream:
+                        existing = stream.read(len(payload) + 1)
+                finally:
+                    os.close(descriptor)
+                if existing != payload:
+                    return False
+                os.unlink("terminal.json", dir_fd=self._root_descriptor)
+            for candidate in os.listdir(self._root_descriptor):
+                if not (candidate.startswith(".terminal.json.") and candidate.endswith(".partial")):
+                    continue
+                metadata = os.stat(
+                    candidate,
+                    dir_fd=self._root_descriptor,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISREG(metadata.st_mode):
+                    return False
+                os.unlink(candidate, dir_fd=self._root_descriptor)
+            self._fsync_root()
+            self._fsync_parent()
+            return not self._entry_exists(self._root_descriptor, "terminal.json")
+        except Exception:
+            return False
+
+    def _rename_root_to_output(self) -> None:
+        if self._moved_to_output:
+            self._verify_root_binding()
+            return
+        self._verify_root_binding()
+        if self._entry_exists(self._parent_descriptor, self._output_name):
+            raise RuntimeError("output destination is no longer fresh")
+        self._fsync_root()
+        os.replace(
+            self._staging_name,
+            self._output_name,
+            src_dir_fd=self._parent_descriptor,
+            dst_dir_fd=self._parent_descriptor,
+        )
+        self._moved_to_output = True
+        self._verify_root_binding()
+        self._fsync_parent()
 
     def begin(self) -> None:
         if self._committed:
             raise RuntimeError("output transaction is already committed")
         if self._begun:
             return
-        os.mkdir(self._staging, mode=0o700)
-        os.chmod(self._staging, 0o700)
-        self._fsync_directory(self._staging)
-        self._fsync_directory(self._parent)
+        self._verify_directory_chain()
+        if self._entry_exists(self._parent_descriptor, self._staging_name) or self._entry_exists(
+            self._parent_descriptor, self._output_name
+        ):
+            raise RuntimeError("output transaction target is no longer fresh")
+        os.mkdir(self._staging_name, mode=0o700, dir_fd=self._parent_descriptor)
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        self._root_descriptor = os.open(
+            self._staging_name,
+            flags,
+            dir_fd=self._parent_descriptor,
+        )
+        os.fchmod(self._root_descriptor, 0o700)
+        root_metadata = os.fstat(self._root_descriptor)
+        self._root_identity = (root_metadata.st_dev, root_metadata.st_ino)
+        self._fsync_root()
+        self._fsync_parent()
         self._begun = True
         try:
             self._write_once("manifest-binding.json", _canonical_bytes(self._binding))
@@ -697,12 +1119,135 @@ class AtomicExternalOutputTransactionV1:
         if type(evidence) is not dict or _canonical_bytes(evidence) != evidence_preimage:
             raise RuntimeError("stage evidence preimage is not canonical")
         payload = {
+            **self._binding,
             "evidence": evidence,
             "receipt": _receipt_projection(receipt),
-            "schema_version": LIVE_EXECUTOR_BINDING_SCHEMA_VERSION,
         }
-        self._write_once(self._STAGE_FILES[receipt.stage], _canonical_bytes(payload))
+        file_sha256 = self._write_once(self._STAGE_FILES[receipt.stage], _canonical_bytes(payload))
         self._recorded.append(receipt.stage)
+        self._stage_file_sha256s[receipt.stage] = file_sha256
+
+    def record_cleanup_success(self, evidence_preimage: bytes) -> str:
+        if (
+            not self._begun
+            or self._committed
+            or self._failed
+            or self._moved_to_output
+            or tuple(self._recorded) != tuple(self._STAGE_FILES)
+            or self._cleanup_file_sha256 is not None
+        ):
+            raise RuntimeError("cleanup proof is outside the full terminal boundary")
+        if type(evidence_preimage) is not bytes:
+            raise RuntimeError("cleanup evidence type differs")
+        try:
+            evidence = json.loads(evidence_preimage.decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError("cleanup evidence is invalid") from exc
+        if type(evidence) is not dict or _canonical_bytes(evidence) != evidence_preimage:
+            raise RuntimeError("cleanup evidence is not canonical")
+        evidence_sha256 = hashlib.sha256(evidence_preimage).hexdigest()
+        if self._binding["production_evidence_required"]:
+            if evidence.get("domain") != "production-resource-cleanup-evidence":
+                raise RuntimeError("production cleanup evidence domain differs")
+            value = evidence.get("value")
+            if type(value) is not dict:
+                raise RuntimeError("production cleanup evidence value differs")
+            if (
+                value.get("manifest_sha256") != self._binding["manifest_sha256"]
+                or value.get("runtime_config_sha256") != self._binding["runtime_config_sha256"]
+                or value.get("resource_topology") != self._binding["resource_topology"]
+                or value.get("sequence_scope_authority_sha256") != self._binding["manifest_sha256"]
+                or value.get("sequence_execution_scope") != "R24_R25_FULL"
+                or value.get("status") != "CLEANED"
+            ):
+                raise RuntimeError("production cleanup evidence root binding differs")
+        if (
+            self._binding["production_evidence_required"]
+            and self._binding["resource_topology"] == "SINGLE_GPU_SEQUENTIAL_SHARED"
+        ):
+            assert type(value) is dict
+            expected_pilot_switches = cast(int, self._binding["max_model_switches"]) - 1
+            switch_authority_sha256: str | None = None
+            if (
+                type(value.get("pilot_model_switch_evidence")) is not list
+                or len(value["pilot_model_switch_evidence"]) != expected_pilot_switches
+                or type(value.get("pilot_model_switch_evidence_sha256s")) is not list
+                or len(value["pilot_model_switch_evidence_sha256s"]) != expected_pilot_switches
+                or value.get("unconsumed_pilot_model_switch_evidence_sha256s") != []
+                or any(
+                    type(item) is not dict
+                    or not _is_lower_hex(digest, 64)
+                    or hashlib.sha256(_canonical_bytes(item)).hexdigest() != digest
+                    for item, digest in zip(
+                        value["pilot_model_switch_evidence"],
+                        value["pilot_model_switch_evidence_sha256s"],
+                        strict=True,
+                    )
+                )
+            ):
+                raise RuntimeError("shared cleanup switch evidence is incomplete")
+            for index, (item, digest) in enumerate(
+                zip(
+                    value["pilot_model_switch_evidence"],
+                    value["pilot_model_switch_evidence_sha256s"],
+                    strict=True,
+                )
+            ):
+                assert type(item) is dict
+                item_value = item.get("value")
+                transition = item_value.get("transition") if type(item_value) is dict else None
+                expected_target = "QWEN3_VL" if index % 2 == 0 else "MAI_UI"
+                expected_source = "MAI_UI" if index % 2 == 0 else "QWEN3_VL"
+                if (
+                    item.get("domain") != "production-pilot-model-switch-evidence"
+                    or type(item_value) is not dict
+                    or item_value.get("switch_index") != index
+                    or item_value.get("pilot_host_block_count") != expected_pilot_switches
+                    or item_value.get("max_model_switches") != self._binding["max_model_switches"]
+                    or item_value.get("max_model_switch_wall_time_seconds")
+                    != self._binding["max_model_switch_wall_time_seconds"]
+                    or item_value.get("max_total_model_switch_wall_time_seconds")
+                    != self._binding["max_total_model_switch_wall_time_seconds"]
+                    or type(transition) is not dict
+                    or transition.get("manifest_sha256") != self._binding["manifest_sha256"]
+                    or transition.get("runtime_config_sha256")
+                    != self._binding["runtime_config_sha256"]
+                    or transition.get("sequence_execution_scope") != "R24_R25_FULL"
+                    or transition.get("sequence_scope_authority_sha256")
+                    != self._binding["manifest_sha256"]
+                    or transition.get("resource_topology") != "SINGLE_GPU_SEQUENTIAL_SHARED"
+                    or transition.get("source_host") != expected_source
+                    or transition.get("target_host") != expected_target
+                    or not _is_lower_hex(digest, 64)
+                ):
+                    raise RuntimeError("shared cleanup switch evidence order/root differs")
+                current_authority = item_value.get("switch_authority_sha256")
+                if not _is_lower_hex(current_authority, 64):
+                    raise RuntimeError("shared cleanup switch authority hash differs")
+                if switch_authority_sha256 is None:
+                    switch_authority_sha256 = cast(str, current_authority)
+                elif switch_authority_sha256 != current_authority:
+                    raise RuntimeError("shared cleanup switch authority root drifted")
+            if switch_authority_sha256 != self._binding["pilot_switch_authority_sha256"]:
+                raise RuntimeError("shared cleanup switch authority binding differs")
+        elif self._binding["production_evidence_required"]:
+            concurrent_value = cast(dict[str, object], value)
+            if (
+                concurrent_value.get("pilot_model_switch_evidence") is not None
+                or concurrent_value.get("pilot_model_switch_evidence_sha256s") is not None
+            ):
+                raise RuntimeError("concurrent cleanup cannot contain model switch evidence")
+        payload = _canonical_bytes(
+            {
+                **self._binding,
+                "resource_cleanup_evidence": evidence,
+                "resource_cleanup_evidence_sha256": evidence_sha256,
+                "resource_cleanup_status": "SUCCEEDED",
+            }
+        )
+        self._cleanup_file_sha256 = self._write_once("04-resource-cleanup.json", payload)
+        self._cleanup_evidence_sha256 = evidence_sha256
+        return evidence_sha256
 
     def fail(
         self,
@@ -713,10 +1258,12 @@ class AtomicExternalOutputTransactionV1:
         resource_cleanup_evidence_preimage: bytes | None = None,
         resource_cleanup_failure_code: str | None = None,
         resource_cleanup_status: str = "SUCCEEDED",
+        cleanup_wall_time_ms: int = 0,
+        sequence_wall_time_ms: int = 0,
     ) -> None:
         """Atomically publish an incomplete run as failure evidence, never success."""
 
-        if self._committed or self._failed or self._output_root.exists():
+        if self._committed or self._failed:
             raise RuntimeError("output transaction is already terminal")
         if not self._begun:
             self.begin()
@@ -754,32 +1301,64 @@ class AtomicExternalOutputTransactionV1:
             resource_cleanup_evidence_sha256 = hashlib.sha256(
                 resource_cleanup_evidence_preimage
             ).hexdigest()
-        if resource_cleanup_status not in {"SUCCEEDED", "RETRY_REQUIRED"} or (
-            resource_cleanup_status == "RETRY_REQUIRED"
-            and (resource_cleanup_failure_code is None or resource_cleanup_evidence is None)
+        if self._legacy_binding:
+            if (
+                resource_cleanup_evidence is not None
+                or resource_cleanup_failure_code is not None
+                or resource_cleanup_status != "SUCCEEDED"
+            ):
+                raise RuntimeError("legacy resource cleanup status is invalid")
+        elif (
+            resource_cleanup_status
+            not in {
+                "SUCCEEDED",
+                "RETRY_REQUIRED",
+                "OWNED_RESOURCES_CLEANED_TENANT_DRIFT",
+            }
+            or resource_cleanup_evidence is None
+            or (
+                resource_cleanup_status
+                in {"RETRY_REQUIRED", "OWNED_RESOURCES_CLEANED_TENANT_DRIFT"}
+                and resource_cleanup_failure_code is None
+            )
+            or (
+                resource_cleanup_status == "SUCCEEDED" and resource_cleanup_failure_code is not None
+            )
         ):
             raise RuntimeError("resource cleanup status is invalid")
-        self._write_once(
-            "failure.json",
-            _canonical_bytes(
-                {
-                    **self._binding,
-                    "completed_stages": [item.value for item in self._recorded],
-                    "failed_stage": failed_stage.value,
-                    "failure_code": failure_code,
-                    "resource_cleanup_evidence": resource_cleanup_evidence,
-                    "resource_cleanup_evidence_sha256": resource_cleanup_evidence_sha256,
-                    "resource_cleanup_failure_code": resource_cleanup_failure_code,
-                    "resource_cleanup_status": resource_cleanup_status,
-                    "stage_failure_evidence": stage_failure_evidence,
-                    "stage_failure_evidence_sha256": stage_failure_evidence_sha256,
-                    "status": "FAILED",
-                }
-            ),
+        if (
+            type(cleanup_wall_time_ms) is not int
+            or cleanup_wall_time_ms < 0
+            or type(sequence_wall_time_ms) is not int
+            or sequence_wall_time_ms < cleanup_wall_time_ms
+        ):
+            raise RuntimeError("failure wall census is invalid")
+        payload = _canonical_bytes(
+            {
+                **self._binding,
+                "completed_stages": [item.value for item in self._recorded],
+                "failed_stage": failed_stage.value,
+                "failure_code": failure_code,
+                "resource_cleanup_evidence": resource_cleanup_evidence,
+                "resource_cleanup_evidence_sha256": resource_cleanup_evidence_sha256,
+                "resource_cleanup_failure_code": resource_cleanup_failure_code,
+                "resource_cleanup_status": resource_cleanup_status,
+                "resource_cleanup_wall_time_ms": cleanup_wall_time_ms,
+                "sequence_wall_time_ms": sequence_wall_time_ms,
+                "stage_failure_evidence": stage_failure_evidence,
+                "stage_failure_evidence_sha256": stage_failure_evidence_sha256,
+                "stage_file_sha256s": {
+                    stage.value: digest for stage, digest in self._stage_file_sha256s.items()
+                },
+                "status": "FAILED",
+                "terminal_output_published": True,
+            }
         )
-        self._fsync_directory(self._staging)
-        os.replace(self._staging, self._output_root)
-        self._fsync_directory(self._parent)
+        self._pending_failure_payload = payload
+        self._write_atomic_terminal("failure.json", payload)
+        if not self._moved_to_output:
+            self._rename_root_to_output()
+        self._fsync_parent()
         self._failed = True
 
     def preserve_failure_recovery(
@@ -790,69 +1369,198 @@ class AtomicExternalOutputTransactionV1:
     ) -> None:
         """Durably mark an unpublishable failure without deleting prior evidence."""
 
-        root: Path | None = None
-        for candidate in (self._staging, self._output_root):
-            if candidate.is_dir() and not candidate.is_symlink():
-                root = candidate
-                break
-        if root is None:
+        if self._root_descriptor < 0 or self._root_identity is None:
             raise RuntimeError("failure recovery directory is unavailable")
-        marker = root / "recovery.json"
+        self._verify_root_binding()
         payload = _canonical_bytes(
             {
                 **self._binding,
                 "completed_stages": [item.value for item in self._recorded],
+                "failure_envelope": (
+                    None
+                    if self._pending_failure_payload is None
+                    else json.loads(self._pending_failure_payload)
+                ),
+                "failure_envelope_sha256": (
+                    None
+                    if self._pending_failure_payload is None
+                    else hashlib.sha256(self._pending_failure_payload).hexdigest()
+                ),
                 "failed_stage": failed_stage.value,
                 "failure_code": failure_code,
                 "status": "FAILURE_PUBLICATION_INCOMPLETE",
             }
         )
-        if marker.exists() or marker.is_symlink():
-            if marker.is_symlink() or marker.read_bytes() != payload:
-                raise RuntimeError("failure recovery marker differs")
-        else:
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(marker, flags, 0o600)
+        if self._entry_exists(self._root_descriptor, "recovery.json"):
+            descriptor = os.open(
+                "recovery.json",
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=self._root_descriptor,
+            )
             try:
-                with os.fdopen(descriptor, "wb", closefd=False) as stream:
-                    stream.write(payload)
-                    stream.flush()
-                    os.fsync(stream.fileno())
+                metadata = os.fstat(descriptor)
+                self._verify_regular_entry("recovery.json", metadata)
+                with os.fdopen(os.dup(descriptor), "rb") as stream:
+                    existing = stream.read(len(payload) + 1)
             finally:
                 os.close(descriptor)
-        self._fsync_directory(root)
-        self._fsync_directory(self._parent)
+            if existing != payload:
+                raise RuntimeError("failure recovery marker differs")
+        else:
+            self._write_once("recovery.json", payload)
+        self._fsync_root()
+        self._fsync_parent()
 
-    def commit(self) -> None:
+    def commit(
+        self,
+        result: SequenceRunResultV1,
+        *,
+        census: dict[str, object],
+        publication_deadline_monotonic_ns: int | None = None,
+    ) -> None:
         if (
             not self._begun
             or self._committed
             or self._failed
             or tuple(self._recorded) != tuple(self._STAGE_FILES)
-            or self._output_root.exists()
-            or self._output_root.is_symlink()
+            or self._cleanup_file_sha256 is None
+            or self._cleanup_evidence_sha256 is None
+            or type(result) is not SequenceRunResultV1
+            or result.status is not SequenceStatusV1.COMPLETE
+            or result.receipts != tuple(cast(list[StageExecutionReceiptV1], census["receipts"]))
+            or self._entry_exists(self._parent_descriptor, self._output_name)
+            or (
+                publication_deadline_monotonic_ns is not None
+                and (
+                    type(publication_deadline_monotonic_ns) is not int
+                    or time.monotonic_ns() >= publication_deadline_monotonic_ns
+                )
+            )
         ):
             raise RuntimeError("output transaction is incomplete or no longer fresh")
-        self._fsync_directory(self._staging)
-        os.replace(self._staging, self._output_root)
-        self._fsync_directory(self._parent)
+        census_projection = {
+            "actor_actions": census["actor_actions"],
+            "actor_calls": census["actor_calls"],
+            "cleanup_attempted": True,
+            "cleanup_evidence_sha256": self._cleanup_evidence_sha256,
+            "cleanup_succeeded": True,
+            "cleanup_wall_time_ms": census["cleanup_wall_time_ms"],
+            "completed_stages": [stage.value for stage in self._recorded],
+            "cost_usd_micros": census["cost_usd_micros"],
+            "openai_calls": census["openai_calls"],
+            "output_committed": True,
+            "secret_leases_acquired": census["secret_leases_acquired"],
+            "secret_leases_closed": census["secret_leases_closed"],
+            "stage_wall_time_ms": census["stage_wall_time_ms"],
+            "state": ExecutorStateV1.COMPLETE.value,
+            "wall_time_ms": census["wall_time_ms"],
+        }
+        expected_handoff_count = (
+            1 if self._binding["resource_topology"] == "SINGLE_GPU_SEQUENTIAL_SHARED" else 0
+        )
+        handoff_evidence_sha256 = census["handoff_evidence_sha256"]
+        if (
+            type(census["cleanup_wall_time_ms"]) is not int
+            or census["cleanup_wall_time_ms"] < 0
+            or type(census["stage_wall_time_ms"]) is not int
+            or census["stage_wall_time_ms"] < 0
+            or type(census["wall_time_ms"]) is not int
+            or census["wall_time_ms"]
+            < max(
+                census["stage_wall_time_ms"],
+                census["cleanup_wall_time_ms"],
+            )
+            or (expected_handoff_count == 1 and not _is_lower_hex(handoff_evidence_sha256, 64))
+            or (expected_handoff_count == 0 and handoff_evidence_sha256 is not None)
+        ):
+            raise RuntimeError("terminal cleanup/handoff census differs")
+        result_projection = _sequence_result_projection(result)
+        terminal_payload = _canonical_bytes(
+            {
+                **self._binding,
+                "acceptance_status": "EXECUTION_COMPLETE_INTEGRITY_PENDING",
+                "cleanup_file_sha256": self._cleanup_file_sha256,
+                "executor_census": census_projection,
+                "executor_census_sha256": hashlib.sha256(
+                    _canonical_bytes(census_projection)
+                ).hexdigest(),
+                "handoff_model_switch_count": (expected_handoff_count),
+                "handoff_model_switch_evidence_sha256": handoff_evidence_sha256,
+                "pilot_model_switch_count": (
+                    cast(int, self._binding["max_model_switches"]) - 1
+                    if self._binding["resource_topology"] == "SINGLE_GPU_SEQUENTIAL_SHARED"
+                    else 0
+                ),
+                "result": result_projection,
+                "result_sha256": hashlib.sha256(_canonical_bytes(result_projection)).hexdigest(),
+                "stage_file_sha256s": {
+                    stage.value: self._stage_file_sha256s[stage] for stage in self._STAGE_FILES
+                },
+                "status": "COMPLETE",
+                "terminal_output_published": True,
+                "total_model_switch_count": self._binding["max_model_switches"],
+            }
+        )
+        try:
+            self._rename_root_to_output()
+            self._write_atomic_terminal("terminal.json", terminal_payload)
+            self._fsync_parent()
+            if (
+                publication_deadline_monotonic_ns is not None
+                and time.monotonic_ns() >= publication_deadline_monotonic_ns
+            ):
+                raise RuntimeError("terminal publication consumed the integrity reserve")
+        except Exception:
+            if not self._revoke_success_terminal(terminal_payload):
+                self._pending_failure_payload = _canonical_bytes(
+                    {
+                        **self._binding,
+                        "failure_code": "SUCCESS_TERMINAL_REVOCATION_UNCONFIRMED",
+                        "status": "FAILURE_PUBLICATION_INCOMPLETE",
+                    }
+                )
+            raise
         self._committed = True
 
     def rollback(self) -> None:
-        if self._committed or self._failed:
+        if self._committed or self._failed or self._moved_to_output:
             return
-        if self._staging.parent != self._parent:
-            raise RuntimeError("output staging path escaped its bound parent")
-        if self._staging.is_symlink():
-            self._staging.unlink()
-        elif self._staging.exists():
-            if not self._staging.is_dir():
-                raise RuntimeError("output staging target changed type")
-            shutil.rmtree(self._staging)
-        self._fsync_directory(self._parent)
+        if self._root_descriptor >= 0:
+            self._verify_root_binding()
+            for name in os.listdir(self._root_descriptor):
+                metadata = os.stat(
+                    name,
+                    dir_fd=self._root_descriptor,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise RuntimeError("rollback preserves an unexpected output transaction entry")
+                os.unlink(name, dir_fd=self._root_descriptor)
+            self._fsync_root()
+            os.close(self._root_descriptor)
+            self._root_descriptor = -1
+            self._root_identity = None
+            os.rmdir(self._staging_name, dir_fd=self._parent_descriptor)
+        self._fsync_parent()
         self._begun = False
         self._recorded.clear()
+        self._stage_file_sha256s.clear()
+        self._cleanup_evidence_sha256 = None
+        self._cleanup_file_sha256 = None
+        self._pending_failure_payload = None
+
+    def __del__(self) -> None:
+        root_descriptor = getattr(self, "_root_descriptor", -1)
+        if type(root_descriptor) is int and root_descriptor >= 0:
+            try:
+                os.close(root_descriptor)
+            except OSError:
+                pass
+            self._root_descriptor = -1
+        chain = getattr(self, "_directory_chain", ())
+        if type(chain) is tuple:
+            self._close_directory_chain(chain)
+            self._directory_chain = ()
 
 
 class AtomicR24SmokeOutputTransactionV1:
@@ -1580,7 +2288,15 @@ class AtomicR24SmokeOutputTransactionV1:
 class _AdapterBundleV1:
     """Identity-sealed bundle; only this module constructs instances."""
 
-    __slots__ = ("pilot", "production", "resources", "secret_leases", "smoke")
+    __slots__ = (
+        "pilot",
+        "pilot_switch_authority",
+        "pilot_switch_authority_sha256",
+        "production",
+        "resources",
+        "secret_leases",
+        "smoke",
+    )
 
     def __init__(
         self,
@@ -1590,6 +2306,8 @@ class _AdapterBundleV1:
         smoke: LiveSmokeAdapterPortV1,
         pilot: PilotAdapterPortV1,
         secret_leases: SecureSecretLeaseProviderPortV1,
+        pilot_switch_authority: object | None,
+        pilot_switch_authority_sha256: str | None,
         production: bool,
     ) -> None:
         if seal is not _MODULE_SEAL:
@@ -1598,6 +2316,8 @@ class _AdapterBundleV1:
         self.smoke = smoke
         self.pilot = pilot
         self.secret_leases = secret_leases
+        self.pilot_switch_authority = pilot_switch_authority
+        self.pilot_switch_authority_sha256 = pilot_switch_authority_sha256
         self.production = production
 
 
@@ -1650,26 +2370,96 @@ class _SequenceExecutorCoreV1:
         manifest: R24R25RunAuthorityManifestV1,
         *,
         confirmed_manifest_sha256: str,
+        preflight_report_sha256: str,
+        factory_binding_sha256: str,
+        confirmed_runtime_config_sha256: str,
+        resource_cleanup_upper_bound_seconds: int,
+        resource_cleanup_upper_bound_preimage: bytes,
+        resource_cleanup_upper_bound_sha256: str,
         repository_root: Path,
         adapters: _AdapterBundleV1,
     ) -> None:
         if type(manifest) is not R24R25RunAuthorityManifestV1:
             raise ValueError("manifest must use the exact authority type")
         trusted_manifest = parse_authority_manifest(authority_manifest_projection(manifest))
+        if trusted_manifest.schema_version != R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2:
+            raise ValueError("full executor requires exact v2 authority")
+        assert trusted_manifest.resource_topology is not None
+        assert trusted_manifest.runtime_config_sha256 is not None
+        assert trusted_manifest.pricing_sha256 is not None
+        assert trusted_manifest.sentinel_config_sha256 is not None
+        assert trusted_manifest.max_resource_cleanup_wall_time_seconds is not None
+        assert trusted_manifest.resource_cleanup_upper_bound_sha256 is not None
+        assert trusted_manifest.max_model_switches is not None
+        assert trusted_manifest.max_model_switch_wall_time_seconds is not None
+        assert trusted_manifest.max_total_model_switch_wall_time_seconds is not None
+        assert trusted_manifest.max_post_run_integrity_wall_time_seconds is not None
         manifest_hash = authority_manifest_sha256(trusted_manifest)
         if confirmed_manifest_sha256 != manifest_hash:
             raise ValueError("confirmed manifest SHA-256 differs")
+        for value, name in (
+            (preflight_report_sha256, "preflight_report_sha256"),
+            (factory_binding_sha256, "factory_binding_sha256"),
+            (confirmed_runtime_config_sha256, "confirmed_runtime_config_sha256"),
+            (
+                resource_cleanup_upper_bound_sha256,
+                "resource_cleanup_upper_bound_sha256",
+            ),
+        ):
+            if not _is_lower_hex(value, 64):
+                raise ValueError(f"{name} differs")
+        if (
+            confirmed_runtime_config_sha256 != trusted_manifest.runtime_config_sha256
+            or resource_cleanup_upper_bound_seconds
+            != trusted_manifest.max_resource_cleanup_wall_time_seconds
+            or resource_cleanup_upper_bound_sha256
+            != trusted_manifest.resource_cleanup_upper_bound_sha256
+        ):
+            raise ValueError("executor resource authority differs")
         if type(adapters) is not _AdapterBundleV1:
             raise ValueError("executor adapters are not module-owned")
         self._manifest_sha256 = manifest_hash
         self._manifest = trusted_manifest
         self._run_id = trusted_manifest.run_id
         self._source_commit = trusted_manifest.source_commit
+        self._preflight_report_sha256 = preflight_report_sha256
+        self._factory_binding_sha256 = factory_binding_sha256
+        self._runtime_config_sha256 = confirmed_runtime_config_sha256
+        self._resource_topology = trusted_manifest.resource_topology
+        self._max_resource_cleanup_wall_time_seconds = (
+            trusted_manifest.max_resource_cleanup_wall_time_seconds
+        )
+        self._max_model_switches = trusted_manifest.max_model_switches
+        self._max_model_switch_wall_time_seconds = (
+            trusted_manifest.max_model_switch_wall_time_seconds
+        )
+        self._max_post_run_integrity_wall_time_seconds = (
+            trusted_manifest.max_post_run_integrity_wall_time_seconds
+        )
         expires = datetime.strptime(
             trusted_manifest.authorization.expires_at_utc, "%Y-%m-%dT%H:%M:%SZ"
         ).replace(tzinfo=UTC)
-        remaining_authority_ns = int((expires - datetime.now(UTC)).total_seconds() * 1_000_000_000)
-        self._authority_deadline_monotonic_ns = time.monotonic_ns() + max(0, remaining_authority_ns)
+        current = datetime.now(UTC)
+        remaining_authority_ns = int((expires - current).total_seconds() * 1_000_000_000)
+        maximum_sequence_ns = trusted_manifest.max_sequence_wall_time_seconds * 1_000_000_000
+        if remaining_authority_ns < maximum_sequence_ns:
+            raise ValueError("owner authority remaining window is shorter than sequence bound")
+        started_ns = time.monotonic_ns()
+        self._authority_deadline_monotonic_ns = started_ns + maximum_sequence_ns
+        integrity_reserve_seconds = trusted_manifest.max_post_run_integrity_wall_time_seconds
+        if type(integrity_reserve_seconds) is not int or integrity_reserve_seconds <= 0:
+            raise ValueError("post-run integrity reserve is absent")
+        self._post_run_integrity_deadline_monotonic_ns = self._authority_deadline_monotonic_ns
+        self._cleanup_deadline_monotonic_ns = (
+            self._post_run_integrity_deadline_monotonic_ns
+            - integrity_reserve_seconds * 1_000_000_000
+        )
+        self._work_deadline_monotonic_ns = (
+            self._cleanup_deadline_monotonic_ns
+            - trusted_manifest.max_resource_cleanup_wall_time_seconds * 1_000_000_000
+        )
+        if self._work_deadline_monotonic_ns <= started_ns:
+            raise ValueError("cleanup and post-run integrity reserves are unavailable")
         self._adapters = adapters
         self._output = AtomicExternalOutputTransactionV1(
             output_root=Path(trusted_manifest.output_root),
@@ -1677,6 +2467,24 @@ class _SequenceExecutorCoreV1:
             run_id=trusted_manifest.run_id,
             source_commit=trusted_manifest.source_commit,
             manifest_sha256=manifest_hash,
+            pricing_sha256=trusted_manifest.pricing_sha256,
+            sentinel_config_sha256=trusted_manifest.sentinel_config_sha256,
+            runtime_config_sha256=confirmed_runtime_config_sha256,
+            preflight_report_sha256=preflight_report_sha256,
+            factory_binding_sha256=factory_binding_sha256,
+            resource_topology=trusted_manifest.resource_topology,
+            resource_cleanup_upper_bound_seconds=resource_cleanup_upper_bound_seconds,
+            resource_cleanup_upper_bound_preimage=resource_cleanup_upper_bound_preimage,
+            resource_cleanup_upper_bound_sha256=resource_cleanup_upper_bound_sha256,
+            max_model_switches=trusted_manifest.max_model_switches,
+            max_model_switch_wall_time_seconds=(
+                trusted_manifest.max_model_switch_wall_time_seconds
+            ),
+            max_total_model_switch_wall_time_seconds=(
+                trusted_manifest.max_total_model_switch_wall_time_seconds
+            ),
+            production_evidence_required=adapters.production,
+            pilot_switch_authority_sha256=adapters.pilot_switch_authority_sha256,
         )
         self._state = ExecutorStateV1.READY
         self._next_stage_index = 0
@@ -1687,9 +2495,38 @@ class _SequenceExecutorCoreV1:
         self._cleanup_succeeded = False
         self._resource_cleanup_failure_code: str | None = None
         self._resource_cleanup_failure_evidence: bytes | None = None
+        self._resource_cleanup_evidence: bytes | None = None
+        self._cleanup_wall_time_ms = 0
+        self._handoff_evidence_sha256: str | None = None
+        self._sequence_started_ns: int | None = None
+        self._sequence_wall_time_ms = 0
         self._lock = threading.Lock()
 
-    def _context(self, manifest: R24R25RunAuthorityManifestV1) -> StageAdapterContextV1:
+    def _context(
+        self,
+        manifest: R24R25RunAuthorityManifestV1,
+        *,
+        cleanup: bool = False,
+    ) -> StageAdapterContextV1:
+        consumed_wall_time_ms = sum(receipt.wall_time_ms for receipt in self._receipts)
+        if cleanup:
+            deadline_ns = self._cleanup_deadline_monotonic_ns
+            actual_remaining_wall_time_ms = max(0, (deadline_ns - time.monotonic_ns()) // 1_000_000)
+            remaining_wall_time_ms = min(
+                self._max_resource_cleanup_wall_time_seconds * 1000,
+                actual_remaining_wall_time_ms,
+            )
+        else:
+            declared_remaining_wall_time_ms = (
+                manifest.max_sequence_wall_time_seconds
+                - self._max_resource_cleanup_wall_time_seconds
+                - self._max_post_run_integrity_wall_time_seconds
+            ) * 1000 - consumed_wall_time_ms
+            deadline_ns = self._work_deadline_monotonic_ns
+            actual_remaining_wall_time_ms = max(0, (deadline_ns - time.monotonic_ns()) // 1_000_000)
+            remaining_wall_time_ms = min(
+                declared_remaining_wall_time_ms, actual_remaining_wall_time_ms
+            )
         return StageAdapterContextV1(
             manifest_sha256=self._manifest_sha256,
             sequence_execution_scope="R24_R25_FULL",
@@ -1702,18 +2539,21 @@ class _SequenceExecutorCoreV1:
             - sum(receipt.openai_calls for receipt in self._receipts),
             remaining_cost_usd_micros=manifest.max_sequence_cost_usd_micros
             - sum(receipt.cost_usd_micros for receipt in self._receipts),
-            remaining_wall_time_ms=manifest.max_sequence_wall_time_seconds * 1000
-            - sum(receipt.wall_time_ms for receipt in self._receipts),
-            authority_deadline_monotonic_ns=self._authority_deadline_monotonic_ns,
+            remaining_wall_time_ms=max(0, remaining_wall_time_ms),
+            authority_deadline_monotonic_ns=deadline_ns,
         )
 
     def _cleanup(self, context: StageAdapterContextV1) -> bool:
+        del context
         if self._cleanup_succeeded:
             return True
         self._cleanup_attempted = True
+        cleanup_context = self._context(self._manifest, cleanup=True)
+        started_ns = time.monotonic_ns()
         try:
-            self._adapters.resources.cleanup(context)
+            self._adapters.resources.cleanup(cleanup_context)
         except Exception as exc:
+            self._cleanup_wall_time_ms = (time.monotonic_ns() - started_ns + 999_999) // 1_000_000
             self._cleanup_succeeded = False
             code = getattr(exc, "code", "RESOURCE_CLEANUP_FAILED")
             self._resource_cleanup_failure_code = (
@@ -1727,6 +2567,33 @@ class _SequenceExecutorCoreV1:
                 )
             except Exception:
                 self._resource_cleanup_failure_evidence = None
+            return False
+        elapsed_ns = time.monotonic_ns() - started_ns
+        self._cleanup_wall_time_ms = (elapsed_ns + 999_999) // 1_000_000
+        try:
+            self._resource_cleanup_evidence = (
+                self._adapters.resources.cleanup_success_evidence_preimage()
+            )
+        except Exception:
+            self._resource_cleanup_evidence = None
+        if (
+            elapsed_ns > self._max_resource_cleanup_wall_time_seconds * 1_000_000_000
+            or time.monotonic_ns() > self._cleanup_deadline_monotonic_ns
+            or self._resource_cleanup_evidence is None
+        ):
+            self._cleanup_succeeded = False
+            self._resource_cleanup_failure_code = "RESOURCE_CLEANUP_PROOF_OR_BOUND_FAILED"
+            if self._resource_cleanup_evidence is None:
+                try:
+                    self._resource_cleanup_failure_evidence = (
+                        self._adapters.resources.failure_evidence_preimage(
+                            RunStageV1.RESOURCE_PREFLIGHT
+                        )
+                    )
+                except Exception:
+                    self._resource_cleanup_failure_evidence = None
+            else:
+                self._resource_cleanup_failure_evidence = self._resource_cleanup_evidence
             return False
         self._cleanup_succeeded = True
         self._resource_cleanup_failure_code = None
@@ -1742,6 +2609,10 @@ class _SequenceExecutorCoreV1:
         failure_evidence_preimage: bytes | None,
     ) -> None:
         cleanup_ok = self._cleanup(context)
+        if self._sequence_started_ns is not None:
+            self._sequence_wall_time_ms = (
+                time.monotonic_ns() - self._sequence_started_ns + 999_999
+            ) // 1_000_000
         failure_publish_ok = True
         try:
             self._output.fail(
@@ -1749,12 +2620,22 @@ class _SequenceExecutorCoreV1:
                 failure_code=code,
                 stage_failure_evidence_preimage=failure_evidence_preimage,
                 resource_cleanup_evidence_preimage=(
-                    None if cleanup_ok else self._resource_cleanup_failure_evidence
+                    self._resource_cleanup_evidence
+                    if cleanup_ok
+                    else self._resource_cleanup_failure_evidence
                 ),
                 resource_cleanup_failure_code=(
                     None if cleanup_ok else self._resource_cleanup_failure_code
                 ),
-                resource_cleanup_status=("SUCCEEDED" if cleanup_ok else "RETRY_REQUIRED"),
+                resource_cleanup_status=(
+                    "SUCCEEDED"
+                    if cleanup_ok
+                    else "OWNED_RESOURCES_CLEANED_TENANT_DRIFT"
+                    if self._resource_cleanup_failure_code == "GPU_SHARED_TENANT_DRIFT"
+                    else "RETRY_REQUIRED"
+                ),
+                cleanup_wall_time_ms=self._cleanup_wall_time_ms,
+                sequence_wall_time_ms=self._sequence_wall_time_ms,
             )
         except Exception:
             failure_publish_ok = False
@@ -1768,12 +2649,12 @@ class _SequenceExecutorCoreV1:
         self._state = ExecutorStateV1.FAILED
         if not cleanup_ok:
             raise LiveRunContractError(
-                "EXECUTOR_CLEANUP_FAILED", "executor cleanup did not complete"
+                code, "executor retained the first failure; cleanup also failed"
             ) from None
         if not failure_publish_ok:
             raise LiveRunContractError(
-                "EXECUTOR_FAILURE_PUBLICATION_FAILED",
-                "failure evidence remains in the owner-only recovery directory",
+                code,
+                "executor retained the first failure; failure publication also failed",
             ) from None
         raise LiveRunContractError(code, "executor stopped fail-closed") from None
 
@@ -1785,12 +2666,93 @@ class _SequenceExecutorCoreV1:
     ) -> AdapterStageResultV1:
         if stage is RunStageV1.RESOURCE_PREFLIGHT:
             try:
+                if self._adapters.production:
+                    return self._adapters.resources.prepare(  # type: ignore[call-arg]
+                        manifest.actor_resources,
+                        context,
+                        pilot_switch_authority=self._adapters.pilot_switch_authority,
+                    )
                 return self._adapters.resources.prepare(manifest.actor_resources, context)
-            except Exception:
-                raise _StageFailure(
-                    "RESOURCE_ADAPTER_FAILED",
-                    self._adapters.resources.failure_evidence_preimage(stage),
-                ) from None
+            except Exception as exc:
+                primary_code = _adapter_error_code(exc, "RESOURCE_ADAPTER_FAILED")
+                try:
+                    evidence = self._adapters.resources.failure_evidence_preimage(stage)
+                except Exception as evidence_exc:
+                    evidence = _canonical_bytes(
+                        {
+                            "domain": "r24-r25-full-stage-failure-evidence",
+                            "manifest_sha256": self._manifest_sha256,
+                            "primary_failure_code": primary_code,
+                            "secondary_failure_codes": [
+                                _adapter_error_code(
+                                    evidence_exc,
+                                    "STAGE_FAILURE_EVIDENCE_RETRIEVAL_FAILED",
+                                )
+                            ],
+                            "stage": stage.value,
+                        }
+                    )
+                raise _StageFailure(primary_code, evidence) from None
+        handoff_result: AdapterStageResultV1 | None = None
+        if stage is RunStageV1.MAI_LIVE_SMOKE:
+            try:
+                if (
+                    self._adapters.production
+                    and self._resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+                ):
+                    switch_deadline_ns = min(
+                        context.authority_deadline_monotonic_ns,
+                        time.monotonic_ns()
+                        + self._max_model_switch_wall_time_seconds * 1_000_000_000,
+                    )
+                    handoff_result = self._adapters.resources.handoff_to_mai(  # type: ignore[call-arg]
+                        context,
+                        switch_deadline_monotonic_ns=switch_deadline_ns,
+                    )
+                else:
+                    handoff_result = self._adapters.resources.handoff_to_mai(context)
+            except Exception as exc:
+                primary_code = _adapter_error_code(exc, "QWEN_TO_MAI_HANDOFF_FAILED")
+                try:
+                    evidence = self._adapters.resources.failure_evidence_preimage(stage)
+                except Exception as evidence_exc:
+                    evidence = _canonical_bytes(
+                        {
+                            "domain": "r24-r25-full-stage-failure-evidence",
+                            "manifest_sha256": self._manifest_sha256,
+                            "primary_failure_code": primary_code,
+                            "secondary_failure_codes": [
+                                _adapter_error_code(
+                                    evidence_exc,
+                                    "STAGE_FAILURE_EVIDENCE_RETRIEVAL_FAILED",
+                                )
+                            ],
+                            "stage": stage.value,
+                        }
+                    )
+                raise _StageFailure(primary_code, evidence) from None
+            expected_handoff_units = (
+                ("resource-handoff:QWEN3_VL:MAI_UI",)
+                if self._resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+                else ("resource-handoff:not-required-concurrent",)
+            )
+            if (
+                type(handoff_result) is not AdapterStageResultV1
+                or handoff_result.stage is not RunStageV1.MAI_LIVE_SMOKE
+                or handoff_result.manifest_sha256 != self._manifest_sha256
+                or handoff_result.actor_calls != 0
+                or handoff_result.openai_calls != 0
+                or handoff_result.actor_actions != 0
+                or handoff_result.cost_usd_micros != 0
+                or handoff_result.completed_units != expected_handoff_units
+                or handoff_result.provider_final_request_proven
+            ):
+                raise _StageFailure("INVALID_HANDOFF_RESULT")
+            self._handoff_evidence_sha256 = (
+                handoff_result.evidence_sha256
+                if self._resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+                else None
+            )
         lease: CaseAuthorityBrokerV1
         try:
             lease = self._adapters.secret_leases.acquire(
@@ -1813,8 +2775,10 @@ class _SequenceExecutorCoreV1:
                 pass
             raise _StageFailure("INVALID_CASE_AUTHORITY_BROKER")
         self._secret_leases_acquired += 1
-        adapter_failed = False
+        adapter_failure_code: str | None = None
         failure_evidence: bytes | None = None
+        returned_result_evidence: bytes | None = None
+        secondary_failure_codes: list[str] = []
         result: AdapterStageResultV1 | None = None
         try:
             if stage in {RunStageV1.QWEN_LIVE_SMOKE, RunStageV1.MAI_LIVE_SMOKE}:
@@ -1843,23 +2807,154 @@ class _SequenceExecutorCoreV1:
                     context,
                     lease,
                 )
-        except Exception:
-            adapter_failed = True
+        except Exception as exc:
+            adapter_failure_code = _adapter_error_code(exc, "STAGE_ADAPTER_FAILED")
             failed_adapter: object = (
                 self._adapters.smoke
                 if stage in {RunStageV1.QWEN_LIVE_SMOKE, RunStageV1.MAI_LIVE_SMOKE}
                 else self._adapters.pilot
             )
-            failure_evidence = failed_adapter.failure_evidence_preimage(stage)  # type: ignore[attr-defined]
+            try:
+                candidate_failure = failed_adapter.failure_evidence_preimage(stage)  # type: ignore[attr-defined]
+                if candidate_failure is not None:
+                    if type(candidate_failure) is not bytes:
+                        raise TypeError("failure evidence type differs")
+                    decoded_failure = json.loads(candidate_failure)
+                    if _canonical_bytes(decoded_failure) != candidate_failure:
+                        raise ValueError("failure evidence is not canonical")
+                    failure_evidence = candidate_failure
+            except Exception as evidence_exc:
+                secondary_failure_codes.append(
+                    _adapter_error_code(evidence_exc, "STAGE_FAILURE_EVIDENCE_RETRIEVAL_FAILED")
+                )
+                failure_evidence = None
+        if adapter_failure_code is None:
+            try:
+                if type(result) is not AdapterStageResultV1 or result.stage is not stage:
+                    raise _StageFailure("INVALID_ADAPTER_RESULT")
+                # Preserve a returned durable stage result before performing
+                # executor-side admission.  A later census/budget rejection or
+                # broker-close fault must not discard completed unit journals.
+                returned_result_evidence = result.evidence_preimage
+                self._validate_stage_receipt(
+                    StageExecutionReceiptV1(
+                        stage=stage,
+                        manifest_sha256=result.manifest_sha256,
+                        passed=True,
+                        evidence_sha256=result.evidence_sha256,
+                        actor_calls=result.actor_calls,
+                        openai_calls=result.openai_calls,
+                        actor_actions=result.actor_actions,
+                        cost_usd_micros=result.cost_usd_micros,
+                        wall_time_ms=0,
+                        completed_units=result.completed_units,
+                        provider_final_request_proven=(result.provider_final_request_proven),
+                    ),
+                    manifest,
+                )
+            except _StageFailure as exc:
+                adapter_failure_code = exc.code
+                failure_evidence = returned_result_evidence
+        broker_close_code: str | None = None
         try:
             lease.close()
             self._secret_leases_closed += 1
-        except Exception:
-            raise _StageFailure("CASE_AUTHORITY_BROKER_CLOSE_FAILED") from None
-        if adapter_failed:
-            raise _StageFailure("STAGE_ADAPTER_FAILED", failure_evidence)
-        if type(result) is not AdapterStageResultV1:
-            raise _StageFailure("INVALID_ADAPTER_RESULT")
+        except Exception as exc:
+            broker_close_code = _adapter_error_code(exc, "CASE_AUTHORITY_BROKER_CLOSE_FAILED")
+            if adapter_failure_code is not None:
+                secondary_failure_codes.append(broker_close_code)
+        if adapter_failure_code is not None:
+            if handoff_result is not None:
+                handoff_failure_value = (
+                    None if failure_evidence is None else cast(object, json.loads(failure_evidence))
+                )
+                failure_evidence = _canonical_bytes(
+                    {
+                        "domain": "r24-r25-full-mai-stage-failure-evidence",
+                        "handoff_evidence": json.loads(handoff_result.evidence_preimage),
+                        "handoff_evidence_sha256": handoff_result.evidence_sha256,
+                        "manifest_sha256": self._manifest_sha256,
+                        "smoke_failure_evidence": handoff_failure_value,
+                        "smoke_failure_evidence_sha256": (
+                            None
+                            if failure_evidence is None
+                            else hashlib.sha256(failure_evidence).hexdigest()
+                        ),
+                        "primary_failure_code": adapter_failure_code,
+                        "secondary_failure_codes": secondary_failure_codes,
+                    }
+                )
+            elif returned_result_evidence is not None or secondary_failure_codes:
+                failure_value: object = None
+                failure_value_sha256: str | None = None
+                if failure_evidence is not None:
+                    failure_value = json.loads(failure_evidence)
+                    failure_value_sha256 = hashlib.sha256(failure_evidence).hexdigest()
+                failure_evidence = _canonical_bytes(
+                    {
+                        "adapter_failure_evidence": failure_value,
+                        "adapter_failure_evidence_sha256": failure_value_sha256,
+                        "domain": "r24-r25-full-stage-failure-evidence",
+                        "manifest_sha256": self._manifest_sha256,
+                        "primary_failure_code": adapter_failure_code,
+                        "secondary_failure_codes": secondary_failure_codes,
+                        "stage": stage.value,
+                    }
+                )
+            raise _StageFailure(adapter_failure_code, failure_evidence)
+        if broker_close_code is not None:
+            assert type(result) is AdapterStageResultV1
+            if handoff_result is not None:
+                close_failure_evidence = _canonical_bytes(
+                    {
+                        "domain": "r24-r25-full-mai-stage-failure-evidence",
+                        "handoff_evidence": json.loads(handoff_result.evidence_preimage),
+                        "handoff_evidence_sha256": handoff_result.evidence_sha256,
+                        "manifest_sha256": self._manifest_sha256,
+                        "primary_failure_code": broker_close_code,
+                        "secondary_failure_codes": [],
+                        "smoke_completed_evidence": json.loads(result.evidence_preimage),
+                        "smoke_completed_evidence_sha256": result.evidence_sha256,
+                    }
+                )
+            else:
+                close_failure_evidence = _canonical_bytes(
+                    {
+                        "completed_adapter_evidence": json.loads(result.evidence_preimage),
+                        "completed_adapter_evidence_sha256": result.evidence_sha256,
+                        "domain": "r24-r25-full-stage-failure-evidence",
+                        "manifest_sha256": self._manifest_sha256,
+                        "primary_failure_code": broker_close_code,
+                        "secondary_failure_codes": [],
+                        "stage": stage.value,
+                    }
+                )
+            raise _StageFailure(broker_close_code, close_failure_evidence) from None
+        assert type(result) is AdapterStageResultV1
+        if handoff_result is not None:
+            smoke_evidence = json.loads(result.evidence_preimage)
+            combined = _canonical_bytes(
+                {
+                    "domain": "r24-r25-full-mai-stage-evidence",
+                    "handoff_evidence": json.loads(handoff_result.evidence_preimage),
+                    "handoff_evidence_sha256": handoff_result.evidence_sha256,
+                    "manifest_sha256": self._manifest_sha256,
+                    "smoke_evidence": smoke_evidence,
+                    "smoke_evidence_sha256": result.evidence_sha256,
+                }
+            )
+            result = AdapterStageResultV1(
+                stage=result.stage,
+                manifest_sha256=result.manifest_sha256,
+                evidence_sha256=hashlib.sha256(combined).hexdigest(),
+                evidence_preimage=combined,
+                actor_calls=result.actor_calls,
+                openai_calls=result.openai_calls,
+                actor_actions=result.actor_actions,
+                cost_usd_micros=result.cost_usd_micros,
+                completed_units=result.completed_units,
+                provider_final_request_proven=result.provider_final_request_proven,
+            )
         return result
 
     def _validate_stage_receipt(
@@ -1888,6 +2983,14 @@ class _SequenceExecutorCoreV1:
                 else PilotHostV1.MAI_UI
             )
             plan = next(plan for plan in manifest.smoke_plans if plan.host is host)
+            handoff_seconds = (
+                self._max_model_switch_wall_time_seconds
+                if (
+                    host is PilotHostV1.MAI_UI
+                    and self._resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+                )
+                else 0
+            )
             minimum_openai_calls = sum(
                 0 if case.mode is SmokeModeV1.OFF else 2 for case in plan.cases
             )
@@ -1898,7 +3001,7 @@ class _SequenceExecutorCoreV1:
                 and receipt.actor_actions == 0
                 and receipt.cost_usd_micros <= sum(case.max_cost_usd_micros for case in plan.cases)
                 and receipt.wall_time_ms
-                <= sum(case.max_wall_time_seconds for case in plan.cases) * 1000
+                <= (sum(case.max_wall_time_seconds for case in plan.cases) + handoff_seconds) * 1000
                 and receipt.provider_final_request_proven
             )
         else:
@@ -1909,7 +3012,15 @@ class _SequenceExecutorCoreV1:
                 and receipt.openai_calls <= manifest.pilot.max_total_openai_calls
                 and receipt.actor_actions <= receipt.actor_calls
                 and receipt.cost_usd_micros <= manifest.pilot.max_total_cost_usd_micros
-                and receipt.wall_time_ms <= manifest.pilot.max_total_wall_time_seconds * 1000
+                and receipt.wall_time_ms
+                <= (
+                    manifest.pilot.max_total_wall_time_seconds
+                    + (
+                        max(0, self._max_model_switches - 1)
+                        * self._max_model_switch_wall_time_seconds
+                    )
+                )
+                * 1000
                 and receipt.provider_final_request_proven
             )
         if not valid:
@@ -1930,10 +3041,12 @@ class _SequenceExecutorCoreV1:
     ) -> StageExecutionReceiptV1:
         with self._lock:
             trusted_manifest = self._manifest
-            context = self._context(trusted_manifest)
             current_stage_preimage: bytes | None = None
             if self._state in {ExecutorStateV1.COMPLETE, ExecutorStateV1.FAILED}:
                 raise LiveRunContractError("EXECUTOR_STOPPED", "executor is terminal")
+            if self._sequence_started_ns is None:
+                self._sequence_started_ns = time.monotonic_ns()
+            context = self._context(trusted_manifest)
             try:
                 if (
                     type(stage) is not RunStageV1
@@ -1947,12 +3060,64 @@ class _SequenceExecutorCoreV1:
                     raise _StageFailure("STAGE_ORDER_VIOLATION")
                 if time.monotonic_ns() >= context.authority_deadline_monotonic_ns:
                     raise _StageFailure("OWNER_AUTHORITY_EXPIRED")
+                required_stage_seconds = (
+                    trusted_manifest.max_resource_preflight_wall_time_seconds
+                    if stage is RunStageV1.RESOURCE_PREFLIGHT
+                    else (
+                        sum(
+                            case.max_wall_time_seconds
+                            for plan in trusted_manifest.smoke_plans
+                            if plan.host
+                            is (
+                                PilotHostV1.QWEN3_VL
+                                if stage is RunStageV1.QWEN_LIVE_SMOKE
+                                else PilotHostV1.MAI_UI
+                            )
+                            for case in plan.cases
+                        )
+                        + (
+                            self._max_model_switch_wall_time_seconds
+                            if stage is RunStageV1.MAI_LIVE_SMOKE
+                            and self._resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+                            else 0
+                        )
+                        if stage in {RunStageV1.QWEN_LIVE_SMOKE, RunStageV1.MAI_LIVE_SMOKE}
+                        else trusted_manifest.pilot.max_total_wall_time_seconds
+                        + max(0, self._max_model_switches - 1)
+                        * self._max_model_switch_wall_time_seconds
+                    )
+                )
+                if context.remaining_wall_time_ms < required_stage_seconds * 1000:
+                    raise _StageFailure("STAGE_WALL_RESERVATION_UNAVAILABLE")
+                started_ns = time.monotonic_ns()
+                if stage is RunStageV1.RESOURCE_PREFLIGHT:
+                    stage_deadline_ns = min(
+                        context.authority_deadline_monotonic_ns,
+                        started_ns + required_stage_seconds * 1_000_000_000,
+                    )
+                    stage_remaining_wall_time_ms = max(
+                        0, (stage_deadline_ns - started_ns) // 1_000_000
+                    )
+                    context = StageAdapterContextV1(
+                        manifest_sha256=context.manifest_sha256,
+                        sequence_execution_scope=context.sequence_execution_scope,
+                        sequence_scope_authority_sha256=(context.sequence_scope_authority_sha256),
+                        run_id=context.run_id,
+                        source_commit=context.source_commit,
+                        remaining_actor_calls=context.remaining_actor_calls,
+                        remaining_openai_calls=context.remaining_openai_calls,
+                        remaining_cost_usd_micros=context.remaining_cost_usd_micros,
+                        remaining_wall_time_ms=min(
+                            context.remaining_wall_time_ms,
+                            stage_remaining_wall_time_ms,
+                        ),
+                        authority_deadline_monotonic_ns=stage_deadline_ns,
+                    )
                 self._state = ExecutorStateV1.RUNNING
                 try:
                     self._output.begin()
                 except Exception:
                     raise _StageFailure("OUTPUT_TRANSACTION_FAILED") from None
-                started_ns = time.monotonic_ns()
                 result = self._adapter_result(stage, trusted_manifest, context)
                 current_stage_preimage = result.evidence_preimage
                 elapsed_ms = (time.monotonic_ns() - started_ns + 999_999) // 1_000_000
@@ -1978,9 +3143,57 @@ class _SequenceExecutorCoreV1:
                     raise _StageFailure("OUTPUT_TRANSACTION_FAILED") from None
                 if stage is RunStageV1.R25_PILOT:
                     if not self._cleanup(context):
-                        raise _StageFailure("EXECUTOR_CLEANUP_FAILED")
+                        raise _StageFailure(
+                            self._resource_cleanup_failure_code or "EXECUTOR_CLEANUP_FAILED"
+                        )
+                    assert self._resource_cleanup_evidence is not None
                     try:
-                        self._output.commit()
+                        self._output.record_cleanup_success(self._resource_cleanup_evidence)
+                    except Exception:
+                        raise _StageFailure("CLEANUP_PUBLICATION_FAILED") from None
+                    terminal_receipts = tuple((*self._receipts, receipt))
+                    terminal_result = SequenceRunResultV1(
+                        schema_version=R24_R25_SEQUENCE_RESULT_SCHEMA_VERSION,
+                        run_id=self._run_id,
+                        manifest_sha256=self._manifest_sha256,
+                        status=SequenceStatusV1.COMPLETE,
+                        receipts=terminal_receipts,
+                        failed_stage=None,
+                        failure_code=None,
+                    )
+                    terminal_census: dict[str, object] = {
+                        "actor_actions": sum(item.actor_actions for item in terminal_receipts),
+                        "actor_calls": sum(item.actor_calls for item in terminal_receipts),
+                        "cleanup_wall_time_ms": self._cleanup_wall_time_ms,
+                        "cost_usd_micros": sum(item.cost_usd_micros for item in terminal_receipts),
+                        "openai_calls": sum(item.openai_calls for item in terminal_receipts),
+                        "handoff_evidence_sha256": self._handoff_evidence_sha256,
+                        "receipts": list(terminal_receipts),
+                        "secret_leases_acquired": self._secret_leases_acquired,
+                        "secret_leases_closed": self._secret_leases_closed,
+                        "stage_wall_time_ms": sum(item.wall_time_ms for item in terminal_receipts),
+                    }
+                    assert self._sequence_started_ns is not None
+                    self._sequence_wall_time_ms = (
+                        time.monotonic_ns() - self._sequence_started_ns + 999_999
+                    ) // 1_000_000
+                    terminal_census["wall_time_ms"] = self._sequence_wall_time_ms
+                    terminal_wall_time_ms = self._sequence_wall_time_ms
+                    if (
+                        terminal_wall_time_ms
+                        > trusted_manifest.max_sequence_wall_time_seconds * 1000
+                        or (
+                            self._resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+                            and self._handoff_evidence_sha256 is None
+                        )
+                    ):
+                        raise _StageFailure("SEQUENCE_BUDGET_OR_HANDOFF_EVIDENCE_MISMATCH")
+                    try:
+                        self._output.commit(
+                            terminal_result,
+                            census=terminal_census,
+                            publication_deadline_monotonic_ns=(self._cleanup_deadline_monotonic_ns),
+                        )
                     except Exception:
                         raise _StageFailure("OUTPUT_TRANSACTION_FAILED") from None
                     self._state = ExecutorStateV1.COMPLETE
@@ -2018,13 +3231,48 @@ class _SequenceExecutorCoreV1:
                 openai_calls=sum(receipt.openai_calls for receipt in self._receipts),
                 actor_actions=sum(receipt.actor_actions for receipt in self._receipts),
                 cost_usd_micros=sum(receipt.cost_usd_micros for receipt in self._receipts),
-                wall_time_ms=sum(receipt.wall_time_ms for receipt in self._receipts),
+                wall_time_ms=(
+                    self._sequence_wall_time_ms
+                    if self._sequence_wall_time_ms
+                    else sum(receipt.wall_time_ms for receipt in self._receipts)
+                ),
                 secret_leases_acquired=self._secret_leases_acquired,
                 secret_leases_closed=self._secret_leases_closed,
                 cleanup_attempted=self._cleanup_attempted,
                 cleanup_succeeded=self._cleanup_succeeded,
                 output_committed=self._output.committed,
             )
+
+    @property
+    def sequence_started_monotonic_ns(self) -> int:
+        with self._lock:
+            if self._sequence_started_ns is None:
+                raise LiveRunContractError(
+                    "SEQUENCE_NOT_STARTED", "sequence start is not yet frozen"
+                )
+            return self._sequence_started_ns
+
+    @property
+    def post_run_integrity_deadline_monotonic_ns(self) -> int:
+        """Absolute deadline left after execution and cleanup for the sealed gate."""
+
+        return self._post_run_integrity_deadline_monotonic_ns
+
+    @property
+    def post_run_integrity_output_root(self) -> Path:
+        return self._output.output_root
+
+    @property
+    def preflight_report_sha256(self) -> str:
+        return self._preflight_report_sha256
+
+    @property
+    def factory_binding_sha256(self) -> str:
+        return self._factory_binding_sha256
+
+    @property
+    def runtime_config_sha256(self) -> str:
+        return self._runtime_config_sha256
 
 
 class ProductionR24R25ExecutorV1(_SequenceExecutorCoreV1):
@@ -2035,6 +3283,12 @@ class ProductionR24R25ExecutorV1(_SequenceExecutorCoreV1):
         manifest: R24R25RunAuthorityManifestV1,
         *,
         confirmed_manifest_sha256: str,
+        preflight_report_sha256: str,
+        factory_binding_sha256: str,
+        confirmed_runtime_config_sha256: str,
+        resource_cleanup_upper_bound_seconds: int,
+        resource_cleanup_upper_bound_preimage: bytes,
+        resource_cleanup_upper_bound_sha256: str,
         repository_root: Path,
         module_owned_adapters: object,
         seal: object | None = None,
@@ -2051,6 +3305,12 @@ class ProductionR24R25ExecutorV1(_SequenceExecutorCoreV1):
         super().__init__(
             manifest,
             confirmed_manifest_sha256=confirmed_manifest_sha256,
+            preflight_report_sha256=preflight_report_sha256,
+            factory_binding_sha256=factory_binding_sha256,
+            confirmed_runtime_config_sha256=confirmed_runtime_config_sha256,
+            resource_cleanup_upper_bound_seconds=resource_cleanup_upper_bound_seconds,
+            resource_cleanup_upper_bound_preimage=resource_cleanup_upper_bound_preimage,
+            resource_cleanup_upper_bound_sha256=resource_cleanup_upper_bound_sha256,
             repository_root=repository_root,
             adapters=module_owned_adapters,
         )
@@ -3143,9 +4403,18 @@ class _CpuSecretLeaseProviderV1:
             raise RuntimeError("CPU lease unavailable")
         self._acquisitions += 1
         fail_close = (
-            self._fault is CpuTestFaultV1.QWEN_CASE_BROKER_CLOSE_FAILURE and self._acquisitions == 1
-        ) or (
-            self._fault is CpuTestFaultV1.MAI_CASE_BROKER_CLOSE_FAILURE and self._acquisitions == 2
+            (
+                self._fault is CpuTestFaultV1.QWEN_CASE_BROKER_CLOSE_FAILURE
+                and self._acquisitions == 1
+            )
+            or (
+                self._fault is CpuTestFaultV1.MAI_CASE_BROKER_CLOSE_FAILURE
+                and self._acquisitions == 2
+            )
+            or (
+                self._fault is CpuTestFaultV1.PILOT_CASE_BROKER_CLOSE_FAILURE
+                and self._acquisitions == 3
+            )
         )
         return _CpuLeaseV1(
             manifest_sha256,
@@ -3208,6 +4477,31 @@ class _CpuResourceAdapterV1:
         )
 
     def cleanup(self, context: StageAdapterContextV1) -> None:
+        if self._fault is CpuTestFaultV1.RESOURCE_CLEANUP_TENANT_DRIFT:
+            self._failure_evidence = _canonical_bytes(
+                {
+                    "domain": "production-resource-cleanup-failure-evidence",
+                    "value": {
+                        "cleanup_outcome": ("OWNED_RESOURCES_RECLAIMED_TENANT_DRIFT"),
+                        "failure_code": "GPU_SHARED_TENANT_DRIFT",
+                        "final_shared_gpu_attestation": {
+                            "processes": [
+                                {
+                                    "pid": 42_999,
+                                    "start_time_ticks": 900_001,
+                                    "uid": os.getuid(),
+                                }
+                            ]
+                        },
+                        "manifest_sha256": context.manifest_sha256,
+                        "status": "FAILED_TENANT_CONTINUITY",
+                    },
+                }
+            )
+            raise LiveRunContractError(
+                "GPU_SHARED_TENANT_DRIFT",
+                "CPU cleanup fixture retained a foreign-tenant continuity anomaly",
+            )
         if self._fault in {
             CpuTestFaultV1.RESOURCE_CLEANUP_FAILURE,
             CpuTestFaultV1.QWEN_SMOKE_AND_RESOURCE_CLEANUP_FAILURE,
@@ -3389,17 +4683,49 @@ class CpuTestR24R25ExecutorV1(_SequenceExecutorCoreV1):
     ) -> None:
         if seal is not _MODULE_SEAL or type(fault) is not CpuTestFaultV1:
             raise ValueError("CPU executor must be created by its module-owned factory")
+        if manifest.schema_version != R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2:
+            raise ValueError("CPU full executor requires exact v2 authority")
+        assert manifest.runtime_config_sha256 is not None
+        assert manifest.resource_topology is not None
+        assert manifest.max_resource_cleanup_wall_time_seconds is not None
         bundle = _AdapterBundleV1(
             seal=_MODULE_SEAL,
             resources=_CpuResourceAdapterV1(fault),
             smoke=_CpuSmokeAdapterV1(fault),
             pilot=_CpuPilotAdapterV1(fault),
             secret_leases=_CpuSecretLeaseProviderV1(fault),
+            pilot_switch_authority=None,
+            pilot_switch_authority_sha256=None,
             production=False,
+        )
+        cleanup_upper_bound_preimage = _canonical_bytes(
+            {
+                "domain": "cpu-test-full-resource-cleanup-bound",
+                "schema_version": LIVE_EXECUTOR_BINDING_SCHEMA_VERSION,
+                "value": {
+                    "cleanup_upper_bound_seconds": (
+                        manifest.max_resource_cleanup_wall_time_seconds
+                    ),
+                    "resource_topology": manifest.resource_topology,
+                    "runtime_config_sha256": manifest.runtime_config_sha256,
+                },
+            }
         )
         super().__init__(
             manifest,
             confirmed_manifest_sha256=confirmed_manifest_sha256,
+            preflight_report_sha256=hashlib.sha256(
+                f"CPU_FULL_PREFLIGHT\0{confirmed_manifest_sha256}".encode()
+            ).hexdigest(),
+            factory_binding_sha256=hashlib.sha256(
+                f"CPU_FULL_FACTORY\0{confirmed_manifest_sha256}".encode()
+            ).hexdigest(),
+            confirmed_runtime_config_sha256=manifest.runtime_config_sha256,
+            resource_cleanup_upper_bound_seconds=(manifest.max_resource_cleanup_wall_time_seconds),
+            resource_cleanup_upper_bound_preimage=cleanup_upper_bound_preimage,
+            resource_cleanup_upper_bound_sha256=hashlib.sha256(
+                cleanup_upper_bound_preimage
+            ).hexdigest(),
             repository_root=repository_root,
             adapters=bundle,
         )
@@ -3500,6 +4826,8 @@ def build_production_executor_v1(
     manifest: R24R25RunAuthorityManifestV1,
     *,
     confirmed_manifest_sha256: str,
+    factory: object,
+    confirmed_runtime_config_sha256: str,
     repository_root: Path,
     resource_adapter: object,
     driver_adapters: object,
@@ -3512,15 +4840,32 @@ def build_production_executor_v1(
     """
 
     from mobile_world.runtime.sentinel.r2_4.production_driver import (
+        PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V2,
         ProductionCaseAuthorityBrokerProviderV1,
         ProductionDriverAdaptersV1,
         ProductionResourceLifecycleAdapterV1,
+        ProductionResourceTopologyV1,
+        build_production_pilot_switch_authority_v1,
+        production_pilot_switch_authority_sha256,
+    )
+    from mobile_world.runtime.sentinel.r2_4.production_preflight import (
+        ProductionPostPreflightFactoryV1,
     )
 
     if type(resource_adapter) is not ProductionResourceLifecycleAdapterV1:
         raise LiveRunContractError(
             "PRODUCTION_RESOURCE_ADAPTER_REQUIRED",
             "exact production resource adapter is required",
+        )
+    if (
+        type(factory) is not ProductionPostPreflightFactoryV1
+        or factory.manifest_sha256 != confirmed_manifest_sha256
+        or factory.runtime_config_sha256 != confirmed_runtime_config_sha256
+        or factory.sequence_execution_scope is not SequenceExecutionScopeV1.R24_R25_FULL
+    ):
+        raise LiveRunContractError(
+            "POST_PREFLIGHT_FACTORY_BINDING_MISMATCH",
+            "full executor requires the exact runtime-bound post-preflight factory",
         )
     if type(driver_adapters) is not ProductionDriverAdaptersV1:
         raise LiveRunContractError(
@@ -3537,17 +4882,55 @@ def build_production_executor_v1(
             "CASE_AUTHORITY_BROKER_REQUIRED",
             "exact post-preflight case authority broker is required",
         )
+    cleanup_seconds, cleanup_preimage, cleanup_sha256 = _production_cleanup_bound_seconds(
+        resource_adapter,
+        expected_schema_version=PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V2,
+        runtime_config_sha256=confirmed_runtime_config_sha256,
+        full_bound=True,
+    )
+    if (
+        cleanup_seconds != manifest.max_resource_cleanup_wall_time_seconds
+        or cleanup_sha256 != manifest.resource_cleanup_upper_bound_sha256
+        or resource_adapter.resource_topology.value != manifest.resource_topology
+    ):
+        raise LiveRunContractError(
+            "RESOURCE_CLEANUP_BOUND_MISMATCH",
+            "executor resource proof differs from owner manifest",
+        )
+    pilot_switch_authority: object | None = None
+    pilot_switch_authority_sha256: str | None = None
+    if (
+        resource_adapter.resource_topology
+        is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+    ):
+        pilot_switch_authority = build_production_pilot_switch_authority_v1(
+            factory=factory,
+            resource_lifecycle=resource_adapter,
+            confirmed_runtime_config_sha256=confirmed_runtime_config_sha256,
+            confirmed_cleanup_upper_bound_sha256=cleanup_sha256,
+        )
+        pilot_switch_authority_sha256 = production_pilot_switch_authority_sha256(
+            pilot_switch_authority
+        )
     bundle = _AdapterBundleV1(
         seal=_MODULE_SEAL,
         resources=resource_adapter,
         smoke=driver_adapters.smoke,
         pilot=driver_adapters.pilot,
         secret_leases=case_authority_broker_provider,
+        pilot_switch_authority=pilot_switch_authority,
+        pilot_switch_authority_sha256=pilot_switch_authority_sha256,
         production=True,
     )
     return ProductionR24R25ExecutorV1(
         manifest,
         confirmed_manifest_sha256=confirmed_manifest_sha256,
+        preflight_report_sha256=factory.preflight_report_sha256,
+        factory_binding_sha256=factory.factory_binding_sha256,
+        confirmed_runtime_config_sha256=confirmed_runtime_config_sha256,
+        resource_cleanup_upper_bound_seconds=cleanup_seconds,
+        resource_cleanup_upper_bound_preimage=cleanup_preimage,
+        resource_cleanup_upper_bound_sha256=cleanup_sha256,
         repository_root=repository_root,
         module_owned_adapters=bundle,
         seal=_PRODUCTION_EXECUTOR_SEAL,
@@ -3559,11 +4942,13 @@ def _production_cleanup_bound_seconds(
     *,
     expected_schema_version: str,
     runtime_config_sha256: str,
+    full_bound: bool = False,
 ) -> tuple[int, bytes, str]:
     try:
-        upper_bound = getattr(resource_adapter, "cleanup_upper_bound_seconds")
-        preimage = getattr(resource_adapter, "cleanup_upper_bound_preimage")
-        confirmed_sha256 = getattr(resource_adapter, "cleanup_upper_bound_sha256")
+        prefix = "full_cleanup" if full_bound else "cleanup"
+        upper_bound = getattr(resource_adapter, f"{prefix}_upper_bound_seconds")
+        preimage = getattr(resource_adapter, f"{prefix}_upper_bound_preimage")
+        confirmed_sha256 = getattr(resource_adapter, f"{prefix}_upper_bound_sha256")
     except Exception as exc:
         raise LiveRunContractError(
             "RESOURCE_CLEANUP_BOUND_MISMATCH",
@@ -3571,7 +4956,7 @@ def _production_cleanup_bound_seconds(
         ) from exc
     if (
         type(upper_bound) is not int
-        or upper_bound < R24_SMOKE_MIN_CLEANUP_RESERVE_SECONDS
+        or upper_bound < 1
         or type(preimage) is not bytes
         or not preimage
         or len(preimage) > 64 * 1024
@@ -3625,6 +5010,8 @@ def _production_cleanup_bound_seconds(
         "runtime_config_sha256",
         "shutdown_grace_seconds",
     }
+    if full_bound:
+        expected_keys.add("maximum_model_cleanup_count")
     integer_keys = expected_keys - {"resource_topology", "runtime_config_sha256"}
     if set(projection) != expected_keys or any(
         type(projection.get(key)) is not int for key in integer_keys
@@ -3644,8 +5031,21 @@ def _production_cleanup_bound_seconds(
     admitted_backend = max(3 * docker_timeout, shutdown + 2 * docker_timeout)
     pending_backend = 7 * docker_timeout
     backend = max(admitted_backend, pending_backend)
-    final_attestation = 4 * nvidia_timeout
-    recomputed = model + backend + final_attestation
+    topology = projection["resource_topology"]
+    maximum_model_cleanup_count = (
+        (
+            1
+            if topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+            else 2
+            if topology == "INDEPENDENT_GPU_CONCURRENT"
+            else 0
+        )
+        if full_bound
+        else (1 if topology == "SINGLE_GPU_SEQUENTIAL_SHARED" else 0)
+    )
+    final_attestation_slots = 4 if topology == "SINGLE_GPU_SEQUENTIAL_SHARED" else 0
+    final_attestation = final_attestation_slots * nvidia_timeout
+    recomputed = maximum_model_cleanup_count * model + backend + final_attestation
     if (
         shutdown < 1
         or poll_ms < 1
@@ -3655,7 +5055,9 @@ def _production_cleanup_bound_seconds(
         or projection["model_port_wait_slots"] != 1
         or projection["model_session_wait_slots"] != 2
         or projection["pending_backend_cleanup_command_slots"] != 7
-        or projection["final_shared_gpu_attestation_command_slots"] != 4
+        or maximum_model_cleanup_count == 0
+        or (full_bound and projection["maximum_model_cleanup_count"] != maximum_model_cleanup_count)
+        or projection["final_shared_gpu_attestation_command_slots"] != final_attestation_slots
         or projection["admitted_model_cleanup_upper_bound_seconds"] != admitted_model
         or projection["partial_model_cleanup_upper_bound_seconds"] != partial_model
         or projection["model_cleanup_upper_bound_seconds"] != model
@@ -3665,7 +5067,6 @@ def _production_cleanup_bound_seconds(
         or projection["final_shared_gpu_attestation_upper_bound_seconds"] != final_attestation
         or projection["cleanup_upper_bound_seconds"] != recomputed
         or recomputed != upper_bound
-        or projection["resource_topology"] != "SINGLE_GPU_SEQUENTIAL_SHARED"
         or projection["runtime_config_sha256"] != runtime_config_sha256
     ):
         raise LiveRunContractError(

@@ -51,6 +51,8 @@
         "frozen_pilot_manifest",
         "frozen_pilot_manifest_sha256",
         "gui_only_task_source_byte_count",
+        "gui_only_task_source_freeze",
+        "gui_only_task_source_freeze_sha256",
         "gui_only_task_source_sha256",
         "schema_version",
         "topology_comparison_artifact",
@@ -59,7 +61,14 @@
       ],
       "properties": {
         "authority_manifest": {
-          "$ref": "https://agentsentinel.local/schemas/r2_4/run_authority_manifest.v1.schema.json"
+          "oneOf": [
+            {
+              "$ref": "https://agentsentinel.local/schemas/r2_4/run_authority_manifest.v1.schema.json"
+            },
+            {
+              "$ref": "https://agentsentinel.local/schemas/r2_4/run_authority_manifest.v2.schema.json"
+            }
+          ]
         },
         "authority_manifest_sha256": {"$ref": "#/$defs/sha256"},
         "authority_status": {"const": "DRAFT_NOT_AUTHORIZED"},
@@ -86,7 +95,7 @@
         },
         "executable_task_source_sha256": {"$ref": "#/$defs/sha256"},
         "frozen_pilot_manifest": {
-          "$ref": "https://agentsentinel.local/schemas/r2_5/frozen_pilot_manifest.v1.schema.json"
+          "$ref": "https://agentsentinel.local/schemas/r2_5/frozen_pilot_manifest.v2.schema.json"
         },
         "frozen_pilot_manifest_sha256": {"$ref": "#/$defs/sha256"},
         "gui_only_task_source_byte_count": {
@@ -94,6 +103,33 @@
           "minimum": 1,
           "maximum": 8388608
         },
+        "gui_only_task_source_freeze": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "historical_manifest_byte_count",
+            "historical_manifest_path",
+            "historical_manifest_sha256",
+            "schema_version",
+            "task_count",
+            "task_source_byte_count",
+            "task_source_sha256",
+            "trial",
+            "trial_provenance"
+          ],
+          "properties": {
+            "historical_manifest_byte_count": {"type": "integer", "minimum": 1, "maximum": 33554432},
+            "historical_manifest_path": {"type": "string", "pattern": "^/[^\\u0000]+$"},
+            "historical_manifest_sha256": {"$ref": "#/$defs/sha256"},
+            "schema_version": {"const": "mobileworld.runtime.sentinel-r2.5-gui-only-task-source-freeze/v1"},
+            "task_count": {"const": 117},
+            "task_source_byte_count": {"type": "integer", "minimum": 1, "maximum": 8388608},
+            "task_source_sha256": {"$ref": "#/$defs/sha256"},
+            "trial": {"const": 1},
+            "trial_provenance": {"const": "NEW_R25_DECLARATION_NOT_HISTORICAL_DERIVATION"}
+          }
+        },
+        "gui_only_task_source_freeze_sha256": {"$ref": "#/$defs/sha256"},
         "gui_only_task_source_sha256": {"$ref": "#/$defs/sha256"},
         "schema_version": {
           "const": "mobileworld.runtime.sentinel-r2.4-r2.5-artifacts/v1"

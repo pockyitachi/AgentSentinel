@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_sha256
 from mobile_world.runtime.sentinel.r2_4.live_run import (
+    R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2,
     HostLiveSmokePlanV1,
     LiveSmokeCaseV1,
     OpenAIResponsesStageV1,
@@ -47,6 +48,7 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     inspect_local_resources,
     parse_authority_manifest,
     preflight_report_projection,
+    production_sentinel_config_sha256_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.smoke_run import (
     R24SmokeRunAuthorityManifestV1,
@@ -174,6 +176,19 @@ class ProductionPreflightReportV1:
     source_commit: str
     checked_at_utc: str
     authority_expires_at_utc: str
+    authorized_stages: tuple[RunStageV1, ...]
+    execution_scope: SequenceExecutionScopeV1
+    runtime_config_sha256: str
+    pricing_sha256: str
+    sentinel_config_sha256: str
+    resource_topology: str
+    resource_cleanup_upper_bound_seconds: int
+    resource_cleanup_upper_bound_sha256: str
+    max_model_switches: int
+    max_model_switch_wall_time_seconds: int
+    max_total_model_switch_wall_time_seconds: int
+    max_post_run_integrity_wall_time_seconds: int
+    max_sequence_wall_time_seconds: int
     base_preflight_sha256: str
     declared_snapshot_tree_sha256s: tuple[str, ...]
     actor_loopback_ports: tuple[int, ...]
@@ -205,6 +220,57 @@ class ProductionPreflightReportV1:
             raise ValueError("source_commit must be full lowercase SHA-1")
         _timestamp(_require_timestamp(self.checked_at_utc, "checked_at_utc"))
         _timestamp(_require_timestamp(self.authority_expires_at_utc, "authority_expires_at_utc"))
+        if self.authorized_stages != (
+            RunStageV1.RESOURCE_PREFLIGHT,
+            RunStageV1.QWEN_LIVE_SMOKE,
+            RunStageV1.MAI_LIVE_SMOKE,
+            RunStageV1.R25_PILOT,
+        ):
+            raise ValueError("full preflight stage authority differs")
+        if self.execution_scope is not SequenceExecutionScopeV1.R24_R25_FULL:
+            raise ValueError("full preflight execution scope differs")
+        _require_sha256(self.runtime_config_sha256, "runtime_config_sha256")
+        _require_sha256(self.pricing_sha256, "pricing_sha256")
+        _require_sha256(self.sentinel_config_sha256, "sentinel_config_sha256")
+        if self.sentinel_config_sha256 != production_sentinel_config_sha256_v1():
+            raise ValueError("production Sentinel config binding differs")
+        if self.resource_topology not in {
+            "INDEPENDENT_GPU_CONCURRENT",
+            "SINGLE_GPU_SEQUENTIAL_SHARED",
+        }:
+            raise ValueError("full preflight resource topology differs")
+        if (
+            type(self.resource_cleanup_upper_bound_seconds) is not int
+            or not 1 <= self.resource_cleanup_upper_bound_seconds <= 86_400
+        ):
+            raise ValueError("full preflight cleanup bound differs")
+        _require_sha256(
+            self.resource_cleanup_upper_bound_sha256,
+            "resource_cleanup_upper_bound_sha256",
+        )
+        for value, name, maximum in (
+            (self.max_model_switches, "max_model_switches", 61),
+            (
+                self.max_model_switch_wall_time_seconds,
+                "max_model_switch_wall_time_seconds",
+                3_600,
+            ),
+            (
+                self.max_total_model_switch_wall_time_seconds,
+                "max_total_model_switch_wall_time_seconds",
+                219_600,
+            ),
+            (
+                self.max_post_run_integrity_wall_time_seconds,
+                "max_post_run_integrity_wall_time_seconds",
+                86_400,
+            ),
+            (self.max_sequence_wall_time_seconds, "max_sequence_wall_time_seconds", 604_800),
+        ):
+            if type(value) is not int or not 0 <= value <= maximum:
+                raise ValueError(f"{name} differs")
+        if self.max_sequence_wall_time_seconds < 1:
+            raise ValueError("max_sequence_wall_time_seconds differs")
         _require_sha256(self.base_preflight_sha256, "base_preflight_sha256")
         if (
             type(self.declared_snapshot_tree_sha256s) is not tuple
@@ -283,6 +349,19 @@ def _trusted_report(value: ProductionPreflightReportV1) -> ProductionPreflightRe
         source_commit=value.source_commit,
         checked_at_utc=value.checked_at_utc,
         authority_expires_at_utc=value.authority_expires_at_utc,
+        authorized_stages=tuple(value.authorized_stages),
+        execution_scope=value.execution_scope,
+        runtime_config_sha256=value.runtime_config_sha256,
+        pricing_sha256=value.pricing_sha256,
+        sentinel_config_sha256=value.sentinel_config_sha256,
+        resource_topology=value.resource_topology,
+        resource_cleanup_upper_bound_seconds=value.resource_cleanup_upper_bound_seconds,
+        resource_cleanup_upper_bound_sha256=value.resource_cleanup_upper_bound_sha256,
+        max_model_switches=value.max_model_switches,
+        max_model_switch_wall_time_seconds=value.max_model_switch_wall_time_seconds,
+        max_total_model_switch_wall_time_seconds=(value.max_total_model_switch_wall_time_seconds),
+        max_post_run_integrity_wall_time_seconds=(value.max_post_run_integrity_wall_time_seconds),
+        max_sequence_wall_time_seconds=value.max_sequence_wall_time_seconds,
         base_preflight_sha256=value.base_preflight_sha256,
         declared_snapshot_tree_sha256s=tuple(value.declared_snapshot_tree_sha256s),
         actor_loopback_ports=tuple(value.actor_loopback_ports),
@@ -315,6 +394,7 @@ def production_preflight_report_projection(
         "actor_actions": trusted.actor_actions,
         "actor_loopback_ports": list(trusted.actor_loopback_ports),
         "all_checks_passed": trusted.all_checks_passed,
+        "authorized_stages": [stage.value for stage in trusted.authorized_stages],
         "authority_expires_at_utc": trusted.authority_expires_at_utc,
         "backend_operations": trusted.backend_operations,
         "base_preflight_sha256": trusted.base_preflight_sha256,
@@ -330,13 +410,29 @@ def production_preflight_report_projection(
         "declared_snapshot_tree_sha256s": list(trusted.declared_snapshot_tree_sha256s),
         "docker_operations": trusted.docker_operations,
         "eligible_for_post_preflight_factory": trusted.eligible_for_post_preflight_factory,
+        "execution_scope": trusted.execution_scope.value,
         "endpoint_connections": trusted.endpoint_connections,
         "files_written": trusted.files_written,
         "gpu_operations": trusted.gpu_operations,
         "manifest_sha256": trusted.manifest_sha256,
+        "max_model_switch_wall_time_seconds": trusted.max_model_switch_wall_time_seconds,
+        "max_model_switches": trusted.max_model_switches,
+        "max_post_run_integrity_wall_time_seconds": (
+            trusted.max_post_run_integrity_wall_time_seconds
+        ),
+        "max_sequence_wall_time_seconds": trusted.max_sequence_wall_time_seconds,
+        "max_total_model_switch_wall_time_seconds": (
+            trusted.max_total_model_switch_wall_time_seconds
+        ),
         "model_loads": trusted.model_loads,
         "pilot_task_manifest_sha256": trusted.pilot_task_manifest_sha256,
+        "pricing_sha256": trusted.pricing_sha256,
         "production_activation_available": trusted.production_activation_available,
+        "resource_cleanup_upper_bound_seconds": (trusted.resource_cleanup_upper_bound_seconds),
+        "resource_cleanup_upper_bound_sha256": (trusted.resource_cleanup_upper_bound_sha256),
+        "resource_topology": trusted.resource_topology,
+        "runtime_config_sha256": trusted.runtime_config_sha256,
+        "sentinel_config_sha256": trusted.sentinel_config_sha256,
         "run_id": trusted.run_id,
         "schema_version": trusted.schema_version,
         "secret_content_reads": trusted.secret_content_reads,
@@ -358,6 +454,7 @@ def _restore_production_preflight_report(
         "actor_actions",
         "actor_loopback_ports",
         "all_checks_passed",
+        "authorized_stages",
         "authority_expires_at_utc",
         "backend_operations",
         "base_preflight_sha256",
@@ -366,13 +463,25 @@ def _restore_production_preflight_report(
         "declared_snapshot_tree_sha256s",
         "docker_operations",
         "eligible_for_post_preflight_factory",
+        "execution_scope",
         "endpoint_connections",
         "files_written",
         "gpu_operations",
         "manifest_sha256",
+        "max_model_switch_wall_time_seconds",
+        "max_model_switches",
+        "max_post_run_integrity_wall_time_seconds",
+        "max_sequence_wall_time_seconds",
+        "max_total_model_switch_wall_time_seconds",
         "model_loads",
         "pilot_task_manifest_sha256",
+        "pricing_sha256",
         "production_activation_available",
+        "resource_cleanup_upper_bound_seconds",
+        "resource_cleanup_upper_bound_sha256",
+        "resource_topology",
+        "runtime_config_sha256",
+        "sentinel_config_sha256",
         "run_id",
         "schema_version",
         "secret_content_reads",
@@ -398,10 +507,12 @@ def _restore_production_preflight_report(
     snapshot_hashes = projection["declared_snapshot_tree_sha256s"]
     ports = projection["actor_loopback_ports"]
     smoke_hashes = projection["smoke_fixture_sha256s"]
+    authorized_stages = projection["authorized_stages"]
     if (
         type(snapshot_hashes) is not list
         or type(ports) is not list
         or type(smoke_hashes) is not list
+        or type(authorized_stages) is not list
     ):
         raise ValueError("spawned preflight arrays differ")
     return ProductionPreflightReportV1(
@@ -411,6 +522,29 @@ def _restore_production_preflight_report(
         source_commit=cast(str, projection["source_commit"]),
         checked_at_utc=cast(str, projection["checked_at_utc"]),
         authority_expires_at_utc=cast(str, projection["authority_expires_at_utc"]),
+        authorized_stages=tuple(RunStageV1(cast(str, item)) for item in authorized_stages),
+        execution_scope=SequenceExecutionScopeV1(cast(str, projection["execution_scope"])),
+        runtime_config_sha256=cast(str, projection["runtime_config_sha256"]),
+        pricing_sha256=cast(str, projection["pricing_sha256"]),
+        sentinel_config_sha256=cast(str, projection["sentinel_config_sha256"]),
+        resource_topology=cast(str, projection["resource_topology"]),
+        resource_cleanup_upper_bound_seconds=cast(
+            int, projection["resource_cleanup_upper_bound_seconds"]
+        ),
+        resource_cleanup_upper_bound_sha256=cast(
+            str, projection["resource_cleanup_upper_bound_sha256"]
+        ),
+        max_model_switches=cast(int, projection["max_model_switches"]),
+        max_model_switch_wall_time_seconds=cast(
+            int, projection["max_model_switch_wall_time_seconds"]
+        ),
+        max_total_model_switch_wall_time_seconds=cast(
+            int, projection["max_total_model_switch_wall_time_seconds"]
+        ),
+        max_post_run_integrity_wall_time_seconds=cast(
+            int, projection["max_post_run_integrity_wall_time_seconds"]
+        ),
+        max_sequence_wall_time_seconds=cast(int, projection["max_sequence_wall_time_seconds"]),
         base_preflight_sha256=cast(str, projection["base_preflight_sha256"]),
         declared_snapshot_tree_sha256s=tuple(cast(list[str], snapshot_hashes)),
         actor_loopback_ports=tuple(cast(list[int], ports)),
@@ -1109,6 +1243,12 @@ def run_production_preflight_v1(
     manifest: R24R25RunAuthorityManifestV1,
     *,
     confirmed_manifest_sha256: str,
+    confirmed_runtime_config_sha256: str,
+    confirmed_pricing_sha256: str,
+    confirmed_sentinel_config_sha256: str,
+    confirmed_resource_topology: str,
+    confirmed_resource_cleanup_upper_bound_seconds: int,
+    confirmed_resource_cleanup_upper_bound_sha256: str,
     repository_root: Path,
     now: datetime | None = None,
 ) -> ProductionPreflightReportV1:
@@ -1117,10 +1257,35 @@ def run_production_preflight_v1(
     if type(manifest) is not R24R25RunAuthorityManifestV1 or not isinstance(repository_root, Path):
         raise TypeError("production preflight inputs must use exact trusted types")
     trusted_manifest = parse_authority_manifest(authority_manifest_projection(manifest))
+    if trusted_manifest.schema_version != R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2:
+        raise ValueError("production full preflight requires a v2 owner authority")
+    assert type(trusted_manifest.max_model_switches) is int
+    assert type(trusted_manifest.max_model_switch_wall_time_seconds) is int
+    assert type(trusted_manifest.max_total_model_switch_wall_time_seconds) is int
+    assert type(trusted_manifest.max_post_run_integrity_wall_time_seconds) is int
     manifest_sha256 = authority_manifest_sha256(trusted_manifest)
     _require_sha256(confirmed_manifest_sha256, "confirmed_manifest_sha256")
     if confirmed_manifest_sha256 != manifest_sha256:
         raise ValueError("confirmed owner-pinned manifest SHA-256 differs")
+    _require_sha256(confirmed_runtime_config_sha256, "confirmed_runtime_config_sha256")
+    _require_sha256(confirmed_pricing_sha256, "confirmed_pricing_sha256")
+    _require_sha256(confirmed_sentinel_config_sha256, "confirmed_sentinel_config_sha256")
+    _require_sha256(
+        confirmed_resource_cleanup_upper_bound_sha256,
+        "confirmed_resource_cleanup_upper_bound_sha256",
+    )
+    if (
+        confirmed_runtime_config_sha256 != trusted_manifest.runtime_config_sha256
+        or confirmed_pricing_sha256 != trusted_manifest.pricing_sha256
+        or confirmed_sentinel_config_sha256 != trusted_manifest.sentinel_config_sha256
+        or confirmed_sentinel_config_sha256 != production_sentinel_config_sha256_v1()
+        or confirmed_resource_topology != trusted_manifest.resource_topology
+        or confirmed_resource_cleanup_upper_bound_seconds
+        != trusted_manifest.max_resource_cleanup_wall_time_seconds
+        or confirmed_resource_cleanup_upper_bound_sha256
+        != trusted_manifest.resource_cleanup_upper_bound_sha256
+    ):
+        raise ValueError("confirmed runtime resource bindings differ from owner manifest")
     current, checked_at_utc = _canonical_now(now)
     base = inspect_local_resources(
         trusted_manifest,
@@ -1146,6 +1311,49 @@ def run_production_preflight_v1(
             ),
             ProductionPreflightCheckV1(
                 "owner_authority_current", base.authority_current, "METADATA"
+            ),
+            ProductionPreflightCheckV1(
+                "authority_remaining_covers_complete_sequence",
+                (
+                    _timestamp(trusted_manifest.authorization.expires_at_utc) - current
+                ).total_seconds()
+                >= trusted_manifest.max_sequence_wall_time_seconds,
+                "METADATA",
+            ),
+            ProductionPreflightCheckV1(
+                "runtime_config_sha256_matches_owner_manifest",
+                confirmed_runtime_config_sha256 == trusted_manifest.runtime_config_sha256,
+                "CANONICAL_SHA256",
+            ),
+            ProductionPreflightCheckV1(
+                "pricing_sha256_matches_owner_manifest",
+                confirmed_pricing_sha256 == trusted_manifest.pricing_sha256,
+                "CANONICAL_SHA256",
+            ),
+            ProductionPreflightCheckV1(
+                "sentinel_config_sha256_matches_owner_manifest",
+                confirmed_sentinel_config_sha256 == trusted_manifest.sentinel_config_sha256
+                and confirmed_sentinel_config_sha256 == production_sentinel_config_sha256_v1(),
+                "CANONICAL_SHA256",
+            ),
+            ProductionPreflightCheckV1(
+                "resource_topology_matches_owner_manifest",
+                confirmed_resource_topology == trusted_manifest.resource_topology,
+                "DECLARATION",
+            ),
+            ProductionPreflightCheckV1(
+                "resource_cleanup_bound_matches_owner_manifest",
+                confirmed_resource_cleanup_upper_bound_seconds
+                == trusted_manifest.max_resource_cleanup_wall_time_seconds
+                and confirmed_resource_cleanup_upper_bound_sha256
+                == trusted_manifest.resource_cleanup_upper_bound_sha256,
+                "CANONICAL_SHA256",
+            ),
+            ProductionPreflightCheckV1(
+                "full_resource_topology_is_executable",
+                trusted_manifest.resource_topology
+                in {"INDEPENDENT_GPU_CONCURRENT", "SINGLE_GPU_SEQUENTIAL_SHARED"},
+                "DECLARATION",
             ),
             ProductionPreflightCheckV1(
                 "deep_snapshot_hashes_verified",
@@ -1174,6 +1382,25 @@ def run_production_preflight_v1(
         source_commit=trusted_manifest.source_commit,
         checked_at_utc=checked_at_utc,
         authority_expires_at_utc=trusted_manifest.authorization.expires_at_utc,
+        authorized_stages=trusted_manifest.safety.stages,
+        execution_scope=SequenceExecutionScopeV1.R24_R25_FULL,
+        runtime_config_sha256=trusted_manifest.runtime_config_sha256,
+        pricing_sha256=trusted_manifest.pricing_sha256,
+        sentinel_config_sha256=trusted_manifest.sentinel_config_sha256,
+        resource_topology=trusted_manifest.resource_topology,
+        resource_cleanup_upper_bound_seconds=(
+            trusted_manifest.max_resource_cleanup_wall_time_seconds
+        ),
+        resource_cleanup_upper_bound_sha256=(trusted_manifest.resource_cleanup_upper_bound_sha256),
+        max_model_switches=trusted_manifest.max_model_switches,
+        max_model_switch_wall_time_seconds=(trusted_manifest.max_model_switch_wall_time_seconds),
+        max_total_model_switch_wall_time_seconds=(
+            trusted_manifest.max_total_model_switch_wall_time_seconds
+        ),
+        max_post_run_integrity_wall_time_seconds=(
+            trusted_manifest.max_post_run_integrity_wall_time_seconds
+        ),
+        max_sequence_wall_time_seconds=trusted_manifest.max_sequence_wall_time_seconds,
         base_preflight_sha256=_base_report_sha256(base),
         declared_snapshot_tree_sha256s=tuple(
             resource.snapshot_tree_sha256 for resource in trusted_manifest.actor_resources
@@ -1767,6 +1994,7 @@ class ProductionPostPreflightFactoryV1:
         "_pricing_binding_sha256",
         "_report",
         "_runtime_config_sha256",
+        "_sentinel_config_sha256",
         "_sequence_execution_scope",
     )
 
@@ -1790,20 +2018,46 @@ class ProductionPostPreflightFactoryV1:
         ):
             legacy_manifest = manifest
             legacy_report = report
+            trusted_full_manifest = parse_authority_manifest(
+                authority_manifest_projection(legacy_manifest)
+            )
+            trusted_full_report = _trusted_report(legacy_report)
             trusted_manifest: R24R25RunAuthorityManifestV1 | R24SmokeRunAuthorityManifestV1 = (
-                parse_authority_manifest(authority_manifest_projection(legacy_manifest))
+                trusted_full_manifest
             )
             trusted_report: ProductionPreflightReportV1 | R24SmokeProductionPreflightReportV1 = (
-                _trusted_report(legacy_report)
+                trusted_full_report
             )
-            manifest_sha256 = authority_manifest_sha256(
-                cast(R24R25RunAuthorityManifestV1, trusted_manifest)
-            )
-            report_sha256 = production_preflight_report_sha256(
-                cast(ProductionPreflightReportV1, trusted_report)
-            )
+            manifest_sha256 = authority_manifest_sha256(trusted_full_manifest)
+            report_sha256 = production_preflight_report_sha256(trusted_full_report)
             sequence_scope = SequenceExecutionScopeV1.R24_R25_FULL
-            runtime_config_sha256: str | None = None
+            runtime_config_sha256: str | None = trusted_full_manifest.runtime_config_sha256
+            if (
+                trusted_full_report.execution_scope is not sequence_scope
+                or trusted_full_report.authorized_stages != trusted_full_manifest.safety.stages
+                or trusted_full_report.runtime_config_sha256 != runtime_config_sha256
+                or trusted_full_report.pricing_sha256 != trusted_full_manifest.pricing_sha256
+                or trusted_full_report.sentinel_config_sha256
+                != trusted_full_manifest.sentinel_config_sha256
+                or trusted_full_report.sentinel_config_sha256
+                != production_sentinel_config_sha256_v1()
+                or trusted_full_report.resource_topology != trusted_full_manifest.resource_topology
+                or trusted_full_report.resource_cleanup_upper_bound_seconds
+                != trusted_full_manifest.max_resource_cleanup_wall_time_seconds
+                or trusted_full_report.resource_cleanup_upper_bound_sha256
+                != trusted_full_manifest.resource_cleanup_upper_bound_sha256
+                or trusted_full_report.max_model_switches
+                != trusted_full_manifest.max_model_switches
+                or trusted_full_report.max_model_switch_wall_time_seconds
+                != trusted_full_manifest.max_model_switch_wall_time_seconds
+                or trusted_full_report.max_total_model_switch_wall_time_seconds
+                != trusted_full_manifest.max_total_model_switch_wall_time_seconds
+                or trusted_full_report.max_sequence_wall_time_seconds
+                != trusted_full_manifest.max_sequence_wall_time_seconds
+                or trusted_full_report.max_post_run_integrity_wall_time_seconds
+                != trusted_full_manifest.max_post_run_integrity_wall_time_seconds
+            ):
+                raise ValueError("full post-preflight resource bindings differ")
         elif (
             type(manifest) is R24SmokeRunAuthorityManifestV1
             and type(report) is R24SmokeProductionPreflightReportV1
@@ -1844,8 +2098,19 @@ class ProductionPostPreflightFactoryV1:
         self._pricing_binding_sha256 = _require_sha256(
             confirmed_pricing_sha256, "confirmed_pricing_sha256"
         )
+        if (
+            sequence_scope is SequenceExecutionScopeV1.R24_R25_FULL
+            and self._pricing_binding_sha256
+            != cast(R24R25RunAuthorityManifestV1, trusted_manifest).pricing_sha256
+        ):
+            raise ValueError("confirmed pricing differs from full owner manifest")
         self._sequence_execution_scope = sequence_scope
         self._runtime_config_sha256 = runtime_config_sha256
+        self._sentinel_config_sha256 = (
+            cast(R24R25RunAuthorityManifestV1, trusted_manifest).sentinel_config_sha256
+            if sequence_scope is SequenceExecutionScopeV1.R24_R25_FULL
+            else None
+        )
         binding: dict[str, JsonValue] = {
             "authorization_id": trusted_manifest.authorization.authorization_id,
             "execution_scope": CaseExecutionScopeV1.OWNER_AUTHORIZED_LIVE.value,
@@ -1856,13 +2121,39 @@ class ProductionPostPreflightFactoryV1:
             "run_id": trusted_manifest.run_id,
             "source_commit": trusted_manifest.source_commit,
         }
-        if sequence_scope is SequenceExecutionScopeV1.R24_LIVE_SMOKE_ONLY:
-            assert runtime_config_sha256 is not None
+        if runtime_config_sha256 is not None:
             binding.update(
                 {
                     "authorized_stages": [stage.value for stage in trusted_manifest.safety.stages],
                     "runtime_config_sha256": runtime_config_sha256,
                     "sequence_execution_scope": sequence_scope.value,
+                }
+            )
+        if sequence_scope is SequenceExecutionScopeV1.R24_R25_FULL:
+            full_manifest = cast(R24R25RunAuthorityManifestV1, trusted_manifest)
+            binding.update(
+                {
+                    "max_model_switch_wall_time_seconds": (
+                        full_manifest.max_model_switch_wall_time_seconds
+                    ),
+                    "max_model_switches": full_manifest.max_model_switches,
+                    "max_post_run_integrity_wall_time_seconds": (
+                        full_manifest.max_post_run_integrity_wall_time_seconds
+                    ),
+                    "max_resource_cleanup_wall_time_seconds": (
+                        full_manifest.max_resource_cleanup_wall_time_seconds
+                    ),
+                    "max_sequence_wall_time_seconds": (
+                        full_manifest.max_sequence_wall_time_seconds
+                    ),
+                    "max_total_model_switch_wall_time_seconds": (
+                        full_manifest.max_total_model_switch_wall_time_seconds
+                    ),
+                    "resource_cleanup_upper_bound_sha256": (
+                        full_manifest.resource_cleanup_upper_bound_sha256
+                    ),
+                    "resource_topology": full_manifest.resource_topology,
+                    "sentinel_config_sha256": full_manifest.sentinel_config_sha256,
                 }
             )
         self._factory_binding_sha256 = canonical_sha256(binding)
@@ -1948,6 +2239,10 @@ class ProductionPostPreflightFactoryV1:
     @property
     def pricing_binding_sha256(self) -> str:
         return self._pricing_binding_sha256
+
+    @property
+    def sentinel_config_sha256(self) -> str | None:
+        return self._sentinel_config_sha256
 
     def openai_stage_sha256(self, role: OpenAIRoleV1) -> str:
         return openai_stage_sha256(self.openai_stage(role))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import stat
 from copy import deepcopy
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 from threading import Lock
@@ -93,10 +94,12 @@ from mobile_world.runtime.sentinel.r2_4.production_audit import (
     ProductionRuntimeAuditTerminalKindV1,
     ProductionRuntimeAuditTransactionV1,
     ProductionRuntimeAuditV1,
+    parse_production_runtime_audit_detail_projection_v1,
     production_runtime_audit_admission_failure_receipt_projection,
     production_runtime_audit_admission_failure_receipt_sha256,
     production_runtime_audit_commit_failure_receipt_projection,
     production_runtime_audit_detail_projection,
+    validate_production_runtime_audit_restricted_stage_projection_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     CASE_EXECUTION_LEASE_SCHEMA_VERSION,
@@ -192,6 +195,7 @@ class _ActorResponse:
         self.model = "cpu-fake-actor"
         self.usage = SimpleNamespace(
             prompt_tokens=11,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=3),
             completion_tokens=7,
             total_tokens=18,
         )
@@ -624,8 +628,16 @@ def _tu_generate_request_proof(
 
 def _off_agent(
     sink: ProductionRuntimeAuditSinkV1,
+    *,
+    actor_attempt_schema_version: str = (
+        production_audit_module.PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION
+    ),
 ) -> tuple[_Agent, ProductionRuntimeAuditV1, list[dict[str, Any]]]:
-    audit = ProductionRuntimeAuditV1(policy=None, sink=sink)
+    audit = ProductionRuntimeAuditV1(
+        policy=None,
+        sink=sink,
+        actor_attempt_schema_version=actor_attempt_schema_version,
+    )
     sentinel = PromptSentinel(
         policy=NoOpSentinelPolicy(),
         codec_registry=build_runtime_history_codec_resolver(),
@@ -669,9 +681,16 @@ def _unstarted_exact_live_policy() -> OwnerAuthorizedLivePerCallPolicyV1:
 def _run_off_call(
     tmp_path: Path,
     sink: ProductionRuntimeAuditSinkV1,
+    *,
+    actor_attempt_schema_version: str = (
+        production_audit_module.PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION
+    ),
 ) -> tuple[ProductionRuntimeAuditV1, list[dict[str, Any]]]:
     run, context = _collector_context(tmp_path)
-    agent, audit, calls = _off_agent(sink)
+    agent, audit, calls = _off_agent(
+        sink,
+        actor_attempt_schema_version=actor_attempt_schema_version,
+    )
     action = JSONAction(action_type=WAIT)
     try:
         with bind_audit_context(context), agent._sentinel_logical_call_scope() as logical_call:
@@ -1174,11 +1193,43 @@ def test_off_base_path_reaches_provider_and_commits_collector_bound_detail(
     assert attempt.collector_request_locator["snapshot_blob"] is not None
     assert attempt.collector_terminal_locator["snapshot_blob"] is not None
     projection = production_runtime_audit_detail_projection(detail)
+    reopened = parse_production_runtime_audit_detail_projection_v1(projection)
+    validate_production_runtime_audit_restricted_stage_projection_v1(reopened)
     encoded = json.dumps(projection, sort_keys=True)
     assert "Wait now." in encoded
     assert "PRIVATE_PROVIDER_OUTPUT" not in encoded
     assert "PRIVATE_PROVIDER_REASONING" not in encoded
     assert projection["terminal"]["parsed_action"]["action_type"] == WAIT
+
+
+def test_actor_attempt_v2_persists_nullable_cached_input_tokens_without_v1_drift(
+    tmp_path: Path,
+) -> None:
+    legacy_sink = MemoryProductionRuntimeAuditSinkV1()
+    _run_off_call(tmp_path / "legacy", legacy_sink)
+    legacy_attempt = production_runtime_audit_detail_projection(legacy_sink.details[0])[
+        "actor_provider_attempts"
+    ][0]
+    assert "cached_input_tokens" not in legacy_attempt
+
+    v2_sink = MemoryProductionRuntimeAuditSinkV1()
+    _run_off_call(
+        tmp_path / "v2",
+        v2_sink,
+        actor_attempt_schema_version=(
+            production_audit_module.PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2
+        ),
+    )
+    projection = production_runtime_audit_detail_projection(v2_sink.details[0])
+    attempt = projection["actor_provider_attempts"][0]
+    assert attempt["schema_version"] == (
+        production_audit_module.PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2
+    )
+    assert attempt["cached_input_tokens"] == 3
+    reopened = parse_production_runtime_audit_detail_projection_v1(projection)
+    assert reopened.actor_provider_attempts[0].cached_input_tokens == 3
+    with pytest.raises(ProductionRuntimeAuditError, match="cached input token"):
+        replace(reopened.actor_provider_attempts[0], cached_input_tokens=12)
 
 
 def test_external_sink_is_owner_only_and_transactionally_publishes(tmp_path: Path) -> None:

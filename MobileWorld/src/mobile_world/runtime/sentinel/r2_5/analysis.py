@@ -10,6 +10,8 @@ The following distinctions are intentional:
 
 * request-hash changes, fallback, unsupported paths, exact duplicate executed
   actions, and an unsuccessful ``finished`` action are mechanically derived;
+* physical actor attempts/retries and provider, parser, and action failures are
+  counted only from hash-bound production-audit detail fields;
 * unnecessary/wrong actions and wrong edits remain ``NOT_MEASURABLE`` without
   an independently admitted annotation;
 * clean-history false-edit/false-archive rates have a zero measured
@@ -20,30 +22,82 @@ The following distinctions are intentional:
 
 from __future__ import annotations
 
+import math
 import re
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from enum import StrEnum
 from typing import cast
 
 from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_4.contracts import (
+    R24ContractError,
     canonical_sha256,
     snapshot_json_value,
 )
+from mobile_world.runtime.sentinel.r2_4.live_attempt import (
+    LiveAttemptReceiptV1,
+    LiveAttemptRoleV1,
+    live_attempt_receipt_sha256,
+)
+from mobile_world.runtime.sentinel.r2_4.live_policy import (
+    validate_live_history_policy_request_proof_projection_v1,
+)
+from mobile_world.runtime.sentinel.r2_4.live_run import R24R25RunAuthorityManifestV1
 from mobile_world.runtime.sentinel.r2_4.production_audit import (
+    PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2,
     PRODUCTION_RUNTIME_AUDIT_DETAIL_SCHEMA_VERSION,
+    ProductionActorProviderAttemptStatusV1,
+    ProductionActorProviderAttemptV1,
+    ProductionRuntimeAuditError,
+    parse_production_runtime_audit_detail_projection_v1,
+    production_actor_provider_attempt_projection,
+    validate_production_runtime_audit_restricted_stage_projection_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.production_driver import (
     OFFICIAL_RESULT_EVALUATOR_ID_V1,
     PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
+    PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2,
     PilotStageEvidenceV1,
     pilot_stage_evidence_projection,
 )
+from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+    LiveRubricError,
+    parse_durable_live_attempt_receipt_projection_v1,
+    validate_live_rubric_request_proof_projection_v1,
+)
+from mobile_world.runtime.sentinel.r2_5.integrity_gate import (
+    R25PostRunIntegrityError,
+    ValidatedPostRunIntegrityArtifactV1,
+    validate_pilot_stage_durable_evidence_projection_v2,
+    validated_post_run_integrity_projection_v1,
+)
 from mobile_world.runtime.sentinel.r2_5.pilot import (
+    OFFICIAL_SUCCESS_METRIC_ID_V1,
+    OFFICIAL_SUCCESS_OPERATOR_V1,
+    OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1,
     FrozenPilotManifestV1,
     PilotArmV1,
     PilotHostV1,
     frozen_pilot_manifest_sha256,
+)
+from mobile_world.runtime.utils.models import (
+    ANSWER,
+    CLICK,
+    DOUBLE_TAP,
+    DRAG,
+    ENV_FAIL,
+    FINISHED,
+    INPUT_TEXT,
+    KEYBOARD_ENTER,
+    LONG_PRESS,
+    NAVIGATE_BACK,
+    NAVIGATE_HOME,
+    OPEN_APP,
+    SCROLL,
+    STATUS,
+    SWIPE,
+    UNKNOWN,
+    WAIT,
 )
 
 PILOT_ANALYSIS_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.5-pilot-analysis/v1"
@@ -127,14 +181,167 @@ _DECISION_FIELDS = frozenset(
 _OFFICIAL_FIELDS = frozenset(
     {
         "evaluator_id",
+        "official_success_metric_id",
+        "official_success_operator",
+        "official_success_threshold_float_hex",
         "reason_sha256",
         "result_payload_sha256",
+        "score_float_hex",
         "score_ppm",
         "successful",
         "task_id",
     }
 )
+_AUDIT_DETAIL_FIELDS = frozenset(
+    {
+        "actor_provider_attempt_root_sha256",
+        "actor_provider_attempts",
+        "detail_id",
+        "logical_call_id",
+        "pre_provider",
+        "pre_provider_sha256",
+        "schema_version",
+        "sentinel_receipt_sha256",
+        "terminal",
+    }
+)
+_AUDIT_PRE_PROVIDER_FIELDS = frozenset(
+    {
+        "candidate_request_sha256",
+        "codec_overlay_sha256",
+        "configured_mode",
+        "content_persistence",
+        "coordinated_record_sha256",
+        "effective_mode",
+        "exact_diff_sha256",
+        "execution_authority_sha256",
+        "extraction_sha256",
+        "factory_binding_sha256",
+        "fallback_check",
+        "fallback_reason",
+        "final_request_sha256",
+        "history_ir_sha256",
+        "host_id",
+        "latencies_ns",
+        "live_attempt_receipt_root_sha256",
+        "live_attempt_receipt_sha256s",
+        "live_call_binding_sha256",
+        "live_cost_exact",
+        "live_cost_usd_micros",
+        "live_openai_calls",
+        "logical_call_id",
+        "outcome",
+        "path_relevance_output_sha256",
+        "preflight_report_sha256",
+        "pricing_binding_sha256",
+        "raw_request_sha256",
+        "render_result_sha256",
+        "restricted_stage_projection",
+        "restricted_stage_projection_sha256",
+        "rubric_result_sha256",
+        "schema_version",
+        "source_transport_binding_sha256",
+        "status",
+        "validator_result_sha256",
+        "vertical_output_sha256",
+        "case_execution_lease_sha256",
+    }
+)
+_AUDIT_PRE_PROVIDER_LATENCY_FIELDS = frozenset(
+    {
+        "evidence_snapshot",
+        "history_extract",
+        "policy",
+        "pre_provider_total",
+        "render",
+        "rubric",
+        "validator",
+    }
+)
+_AUDIT_CONTENT_PERSISTENCE_FIELDS = frozenset(
+    {
+        "credentials",
+        "environment",
+        "exact_diff",
+        "history_ir",
+        "policy_output",
+        "provider_reasoning",
+        "provider_request",
+        "provider_response",
+        "raw_request",
+        "rendered_request",
+        "rubric_output",
+        "validator_result",
+    }
+)
+_AUDIT_TERMINAL_FIELDS = frozenset(
+    {
+        "action_executed",
+        "credentials_persisted",
+        "environment_persisted",
+        "executed_action_sha256",
+        "latencies_ns",
+        "normalized_actor_output_sha256",
+        "parsed_action",
+        "parsed_action_sha256",
+        "parser_attempt_count",
+        "parser_id",
+        "parser_input_persisted",
+        "parser_input_sha256",
+        "parser_status",
+        "provider_response_persisted",
+        "reasoning_persisted",
+        "successful_provider_response_sha256",
+    }
+)
+_AUDIT_TERMINAL_LATENCY_FIELDS = frozenset(
+    {"action_execution", "parser", "provider_total", "total"}
+)
+_ACTOR_ATTEMPT_FIELDS = frozenset(
+    {
+        "attempt_id",
+        "attempt_index",
+        "collector_request_locator",
+        "collector_terminal_locator",
+        "failure_code",
+        "final_request_sha256",
+        "finish_reason",
+        "input_tokens",
+        "cached_input_tokens",
+        "latency_ns",
+        "model_id_sha256",
+        "output_tokens",
+        "provider_response_persisted",
+        "provider_response_sha256",
+        "reasoning_persisted",
+        "response_id_sha256",
+        "schema_version",
+        "sdk_arguments_sha256",
+        "status",
+        "total_tokens",
+    }
+)
 _CALL_RATE_METRICS: tuple[PilotRateMetricV1, ...]
+_OPERATIONAL_METRICS: tuple[PilotOperationalMetricV1, ...]
+_PILOT_GUI_ACTION_TYPES_V1 = frozenset(
+    {
+        ANSWER,
+        CLICK,
+        DOUBLE_TAP,
+        DRAG,
+        INPUT_TEXT,
+        KEYBOARD_ENTER,
+        LONG_PRESS,
+        NAVIGATE_BACK,
+        NAVIGATE_HOME,
+        OPEN_APP,
+        SCROLL,
+        STATUS,
+        SWIPE,
+        WAIT,
+    }
+)
+_PILOT_TERMINAL_ACTION_TYPES_V1 = frozenset({FINISHED, ENV_FAIL, UNKNOWN})
 
 
 class R25AnalysisContractError(ValueError):
@@ -145,6 +352,83 @@ class R25AnalysisContractError(ValueError):
             raise ValueError("analysis errors require a closed reason code")
         self.code = code
         super().__init__(f"{code}: {message}")
+
+
+class PilotAnalysisEvidenceCompletenessV1(StrEnum):
+    LEGACY_CPU_ONLY_UNACCEPTABLE = "LEGACY_CPU_ONLY_UNACCEPTABLE"
+    PRODUCTION_V2_INTEGRITY_BOUND = "PRODUCTION_V2_INTEGRITY_BOUND"
+
+
+@dataclass(frozen=True, slots=True)
+class PilotAnalysisProductionBindingsV1:
+    """Caller-known roots required to analyze publishable production evidence."""
+
+    authority_manifest_sha256: str
+    run_id: str
+    run_manifest: R24R25RunAuthorityManifestV1
+    resolved_pilot_inputs_sha256: str
+    backend_endpoint: str
+    preflight_report_sha256: str
+    factory_binding_sha256: str
+    post_run_integrity_artifact_sha256: str
+    ordered_collector_integrity_root_sha256: str
+    _validated_integrity: InitVar[ValidatedPostRunIntegrityArtifactV1 | None] = None
+
+    def __post_init__(
+        self,
+        _validated_integrity: ValidatedPostRunIntegrityArtifactV1 | None,
+    ) -> None:
+        if type(_validated_integrity) is not ValidatedPostRunIntegrityArtifactV1:
+            raise PermissionError(
+                "production analysis bindings require a validated integrity capability"
+            )
+        try:
+            validated_post_run_integrity_projection_v1(_validated_integrity)
+        except R25PostRunIntegrityError as exc:
+            raise PermissionError(
+                "production analysis bindings require a validated integrity capability"
+            ) from exc
+        if (
+            type(self.run_manifest) is not R24R25RunAuthorityManifestV1
+            or self.run_manifest.run_id != self.run_id
+            or _validated_integrity.authority_manifest_sha256 != self.authority_manifest_sha256
+            or _validated_integrity.resolved_pilot_inputs_sha256
+            != self.resolved_pilot_inputs_sha256
+            or _validated_integrity.preflight_report_sha256 != self.preflight_report_sha256
+            or _validated_integrity.factory_binding_sha256 != self.factory_binding_sha256
+            or _validated_integrity.backend_endpoint != self.backend_endpoint
+            or _validated_integrity.artifact_sha256 != self.post_run_integrity_artifact_sha256
+            or _validated_integrity.ordered_collector_integrity_root_sha256
+            != self.ordered_collector_integrity_root_sha256
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_PRODUCTION_BINDING", "run manifest binding differs"
+            )
+        for value, name in (
+            (self.authority_manifest_sha256, "authority_manifest_sha256"),
+            (self.resolved_pilot_inputs_sha256, "resolved_pilot_inputs_sha256"),
+            (self.preflight_report_sha256, "preflight_report_sha256"),
+            (self.factory_binding_sha256, "factory_binding_sha256"),
+            (
+                self.post_run_integrity_artifact_sha256,
+                "post_run_integrity_artifact_sha256",
+            ),
+            (
+                self.ordered_collector_integrity_root_sha256,
+                "ordered_collector_integrity_root_sha256",
+            ),
+        ):
+            _require_sha256(value, name)
+        _require_id(self.run_id, "run_id")
+        if (
+            type(self.backend_endpoint) is not str
+            or re.fullmatch(r"http://127\.0\.0\.1:(?:[1-9][0-9]{3,4})", self.backend_endpoint)
+            is None
+            or not 1_024 <= int(self.backend_endpoint.rsplit(":", 1)[1]) <= 65_535
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_PRODUCTION_BINDING", "backend endpoint is invalid"
+            )
 
 
 class PilotMeasurementStatusV1(StrEnum):
@@ -179,6 +463,15 @@ class PilotRateMetricV1(StrEnum):
     CLEAN_HISTORY_FALSE_ARCHIVE = "CLEAN_HISTORY_FALSE_ARCHIVE"
 
 
+class PilotOperationalMetricV1(StrEnum):
+    PHYSICAL_ACTOR_ATTEMPT = "PHYSICAL_ACTOR_ATTEMPT"
+    ACTOR_RETRY = "ACTOR_RETRY"
+    PROVIDER_FAILURE = "PROVIDER_FAILURE"
+    PARSER_ATTEMPT = "PARSER_ATTEMPT"
+    PARSER_FAILURE = "PARSER_FAILURE"
+    ACTION_FAILURE = "ACTION_FAILURE"
+
+
 _CALL_RATE_METRICS = (
     PilotRateMetricV1.EDIT,
     PilotRateMetricV1.ABSTAIN,
@@ -189,6 +482,7 @@ _CALL_RATE_METRICS = (
     PilotRateMetricV1.CLEAN_HISTORY_FALSE_EDIT,
     PilotRateMetricV1.CLEAN_HISTORY_FALSE_ARCHIVE,
 )
+_OPERATIONAL_METRICS = tuple(PilotOperationalMetricV1)
 
 
 class PilotTerminationReasonV1(StrEnum):
@@ -386,6 +680,151 @@ class PilotTokenSummaryV1:
 
 
 @dataclass(frozen=True, slots=True)
+class PilotOperationalCountV1:
+    """Exact counts over the logical calls whose audit details are available."""
+
+    metric: PilotOperationalMetricV1
+    population_logical_calls: int
+    measured_logical_call_denominator: int
+    missing_logical_call_count: int
+    observed_count: int | None
+    measurement_status: PilotMeasurementStatusV1
+    reason_codes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.metric) is not PilotOperationalMetricV1:
+            raise R25AnalysisContractError("UNTRUSTED_TYPE", "operational metric differs")
+        for name in (
+            "population_logical_calls",
+            "measured_logical_call_denominator",
+            "missing_logical_call_count",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise R25AnalysisContractError("INVALID_OPERATIONAL_CENSUS", f"{name} is invalid")
+        if self.population_logical_calls != (
+            self.measured_logical_call_denominator + self.missing_logical_call_count
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "operational population partition differs"
+            )
+        if self.measured_logical_call_denominator == 0:
+            if self.observed_count is not None:
+                raise R25AnalysisContractError(
+                    "INVALID_OPERATIONAL_CENSUS",
+                    "an unmeasured operational count cannot claim zero",
+                )
+        elif type(self.observed_count) is not int or self.observed_count < 0:
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "measured operational count is absent"
+            )
+        if (
+            self.metric
+            in {
+                PilotOperationalMetricV1.ACTION_FAILURE,
+            }
+            and type(self.observed_count) is int
+        ):
+            if self.observed_count > self.measured_logical_call_denominator:
+                raise R25AnalysisContractError(
+                    "INVALID_OPERATIONAL_CENSUS", "action failures exceed measured calls"
+                )
+        expected_status = _measurement_status(
+            measured=self.measured_logical_call_denominator,
+            missing=self.missing_logical_call_count,
+            not_applicable=0,
+        )
+        if self.measurement_status is not expected_status:
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "operational measurement status differs"
+            )
+        if (
+            type(self.reason_codes) is not tuple
+            or not self.reason_codes
+            or tuple(sorted(set(self.reason_codes))) != self.reason_codes
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_REASON_CENSUS", "operational reasons must be sorted and unique"
+            )
+        for reason in self.reason_codes:
+            _require_reason(reason, "operational reason")
+
+
+@dataclass(frozen=True, slots=True)
+class PilotScoreSummaryV1:
+    """Integer-ppm official-score summary; no binary-success substitution."""
+
+    score_count: int
+    score_sum_ppm: int
+    score_mean_ppm: int
+    minimum_score_ppm: int
+    maximum_score_ppm: int
+
+    def __post_init__(self) -> None:
+        if type(self.score_count) is not int or self.score_count < 1:
+            raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "score count is invalid")
+        for name in (
+            "score_sum_ppm",
+            "score_mean_ppm",
+            "minimum_score_ppm",
+            "maximum_score_ppm",
+        ):
+            value = getattr(self, name)
+            maximum = self.score_count * 1_000_000 if name == "score_sum_ppm" else 1_000_000
+            if type(value) is not int or not 0 <= value <= maximum:
+                raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", f"{name} is invalid")
+        if self.minimum_score_ppm > self.maximum_score_ppm:
+            raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "score range differs")
+        if not (
+            self.minimum_score_ppm * self.score_count
+            <= self.score_sum_ppm
+            <= self.maximum_score_ppm * self.score_count
+        ):
+            raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "score sum exceeds range")
+        if self.score_mean_ppm != _rounded_integer_mean(self.score_sum_ppm, self.score_count):
+            raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "score mean differs")
+
+
+@dataclass(frozen=True, slots=True)
+class PilotScoreDeltaSummaryV1:
+    """Signed JOINT-minus-BASELINE official-score differences in integer ppm."""
+
+    pair_count: int
+    score_delta_sum_ppm: int
+    score_delta_mean_ppm: int
+    minimum_score_delta_ppm: int
+    maximum_score_delta_ppm: int
+
+    def __post_init__(self) -> None:
+        if type(self.pair_count) is not int or self.pair_count < 1:
+            raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "delta pair count is invalid")
+        for name in (
+            "score_delta_mean_ppm",
+            "minimum_score_delta_ppm",
+            "maximum_score_delta_ppm",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or not -1_000_000 <= value <= 1_000_000:
+                raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", f"{name} is invalid")
+        if type(self.score_delta_sum_ppm) is not int or not (
+            -self.pair_count * 1_000_000 <= self.score_delta_sum_ppm <= self.pair_count * 1_000_000
+        ):
+            raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "delta sum is invalid")
+        if self.minimum_score_delta_ppm > self.maximum_score_delta_ppm:
+            raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "delta range differs")
+        if not (
+            self.minimum_score_delta_ppm * self.pair_count
+            <= self.score_delta_sum_ppm
+            <= self.maximum_score_delta_ppm * self.pair_count
+        ):
+            raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "delta sum exceeds range")
+        if self.score_delta_mean_ppm != _rounded_integer_mean(
+            self.score_delta_sum_ppm, self.pair_count
+        ):
+            raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "delta mean differs")
+
+
+@dataclass(frozen=True, slots=True)
 class PilotTerminationCountV1:
     reason: PilotTerminationReasonV1
     count: int
@@ -405,6 +844,10 @@ class PilotCellAnalysisV1:
     arm: PilotArmV1
     source_cell_sha256: str
     official_success: bool
+    official_success_metric_id: str
+    official_success_operator: str
+    official_success_threshold_float_hex: str
+    official_score_float_hex: str
     official_score_ppm: int
     steps: int
     executed_actions: int
@@ -415,6 +858,7 @@ class PilotCellAnalysisV1:
     wrong_edit: PilotClassificationResultV1
     premature_stop: PilotClassificationResultV1
     call_rates: tuple[PilotRateSummaryV1, ...]
+    operational_counts: tuple[PilotOperationalCountV1, ...]
     actor_provider_tokens: PilotTokenSummaryV1
     sentinel_openai_tokens: PilotTokenSummaryV1
     audit_detail_present_count: int
@@ -432,6 +876,32 @@ class PilotCellAnalysisV1:
         _require_sha256(self.source_cell_sha256, "source_cell_sha256")
         if type(self.official_success) is not bool:
             raise R25AnalysisContractError("UNTRUSTED_TYPE", "official success is not bool")
+        if (
+            self.official_success_metric_id != OFFICIAL_SUCCESS_METRIC_ID_V1
+            or self.official_success_operator != OFFICIAL_SUCCESS_OPERATOR_V1
+            or self.official_success_threshold_float_hex != OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1
+            or type(self.official_score_float_hex) is not str
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OFFICIAL_RESULT", "official score metric binding differs"
+            )
+        try:
+            raw_score = float.fromhex(self.official_score_float_hex)
+        except (TypeError, ValueError) as exc:
+            raise R25AnalysisContractError(
+                "INVALID_OFFICIAL_RESULT", "official raw score encoding differs"
+            ) from exc
+        if (
+            not math.isfinite(raw_score)
+            or not 0.0 <= raw_score <= 1.0
+            or raw_score.hex() != self.official_score_float_hex
+            or round(raw_score * 1_000_000) != self.official_score_ppm
+            or self.official_success
+            is not (raw_score > float.fromhex(OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1))
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OFFICIAL_RESULT", "official raw score result differs"
+            )
         if (
             type(self.official_score_ppm) is not int
             or not 0 <= self.official_score_ppm <= 1_000_000
@@ -467,6 +937,78 @@ class PilotCellAnalysisV1:
             raise R25AnalysisContractError("INVALID_RATE_CENSUS", "cell call-rate census differs")
         if any(item.population_count != self.steps for item in self.call_rates):
             raise R25AnalysisContractError("INVALID_DENOMINATOR", "cell rate population differs")
+        if tuple(item.metric for item in self.operational_counts) != _OPERATIONAL_METRICS:
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "cell operational census differs"
+            )
+        if any(item.population_logical_calls != self.steps for item in self.operational_counts):
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "cell operational population differs"
+            )
+        operational = {item.metric: item for item in self.operational_counts}
+        physical = operational[PilotOperationalMetricV1.PHYSICAL_ACTOR_ATTEMPT]
+        retries = operational[PilotOperationalMetricV1.ACTOR_RETRY]
+        provider_failures = operational[PilotOperationalMetricV1.PROVIDER_FAILURE]
+        parser_attempts = operational[PilotOperationalMetricV1.PARSER_ATTEMPT]
+        parser_failures = operational[PilotOperationalMetricV1.PARSER_FAILURE]
+        action_failures = operational[PilotOperationalMetricV1.ACTION_FAILURE]
+        if (
+            physical.measured_logical_call_denominator != retries.measured_logical_call_denominator
+            or physical.missing_logical_call_count != retries.missing_logical_call_count
+            or physical.observed_count is not None
+            and retries.observed_count is not None
+            and physical.observed_count
+            != physical.measured_logical_call_denominator + retries.observed_count
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "physical attempt/retry census differs"
+            )
+        for derived in (
+            provider_failures,
+            parser_attempts,
+            parser_failures,
+            action_failures,
+        ):
+            if (
+                derived.measured_logical_call_denominator
+                != physical.measured_logical_call_denominator
+                or derived.missing_logical_call_count != physical.missing_logical_call_count
+            ):
+                raise R25AnalysisContractError(
+                    "INVALID_OPERATIONAL_CENSUS", "operational evidence denominators differ"
+                )
+        if (
+            provider_failures.observed_count is not None
+            and retries.observed_count is not None
+            and provider_failures.observed_count > retries.observed_count
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "provider failures exceed actor retries"
+            )
+        if (
+            parser_failures.observed_count is not None
+            and parser_attempts.observed_count is not None
+            and parser_failures.observed_count > parser_attempts.observed_count
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "parser failures exceed parser attempts"
+            )
+        if (
+            parser_attempts.observed_count is not None
+            and physical.observed_count is not None
+            and parser_attempts.observed_count > physical.observed_count
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "parser attempts exceed physical actor attempts"
+            )
+        if (
+            action_failures.observed_count is not None
+            and action_failures.missing_logical_call_count == 0
+            and self.executed_actions + action_failures.observed_count > self.steps
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "action outcomes exceed logical decisions"
+            )
         if (
             type(self.actor_provider_tokens) is not PilotTokenSummaryV1
             or type(self.sentinel_openai_tokens) is not PilotTokenSummaryV1
@@ -485,8 +1027,10 @@ class PilotGroupAnalysisV1:
     task_id: str | None
     cell_count: int
     official_success: PilotRateSummaryV1
+    official_scores: PilotScoreSummaryV1
     steps: PilotStepSummaryV1
     call_rates: tuple[PilotRateSummaryV1, ...]
+    operational_counts: tuple[PilotOperationalCountV1, ...]
     termination_counts: tuple[PilotTerminationCountV1, ...]
     actor_provider_tokens: PilotTokenSummaryV1
     sentinel_openai_tokens: PilotTokenSummaryV1
@@ -524,12 +1068,21 @@ class PilotGroupAnalysisV1:
         ):
             raise R25AnalysisContractError("INVALID_GROUP", "official-success summary differs")
         if (
+            type(self.official_scores) is not PilotScoreSummaryV1
+            or self.official_scores.score_count != self.cell_count
+        ):
+            raise R25AnalysisContractError("INVALID_GROUP", "official-score summary differs")
+        if (
             type(self.steps) is not PilotStepSummaryV1
             or self.steps.cell_denominator != self.cell_count
         ):
             raise R25AnalysisContractError("INVALID_GROUP", "step summary differs")
         if tuple(item.metric for item in self.call_rates) != _CALL_RATE_METRICS:
             raise R25AnalysisContractError("INVALID_RATE_CENSUS", "group call-rate census differs")
+        if tuple(item.metric for item in self.operational_counts) != _OPERATIONAL_METRICS:
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "group operational census differs"
+            )
         if tuple(item.reason for item in self.termination_counts) != tuple(
             PilotTerminationReasonV1
         ):
@@ -541,6 +1094,12 @@ class PilotGroupAnalysisV1:
                 "INVALID_TERMINATION_CENSUS", "termination count differs"
             )
         call_population = self.call_rates[0].population_count
+        if any(
+            item.population_logical_calls != call_population for item in self.operational_counts
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OPERATIONAL_CENSUS", "group operational population differs"
+            )
         if (
             type(self.actor_provider_tokens) is not PilotTokenSummaryV1
             or type(self.sentinel_openai_tokens) is not PilotTokenSummaryV1
@@ -558,6 +1117,9 @@ class PilotMatchedPairV1:
     joint_sequence_index: int
     baseline_success: bool
     joint_success: bool
+    baseline_score_ppm: int
+    joint_score_ppm: int
+    joint_minus_baseline_score_ppm: int
     outcome: PilotMatchedOutcomeV1
     baseline_steps: int
     joint_steps: int
@@ -600,6 +1162,14 @@ class PilotMatchedPairV1:
         )
         if self.outcome is not expected_outcome:
             raise R25AnalysisContractError("INVALID_MATCHED_PAIR", "matched outcome differs")
+        if (
+            type(self.baseline_score_ppm) is not int
+            or type(self.joint_score_ppm) is not int
+            or not 0 <= self.baseline_score_ppm <= 1_000_000
+            or not 0 <= self.joint_score_ppm <= 1_000_000
+            or self.joint_minus_baseline_score_ppm != self.joint_score_ppm - self.baseline_score_ppm
+        ):
+            raise R25AnalysisContractError("INVALID_MATCHED_PAIR", "matched scores differ")
         if (
             type(self.baseline_steps) is not int
             or type(self.joint_steps) is not int
@@ -668,6 +1238,9 @@ class PilotMatchedComparisonV1:
     joint_regressed_count: int
     baseline_success_count: int
     joint_success_count: int
+    baseline_scores: PilotScoreSummaryV1
+    joint_scores: PilotScoreSummaryV1
+    joint_minus_baseline_scores: PilotScoreDeltaSummaryV1
     baseline_total_steps: int
     joint_total_steps: int
     joint_minus_baseline_total_steps: int
@@ -729,6 +1302,17 @@ class PilotMatchedComparisonV1:
             raise R25AnalysisContractError("INVALID_COMPARISON", "baseline success count differs")
         if self.joint_success_count != self.both_success_count + self.joint_improved_count:
             raise R25AnalysisContractError("INVALID_COMPARISON", "joint success count differs")
+        if (
+            type(self.baseline_scores) is not PilotScoreSummaryV1
+            or type(self.joint_scores) is not PilotScoreSummaryV1
+            or type(self.joint_minus_baseline_scores) is not PilotScoreDeltaSummaryV1
+            or self.baseline_scores.score_count != self.pair_count
+            or self.joint_scores.score_count != self.pair_count
+            or self.joint_minus_baseline_scores.pair_count != self.pair_count
+            or self.joint_minus_baseline_scores.score_delta_sum_ppm
+            != self.joint_scores.score_sum_ppm - self.baseline_scores.score_sum_ppm
+        ):
+            raise R25AnalysisContractError("INVALID_COMPARISON", "matched scores differ")
         if self.pair_count != self.comparable_termination_pairs + self.missing_termination_pairs:
             raise R25AnalysisContractError("INVALID_COMPARISON", "termination denominator differs")
         if self.comparable_termination_pairs != (
@@ -755,12 +1339,18 @@ class PilotMatchedComparisonV1:
             )
 
 
+_PILOT_ANALYSIS_SEAL = object()
+
+
 @dataclass(frozen=True, slots=True)
 class PilotAnalysisV1:
     source_stage_evidence_sha256: str
     source_manifest_sha256: str
     manifest_sha256: str
     run_id: str
+    evidence_completeness: PilotAnalysisEvidenceCompletenessV1
+    post_run_integrity_artifact_sha256: str | None
+    ordered_collector_integrity_root_sha256: str | None
     cells: tuple[PilotCellAnalysisV1, ...]
     host_arm_groups: tuple[PilotGroupAnalysisV1, ...]
     task_groups: tuple[PilotGroupAnalysisV1, ...]
@@ -770,8 +1360,11 @@ class PilotAnalysisV1:
     overall: PilotGroupAnalysisV1
     limitations: tuple[str, ...]
     schema_version: str = PILOT_ANALYSIS_SCHEMA_VERSION
+    _seal: InitVar[object | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _seal: object | None) -> None:
+        if _seal is not _PILOT_ANALYSIS_SEAL:
+            raise PermissionError("pilot analysis is module-owned")
         if self.schema_version != PILOT_ANALYSIS_SCHEMA_VERSION:
             raise R25AnalysisContractError("UNKNOWN_SCHEMA", "analysis schema differs")
         for value, name in (
@@ -781,6 +1374,36 @@ class PilotAnalysisV1:
         ):
             _require_sha256(value, name)
         _require_id(self.run_id, "run_id")
+        if type(self.evidence_completeness) is not PilotAnalysisEvidenceCompletenessV1:
+            raise R25AnalysisContractError(
+                "INVALID_EVIDENCE_COMPLETENESS", "analysis completeness enum differs"
+            )
+        integrity_roots = (
+            self.post_run_integrity_artifact_sha256,
+            self.ordered_collector_integrity_root_sha256,
+        )
+        if (
+            self.evidence_completeness
+            is PilotAnalysisEvidenceCompletenessV1.LEGACY_CPU_ONLY_UNACCEPTABLE
+            and any(item is not None for item in integrity_roots)
+        ) or (
+            self.evidence_completeness
+            is PilotAnalysisEvidenceCompletenessV1.PRODUCTION_V2_INTEGRITY_BOUND
+            and any(item is None for item in integrity_roots)
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_EVIDENCE_COMPLETENESS", "integrity roots differ from evidence class"
+            )
+        for integrity_value, integrity_name in zip(
+            integrity_roots,
+            (
+                "post_run_integrity_artifact_sha256",
+                "ordered_collector_integrity_root_sha256",
+            ),
+            strict=True,
+        ):
+            if integrity_value is not None:
+                _require_sha256(integrity_value, integrity_name)
         if type(self.cells) is not tuple or not 80 <= len(self.cells) <= 120:
             raise R25AnalysisContractError("INVALID_CELL_MATRIX", "analysis cell matrix differs")
         if tuple(item.sequence_index for item in self.cells) != tuple(range(len(self.cells))):
@@ -808,6 +1431,17 @@ class PilotAnalysisV1:
         expected_pairs = len(self.cells) // 2
         if type(self.matched_pairs) is not tuple or len(self.matched_pairs) != expected_pairs:
             raise R25AnalysisContractError("INVALID_MATCHED_PAIR", "matched-pair census differs")
+        expected_matched_pairs = tuple(
+            _matched_pair(self.cells[index], self.cells[index + 1])
+            for index in range(0, len(self.cells), 2)
+        )
+        if self.matched_pairs != expected_matched_pairs:
+            raise R25AnalysisContractError(
+                "INVALID_MATCHED_PAIR", "matched-pair order or source values differ"
+            )
+        host_order = tuple(dict.fromkeys(cell.host for cell in self.cells))
+        arm_order = tuple(dict.fromkeys(cell.arm for cell in self.cells))
+        task_order = tuple(dict.fromkeys(cell.task_id for cell in self.cells))
         if (
             type(self.matched_host_comparisons) is not tuple
             or len(self.matched_host_comparisons) != 2
@@ -816,11 +1450,57 @@ class PilotAnalysisV1:
             raise R25AnalysisContractError(
                 "INVALID_COMPARISON", "matched host comparison census differs"
             )
+        expected_host_comparisons = tuple(
+            _matched_comparison(
+                tuple(item for item in self.matched_pairs if item.host is host),
+                comparison_id=f"MATCHED:{host.value}",
+                host=host,
+            )
+            for host in host_order
+        )
+        if self.matched_host_comparisons != expected_host_comparisons:
+            raise R25AnalysisContractError(
+                "INVALID_COMPARISON", "matched host comparisons differ from pairs"
+            )
         if type(self.matched_overall) is not PilotMatchedComparisonV1 or (
             self.matched_overall.host is not None
             or self.matched_overall.pair_count != expected_pairs
         ):
             raise R25AnalysisContractError("INVALID_COMPARISON", "matched overall differs")
+        if self.matched_overall != _matched_comparison(
+            self.matched_pairs, comparison_id="MATCHED:OVERALL", host=None
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_COMPARISON", "matched overall differs from pairs"
+            )
+        expected_host_arm_groups = tuple(
+            _group(
+                PilotGroupKindV1.HOST_ARM,
+                tuple(cell for cell in self.cells if cell.host is host and cell.arm is arm),
+                group_id=f"{host.value}:{arm.value}",
+                host=host,
+                arm=arm,
+            )
+            for host in host_order
+            for arm in arm_order
+        )
+        if self.host_arm_groups != expected_host_arm_groups:
+            raise R25AnalysisContractError(
+                "INVALID_GROUP", "host/arm groups differ from source cells"
+            )
+        expected_task_groups = tuple(
+            _group(
+                PilotGroupKindV1.TASK,
+                tuple(cell for cell in self.cells if cell.task_id == task_id),
+                group_id=f"TASK:{task_id}",
+                task_id=task_id,
+            )
+            for task_id in task_order
+        )
+        if self.task_groups != expected_task_groups:
+            raise R25AnalysisContractError("INVALID_GROUP", "task groups differ from source cells")
+        if self.overall != _group(PilotGroupKindV1.OVERALL, self.cells, group_id="OVERALL"):
+            raise R25AnalysisContractError("INVALID_GROUP", "overall differs from source cells")
         if (
             type(self.limitations) is not tuple
             or not self.limitations
@@ -844,6 +1524,12 @@ class _DecisionFacts:
     archive_shadow: bool | None
     actor_tokens: tuple[int, int, int, int] | None
     sentinel_tokens: tuple[int, int, int, int] | None | PilotMeasurementStatusV1
+    physical_actor_attempt_count: int | None
+    actor_retry_count: int | None
+    provider_failure_count: int | None
+    parser_attempt_count: int | None
+    parser_failure_count: int | None
+    action_failure_count: int | None
 
 
 def _require_reason(value: object, name: str) -> str:
@@ -882,6 +1568,16 @@ def _int(value: object, name: str) -> int:
     return value
 
 
+def _rounded_integer_mean(total: int, denominator: int) -> int:
+    """Round an exact integer ratio to nearest, with signed ties away from zero."""
+
+    if type(total) is not int or type(denominator) is not int or denominator < 1:
+        raise R25AnalysisContractError("INVALID_DENOMINATOR", "integer mean inputs differ")
+    if total < 0:
+        return -((-total + denominator // 2) // denominator)
+    return (total + denominator // 2) // denominator
+
+
 def _measurement_status(
     *, measured: int, missing: int, not_applicable: int
 ) -> PilotMeasurementStatusV1:
@@ -916,6 +1612,60 @@ def _rate(
         rate_ppm=(None if measured == 0 else (positive * 1_000_000 + measured // 2) // measured),
         measurement_status=status,
         reason_codes=tuple(sorted(set(reasons))),
+    )
+
+
+def _operational_count(
+    metric: PilotOperationalMetricV1,
+    values: tuple[int | None, ...],
+    reasons: tuple[str, ...],
+) -> PilotOperationalCountV1:
+    measured = sum(type(item) is int for item in values)
+    missing = sum(item is None for item in values)
+    if measured + missing != len(values):
+        raise R25AnalysisContractError(
+            "INVALID_OPERATIONAL_CENSUS", "operational count input differs"
+        )
+    return PilotOperationalCountV1(
+        metric=metric,
+        population_logical_calls=len(values),
+        measured_logical_call_denominator=measured,
+        missing_logical_call_count=missing,
+        observed_count=(
+            None if measured == 0 else sum(item for item in values if item is not None)
+        ),
+        measurement_status=_measurement_status(
+            measured=measured, missing=missing, not_applicable=0
+        ),
+        reason_codes=tuple(sorted(set(reasons))),
+    )
+
+
+def _score_summary(values: tuple[int, ...]) -> PilotScoreSummaryV1:
+    if not values or any(type(item) is not int or not 0 <= item <= 1_000_000 for item in values):
+        raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "score inputs differ")
+    total = sum(values)
+    return PilotScoreSummaryV1(
+        score_count=len(values),
+        score_sum_ppm=total,
+        score_mean_ppm=_rounded_integer_mean(total, len(values)),
+        minimum_score_ppm=min(values),
+        maximum_score_ppm=max(values),
+    )
+
+
+def _score_delta_summary(values: tuple[int, ...]) -> PilotScoreDeltaSummaryV1:
+    if not values or any(
+        type(item) is not int or not -1_000_000 <= item <= 1_000_000 for item in values
+    ):
+        raise R25AnalysisContractError("INVALID_SCORE_SUMMARY", "score delta inputs differ")
+    total = sum(values)
+    return PilotScoreDeltaSummaryV1(
+        pair_count=len(values),
+        score_delta_sum_ppm=total,
+        score_delta_mean_ppm=_rounded_integer_mean(total, len(values)),
+        minimum_score_delta_ppm=min(values),
+        maximum_score_delta_ppm=max(values),
     )
 
 
@@ -1037,18 +1787,59 @@ def _validate_decision(
         decision["executed_action_sha256"] != decision["parsed_action_sha256"]
     ):
         raise R25AnalysisContractError("ACTION_BINDING_MISMATCH", "executed action differs")
-    if len(rubric_receipts) != census["rubric_openai_calls"]:
-        raise R25AnalysisContractError("INVALID_CENSUS", "rubric attempt census differs")
+    if census["rubric_openai_calls"] > len(rubric_receipts) or census[
+        "history_policy_openai_calls"
+    ] > int(decision["history_policy_attempt_receipt_sha256"] is not None):
+        raise R25AnalysisContractError("INVALID_CENSUS", "live attempt census differs")
     return decision, census
 
 
 def _validate_stage(
     manifest: FrozenPilotManifestV1,
     source: dict[str, JsonValue],
+    *,
+    production_bindings: PilotAnalysisProductionBindingsV1 | None,
 ) -> tuple[tuple[dict[str, JsonValue], ...], dict[str, int]]:
     if set(source) != _STAGE_FIELDS:
         raise R25AnalysisContractError("INVALID_FIELDS", "stage evidence fields differ")
-    if source["schema_version"] != PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION:
+    schema_version = source["schema_version"]
+    if schema_version == PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2:
+        if production_bindings is None:
+            raise R25AnalysisContractError(
+                "PRODUCTION_BINDING_REQUIRED",
+                "production-v2 pilot evidence requires caller-known integrity bindings",
+            )
+        if (
+            source["manifest_sha256"] != production_bindings.authority_manifest_sha256
+            or source["run_id"] != production_bindings.run_id
+        ):
+            raise R25AnalysisContractError(
+                "MANIFEST_BINDING_MISMATCH", "production analysis authority differs"
+            )
+        try:
+            source = validate_pilot_stage_durable_evidence_projection_v2(
+                source,
+                expected_run_manifest=production_bindings.run_manifest,
+                expected_manifest_sha256=production_bindings.authority_manifest_sha256,
+                expected_resolved_pilot_inputs_sha256=(
+                    production_bindings.resolved_pilot_inputs_sha256
+                ),
+                expected_backend_endpoint=production_bindings.backend_endpoint,
+                expected_preflight_report_sha256=(production_bindings.preflight_report_sha256),
+                expected_factory_binding_sha256=(production_bindings.factory_binding_sha256),
+            )
+        except R25PostRunIntegrityError as exc:
+            raise R25AnalysisContractError(
+                "INVALID_PRODUCTION_PILOT_EVIDENCE",
+                "production-v2 pilot evidence fails durable validation",
+            ) from exc
+    elif schema_version == PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION:
+        if production_bindings is not None:
+            raise R25AnalysisContractError(
+                "LEGACY_PRODUCTION_EVIDENCE_FORBIDDEN",
+                "legacy pilot evidence cannot carry production-integrity bindings",
+            )
+    else:
         raise R25AnalysisContractError("UNKNOWN_SCHEMA", "driver evidence schema differs")
     _require_sha256(source["manifest_sha256"], "manifest_sha256")
     _require_id(source["run_id"], "run_id")
@@ -1075,7 +1866,10 @@ def _validate_stage(
     actor_resources: dict[str, str] = {}
     for index, (raw_cell, expected) in enumerate(zip(raw_cells, expected_cells, strict=True)):
         cell = _object(raw_cell, f"cell[{index}]")
-        if set(cell) != _CELL_FIELDS:
+        if (
+            schema_version == PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+            and set(cell) != _CELL_FIELDS
+        ):
             raise R25AnalysisContractError("INVALID_FIELDS", f"cell[{index}] fields differ")
         expected_identity = (
             index,
@@ -1158,6 +1952,10 @@ def _validate_stage(
         if (
             official["task_id"] != expected.task_id
             or official["evaluator_id"] != OFFICIAL_RESULT_EVALUATOR_ID_V1
+            or official["official_success_metric_id"] != manifest.official_success_metric_id
+            or official["official_success_operator"] != manifest.official_success_operator
+            or official["official_success_threshold_float_hex"]
+            != manifest.official_success_threshold_float_hex
         ):
             raise R25AnalysisContractError(
                 "INVALID_OFFICIAL_RESULT", "official evaluator/task binding differs"
@@ -1167,6 +1965,28 @@ def _validate_stage(
         score = official["score_ppm"]
         if type(score) is not int or not 0 <= score <= 1_000_000:
             raise R25AnalysisContractError("INVALID_OFFICIAL_RESULT", "score is invalid")
+        score_float_hex = official["score_float_hex"]
+        if type(score_float_hex) is not str:
+            raise R25AnalysisContractError(
+                "INVALID_OFFICIAL_RESULT", "raw score encoding is invalid"
+            )
+        try:
+            raw_score = float.fromhex(score_float_hex)
+        except ValueError as exc:
+            raise R25AnalysisContractError(
+                "INVALID_OFFICIAL_RESULT", "raw score encoding is invalid"
+            ) from exc
+        if (
+            not math.isfinite(raw_score)
+            or not 0.0 <= raw_score <= 1.0
+            or raw_score.hex() != score_float_hex
+            or round(raw_score * 1_000_000) != score
+            or official["successful"]
+            is not (raw_score > float.fromhex(manifest.official_success_threshold_float_hex))
+        ):
+            raise R25AnalysisContractError(
+                "INVALID_OFFICIAL_RESULT", "official success/score binding differs"
+            )
         _require_sha256(official["reason_sha256"], "official reason")
         _require_sha256(official["result_payload_sha256"], "official payload")
         cells.append(cell)
@@ -1258,14 +2078,213 @@ def _merge_tokens(
     )
 
 
+def _request_proof_object(value: object, name: str) -> dict[str, JsonValue]:
+    """Return one detached proof object or fail with the analysis error domain."""
+
+    try:
+        trusted = snapshot_json_value(cast(JsonValue, value))
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise R25AnalysisContractError(
+            "INVALID_REQUEST_PROOF", f"{name} is not bounded canonical JSON"
+        ) from exc
+    return _object(trusted, name)
+
+
+def _validate_request_proofs(
+    *,
+    restricted: dict[str, JsonValue],
+    decision: dict[str, JsonValue],
+    trusted_live_attempts: list[LiveAttemptReceiptV1],
+    expected_coordinated_record_sha256: str | None,
+    require_complete: bool,
+) -> None:
+    """Reopen every persisted request proof against its externally bound receipt.
+
+    The attempt receipt hashes are already bound by the stage decision and the
+    pre-provider receipt root before this function runs.  Each provider-request
+    proof must therefore rebuild against those receipts, not against roots fed
+    back solely by the proof itself.  The constraint preimage is additionally
+    covered by the externally bound attempt-authority hash and is passed to the
+    public R2.4 validator for a complete component-level reconstruction.  A
+    fallback may retain an ordered prefix of the normal attempt topology, but
+    every retained attempt still requires its matching proof.
+    """
+
+    actor_call_index = cast(int, decision["actor_call_index"])
+    rubric_attempts = [
+        item for item in trusted_live_attempts if item.role is LiveAttemptRoleV1.RUBRIC
+    ]
+    history_attempts = [
+        item for item in trusted_live_attempts if item.role is LiveAttemptRoleV1.HISTORY_POLICY
+    ]
+    expected_operations = ("GENERATE", "TRACK") if actor_call_index == 1 else ("TRACK",)
+    raw_rubric_proofs = _array(
+        restricted.get("r2_4_rubric_request_proofs"), "rubric request proofs"
+    )
+    if (
+        len(raw_rubric_proofs) != len(rubric_attempts)
+        or len(raw_rubric_proofs) > len(expected_operations)
+        or (require_complete and len(raw_rubric_proofs) != len(expected_operations))
+    ):
+        raise R25AnalysisContractError(
+            "REQUEST_PROOF_CENSUS_MISMATCH", "rubric request-proof census differs"
+        )
+
+    tracking_packet_sha256: str | None = None
+    for attempt_order, (raw_proof, receipt, expected_operation) in enumerate(
+        zip(
+            raw_rubric_proofs,
+            rubric_attempts,
+            expected_operations[: len(raw_rubric_proofs)],
+            strict=True,
+        ),
+        1,
+    ):
+        proof = _request_proof_object(raw_proof, "rubric request proof")
+        constraint = _request_proof_object(
+            proof.get("attempt_constraint_binding"), "rubric attempt constraint"
+        )
+        if (
+            proof.get("operation") != expected_operation
+            or proof.get("attempt_order") != attempt_order
+            or proof.get("attempt_role") != LiveAttemptRoleV1.RUBRIC.value
+            or proof.get("attempt_id") != receipt.attempt_id
+            or proof.get("attempt_receipt_sha256") != live_attempt_receipt_sha256(receipt)
+            or proof.get("attempt_authority_sha256") != receipt.authority_sha256
+            or proof.get("provider_request_sha256") != receipt.request_sha256
+        ):
+            raise R25AnalysisContractError(
+                "REQUEST_PROOF_BINDING_MISMATCH", "rubric request proof differs from its receipt"
+            )
+        try:
+            validate_live_rubric_request_proof_projection_v1(
+                cast(JsonValue, proof),
+                attempt_receipt=receipt,
+                expected_attempt_order=attempt_order,
+                expected_attempt_authority_sha256=receipt.authority_sha256,
+                expected_constraint_binding_sha256=canonical_sha256(cast(JsonValue, constraint)),
+                expected_manifest_sha256=receipt.manifest_sha256,
+                expected_preflight_sha256=receipt.preflight_sha256,
+                expected_case_execution_lease_sha256=(receipt.case_execution_lease_sha256),
+                expected_stage_sha256=receipt.stage_sha256,
+                expected_pricing_binding_sha256=receipt.pricing_binding_sha256,
+                expected_transport_binding_sha256=receipt.transport_binding_sha256,
+                expected_request_sha256=receipt.request_sha256,
+            )
+        except (LiveRubricError, TypeError, ValueError) as exc:
+            raise R25AnalysisContractError(
+                "INVALID_REQUEST_PROOF", "rubric provider-request proof is invalid"
+            ) from exc
+        if expected_operation == "TRACK":
+            candidate = proof.get("tracking_packet_sha256")
+            if type(candidate) is not str or _SHA256.fullmatch(candidate) is None:
+                raise R25AnalysisContractError(
+                    "REQUEST_PROOF_BINDING_MISMATCH", "tracking packet binding is absent"
+                )
+            tracking_packet_sha256 = candidate
+
+    raw_history_proof = restricted.get("r2_4_history_policy_request_proof")
+    coordinator_packet_sha256: str | None = None
+    if history_attempts:
+        if len(history_attempts) != 1:
+            raise R25AnalysisContractError(
+                "REQUEST_PROOF_CENSUS_MISMATCH", "history request-proof census differs"
+            )
+        history_proof = _request_proof_object(raw_history_proof, "history request proof")
+        history_constraint = _request_proof_object(
+            history_proof.get("constraint_binding"), "history attempt constraint"
+        )
+        history_receipt = history_attempts[0]
+        if (
+            history_proof.get("attempt_role") != LiveAttemptRoleV1.HISTORY_POLICY.value
+            or history_proof.get("attempt_id") != history_receipt.attempt_id
+            or history_proof.get("attempt_receipt_sha256")
+            != live_attempt_receipt_sha256(history_receipt)
+            or history_proof.get("attempt_authority_sha256") != history_receipt.authority_sha256
+            or history_proof.get("provider_request_sha256") != history_receipt.request_sha256
+        ):
+            raise R25AnalysisContractError(
+                "REQUEST_PROOF_BINDING_MISMATCH", "history request proof differs from its receipt"
+            )
+        try:
+            validate_live_history_policy_request_proof_projection_v1(
+                cast(JsonValue, history_proof),
+                attempt_receipt=history_receipt,
+                expected_attempt_authority_sha256=history_receipt.authority_sha256,
+                expected_constraint_binding_sha256=canonical_sha256(
+                    cast(JsonValue, history_constraint)
+                ),
+                expected_manifest_sha256=history_receipt.manifest_sha256,
+                expected_preflight_sha256=history_receipt.preflight_sha256,
+                expected_case_execution_lease_sha256=(history_receipt.case_execution_lease_sha256),
+                expected_stage_sha256=history_receipt.stage_sha256,
+                expected_pricing_binding_sha256=history_receipt.pricing_binding_sha256,
+                expected_transport_binding_sha256=(history_receipt.transport_binding_sha256),
+                expected_request_sha256=history_receipt.request_sha256,
+            )
+        except (R24ContractError, TypeError, ValueError) as exc:
+            raise R25AnalysisContractError(
+                "INVALID_REQUEST_PROOF", "history provider-request proof is invalid"
+            ) from exc
+        candidate = history_proof.get("coordinator_evidence_packet_sha256")
+        if type(candidate) is not str or _SHA256.fullmatch(candidate) is None:
+            raise R25AnalysisContractError(
+                "REQUEST_PROOF_BINDING_MISMATCH", "history evidence packet binding is absent"
+            )
+        coordinator_packet_sha256 = candidate
+    elif raw_history_proof is not None:
+        raise R25AnalysisContractError(
+            "REQUEST_PROOF_CENSUS_MISMATCH", "history proof exists without a history attempt"
+        )
+
+    raw_coordinated = restricted.get("coordinated_record")
+    if expected_coordinated_record_sha256 is None:
+        if raw_coordinated is not None:
+            raise R25AnalysisContractError(
+                "REQUEST_PROOF_BINDING_MISMATCH",
+                "unexpected coordinated record is not externally bound",
+            )
+    else:
+        coordinated = _request_proof_object(raw_coordinated, "coordinated record")
+        if (
+            canonical_sha256(cast(JsonValue, coordinated)) != expected_coordinated_record_sha256
+            or coordinated.get("logical_call_id") != decision["logical_call_id"]
+            or coordinated.get("tracking_packet_sha256") != tracking_packet_sha256
+            or coordinated.get("gpt56_evidence_packet_sha256") != coordinator_packet_sha256
+        ):
+            raise R25AnalysisContractError(
+                "REQUEST_PROOF_BINDING_MISMATCH", "coordinator and provider proofs differ"
+            )
+
+
 def _detail_facts(
     decision: dict[str, JsonValue],
     audit_details: dict[str, JsonValue],
+    *,
+    require_production_restricted_proof: bool,
 ) -> _DecisionFacts:
     detail_hash = cast(str, decision["runtime_audit_detail_sha256"])
     raw_detail = audit_details.get(detail_hash)
     if raw_detail is None:
-        return _DecisionFacts(False, None, None, None, None, None, None, None, None, None, None)
+        return _DecisionFacts(
+            detail_present=False,
+            pre_provider_status=None,
+            semantic_applicable=None,
+            action_type=None,
+            abstain=None,
+            fallback=None,
+            error=None,
+            unsupported=None,
+            archive_shadow=None,
+            actor_tokens=None,
+            sentinel_tokens=None,
+            physical_actor_attempt_count=None,
+            actor_retry_count=None,
+            provider_failure_count=None,
+            parser_attempt_count=None,
+            parser_failure_count=None,
+            action_failure_count=None,
+        )
     try:
         detail_value = snapshot_json_value(raw_detail)
     except (TypeError, ValueError, RecursionError) as exc:
@@ -1274,14 +2293,31 @@ def _detail_facts(
         ) from exc
     if canonical_sha256(detail_value) != detail_hash:
         raise R25AnalysisContractError("AUDIT_DETAIL_HASH_MISMATCH", "audit detail hash differs")
+    try:
+        trusted_detail = parse_production_runtime_audit_detail_projection_v1(detail_value)
+        if require_production_restricted_proof:
+            validate_production_runtime_audit_restricted_stage_projection_v1(trusted_detail)
+    except ProductionRuntimeAuditError as exc:
+        raise R25AnalysisContractError(
+            "INVALID_AUDIT_DETAIL", "audit detail fails its complete durable contract"
+        ) from exc
     detail = _object(detail_value, "audit detail")
     if detail.get("schema_version") != PRODUCTION_RUNTIME_AUDIT_DETAIL_SCHEMA_VERSION:
         raise R25AnalysisContractError("UNKNOWN_SCHEMA", "audit detail schema differs")
     if detail.get("logical_call_id") != decision["logical_call_id"]:
         raise R25AnalysisContractError("TRACE_BINDING_MISMATCH", "audit logical call differs")
+    if detail.get("sentinel_receipt_sha256") != decision["sentinel_receipt_sha256"]:
+        raise R25AnalysisContractError("TRACE_BINDING_MISMATCH", "audit sentinel receipt differs")
     pre = _object(detail.get("pre_provider"), "audit pre_provider")
     if detail.get("pre_provider_sha256") != canonical_sha256(cast(JsonValue, pre)):
         raise R25AnalysisContractError("TRACE_BINDING_MISMATCH", "pre-provider hash differs")
+    restricted = _object(pre.get("restricted_stage_projection"), "restricted projection")
+    if pre.get("restricted_stage_projection_sha256") != canonical_sha256(
+        cast(JsonValue, restricted)
+    ):
+        raise R25AnalysisContractError(
+            "TRACE_BINDING_MISMATCH", "restricted stage projection hash differs"
+        )
     for field in ("raw_request_sha256", "final_request_sha256", "exact_diff_sha256"):
         if pre.get(field) != decision[field]:
             raise R25AnalysisContractError("TRACE_BINDING_MISMATCH", f"audit {field} differs")
@@ -1296,6 +2332,212 @@ def _detail_facts(
             raise R25AnalysisContractError(
                 "TRACE_BINDING_MISMATCH", f"audit pre-provider {field} differs"
             )
+    expected_live_receipts = [
+        cast(str, item)
+        for item in _array(decision["rubric_attempt_receipt_sha256s"], "rubric attempt receipts")
+    ]
+    history_receipt = decision["history_policy_attempt_receipt_sha256"]
+    if history_receipt is not None:
+        expected_live_receipts.append(cast(str, history_receipt))
+    if pre.get("live_attempt_receipt_sha256s") != expected_live_receipts:
+        raise R25AnalysisContractError(
+            "TRACE_BINDING_MISMATCH", "pre-provider live attempt receipts differ"
+        )
+    expected_live_root = (
+        None
+        if not expected_live_receipts
+        else canonical_sha256(
+            cast(
+                JsonValue,
+                {
+                    "receipt_sha256s": expected_live_receipts,
+                    "schema_version": (
+                        "mobileworld.runtime.sentinel-r2.4-live-attempt-receipt-root/v1"
+                    ),
+                },
+            )
+        )
+    )
+    if pre.get("live_attempt_receipt_root_sha256") != expected_live_root:
+        raise R25AnalysisContractError(
+            "TRACE_BINDING_MISMATCH", "pre-provider live attempt root differs"
+        )
+    raw_live_attempts = restricted.get("live_attempt_receipts")
+    trusted_live_attempts: list[LiveAttemptReceiptV1] = []
+    if raw_live_attempts is None:
+        if expected_live_receipts:
+            raise R25AnalysisContractError(
+                "TRACE_BINDING_MISMATCH", "Sentinel attempt preimages are absent"
+            )
+        live_attempts: list[JsonValue] = []
+    else:
+        live_attempts = _array(raw_live_attempts, "Sentinel OpenAI attempts")
+        if len(live_attempts) != len(expected_live_receipts):
+            raise R25AnalysisContractError(
+                "TRACE_BINDING_MISMATCH", "Sentinel attempt preimage census differs"
+            )
+        for raw_receipt, expected_receipt_sha256 in zip(
+            live_attempts, expected_live_receipts, strict=True
+        ):
+            try:
+                trusted_receipt = parse_durable_live_attempt_receipt_projection_v1(
+                    _object(raw_receipt, "Sentinel OpenAI attempt")
+                )
+            except (LiveRubricError, TypeError, ValueError) as exc:
+                raise R25AnalysisContractError(
+                    "INVALID_AUDIT_DETAIL", "Sentinel attempt preimage is invalid"
+                ) from exc
+            if live_attempt_receipt_sha256(trusted_receipt) != expected_receipt_sha256:
+                raise R25AnalysisContractError(
+                    "TRACE_BINDING_MISMATCH", "Sentinel attempt preimage hash differs"
+                )
+            trusted_live_attempts.append(trusted_receipt)
+    for pre_field, decision_field in (
+        ("case_execution_lease_sha256", "case_execution_lease_sha256"),
+        ("execution_authority_sha256", "live_policy_authority_sha256"),
+    ):
+        if pre.get(pre_field) != decision[decision_field]:
+            raise R25AnalysisContractError(
+                "TRACE_BINDING_MISMATCH", f"audit pre-provider {pre_field} differs"
+            )
+    expected_preflight = decision["preflight_report_sha256"] if expected_live_receipts else None
+    expected_factory = (
+        decision["live_policy_factory_binding_sha256"] if expected_live_receipts else None
+    )
+    if (
+        pre.get("preflight_report_sha256") != expected_preflight
+        or pre.get("factory_binding_sha256") != expected_factory
+    ):
+        raise R25AnalysisContractError(
+            "TRACE_BINDING_MISMATCH", "audit live factory/preflight binding differs"
+        )
+    decision_census = _census(decision["census"], "decision.census")
+    if trusted_live_attempts:
+        execution_authority = decision["live_policy_authority_sha256"]
+        case_lease = decision["case_execution_lease_sha256"]
+        preflight = decision["preflight_report_sha256"]
+        pricing = pre.get("pricing_binding_sha256")
+        source_transport = pre.get("source_transport_binding_sha256")
+        invalid_source_transport = (
+            source_transport is not None
+            if history_receipt is None
+            else type(source_transport) is not str or _SHA256.fullmatch(source_transport) is None
+        )
+        expected_roles = [LiveAttemptRoleV1.RUBRIC] * len(
+            expected_live_receipts if history_receipt is None else expected_live_receipts[:-1]
+        )
+        if history_receipt is not None:
+            expected_roles.append(LiveAttemptRoleV1.HISTORY_POLICY)
+        actor_call_index = cast(int, decision["actor_call_index"])
+        allowed_role_sequence = (
+            (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.RUBRIC)
+            if actor_call_index == 1
+            else (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.HISTORY_POLICY)
+        )
+        observed_roles = tuple(attempt.role for attempt in trusted_live_attempts)
+        role_sequence_invalid = (
+            observed_roles != allowed_role_sequence
+            if pre.get("status") == "READY"
+            else observed_roles != allowed_role_sequence[: len(observed_roles)]
+        )
+        if (
+            type(pricing) is not str
+            or _SHA256.fullmatch(pricing) is None
+            or invalid_source_transport
+            or role_sequence_invalid
+            or any(
+                attempt.role is not role
+                or attempt.logical_call_id != decision["logical_call_id"]
+                or attempt.actor_request_sha256 != decision["raw_request_sha256"]
+                or attempt.manifest_sha256 != execution_authority
+                or attempt.preflight_sha256 != preflight
+                or attempt.case_execution_lease_sha256 != case_lease
+                or attempt.pricing_binding_sha256 != pricing
+                or not attempt.worker_reaped
+                or attempt.cost_status.value != "EXACT"
+                or attempt.cost_usd_micros is None
+                for attempt, role in zip(trusted_live_attempts, expected_roles, strict=True)
+            )
+            or (
+                history_receipt is not None
+                and trusted_live_attempts[-1].transport_binding_sha256 != source_transport
+            )
+            or (
+                pre.get("status") == "READY"
+                and any(attempt.status.value != "COMPLETED" for attempt in trusted_live_attempts)
+            )
+            or len({attempt.attempt_id for attempt in trusted_live_attempts})
+            != len(trusted_live_attempts)
+            or len({live_attempt_receipt_sha256(attempt) for attempt in trusted_live_attempts})
+            != len(trusted_live_attempts)
+            or len({attempt.case_id for attempt in trusted_live_attempts}) != 1
+            or len(
+                {
+                    attempt.stage_sha256
+                    for attempt in trusted_live_attempts
+                    if attempt.role is LiveAttemptRoleV1.RUBRIC
+                }
+            )
+            > 1
+        ):
+            raise R25AnalysisContractError(
+                "TRACE_BINDING_MISMATCH", "Sentinel attempt authority graph differs"
+            )
+        rubric_dispatches = sum(
+            attempt.dispatch_count
+            for attempt in trusted_live_attempts
+            if attempt.role is LiveAttemptRoleV1.RUBRIC
+        )
+        history_dispatches = sum(
+            attempt.dispatch_count
+            for attempt in trusted_live_attempts
+            if attempt.role is LiveAttemptRoleV1.HISTORY_POLICY
+        )
+        live_cost = sum(cast(int, attempt.cost_usd_micros) for attempt in trusted_live_attempts)
+        if (
+            pre.get("live_cost_exact") is not True
+            or pre.get("live_openai_calls") != rubric_dispatches + history_dispatches
+            or pre.get("live_cost_usd_micros") != live_cost
+            or decision_census["rubric_openai_calls"] != rubric_dispatches
+            or decision_census["history_policy_openai_calls"] != history_dispatches
+            or decision_census["openai_calls"] != rubric_dispatches + history_dispatches
+            or decision_census["cost_usd_micros"] != live_cost
+        ):
+            raise R25AnalysisContractError(
+                "TRACE_BINDING_MISMATCH", "Sentinel attempt census or cost differs"
+            )
+        _validate_request_proofs(
+            restricted=restricted,
+            decision=decision,
+            trusted_live_attempts=trusted_live_attempts,
+            expected_coordinated_record_sha256=cast(
+                str | None, pre.get("coordinated_record_sha256")
+            ),
+            require_complete=(
+                pre.get("status") == "READY"
+                or pre.get("outcome") == "NO_HISTORY_RUBRIC_FALLBACK_ORIGINAL"
+            ),
+        )
+    elif (
+        expected_live_receipts
+        or pre.get("live_openai_calls") not in {None, 0}
+        or pre.get("live_cost_usd_micros") not in {None, 0}
+        or decision_census["openai_calls"] != 0
+        or decision_census["cost_usd_micros"] != 0
+    ):
+        raise R25AnalysisContractError(
+            "TRACE_BINDING_MISMATCH", "empty Sentinel attempt census differs"
+        )
+    elif "r2_4_rubric_request_proofs" in restricted:
+        _validate_request_proofs(
+            restricted=restricted,
+            decision=decision,
+            trusted_live_attempts=[],
+            expected_coordinated_record_sha256=cast(
+                str | None, pre.get("coordinated_record_sha256")
+            ),
+            require_complete=False,
+        )
     terminal = _object(detail.get("terminal"), "audit terminal")
     if terminal.get("successful_provider_response_sha256") != decision["provider_response_sha256"]:
         raise R25AnalysisContractError("TRACE_BINDING_MISMATCH", "provider response differs")
@@ -1315,38 +2557,135 @@ def _detail_facts(
         decision["executed_action_sha256"] is not None
     ):
         raise R25AnalysisContractError("ACTION_BINDING_MISMATCH", "action execution differs")
+    if action_type in _PILOT_GUI_ACTION_TYPES_V1:
+        action_failure_count = 0 if action_executed else 1
+    elif action_type in _PILOT_TERMINAL_ACTION_TYPES_V1:
+        if action_executed:
+            raise R25AnalysisContractError(
+                "ACTION_BINDING_MISMATCH", "terminal action cannot be executed"
+            )
+        action_failure_count = 0
+    else:
+        raise R25AnalysisContractError(
+            "INVALID_ACTION", "action type is outside the frozen pilot vocabulary"
+        )
     attempts = _array(detail.get("actor_provider_attempts"), "actor provider attempts")
     if not attempts:
         raise R25AnalysisContractError("INVALID_AUDIT_DETAIL", "provider attempt census is empty")
-    provider_failure = False
-    provider_success = False
-    for attempt_value in attempts:
+    provider_failure_count = 0
+    for attempt_index, attempt_value in enumerate(attempts, 1):
         attempt = _object(attempt_value, "actor provider attempt")
-        status = attempt.get("status")
+        if set(attempt) != _ACTOR_ATTEMPT_FIELDS:
+            raise R25AnalysisContractError("INVALID_AUDIT_DETAIL", "provider attempt fields differ")
+        try:
+            trusted_attempt = ProductionActorProviderAttemptV1(
+                attempt_id=cast(str, attempt["attempt_id"]),
+                attempt_index=cast(int, attempt["attempt_index"]),
+                sdk_arguments_sha256=cast(str, attempt["sdk_arguments_sha256"]),
+                final_request_sha256=cast(str, attempt["final_request_sha256"]),
+                collector_request_locator=attempt["collector_request_locator"],
+                collector_terminal_locator=attempt["collector_terminal_locator"],
+                status=ProductionActorProviderAttemptStatusV1(cast(str, attempt["status"])),
+                provider_response_sha256=cast(str | None, attempt["provider_response_sha256"]),
+                response_id_sha256=cast(str | None, attempt["response_id_sha256"]),
+                model_id_sha256=cast(str | None, attempt["model_id_sha256"]),
+                finish_reason=cast(str | None, attempt["finish_reason"]),
+                input_tokens=cast(int | None, attempt["input_tokens"]),
+                cached_input_tokens=cast(int | None, attempt["cached_input_tokens"]),
+                output_tokens=cast(int | None, attempt["output_tokens"]),
+                total_tokens=cast(int | None, attempt["total_tokens"]),
+                latency_ns=cast(int, attempt["latency_ns"]),
+                failure_code=cast(str | None, attempt["failure_code"]),
+                schema_version=cast(str, attempt["schema_version"]),
+            )
+        except (KeyError, TypeError, ValueError, ProductionRuntimeAuditError) as exc:
+            raise R25AnalysisContractError(
+                "INVALID_AUDIT_DETAIL", "provider attempt is invalid"
+            ) from exc
+        if production_actor_provider_attempt_projection(trusted_attempt) != attempt:
+            raise R25AnalysisContractError(
+                "INVALID_AUDIT_DETAIL", "provider attempt projection is non-canonical"
+            )
+        if trusted_attempt.attempt_index != attempt_index:
+            raise R25AnalysisContractError(
+                "INVALID_AUDIT_DETAIL", "provider attempt schema/order differs"
+            )
+        if trusted_attempt.schema_version != PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2:
+            raise R25AnalysisContractError(
+                "INVALID_AUDIT_DETAIL", "pilot actor attempt is not the frozen v2 schema"
+            )
+        if (
+            trusted_attempt.final_request_sha256 != decision["final_request_sha256"]
+            or trusted_attempt.sdk_arguments_sha256 != decision["final_request_sha256"]
+        ):
+            raise R25AnalysisContractError(
+                "TRACE_BINDING_MISMATCH", "provider attempt SDK/final request differs"
+            )
+        status = trusted_attempt.status.value
         if status == "FAILED":
-            provider_failure = True
-        elif status == "SUCCEEDED":
-            provider_success = True
-        else:
-            raise R25AnalysisContractError("INVALID_AUDIT_DETAIL", "provider status is unknown")
-    if not provider_success:
+            provider_failure_count += 1
+    final_attempt = _object(attempts[-1], "final actor provider attempt")
+    if final_attempt.get("status") != "SUCCEEDED":
         raise R25AnalysisContractError("INVALID_AUDIT_DETAIL", "terminal detail has no success")
-    actor_tokens = _tokens_from_attempts(
-        attempts, cached_field=False, name="actor provider attempt"
+    if final_attempt.get("provider_response_sha256") != decision["provider_response_sha256"]:
+        raise R25AnalysisContractError(
+            "TRACE_BINDING_MISMATCH", "final provider attempt response differs"
+        )
+    expected_attempt_root = canonical_sha256(
+        cast(
+            JsonValue,
+            {
+                "attempt_sha256s": [canonical_sha256(item) for item in attempts],
+                "schema_version": (
+                    "mobileworld.runtime.sentinel-r2.4-production-actor-attempt-root/v1"
+                ),
+            },
+        )
     )
-    status = pre.get("status")
-    if status not in {"OFF", "READY", "FALLBACK_ORIGINAL", "BYPASSED_ORIGINAL"}:
+    if detail.get("actor_provider_attempt_root_sha256") != expected_attempt_root:
+        raise R25AnalysisContractError(
+            "TRACE_BINDING_MISMATCH", "actor provider attempt root differs"
+        )
+    if (
+        decision["actor_attempt_receipt_sha256"] != expected_attempt_root
+        or decision["provider_attempt_receipt_sha256"] != expected_attempt_root
+    ):
+        raise R25AnalysisContractError(
+            "TRACE_BINDING_MISMATCH", "decision provider attempt roots differ"
+        )
+    physical_actor_attempt_count = len(attempts)
+    actor_retry_count = physical_actor_attempt_count - 1
+    actor_tokens = _tokens_from_attempts(attempts, cached_field=True, name="actor provider attempt")
+    parser_status = terminal.get("parser_status")
+    parser_attempt_count = terminal.get("parser_attempt_count")
+    if parser_status not in {"PARSED", "PARSE_FALLBACK"}:
+        raise R25AnalysisContractError("INVALID_AUDIT_DETAIL", "parser status is unknown")
+    if (
+        type(parser_attempt_count) is not int
+        or parser_attempt_count < 1
+        or parser_attempt_count > physical_actor_attempt_count
+    ):
+        raise R25AnalysisContractError(
+            "INVALID_AUDIT_DETAIL", "parser attempt count differs from actor attempts"
+        )
+    parser_failure_count = parser_attempt_count - (1 if parser_status == "PARSED" else 0)
+    pre_status = pre.get("status")
+    if type(pre_status) is not str or pre_status not in {
+        "OFF",
+        "READY",
+        "FALLBACK_ORIGINAL",
+        "BYPASSED_ORIGINAL",
+    }:
         raise R25AnalysisContractError("INVALID_AUDIT_DETAIL", "pre-provider status is unknown")
-    fallback = status == "FALLBACK_ORIGINAL"
+    fallback = pre_status == "FALLBACK_ORIGINAL"
     fallback_reason = pre.get("fallback_reason")
     if fallback and type(fallback_reason) is not str:
         raise R25AnalysisContractError("INVALID_AUDIT_DETAIL", "fallback reason is absent")
     unsupported = fallback and fallback_reason == "UNSUPPORTED_HISTORY_FAMILY"
     technical_fallback = fallback and not unsupported
-    restricted = _object(pre.get("restricted_stage_projection"), "restricted projection")
     abstain = False
     archive = False
-    if status == "READY":
+    if pre_status == "READY":
         vertical = _object(restricted.get("vertical_output"), "vertical output")
         raw_policy_decisions = _array(vertical.get("decisions"), "vertical decisions")
         operations: list[str] = []
@@ -1367,20 +2706,20 @@ def _detail_facts(
                     "INVALID_AUDIT_DETAIL", "relevance disposition is unknown"
                 )
             archive = archive or disposition == "ARCHIVE_SHADOW"
-    if status == "OFF":
+    if pre_status == "OFF":
         sentinel_tokens: tuple[int, int, int, int] | None | PilotMeasurementStatusV1 = (
             PilotMeasurementStatusV1.NOT_APPLICABLE
         )
-    elif status == "BYPASSED_ORIGINAL":
+    elif pre_status == "BYPASSED_ORIGINAL":
         sentinel_tokens = (0, 0, 0, 0)
     else:
-        raw_live_attempts = restricted.get("live_attempt_receipts")
         if raw_live_attempts is None:
             sentinel_tokens = None
         else:
-            live_attempts = _array(raw_live_attempts, "Sentinel OpenAI attempts")
-            decision_census = _census(decision["census"], "decision.census")
-            if len(live_attempts) != decision_census["openai_calls"]:
+            if (
+                sum(item.dispatch_count for item in trusted_live_attempts)
+                != decision_census["openai_calls"]
+            ):
                 raise R25AnalysisContractError(
                     "INVALID_TOKEN_CENSUS", "Sentinel attempt/token census differs"
                 )
@@ -1391,16 +2730,28 @@ def _detail_facts(
             )
     return _DecisionFacts(
         detail_present=True,
-        pre_provider_status=cast(str, status),
-        semantic_applicable=status in {"READY", "FALLBACK_ORIGINAL"},
+        pre_provider_status=pre_status,
+        semantic_applicable=pre_status in {"READY", "FALLBACK_ORIGINAL"},
         action_type=action_type,
         abstain=abstain,
         fallback=fallback,
-        error=provider_failure or technical_fallback or action_type in {"error_env", "unknown"},
+        error=(
+            provider_failure_count > 0
+            or parser_failure_count > 0
+            or action_failure_count > 0
+            or technical_fallback
+            or action_type in {ENV_FAIL, UNKNOWN}
+        ),
         unsupported=unsupported,
         archive_shadow=archive,
         actor_tokens=actor_tokens,
         sentinel_tokens=sentinel_tokens,
+        physical_actor_attempt_count=physical_actor_attempt_count,
+        actor_retry_count=actor_retry_count,
+        provider_failure_count=provider_failure_count,
+        parser_attempt_count=parser_attempt_count,
+        parser_failure_count=parser_failure_count,
+        action_failure_count=action_failure_count,
     )
 
 
@@ -1415,11 +2766,19 @@ def _cell_analysis(
     *,
     audit_details: dict[str, JsonValue],
     max_steps: int,
+    require_production_restricted_proof: bool,
 ) -> PilotCellAnalysisV1:
     decisions = tuple(
         _object(item, "decision") for item in _array(cell["decisions"], "cell decisions")
     )
-    facts = tuple(_detail_facts(item, audit_details) for item in decisions)
+    facts = tuple(
+        _detail_facts(
+            item,
+            audit_details,
+            require_production_restricted_proof=require_production_restricted_proof,
+        )
+        for item in decisions
+    )
     official = _object(cell["official_result"], "official result")
     arm = PilotArmV1(cast(str, cell["arm"]))
     if any(
@@ -1433,12 +2792,25 @@ def _cell_analysis(
         raise R25AnalysisContractError(
             "ARM_MODE_MISMATCH", "audit pre-provider status differs from pilot arm"
         )
-    executed_hashes = tuple(
-        cast(str, item["executed_action_sha256"])
-        for item in decisions
-        if item["executed_action_sha256"] is not None
+    if any(
+        fact.detail_present
+        and (
+            fact.action_type in _PILOT_TERMINAL_ACTION_TYPES_V1
+            or cast(int, fact.action_failure_count) > 0
+        )
+        for fact in facts[:-1]
+    ):
+        raise R25AnalysisContractError(
+            "INVALID_ACTION_SEQUENCE",
+            "a terminal or failed action must be the final pilot decision",
+        )
+    adjacent_execution_hashes = tuple(item["executed_action_sha256"] for item in decisions)
+    repeated = any(
+        left is not None and right is not None and left == right
+        for left, right in zip(
+            adjacent_execution_hashes, adjacent_execution_hashes[1:], strict=False
+        )
     )
-    repeated = any(left == right for left, right in zip(executed_hashes, executed_hashes[1:]))
     repeated_classification = _classification(
         PilotClassificationV1.OBSERVED if repeated else PilotClassificationV1.NOT_OBSERVED,
         "EXACT_CONSECUTIVE_EXECUTED_ACTION_HASH_REPEAT"
@@ -1446,7 +2818,12 @@ def _cell_analysis(
         else "NO_EXACT_CONSECUTIVE_EXECUTED_ACTION_HASH_REPEAT",
     )
     edit_values: tuple[bool | None | PilotMeasurementStatusV1, ...] = tuple(
-        item["raw_request_sha256"] != item["final_request_sha256"] for item in decisions
+        (
+            item["raw_request_sha256"] != item["final_request_sha256"]
+            if fact.detail_present
+            else None
+        )
+        for item, fact in zip(decisions, facts, strict=True)
     )
     abstain_values: tuple[bool | None | PilotMeasurementStatusV1, ...]
     fallback_values: tuple[bool | None | PilotMeasurementStatusV1, ...]
@@ -1509,7 +2886,7 @@ def _cell_analysis(
             PilotRateMetricV1.ERROR,
             PilotRateUnitV1.ACTOR_CALL,
             error_values,
-            ("TECHNICAL_FALLBACK_FAILED_PROVIDER_OR_ACTOR_ERROR_SIGNAL",),
+            ("HASH_BOUND_TECHNICAL_FAILURE_SIGNAL",),
         ),
         _rate(
             PilotRateMetricV1.UNSUPPORTED,
@@ -1552,11 +2929,54 @@ def _cell_analysis(
             ),
         ),
     )
-    any_edit = any(item is True for item in edit_values)
-    wrong_edit = _classification(
-        PilotClassificationV1.NOT_MEASURABLE if any_edit else PilotClassificationV1.NOT_APPLICABLE,
-        "NO_INDEPENDENT_EDIT_CORRECTNESS_LABEL" if any_edit else "NO_EDIT_APPLIED",
+    operational_reasons = (
+        ("AUDIT_DETAIL_UNAVAILABLE",) if any(not item.detail_present for item in facts) else ()
     )
+    operational_counts = (
+        _operational_count(
+            PilotOperationalMetricV1.PHYSICAL_ACTOR_ATTEMPT,
+            tuple(item.physical_actor_attempt_count for item in facts),
+            ("HASH_BOUND_ACTOR_PROVIDER_ATTEMPT_ARRAY",) + operational_reasons,
+        ),
+        _operational_count(
+            PilotOperationalMetricV1.ACTOR_RETRY,
+            tuple(item.actor_retry_count for item in facts),
+            ("PHYSICAL_ATTEMPTS_MINUS_LOGICAL_CALLS",) + operational_reasons,
+        ),
+        _operational_count(
+            PilotOperationalMetricV1.PROVIDER_FAILURE,
+            tuple(item.provider_failure_count for item in facts),
+            ("FAILED_PROVIDER_ATTEMPT_STATUS",) + operational_reasons,
+        ),
+        _operational_count(
+            PilotOperationalMetricV1.PARSER_ATTEMPT,
+            tuple(item.parser_attempt_count for item in facts),
+            ("HASH_BOUND_PARSER_ATTEMPT_COUNT",) + operational_reasons,
+        ),
+        _operational_count(
+            PilotOperationalMetricV1.PARSER_FAILURE,
+            tuple(item.parser_failure_count for item in facts),
+            ("PARSER_STATUS_AND_ATTEMPT_COUNT",) + operational_reasons,
+        ),
+        _operational_count(
+            PilotOperationalMetricV1.ACTION_FAILURE,
+            tuple(item.action_failure_count for item in facts),
+            ("CLOSED_ACTION_TYPE_AND_EXECUTION_FLAG",) + operational_reasons,
+        ),
+    )
+    any_edit = any(item is True for item in edit_values)
+    if any_edit:
+        wrong_edit = _classification(
+            PilotClassificationV1.NOT_MEASURABLE,
+            "NO_INDEPENDENT_EDIT_CORRECTNESS_LABEL",
+        )
+    elif any(item is None for item in edit_values):
+        wrong_edit = _classification(
+            PilotClassificationV1.UNKNOWN,
+            "AUDIT_DETAIL_MISSING_EDIT_STATUS_UNKNOWN",
+        )
+    else:
+        wrong_edit = _classification(PilotClassificationV1.NOT_APPLICABLE, "NO_EDIT_APPLIED")
     last_fact = facts[-1]
     last_executed = decisions[-1]["executed_action_sha256"] is not None
     if last_fact.detail_present and last_fact.action_type == "finished":
@@ -1606,6 +3026,12 @@ def _cell_analysis(
         arm=arm,
         source_cell_sha256=canonical_sha256(cast(JsonValue, cell)),
         official_success=cast(bool, official["successful"]),
+        official_success_metric_id=cast(str, official["official_success_metric_id"]),
+        official_success_operator=cast(str, official["official_success_operator"]),
+        official_success_threshold_float_hex=cast(
+            str, official["official_success_threshold_float_hex"]
+        ),
+        official_score_float_hex=cast(str, official["score_float_hex"]),
         official_score_ppm=cast(int, official["score_ppm"]),
         steps=len(decisions),
         executed_actions=executed_count,
@@ -1616,6 +3042,7 @@ def _cell_analysis(
         wrong_edit=wrong_edit,
         premature_stop=premature,
         call_rates=rates,
+        operational_counts=operational_counts,
         actor_provider_tokens=_token_summary(tuple(item.actor_tokens for item in facts)),
         sentinel_openai_tokens=_token_summary(tuple(item.sentinel_tokens for item in facts)),
         audit_detail_present_count=sum(item.detail_present for item in facts),
@@ -1654,6 +3081,30 @@ def _merge_rate(
     )
 
 
+def _merge_operational_count(
+    metric: PilotOperationalMetricV1,
+    cells: tuple[PilotCellAnalysisV1, ...],
+) -> PilotOperationalCountV1:
+    inputs = tuple(
+        next(item for item in cell.operational_counts if item.metric is metric) for cell in cells
+    )
+    measured = sum(item.measured_logical_call_denominator for item in inputs)
+    missing = sum(item.missing_logical_call_count for item in inputs)
+    return PilotOperationalCountV1(
+        metric=metric,
+        population_logical_calls=sum(item.population_logical_calls for item in inputs),
+        measured_logical_call_denominator=measured,
+        missing_logical_call_count=missing,
+        observed_count=(
+            None if measured == 0 else sum(item.observed_count or 0 for item in inputs)
+        ),
+        measurement_status=_measurement_status(
+            measured=measured, missing=missing, not_applicable=0
+        ),
+        reason_codes=tuple(sorted({reason for item in inputs for reason in item.reason_codes})),
+    )
+
+
 def _group(
     kind: PilotGroupKindV1,
     cells: tuple[PilotCellAnalysisV1, ...],
@@ -1664,6 +3115,7 @@ def _group(
     task_id: str | None = None,
 ) -> PilotGroupAnalysisV1:
     successes = tuple(cell.official_success for cell in cells)
+    scores = tuple(cell.official_score_ppm for cell in cells)
     step_values = tuple(cell.steps for cell in cells)
     return PilotGroupAnalysisV1(
         kind=kind,
@@ -1678,6 +3130,7 @@ def _group(
             successes,
             ("OFFICIAL_MOBILEWORLD_EVALUATOR",),
         ),
+        official_scores=_score_summary(scores),
         steps=PilotStepSummaryV1(
             cell_denominator=len(step_values),
             total_steps=sum(step_values),
@@ -1685,6 +3138,9 @@ def _group(
             maximum_steps=max(step_values),
         ),
         call_rates=tuple(_merge_rate(metric, cells) for metric in _CALL_RATE_METRICS),
+        operational_counts=tuple(
+            _merge_operational_count(metric, cells) for metric in _OPERATIONAL_METRICS
+        ),
         termination_counts=tuple(
             PilotTerminationCountV1(
                 reason=reason,
@@ -1731,6 +3187,9 @@ def _matched_pair(
         joint_sequence_index=joint.sequence_index,
         baseline_success=baseline.official_success,
         joint_success=joint.official_success,
+        baseline_score_ppm=baseline.official_score_ppm,
+        joint_score_ppm=joint.official_score_ppm,
+        joint_minus_baseline_score_ppm=(joint.official_score_ppm - baseline.official_score_ppm),
         outcome=outcome,
         baseline_steps=baseline.steps,
         joint_steps=joint.steps,
@@ -1761,6 +3220,9 @@ def _matched_comparison(
     host: PilotHostV1 | None,
 ) -> PilotMatchedComparisonV1:
     comparable = tuple(item for item in pairs if item.termination_comparable)
+    baseline_scores = tuple(item.baseline_score_ppm for item in pairs)
+    joint_scores = tuple(item.joint_score_ppm for item in pairs)
+    score_deltas = tuple(item.joint_minus_baseline_score_ppm for item in pairs)
     return PilotMatchedComparisonV1(
         comparison_id=comparison_id,
         host=host,
@@ -1779,6 +3241,9 @@ def _matched_comparison(
         ),
         baseline_success_count=sum(item.baseline_success for item in pairs),
         joint_success_count=sum(item.joint_success for item in pairs),
+        baseline_scores=_score_summary(baseline_scores),
+        joint_scores=_score_summary(joint_scores),
+        joint_minus_baseline_scores=_score_delta_summary(score_deltas),
         baseline_total_steps=sum(item.baseline_steps for item in pairs),
         joint_total_steps=sum(item.joint_steps for item in pairs),
         joint_minus_baseline_total_steps=sum(item.joint_minus_baseline_steps for item in pairs),
@@ -1816,6 +3281,7 @@ def analyze_pilot_stage_v1(
     evidence: PilotStageEvidenceV1 | JsonValue,
     *,
     audit_detail_projections: dict[str, JsonValue] | None = None,
+    production_bindings: PilotAnalysisProductionBindingsV1 | None = None,
 ) -> PilotAnalysisV1:
     """Analyze one complete pilot without silently changing a denominator.
 
@@ -1832,8 +3298,19 @@ def analyze_pilot_stage_v1(
 
     if type(manifest) is not FrozenPilotManifestV1:
         raise R25AnalysisContractError("UNTRUSTED_TYPE", "manifest must use its exact type")
+    if (
+        production_bindings is not None
+        and type(production_bindings) is not PilotAnalysisProductionBindingsV1
+    ):
+        raise R25AnalysisContractError(
+            "UNTRUSTED_TYPE", "production analysis bindings must use their exact type"
+        )
     source = _stage_projection(evidence)
-    cells, _ = _validate_stage(manifest, source)
+    cells, _ = _validate_stage(
+        manifest,
+        source,
+        production_bindings=production_bindings,
+    )
     if audit_detail_projections is None:
         details: dict[str, JsonValue] = {}
     elif type(audit_detail_projections) is dict and all(
@@ -1849,6 +3326,7 @@ def analyze_pilot_stage_v1(
             cell,
             audit_details=details,
             max_steps=manifest.max_steps_per_cell,
+            require_production_restricted_proof=production_bindings is not None,
         )
         for cell in cells
     )
@@ -1905,6 +3383,21 @@ def analyze_pilot_stage_v1(
         source_manifest_sha256=frozen_pilot_manifest_sha256(manifest),
         manifest_sha256=cast(str, source["manifest_sha256"]),
         run_id=cast(str, source["run_id"]),
+        evidence_completeness=(
+            PilotAnalysisEvidenceCompletenessV1.LEGACY_CPU_ONLY_UNACCEPTABLE
+            if production_bindings is None
+            else PilotAnalysisEvidenceCompletenessV1.PRODUCTION_V2_INTEGRITY_BOUND
+        ),
+        post_run_integrity_artifact_sha256=(
+            None
+            if production_bindings is None
+            else production_bindings.post_run_integrity_artifact_sha256
+        ),
+        ordered_collector_integrity_root_sha256=(
+            None
+            if production_bindings is None
+            else production_bindings.ordered_collector_integrity_root_sha256
+        ),
         cells=analyses,
         host_arm_groups=host_arm_groups,
         task_groups=task_groups,
@@ -1927,6 +3420,7 @@ def analyze_pilot_stage_v1(
                 )
             )
         ),
+        _seal=_PILOT_ANALYSIS_SEAL,
     )
 
 
@@ -1963,6 +3457,38 @@ def _token_projection(value: PilotTokenSummaryV1) -> dict[str, JsonValue]:
     }
 
 
+def _operational_projection(value: PilotOperationalCountV1) -> dict[str, JsonValue]:
+    return {
+        "measurement_status": value.measurement_status.value,
+        "measured_logical_call_denominator": value.measured_logical_call_denominator,
+        "metric": value.metric.value,
+        "missing_logical_call_count": value.missing_logical_call_count,
+        "observed_count": value.observed_count,
+        "population_logical_calls": value.population_logical_calls,
+        "reason_codes": list(value.reason_codes),
+    }
+
+
+def _score_projection(value: PilotScoreSummaryV1) -> dict[str, JsonValue]:
+    return {
+        "maximum_score_ppm": value.maximum_score_ppm,
+        "minimum_score_ppm": value.minimum_score_ppm,
+        "score_count": value.score_count,
+        "score_mean_ppm": value.score_mean_ppm,
+        "score_sum_ppm": value.score_sum_ppm,
+    }
+
+
+def _score_delta_projection(value: PilotScoreDeltaSummaryV1) -> dict[str, JsonValue]:
+    return {
+        "maximum_score_delta_ppm": value.maximum_score_delta_ppm,
+        "minimum_score_delta_ppm": value.minimum_score_delta_ppm,
+        "pair_count": value.pair_count,
+        "score_delta_mean_ppm": value.score_delta_mean_ppm,
+        "score_delta_sum_ppm": value.score_delta_sum_ppm,
+    }
+
+
 def _group_projection(value: PilotGroupAnalysisV1) -> dict[str, JsonValue]:
     return {
         "actor_provider_tokens": _token_projection(value.actor_provider_tokens),
@@ -1973,8 +3499,10 @@ def _group_projection(value: PilotGroupAnalysisV1) -> dict[str, JsonValue]:
         "group_id": value.group_id,
         "host": None if value.host is None else value.host.value,
         "kind": value.kind.value,
+        "official_scores": _score_projection(value.official_scores),
         "official_success": _rate_projection(value.official_success),
         "openai_calls": value.openai_calls,
+        "operational_counts": [_operational_projection(item) for item in value.operational_counts],
         "sentinel_openai_tokens": _token_projection(value.sentinel_openai_tokens),
         "steps": {
             "cell_denominator": value.steps.cell_denominator,
@@ -1996,6 +3524,7 @@ def _matched_pair_projection(value: PilotMatchedPairV1) -> dict[str, JsonValue]:
         "baseline_cost_usd_micros": value.baseline_cost_usd_micros,
         "baseline_openai_calls": value.baseline_openai_calls,
         "baseline_sequence_index": value.baseline_sequence_index,
+        "baseline_score_ppm": value.baseline_score_ppm,
         "baseline_steps": value.baseline_steps,
         "baseline_success": value.baseline_success,
         "baseline_termination": value.baseline_termination.value,
@@ -2003,9 +3532,11 @@ def _matched_pair_projection(value: PilotMatchedPairV1) -> dict[str, JsonValue]:
         "baseline_sentinel_openai_tokens": _token_projection(value.baseline_sentinel_openai_tokens),
         "host": value.host.value,
         "joint_cost_usd_micros": value.joint_cost_usd_micros,
+        "joint_minus_baseline_score_ppm": value.joint_minus_baseline_score_ppm,
         "joint_minus_baseline_steps": value.joint_minus_baseline_steps,
         "joint_openai_calls": value.joint_openai_calls,
         "joint_sequence_index": value.joint_sequence_index,
+        "joint_score_ppm": value.joint_score_ppm,
         "joint_steps": value.joint_steps,
         "joint_success": value.joint_success,
         "joint_actor_provider_tokens": _token_projection(value.joint_actor_provider_tokens),
@@ -2025,6 +3556,7 @@ def _matched_comparison_projection(
         "baseline_actor_provider_tokens": _token_projection(value.baseline_actor_provider_tokens),
         "baseline_cost_usd_micros": value.baseline_cost_usd_micros,
         "baseline_openai_calls": value.baseline_openai_calls,
+        "baseline_scores": _score_projection(value.baseline_scores),
         "baseline_success_count": value.baseline_success_count,
         "baseline_total_steps": value.baseline_total_steps,
         "baseline_wall_time_ms": value.baseline_wall_time_ms,
@@ -2037,9 +3569,11 @@ def _matched_comparison_projection(
         "host": None if value.host is None else value.host.value,
         "joint_cost_usd_micros": value.joint_cost_usd_micros,
         "joint_improved_count": value.joint_improved_count,
+        "joint_minus_baseline_scores": _score_delta_projection(value.joint_minus_baseline_scores),
         "joint_minus_baseline_total_steps": value.joint_minus_baseline_total_steps,
         "joint_openai_calls": value.joint_openai_calls,
         "joint_regressed_count": value.joint_regressed_count,
+        "joint_scores": _score_projection(value.joint_scores),
         "joint_success_count": value.joint_success_count,
         "joint_total_steps": value.joint_total_steps,
         "joint_wall_time_ms": value.joint_wall_time_ms,
@@ -2063,6 +3597,9 @@ def pilot_analysis_projection(value: PilotAnalysisV1) -> dict[str, JsonValue]:
         source_manifest_sha256=value.source_manifest_sha256,
         manifest_sha256=value.manifest_sha256,
         run_id=value.run_id,
+        evidence_completeness=value.evidence_completeness,
+        post_run_integrity_artifact_sha256=value.post_run_integrity_artifact_sha256,
+        ordered_collector_integrity_root_sha256=(value.ordered_collector_integrity_root_sha256),
         cells=tuple(value.cells),
         host_arm_groups=tuple(value.host_arm_groups),
         task_groups=tuple(value.task_groups),
@@ -2072,6 +3609,7 @@ def pilot_analysis_projection(value: PilotAnalysisV1) -> dict[str, JsonValue]:
         overall=value.overall,
         limitations=tuple(value.limitations),
         schema_version=value.schema_version,
+        _seal=_PILOT_ANALYSIS_SEAL,
     )
     return {
         "cells": [
@@ -2084,9 +3622,16 @@ def pilot_analysis_projection(value: PilotAnalysisV1) -> dict[str, JsonValue]:
                 "cost_usd_micros": cell.cost_usd_micros,
                 "executed_actions": cell.executed_actions,
                 "host": cell.host.value,
+                "official_score_float_hex": cell.official_score_float_hex,
                 "official_score_ppm": cell.official_score_ppm,
                 "official_success": cell.official_success,
+                "official_success_metric_id": cell.official_success_metric_id,
+                "official_success_operator": cell.official_success_operator,
+                "official_success_threshold_float_hex": (cell.official_success_threshold_float_hex),
                 "openai_calls": cell.openai_calls,
+                "operational_counts": [
+                    _operational_projection(item) for item in cell.operational_counts
+                ],
                 "premature_stop": _classification_projection(cell.premature_stop),
                 "repeated_action": _classification_projection(cell.repeated_action),
                 "sequence_index": cell.sequence_index,
@@ -2103,6 +3648,7 @@ def pilot_analysis_projection(value: PilotAnalysisV1) -> dict[str, JsonValue]:
             for cell in value.cells
         ],
         "host_arm_groups": [_group_projection(item) for item in value.host_arm_groups],
+        "evidence_completeness": value.evidence_completeness.value,
         "limitations": list(value.limitations),
         "manifest_sha256": value.manifest_sha256,
         "matched_host_comparisons": [
@@ -2111,6 +3657,8 @@ def pilot_analysis_projection(value: PilotAnalysisV1) -> dict[str, JsonValue]:
         "matched_overall": _matched_comparison_projection(value.matched_overall),
         "matched_pairs": [_matched_pair_projection(item) for item in value.matched_pairs],
         "overall": _group_projection(value.overall),
+        "ordered_collector_integrity_root_sha256": (value.ordered_collector_integrity_root_sha256),
+        "post_run_integrity_artifact_sha256": value.post_run_integrity_artifact_sha256,
         "run_id": value.run_id,
         "schema_version": value.schema_version,
         "source_manifest_sha256": value.source_manifest_sha256,
@@ -2125,6 +3673,8 @@ def pilot_analysis_sha256(value: PilotAnalysisV1) -> str:
 
 __all__ = [
     "PILOT_ANALYSIS_SCHEMA_VERSION",
+    "PilotAnalysisEvidenceCompletenessV1",
+    "PilotAnalysisProductionBindingsV1",
     "PilotAnalysisV1",
     "PilotCellAnalysisV1",
     "PilotClassificationResultV1",
@@ -2135,10 +3685,14 @@ __all__ = [
     "PilotMatchedOutcomeV1",
     "PilotMatchedPairV1",
     "PilotMeasurementStatusV1",
+    "PilotOperationalCountV1",
+    "PilotOperationalMetricV1",
     "PilotRateMetricV1",
     "PilotRateSummaryV1",
     "PilotRateUnitV1",
     "PilotStepSummaryV1",
+    "PilotScoreDeltaSummaryV1",
+    "PilotScoreSummaryV1",
     "PilotTokenSummaryV1",
     "PilotTerminationCountV1",
     "PilotTerminationReasonV1",

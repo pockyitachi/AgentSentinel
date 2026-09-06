@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -19,12 +20,22 @@ import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from types import ModuleType
 from typing import cast
+
+from jsonschema import (  # type: ignore[import-untyped]
+    Draft202012Validator,
+    RefResolver,
+    SchemaError,
+    ValidationError,
+)
 
 from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes, canonical_sha256
 from mobile_world.runtime.sentinel.r2_4.live_run import (
     R24_R25_RUN_AUTHORITY_SCHEMA_VERSION,
+    R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V1,
+    R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2,
     SNAPSHOT_TREE_ALGORITHM_V1,
     HostLiveSmokePlanV1,
     LiveSmokeCaseV1,
@@ -40,6 +51,8 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     SnapshotResourceV1,
     authority_manifest_projection,
     authority_manifest_sha256,
+    parse_authority_manifest,
+    production_sentinel_config_sha256_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.topology_artifact import (
     R24CpuTopologyArtifactV1,
@@ -50,6 +63,8 @@ from mobile_world.runtime.sentinel.r2_4.topology_artifact import (
 from mobile_world.runtime.sentinel.r2_5.pilot import (
     EXECUTABLE_PILOT_TASK_SOURCE_SCHEMA_VERSION,
     FROZEN_PILOT_SCHEMA_VERSION,
+    FROZEN_PILOT_SCHEMA_VERSION_V1,
+    FROZEN_PILOT_SCHEMA_VERSION_V2,
     FrozenPilotManifestV1,
     InlinePilotTaskParametersV1,
     MobileWorldTaskParametersV1,
@@ -62,6 +77,7 @@ from mobile_world.runtime.sentinel.r2_5.pilot import (
     executable_pilot_task_source_projection,
     frozen_pilot_manifest_projection,
     frozen_pilot_manifest_sha256,
+    parse_frozen_pilot_manifest,
 )
 
 ARTIFACT_BUNDLE_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-r2.5-artifacts/v1"
@@ -75,6 +91,12 @@ FROZEN_PILOT_MANIFEST_FILENAME = "frozen-pilot-manifest.json"
 RUN_AUTHORITY_MANIFEST_FILENAME = "run-authority-manifest.draft.json"
 ARTIFACT_BUNDLE_FILENAME = "artifact-bundle.json"
 TOPOLOGY_COMPARISON_FILENAME = "cpu-topology-comparison.v1.json"
+GUI_ONLY_TASK_SOURCE_TRIAL = 1
+GUI_ONLY_TASK_SOURCE_TASK_COUNT = 117
+GUI_ONLY_TASK_SOURCE_TRIAL_PROVENANCE = "NEW_R25_DECLARATION_NOT_HISTORICAL_DERIVATION"
+GUI_ONLY_TASK_SOURCE_FREEZE_SCHEMA_VERSION = (
+    "mobileworld.runtime.sentinel-r2.5-gui-only-task-source-freeze/v1"
+)
 
 _SELECTION_DOMAIN = b"r25-pilot-v1\0"
 _RESET_SEED_DOMAIN = b"r25-reset-seed-v1\0"
@@ -85,6 +107,94 @@ _MAX_SOURCE_ROWS = 10_000
 _MAX_FIXTURE_BYTES = 100_000_000
 _MAX_TOPOLOGY_ARTIFACT_BYTES = 8 * 1024 * 1024
 _MAX_TASK_DEFINITION_BYTES = 4 * 1024 * 1024
+_MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
+_CURATED_TASK_SET_SCHEMA_VERSION = "mobileworld.audit.curated-task-set/v1"
+_CURATED_TASK_SET_ARTIFACT_TYPE = "derived_task_selection"
+_CURATED_TASK_SET_FIELDS = frozenset(
+    {
+        "artifact_type",
+        "canonical_catalog",
+        "counts",
+        "dataset_id",
+        "is_raw_run",
+        "raw_schema_version",
+        "schema_version",
+        "selection_policy",
+        "selection_sha256",
+        "source_locator",
+        "sources",
+        "tasks",
+    }
+)
+_CURATED_CATALOG_FIELDS = frozenset({"task_catalog_sha256", "task_count", "task_name_index_sha256"})
+_CURATED_COUNT_FIELDS = frozenset(
+    {
+        "blob_reference_occurrences",
+        "selected_task_stream_byte_count",
+        "task_count",
+        "task_count_by_source",
+        "unique_blob_byte_count_summed_by_source",
+        "unique_blob_count_summed_by_source",
+    }
+)
+_CURATED_SELECTION_POLICY_FIELDS = frozenset(
+    {
+        "candidate_resolution",
+        "canonical_catalog_source_id",
+        "collector_error_event_ids_must_be_empty",
+        "missing_artifacts_must_be_empty",
+        "raw_events_or_blobs_copied",
+        "source_run_global_capture_complete_required",
+        "task_capture_complete",
+        "task_goal_sha256_must_match_catalog",
+        "task_outcome_score_filter",
+        "task_runtime_status",
+        "unit",
+    }
+)
+_CURATED_TASK_FIELDS = frozenset(
+    {
+        "canonical_suite_index",
+        "capture_complete",
+        "collector_error_event_ids",
+        "environment_evaluation",
+        "missing_artifacts",
+        "runtime_status",
+        "source_id",
+        "source_run_id",
+        "source_task_index",
+        "source_task_run_id",
+        "task_ended_event_id",
+        "task_goal_utf8_byte_count",
+        "task_goal_utf8_sha256",
+        "task_name",
+        "task_started_event_id",
+        "task_stream",
+        "whole_task_attempt_index",
+    }
+)
+_WRITTEN_ARTIFACT_FILENAMES = frozenset(
+    {
+        GUI_ONLY_TASK_SOURCE_FILENAME,
+        COHORT_SELECTION_FILENAME,
+        PILOT_TASK_SOURCE_FILENAME,
+        FROZEN_PILOT_MANIFEST_FILENAME,
+        RUN_AUTHORITY_MANIFEST_FILENAME,
+        ARTIFACT_BUNDLE_FILENAME,
+        TOPOLOGY_COMPARISON_FILENAME,
+    }
+)
+_SCHEMA_RELATIVE_PATHS = (
+    "mobileworld_audit_handoff/schemas/r2_4/topology_comparison.v1.schema.json",
+    "mobileworld_audit_handoff/schemas/r2_4/cpu_topology_artifact.v1.schema.json",
+    "mobileworld_audit_handoff/schemas/r2_4/run_authority_manifest.v1.schema.json",
+    "mobileworld_audit_handoff/schemas/r2_4/run_authority_manifest.v2.schema.json",
+    "mobileworld_audit_handoff/schemas/r2_5/frozen_pilot_manifest.v1.schema.json",
+    "mobileworld_audit_handoff/schemas/r2_5/frozen_pilot_manifest.v2.schema.json",
+    "mobileworld_audit_handoff/schemas/r2_5/cohort_selection.v1.schema.json",
+    "mobileworld_audit_handoff/schemas/r2_5/executable_task_source.v1.schema.json",
+    "mobileworld_audit_handoff/schemas/r2_5/artifact_bundle.v1.schema.json",
+)
 _DYNAMIC_TIME_APPS = frozenset({"Chrome", "Maps", "MCP-arXiv"})
 _DYNAMIC_TIME_SOURCE_MARKERS = (
     b"datetime.now",
@@ -98,6 +208,68 @@ _DYNAMIC_TIME_SOURCE_MARKERS = (
     b"get_device_datetime",
     b"get_device_date",
 )
+_DYNAMIC_TIME_CALLS = frozenset(
+    {
+        "datetime.date.today",
+        "datetime.datetime.now",
+        "datetime.datetime.today",
+        "datetime.datetime.utcnow",
+        "time.time",
+    }
+)
+
+
+def _source_ast_uses_dynamic_wall_clock(syntax: ast.AST) -> bool:
+    """Recognize wall-clock calls through ordinary import/assignment aliases.
+
+    This is deliberately conservative: wildcard imports from ``time`` or
+    ``datetime`` cannot be resolved statically and therefore classify the
+    containing definition source as dynamic/unknown.
+    """
+
+    aliases: dict[str, str] = {}
+    assignments: list[tuple[str, ast.expr]] = []
+    for node in ast.walk(syntax):
+        if isinstance(node, ast.Import):
+            for imported in node.names:
+                if imported.name in {"time", "datetime"}:
+                    aliases[imported.asname or imported.name] = imported.name
+        elif isinstance(node, ast.ImportFrom) and node.module in {"time", "datetime"}:
+            for imported in node.names:
+                if imported.name == "*":
+                    return True
+                local = imported.asname or imported.name
+                aliases[local] = f"{node.module}.{imported.name}"
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.expr):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            assignments.extend(
+                (target.id, node.value) for target in targets if isinstance(target, ast.Name)
+            )
+
+    def qualified(value: ast.expr) -> str | None:
+        if isinstance(value, ast.Name):
+            return aliases.get(value.id, value.id)
+        if isinstance(value, ast.Attribute):
+            parent = qualified(value.value)
+            return None if parent is None else f"{parent}.{value.attr}"
+        return None
+
+    # Resolve simple ``clock = time_module.time`` aliases without executing
+    # task code. Two passes cover the ordinary chained-alias form while
+    # remaining bounded and deterministic.
+    for _ in range(2):
+        changed = False
+        for target, expression in assignments:
+            resolved = qualified(expression)
+            if resolved is not None and aliases.get(target) != resolved:
+                aliases[target] = resolved
+                changed = True
+        if not changed:
+            break
+    return any(
+        isinstance(node, ast.Call) and qualified(node.func) in _DYNAMIC_TIME_CALLS
+        for node in ast.walk(syntax)
+    )
 
 
 class R25ArtifactBuildError(ValueError):
@@ -402,6 +574,14 @@ class AuthorityArtifactInputsV1:
     authorized_by: str
     issued_at_utc: str
     expires_at_utc: str
+    resource_topology: str
+    runtime_config_sha256: str
+    pricing_sha256: str
+    max_resource_cleanup_wall_time_seconds: int
+    resource_cleanup_upper_bound_sha256: str
+    max_model_switch_wall_time_seconds: int
+    max_post_run_integrity_wall_time_seconds: int
+    cohort_size: int = 20
     max_steps_per_cell: int = 8
     per_cell_timeout_seconds: int = 900
     max_total_wall_time_seconds: int = 72_000
@@ -410,6 +590,7 @@ class AuthorityArtifactInputsV1:
     smoke_cost_usd_micros: int = 1_000_000
     resource_preflight_wall_time_seconds: int = 3_600
     openai_timeout_ms: int = 120_000
+    source_freeze_receipt: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,6 +601,201 @@ class AuthorityArtifactBundleV1:
     pilot_manifest: FrozenPilotManifestV1
     authority_manifest: R24R25RunAuthorityManifestV1
     topology_artifact: R24CpuTopologyArtifactV1
+    source_freeze: FrozenGuiOnlyTaskSourceV1
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenGuiOnlyTaskSourceV1:
+    """Exact task-name extraction plus a new, explicit R2.5 trial declaration."""
+
+    historical_manifest_path: str
+    historical_manifest_sha256: str
+    historical_manifest_byte_count: int
+    task_source_bytes: bytes
+    task_source_sha256: str
+    task_count: int
+    trial: int
+    trial_provenance: str
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.historical_manifest_path) is not str
+            or not Path(self.historical_manifest_path).is_absolute()
+        ):
+            raise R25ArtifactBuildError(
+                "INVALID_HISTORICAL_MANIFEST", "historical manifest path is invalid"
+            )
+        for value in (self.historical_manifest_sha256, self.task_source_sha256):
+            if type(value) is not str or _SHA256.fullmatch(value) is None:
+                raise R25ArtifactBuildError(
+                    "INVALID_HISTORICAL_MANIFEST", "source freeze digest is invalid"
+                )
+        if (
+            type(self.historical_manifest_byte_count) is not int
+            or self.historical_manifest_byte_count < 1
+            or type(self.task_source_bytes) is not bytes
+            or not self.task_source_bytes
+            or hashlib.sha256(self.task_source_bytes).hexdigest() != self.task_source_sha256
+            or type(self.task_count) is not int
+            or self.task_count != GUI_ONLY_TASK_SOURCE_TASK_COUNT
+            or type(self.trial) is not int
+            or self.trial != GUI_ONLY_TASK_SOURCE_TRIAL
+            or type(self.trial_provenance) is not str
+            or self.trial_provenance != GUI_ONLY_TASK_SOURCE_TRIAL_PROVENANCE
+        ):
+            raise R25ArtifactBuildError(
+                "INVALID_GUI_ONLY_TASK_SOURCE", "source freeze values are inconsistent"
+            )
+        rows = _source_rows(self.task_source_bytes)
+        if len(rows) != self.task_count or any(row.trial != self.trial for row in rows):
+            raise R25ArtifactBuildError(
+                "INVALID_GUI_ONLY_TASK_SOURCE",
+                "source freeze rows are inconsistent with its census and trial declaration",
+            )
+        canonical_source_bytes = b"".join(
+            canonical_json_bytes(
+                cast(
+                    JsonValue,
+                    {"task_name": row.task_name, "trial": row.trial},
+                )
+            )
+            + b"\n"
+            for row in rows
+        )
+        if self.task_source_bytes != canonical_source_bytes:
+            raise R25ArtifactBuildError(
+                "INVALID_GUI_ONLY_TASK_SOURCE",
+                "source freeze rows are not exact canonical JSONL",
+            )
+
+
+def frozen_gui_only_task_source_projection_v1(
+    source: FrozenGuiOnlyTaskSourceV1,
+) -> dict[str, JsonValue]:
+    """Project the complete provenance without duplicating the JSONL payload."""
+
+    if type(source) is not FrozenGuiOnlyTaskSourceV1:
+        raise R25ArtifactBuildError("UNTRUSTED_SOURCE_FREEZE", "source freeze type is untrusted")
+    return {
+        "historical_manifest_byte_count": source.historical_manifest_byte_count,
+        "historical_manifest_path": source.historical_manifest_path,
+        "historical_manifest_sha256": source.historical_manifest_sha256,
+        "schema_version": GUI_ONLY_TASK_SOURCE_FREEZE_SCHEMA_VERSION,
+        "task_count": source.task_count,
+        "task_source_byte_count": len(source.task_source_bytes),
+        "task_source_sha256": source.task_source_sha256,
+        "trial": source.trial,
+        "trial_provenance": source.trial_provenance,
+    }
+
+
+def frozen_gui_only_task_source_sha256_v1(source: FrozenGuiOnlyTaskSourceV1) -> str:
+    return canonical_sha256(cast(JsonValue, frozen_gui_only_task_source_projection_v1(source)))
+
+
+def frozen_gui_only_task_source_receipt_v1(
+    source: FrozenGuiOnlyTaskSourceV1,
+) -> dict[str, JsonValue]:
+    projection = cast(JsonValue, frozen_gui_only_task_source_projection_v1(source))
+    return {
+        "source_freeze": projection,
+        "source_freeze_sha256": canonical_sha256(projection),
+    }
+
+
+def _parse_frozen_gui_only_task_source_projection_v1(
+    value: object,
+    *,
+    task_source_bytes: bytes,
+) -> FrozenGuiOnlyTaskSourceV1:
+    fields = frozenset(
+        {
+            "historical_manifest_byte_count",
+            "historical_manifest_path",
+            "historical_manifest_sha256",
+            "schema_version",
+            "task_count",
+            "task_source_byte_count",
+            "task_source_sha256",
+            "trial",
+            "trial_provenance",
+        }
+    )
+    item = _exact_object(value, fields, "GUI-only task source freeze")
+    if (
+        item["schema_version"] != GUI_ONLY_TASK_SOURCE_FREEZE_SCHEMA_VERSION
+        or type(item["task_source_byte_count"]) is not int
+        or item["task_source_byte_count"] != len(task_source_bytes)
+    ):
+        raise R25ArtifactBuildError(
+            "INVALID_GUI_ONLY_TASK_SOURCE", "source freeze projection differs"
+        )
+    try:
+        return FrozenGuiOnlyTaskSourceV1(
+            historical_manifest_path=cast(str, item["historical_manifest_path"]),
+            historical_manifest_sha256=cast(str, item["historical_manifest_sha256"]),
+            historical_manifest_byte_count=cast(int, item["historical_manifest_byte_count"]),
+            task_source_bytes=task_source_bytes,
+            task_source_sha256=cast(str, item["task_source_sha256"]),
+            task_count=cast(int, item["task_count"]),
+            trial=cast(int, item["trial"]),
+            trial_provenance=cast(str, item["trial_provenance"]),
+        )
+    except (TypeError, ValueError) as exc:
+        if isinstance(exc, R25ArtifactBuildError):
+            raise
+        raise R25ArtifactBuildError(
+            "INVALID_GUI_ONLY_TASK_SOURCE", "source freeze projection is invalid"
+        ) from exc
+
+
+def _validate_source_freeze_against_historical_manifest(
+    source: FrozenGuiOnlyTaskSourceV1,
+) -> None:
+    regenerated = freeze_gui_only_task_source_from_historical_manifest_v1(
+        Path(source.historical_manifest_path),
+        expected_manifest_sha256=source.historical_manifest_sha256,
+        expected_manifest_byte_count=source.historical_manifest_byte_count,
+    )
+    if regenerated != source:
+        raise R25ArtifactBuildError(
+            "SOURCE_FREEZE_PROVENANCE_MISMATCH",
+            "source freeze does not reproduce from its exact historical manifest",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactBundleReadbackValidationV1:
+    bundle_directory: str
+    artifact_bundle_sha256: str
+    gui_only_task_source_sha256: str
+    registry_sha256: str
+    source_task_count: int
+    cohort_size: int
+    artifact_count: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.bundle_directory) is not str
+            or not Path(self.bundle_directory).is_absolute()
+            or type(self.source_task_count) is not int
+            or self.source_task_count < 20
+            or type(self.cohort_size) is not int
+            or not 20 <= self.cohort_size <= 30
+            or self.artifact_count != len(_WRITTEN_ARTIFACT_FILENAMES)
+        ):
+            raise R25ArtifactBuildError(
+                "INVALID_READBACK_VALIDATION", "readback validation values are inconsistent"
+            )
+        for value in (
+            self.artifact_bundle_sha256,
+            self.gui_only_task_source_sha256,
+            self.registry_sha256,
+        ):
+            if type(value) is not str or _SHA256.fullmatch(value) is None:
+                raise R25ArtifactBuildError(
+                    "INVALID_READBACK_VALIDATION", "readback digest is invalid"
+                )
 
 
 def _path_within(path: Path, root: Path) -> bool:
@@ -438,14 +814,11 @@ def _absolute_path(path: object, name: str) -> Path:
 
 def _repo_external(path: Path, repository_root: Path, name: str) -> Path:
     path = _absolute_path(path, name)
-    try:
-        resolved = path.resolve(strict=False)
-        repository = repository_root.resolve(strict=True)
-    except OSError as exc:
-        raise R25ArtifactBuildError("INVALID_PATH", f"{name} cannot be resolved") from exc
-    if _path_within(resolved, repository):
+    normalized = Path(os.path.abspath(os.fspath(path)))
+    repository = Path(os.path.abspath(os.fspath(repository_root)))
+    if _path_within(normalized, repository):
         raise R25ArtifactBuildError("REPOSITORY_PATH_FORBIDDEN", f"{name} must be repo-external")
-    return resolved
+    return normalized
 
 
 def _external_reference_without_io(path: Path, repository_root: Path, name: str) -> Path:
@@ -483,15 +856,363 @@ def _strict_json(raw: bytes, name: str) -> object:
         raise R25ArtifactBuildError("INVALID_JSON", f"{name} is not strict JSON") from exc
 
 
+_DirectoryChainV1 = tuple[tuple[int, str | None, int, int], ...]
+
+
+def _open_directory_chain(path: Path, *, name: str) -> tuple[Path, _DirectoryChainV1]:
+    """Open every lexical directory component and retain its inode identity."""
+
+    absolute = _absolute_path(path, name)
+    normalized = Path(os.path.abspath(os.fspath(absolute)))
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    opened: list[tuple[int, str | None, int, int]] = []
+    try:
+        descriptor = os.open("/", flags)
+        metadata = os.fstat(descriptor)
+        opened.append((descriptor, None, metadata.st_dev, metadata.st_ino))
+        for component in normalized.parts[1:]:
+            descriptor = os.open(component, flags, dir_fd=opened[-1][0])
+            metadata = os.fstat(descriptor)
+            named = os.stat(component, dir_fd=opened[-1][0], follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or not stat.S_ISDIR(named.st_mode)
+                or (metadata.st_dev, metadata.st_ino) != (named.st_dev, named.st_ino)
+            ):
+                os.close(descriptor)
+                raise R25ArtifactBuildError(
+                    "PATH_IDENTITY_DRIFT", f"{name} crosses a directory alias"
+                )
+            opened.append((descriptor, component, metadata.st_dev, metadata.st_ino))
+        return normalized, tuple(opened)
+    except R25ArtifactBuildError:
+        for descriptor, _, _, _ in reversed(opened):
+            os.close(descriptor)
+        raise
+    except OSError as exc:
+        for descriptor, _, _, _ in reversed(opened):
+            os.close(descriptor)
+        raise R25ArtifactBuildError(
+            "INVALID_PATH", f"{name} cannot be opened without aliases"
+        ) from exc
+
+
+def _close_directory_chain(chain: _DirectoryChainV1) -> None:
+    for descriptor, _, _, _ in reversed(chain):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
+def _revalidate_directory_chain(chain: _DirectoryChainV1, *, name: str) -> None:
+    for index, (descriptor, component, device, inode) in enumerate(chain):
+        current = os.fstat(descriptor)
+        if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (
+            device,
+            inode,
+        ):
+            raise R25ArtifactBuildError("PATH_IDENTITY_DRIFT", f"{name} directory identity changed")
+        if index:
+            assert component is not None
+            named = os.stat(component, dir_fd=chain[index - 1][0], follow_symlinks=False)
+            if (named.st_dev, named.st_ino) != (device, inode):
+                raise R25ArtifactBuildError("PATH_IDENTITY_DRIFT", f"{name} directory path changed")
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskTreeDirectoryV1:
+    descriptor: int
+    parent_descriptor: int | None
+    entry_name: str | None
+    relative_path: str
+    device: int
+    inode: int
+    entries: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskTreeEntryV1:
+    parent_descriptor: int
+    entry_name: str
+    relative_path: str
+    device: int
+    inode: int
+    mode: int
+    size: int
+    mtime_ns: int
+
+
+@dataclass(slots=True)
+class _HeldTaskDefinitionTreeV1:
+    root: Path
+    root_chain: _DirectoryChainV1
+    directories: tuple[_TaskTreeDirectoryV1, ...]
+    entries: tuple[_TaskTreeEntryV1, ...]
+    sources: dict[str, bytes]
+
+    def revalidate(self) -> None:
+        _revalidate_directory_chain(self.root_chain, name="task definitions root")
+        for directory in self.directories:
+            current = os.fstat(directory.descriptor)
+            if (
+                not stat.S_ISDIR(current.st_mode)
+                or (current.st_dev, current.st_ino) != (directory.device, directory.inode)
+                or tuple(
+                    sorted(os.listdir(directory.descriptor), key=lambda item: item.encode("utf-8"))
+                )
+                != directory.entries
+            ):
+                raise R25ArtifactBuildError(
+                    "TASK_DEFINITION_TREE_DRIFT",
+                    "task definition directory changed during registry snapshot",
+                )
+            if directory.parent_descriptor is not None:
+                assert directory.entry_name is not None
+                named = os.stat(
+                    directory.entry_name,
+                    dir_fd=directory.parent_descriptor,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISDIR(named.st_mode) or (named.st_dev, named.st_ino) != (
+                    directory.device,
+                    directory.inode,
+                ):
+                    raise R25ArtifactBuildError(
+                        "TASK_DEFINITION_TREE_DRIFT",
+                        "task definition directory binding changed",
+                    )
+        for entry in self.entries:
+            named = os.stat(
+                entry.entry_name,
+                dir_fd=entry.parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(named.st_mode)
+                or named.st_nlink != 1
+                or named.st_uid != os.geteuid()
+                or named.st_gid != os.getegid()
+                or (named.st_dev, named.st_ino) != (entry.device, entry.inode)
+                or named.st_mode != entry.mode
+                or named.st_size != entry.size
+                or named.st_mtime_ns != entry.mtime_ns
+            ):
+                raise R25ArtifactBuildError(
+                    "TASK_DEFINITION_TREE_DRIFT",
+                    "task definition entry changed during registry snapshot",
+                )
+
+    def close(self) -> None:
+        root_descriptor = self.root_chain[-1][0]
+        for directory in reversed(self.directories):
+            if directory.descriptor != root_descriptor:
+                try:
+                    os.close(directory.descriptor)
+                except OSError:
+                    pass
+        _close_directory_chain(self.root_chain)
+
+
+def _read_task_source_at(
+    *, parent_descriptor: int, entry_name: str, expected: os.stat_result
+) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            entry_name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_descriptor,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_uid != os.geteuid()
+            or before.st_gid != os.getegid()
+            or (before.st_dev, before.st_ino) != (expected.st_dev, expected.st_ino)
+            or not 0 <= before.st_size <= _MAX_TASK_DEFINITION_BYTES
+        ):
+            raise R25ArtifactBuildError(
+                "INVALID_TASK_DEFINITION_SOURCE",
+                "task definition must be an owner-held unaliased regular file",
+            )
+        chunks: list[bytes] = []
+        remaining = before.st_size + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        named_after = os.stat(entry_name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (
+            len(raw) != before.st_size
+            or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+            or (named_after.st_dev, named_after.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise R25ArtifactBuildError(
+                "TASK_DEFINITION_TREE_DRIFT", "task definition changed while being read"
+            )
+        return raw
+    except R25ArtifactBuildError:
+        raise
+    except OSError as exc:
+        raise R25ArtifactBuildError(
+            "INVALID_TASK_DEFINITION_SOURCE", "task definition cannot be read safely"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _snapshot_task_definition_tree_v1(root: Path) -> _HeldTaskDefinitionTreeV1:
+    """Hold one alias-free directory census and read every Python source via openat."""
+
+    normalized, root_chain = _open_directory_chain(root, name="task definitions root")
+    root_descriptor = root_chain[-1][0]
+    directories: list[_TaskTreeDirectoryV1] = []
+    entries: list[_TaskTreeEntryV1] = []
+    sources: dict[str, bytes] = {}
+    opened_child_descriptors: list[int] = []
+    pending: list[tuple[int, int | None, str | None, Path]] = [
+        (root_descriptor, None, None, Path("."))
+    ]
+    try:
+        while pending:
+            descriptor, parent_descriptor, entry_name, relative = pending.pop()
+            info = os.fstat(descriptor)
+            names = tuple(sorted(os.listdir(descriptor), key=lambda item: item.encode("utf-8")))
+            directories.append(
+                _TaskTreeDirectoryV1(
+                    descriptor=descriptor,
+                    parent_descriptor=parent_descriptor,
+                    entry_name=entry_name,
+                    relative_path=relative.as_posix(),
+                    device=info.st_dev,
+                    inode=info.st_ino,
+                    entries=names,
+                )
+            )
+            if len(directories) + len(entries) + len(names) > _MAX_SOURCE_ROWS:
+                raise R25ArtifactBuildError(
+                    "TASK_DEFINITION_TREE_LIMIT",
+                    "task definition tree exceeds its fixed census bound",
+                )
+            child_directories: list[tuple[int, int, str, Path]] = []
+            for name in names:
+                named = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                child_relative = Path(name) if relative == Path(".") else relative / name
+                if stat.S_ISLNK(named.st_mode):
+                    raise R25ArtifactBuildError(
+                        "TASK_DEFINITION_ALIAS_FORBIDDEN",
+                        "task definition tree contains a symbolic link",
+                    )
+                if stat.S_ISDIR(named.st_mode):
+                    child = os.open(
+                        name,
+                        os.O_RDONLY
+                        | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_DIRECTORY", 0)
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=descriptor,
+                    )
+                    child_info = os.fstat(child)
+                    if (child_info.st_dev, child_info.st_ino) != (
+                        named.st_dev,
+                        named.st_ino,
+                    ):
+                        os.close(child)
+                        raise R25ArtifactBuildError(
+                            "TASK_DEFINITION_TREE_DRIFT",
+                            "task definition directory changed while opening",
+                        )
+                    opened_child_descriptors.append(child)
+                    child_directories.append((child, descriptor, name, child_relative))
+                    continue
+                if not stat.S_ISREG(named.st_mode):
+                    raise R25ArtifactBuildError(
+                        "TASK_DEFINITION_ALIAS_FORBIDDEN",
+                        "task definition tree contains a non-regular entry",
+                    )
+                if (
+                    named.st_nlink != 1
+                    or named.st_uid != os.geteuid()
+                    or named.st_gid != os.getegid()
+                ):
+                    raise R25ArtifactBuildError(
+                        "TASK_DEFINITION_ALIAS_FORBIDDEN",
+                        "task definition tree contains an aliased or foreign file",
+                    )
+                entries.append(
+                    _TaskTreeEntryV1(
+                        parent_descriptor=descriptor,
+                        entry_name=name,
+                        relative_path=child_relative.as_posix(),
+                        device=named.st_dev,
+                        inode=named.st_ino,
+                        mode=named.st_mode,
+                        size=named.st_size,
+                        mtime_ns=named.st_mtime_ns,
+                    )
+                )
+                if name.endswith(".py"):
+                    sources[child_relative.as_posix()] = _read_task_source_at(
+                        parent_descriptor=descriptor,
+                        entry_name=name,
+                        expected=named,
+                    )
+            pending.extend(reversed(child_directories))
+        held = _HeldTaskDefinitionTreeV1(
+            root=normalized,
+            root_chain=root_chain,
+            directories=tuple(directories),
+            entries=tuple(entries),
+            sources=sources,
+        )
+        held.revalidate()
+        return held
+    except Exception:
+        for descriptor in reversed(opened_child_descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        _close_directory_chain(root_chain)
+        raise
+
+
 def _read_regular_file(path: Path, *, maximum: int, name: str) -> bytes:
     path = _absolute_path(path, name)
     descriptor = -1
+    chain: _DirectoryChainV1 = ()
     try:
+        normalized, chain = _open_directory_chain(path.parent, name=f"{name} parent")
+        del normalized
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags)
+        descriptor = os.open(path.name, flags, dir_fd=chain[-1][0])
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise R25ArtifactBuildError("INVALID_FILE", f"{name} must be a regular file")
+        named_before = os.stat(path.name, dir_fd=chain[-1][0], follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or not stat.S_ISREG(named_before.st_mode)
+            or (before.st_dev, before.st_ino) != (named_before.st_dev, named_before.st_ino)
+            or before.st_nlink != 1
+            or before.st_uid != os.geteuid()
+            or before.st_gid != os.getegid()
+        ):
+            raise R25ArtifactBuildError(
+                "INVALID_FILE", f"{name} must be an owner-held, unaliased regular file"
+            )
         if not 1 <= before.st_size <= maximum:
             raise R25ArtifactBuildError("INVALID_FILE_SIZE", f"{name} size is outside bounds")
         chunks: list[bytes] = []
@@ -504,6 +1225,8 @@ def _read_regular_file(path: Path, *, maximum: int, name: str) -> bytes:
             remaining -= len(chunk)
         raw = b"".join(chunks)
         after = os.fstat(descriptor)
+        _revalidate_directory_chain(chain, name=f"{name} parent")
+        named_after = os.stat(path.name, dir_fd=chain[-1][0], follow_symlinks=False)
     except R25ArtifactBuildError:
         raise
     except OSError as exc:
@@ -511,15 +1234,493 @@ def _read_regular_file(path: Path, *, maximum: int, name: str) -> bytes:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+        _close_directory_chain(chain)
     if (
         len(raw) != before.st_size
         or after.st_size != before.st_size
         or after.st_mtime_ns != before.st_mtime_ns
         or after.st_ino != before.st_ino
         or after.st_dev != before.st_dev
+        or (named_after.st_dev, named_after.st_ino) != (before.st_dev, before.st_ino)
     ):
         raise R25ArtifactBuildError("FILE_DRIFT", f"{name} changed while being read")
     return raw
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise R25ArtifactBuildError(
+            "ARTIFACT_FSYNC_FAILED", "artifact directory durability barrier failed"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _write_fresh_owner_file(path: Path, payload: bytes, *, name: str) -> None:
+    descriptor = -1
+    chain: _DirectoryChainV1 = ()
+    try:
+        _, chain = _open_directory_chain(path.parent, name=f"{name} parent")
+        try:
+            os.stat(path.name, dir_fd=chain[-1][0], follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise R25ArtifactBuildError("OUTPUT_NOT_FRESH", f"{name} must not exist")
+        descriptor = os.open(
+            path.name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=chain[-1][0],
+        )
+        opened = os.fstat(descriptor)
+        named = os.stat(path.name, dir_fd=chain[-1][0], follow_symlinks=False)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+            or opened.st_nlink != 1
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or opened.st_uid != os.geteuid()
+            or opened.st_gid != os.getegid()
+        ):
+            raise R25ArtifactBuildError(
+                "ARTIFACT_WRITE_FAILED", f"{name} identity differs after creation"
+            )
+        view = memoryview(payload)
+        written = 0
+        while written < len(view):
+            count = os.write(descriptor, view[written:])
+            if count <= 0:
+                raise OSError("short artifact write")
+            written += count
+        os.fsync(descriptor)
+        os.fsync(chain[-1][0])
+        _revalidate_directory_chain(chain, name=f"{name} parent")
+        rebound = os.stat(path.name, dir_fd=chain[-1][0], follow_symlinks=False)
+        after = os.fstat(descriptor)
+        if (
+            (rebound.st_dev, rebound.st_ino) != (opened.st_dev, opened.st_ino)
+            or (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
+            or after.st_size != len(payload)
+        ):
+            raise R25ArtifactBuildError("PATH_IDENTITY_DRIFT", f"{name} changed during publication")
+    except R25ArtifactBuildError:
+        raise
+    except OSError as exc:
+        raise R25ArtifactBuildError("ARTIFACT_WRITE_FAILED", f"{name} publication failed") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        _close_directory_chain(chain)
+
+
+def _read_owner_only_artifact(path: Path, *, name: str) -> bytes:
+    descriptor = -1
+    chain: _DirectoryChainV1 = ()
+    try:
+        _, chain = _open_directory_chain(path.parent, name=f"{name} parent")
+        lexical = os.stat(path.name, dir_fd=chain[-1][0], follow_symlinks=False)
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=chain[-1][0],
+        )
+        before = os.fstat(descriptor)
+        identity_fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_size")
+        if any(getattr(lexical, field) != getattr(before, field) for field in identity_fields):
+            raise R25ArtifactBuildError(
+                "ARTIFACT_READBACK_FAILED", f"{name} changed while being opened"
+            )
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or not 1 <= before.st_size <= _MAX_ARTIFACT_BYTES
+        ):
+            raise R25ArtifactBuildError(
+                "ARTIFACT_READBACK_FAILED", f"{name} is not an owner-only single-link file"
+            )
+        chunks: list[bytes] = []
+        remaining = before.st_size + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        _revalidate_directory_chain(chain, name=f"{name} parent")
+        rebound = os.stat(path.name, dir_fd=chain[-1][0], follow_symlinks=False)
+    except OSError as exc:
+        raise R25ArtifactBuildError("ARTIFACT_READBACK_FAILED", f"{name} is unavailable") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        _close_directory_chain(chain)
+    if (
+        len(raw) != before.st_size
+        or any(getattr(before, field) != getattr(after, field) for field in identity_fields)
+        or after.st_mtime_ns != before.st_mtime_ns
+        or (rebound.st_dev, rebound.st_ino) != (before.st_dev, before.st_ino)
+    ):
+        raise R25ArtifactBuildError(
+            "ARTIFACT_READBACK_FAILED", f"{name} changed during owner-only readback"
+        )
+    return raw
+
+
+def _read_owner_only_artifact_at(
+    directory_descriptor: int,
+    filename: str,
+    *,
+    name: str,
+) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            filename,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_descriptor,
+        )
+        before = os.fstat(descriptor)
+        named = os.stat(filename, dir_fd=directory_descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or (before.st_dev, before.st_ino) != (named.st_dev, named.st_ino)
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_uid != os.geteuid()
+            or before.st_gid != os.getegid()
+            or before.st_nlink != 1
+            or not 1 <= before.st_size <= _MAX_ARTIFACT_BYTES
+        ):
+            raise R25ArtifactBuildError(
+                "ARTIFACT_READBACK_FAILED", f"{name} is not one owner-only regular file"
+            )
+        chunks: list[bytes] = []
+        remaining = before.st_size + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(1_048_576, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        rebound = os.stat(filename, dir_fd=directory_descriptor, follow_symlinks=False)
+        if (
+            len(raw) != before.st_size
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+            or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+            or (rebound.st_dev, rebound.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise R25ArtifactBuildError(
+                "ARTIFACT_READBACK_FAILED", f"{name} changed during readback"
+            )
+        return raw
+    except R25ArtifactBuildError:
+        raise
+    except OSError as exc:
+        raise R25ArtifactBuildError("ARTIFACT_READBACK_FAILED", f"{name} is unavailable") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _read_bundle_artifacts_stable(
+    target: Path,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> dict[str, bytes]:
+    chain: _DirectoryChainV1 = ()
+    try:
+        _, chain = _open_directory_chain(target, name="bundle directory")
+        descriptor = chain[-1][0]
+        metadata = os.fstat(descriptor)
+        if expected_identity is not None and (metadata.st_dev, metadata.st_ino) != (
+            expected_identity
+        ):
+            raise R25ArtifactBuildError(
+                "PATH_IDENTITY_DRIFT", "bundle directory is not the published inode"
+            )
+        entries = os.listdir(descriptor)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_gid != os.getegid()
+            or set(entries) != _WRITTEN_ARTIFACT_FILENAMES
+            or len(entries) != len(_WRITTEN_ARTIFACT_FILENAMES)
+        ):
+            raise R25ArtifactBuildError(
+                "ARTIFACT_READBACK_FAILED",
+                "bundle must be one owner-only directory containing exactly seven artifacts",
+            )
+        result: dict[str, bytes] = {}
+        for filename in sorted(_WRITTEN_ARTIFACT_FILENAMES):
+            result[filename] = _read_owner_only_artifact_at(descriptor, filename, name=filename)
+            _revalidate_directory_chain(chain, name="bundle directory")
+        if set(os.listdir(descriptor)) != _WRITTEN_ARTIFACT_FILENAMES:
+            raise R25ArtifactBuildError(
+                "ARTIFACT_READBACK_FAILED", "bundle membership changed during readback"
+            )
+        _revalidate_directory_chain(chain, name="bundle directory")
+        return result
+    finally:
+        _close_directory_chain(chain)
+
+
+def _exact_object(value: object, fields: frozenset[str], name: str) -> dict[str, object]:
+    if type(value) is not dict:
+        raise R25ArtifactBuildError("INVALID_JSON_OBJECT", f"{name} must be an object")
+    mapping = cast(dict[object, object], value)
+    if any(type(key) is not str for key in mapping) or set(mapping) != fields:
+        raise R25ArtifactBuildError("INVALID_JSON_OBJECT", f"{name} fields are not exact")
+    return cast(dict[str, object], mapping)
+
+
+def freeze_gui_only_task_source_from_historical_manifest_v1(
+    historical_manifest_path: Path,
+    *,
+    expected_manifest_sha256: str,
+    expected_manifest_byte_count: int,
+) -> FrozenGuiOnlyTaskSourceV1:
+    """Extract only ordered task identities from one exact historical GUI-117 manifest.
+
+    The historical artifact supplies task names and their canonical order only.
+    ``trial=1`` is created here as a new R2.5 initialization declaration; it is
+    deliberately not represented as a value observed or derived from the
+    historical task runs.
+    """
+
+    if (
+        type(expected_manifest_sha256) is not str
+        or _SHA256.fullmatch(expected_manifest_sha256) is None
+        or type(expected_manifest_byte_count) is not int
+        or not 1 <= expected_manifest_byte_count <= _MAX_ARTIFACT_BYTES
+    ):
+        raise R25ArtifactBuildError(
+            "INVALID_HISTORICAL_MANIFEST_BINDING",
+            "historical manifest binding is invalid",
+        )
+    raw = _read_regular_file(
+        historical_manifest_path,
+        maximum=_MAX_ARTIFACT_BYTES,
+        name="historical GUI-117 manifest",
+    )
+    if (
+        len(raw) != expected_manifest_byte_count
+        or hashlib.sha256(raw).hexdigest() != expected_manifest_sha256
+    ):
+        raise R25ArtifactBuildError(
+            "HISTORICAL_MANIFEST_DRIFT", "historical GUI-117 manifest binding changed"
+        )
+    value = _strict_json(raw, "historical GUI-117 manifest")
+    if raw != canonical_json_bytes(cast(JsonValue, value)) + b"\n":
+        raise R25ArtifactBuildError(
+            "NONCANONICAL_HISTORICAL_MANIFEST",
+            "historical GUI-117 manifest is not exact canonical JSON with one newline",
+        )
+    manifest = _exact_object(value, _CURATED_TASK_SET_FIELDS, "historical GUI-117 manifest")
+    if (
+        manifest["schema_version"] != _CURATED_TASK_SET_SCHEMA_VERSION
+        or manifest["artifact_type"] != _CURATED_TASK_SET_ARTIFACT_TYPE
+        or manifest["is_raw_run"] is not False
+        or manifest["raw_schema_version"] != "mobileworld.audit.event/v1"
+    ):
+        raise R25ArtifactBuildError(
+            "UNSUPPORTED_HISTORICAL_MANIFEST",
+            "historical manifest type/schema is not the frozen curated task set",
+        )
+    catalog = _exact_object(
+        manifest["canonical_catalog"], _CURATED_CATALOG_FIELDS, "canonical catalog"
+    )
+    counts = _exact_object(manifest["counts"], _CURATED_COUNT_FIELDS, "historical counts")
+    policy = _exact_object(
+        manifest["selection_policy"],
+        _CURATED_SELECTION_POLICY_FIELDS,
+        "historical selection policy",
+    )
+    if (
+        type(catalog["task_count"]) is not int
+        or catalog["task_count"] != GUI_ONLY_TASK_SOURCE_TASK_COUNT
+        or type(counts["task_count"]) is not int
+        or counts["task_count"] != GUI_ONLY_TASK_SOURCE_TASK_COUNT
+        or policy["unit"] != "task_run"
+        or policy["task_capture_complete"] is not True
+        or policy["task_goal_sha256_must_match_catalog"] is not True
+        or policy["missing_artifacts_must_be_empty"] is not True
+        or policy["collector_error_event_ids_must_be_empty"] is not True
+        or policy["raw_events_or_blobs_copied"] is not False
+    ):
+        raise R25ArtifactBuildError(
+            "INVALID_HISTORICAL_MANIFEST",
+            "historical manifest does not bind one complete 117-task identity catalog",
+        )
+    tasks_value = manifest["tasks"]
+    if type(tasks_value) is not list or len(tasks_value) != GUI_ONLY_TASK_SOURCE_TASK_COUNT:
+        raise R25ArtifactBuildError(
+            "INVALID_HISTORICAL_MANIFEST", "historical task census is not exactly 117"
+        )
+    task_names: list[str] = []
+    task_name_index: list[dict[str, JsonValue]] = []
+    for expected_index, raw_task in enumerate(cast(list[object], tasks_value), start=1):
+        task = _exact_object(raw_task, _CURATED_TASK_FIELDS, "historical task")
+        task_index = task["canonical_suite_index"]
+        task_name = task["task_name"]
+        if (
+            type(task_index) is not int
+            or task_index != expected_index
+            or type(task_name) is not str
+        ):
+            raise R25ArtifactBuildError(
+                "INVALID_HISTORICAL_MANIFEST", "historical task identities are not contiguous"
+            )
+        try:
+            MobileWorldTaskParametersV1(
+                task_name=task_name,
+                trial=GUI_ONLY_TASK_SOURCE_TRIAL,
+            )
+        except (TypeError, ValueError) as exc:
+            raise R25ArtifactBuildError(
+                "INVALID_HISTORICAL_MANIFEST", "historical task name is invalid"
+            ) from exc
+        if (
+            task["capture_complete"] is not True
+            or task["collector_error_event_ids"] != []
+            or task["missing_artifacts"] != []
+        ):
+            raise R25ArtifactBuildError(
+                "INVALID_HISTORICAL_MANIFEST", "historical selected task is incomplete"
+            )
+        task_names.append(task_name)
+        task_name_index.append({"task_index": task_index, "task_name": task_name})
+    if len(set(task_names)) != GUI_ONLY_TASK_SOURCE_TASK_COUNT:
+        raise R25ArtifactBuildError(
+            "INVALID_HISTORICAL_MANIFEST", "historical task identities are not unique"
+        )
+    task_name_index_sha256 = canonical_sha256(cast(JsonValue, task_name_index))
+    selection_sha256 = canonical_sha256(cast(JsonValue, tasks_value))
+    if (
+        catalog["task_name_index_sha256"] != task_name_index_sha256
+        or manifest["selection_sha256"] != selection_sha256
+    ):
+        raise R25ArtifactBuildError(
+            "INVALID_HISTORICAL_MANIFEST", "historical task identity hashes are inconsistent"
+        )
+    source_bytes = b"".join(
+        canonical_json_bytes(
+            cast(
+                JsonValue,
+                {"task_name": task_name, "trial": GUI_ONLY_TASK_SOURCE_TRIAL},
+            )
+        )
+        + b"\n"
+        for task_name in task_names
+    )
+    if len(_source_rows(source_bytes)) != GUI_ONLY_TASK_SOURCE_TASK_COUNT:
+        raise R25ArtifactBuildError(
+            "INVALID_GUI_ONLY_TASK_SOURCE", "generated source did not round-trip"
+        )
+    return FrozenGuiOnlyTaskSourceV1(
+        historical_manifest_path=str(historical_manifest_path),
+        historical_manifest_sha256=expected_manifest_sha256,
+        historical_manifest_byte_count=expected_manifest_byte_count,
+        task_source_bytes=source_bytes,
+        task_source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        task_count=GUI_ONLY_TASK_SOURCE_TASK_COUNT,
+        trial=GUI_ONLY_TASK_SOURCE_TRIAL,
+        trial_provenance=GUI_ONLY_TASK_SOURCE_TRIAL_PROVENANCE,
+    )
+
+
+def write_fresh_gui_only_task_source_v1(
+    source: FrozenGuiOnlyTaskSourceV1,
+    output_path: Path,
+    *,
+    repository_root: Path,
+) -> Path:
+    """Publish a source once; failed readback leaves the bytes untouched."""
+
+    if type(source) is not FrozenGuiOnlyTaskSourceV1:
+        raise R25ArtifactBuildError("UNTRUSTED_SOURCE_FREEZE", "source freeze type is untrusted")
+    repository = _absolute_path(repository_root, "repository root").resolve(strict=True)
+    output = _repo_external(output_path, repository, "GUI-only task source output")
+    _write_fresh_owner_file(output, source.task_source_bytes, name="GUI-only task source")
+    readback = _read_owner_only_artifact(output, name="GUI-only task source")
+    if readback != source.task_source_bytes:
+        raise R25ArtifactBuildError(
+            "ARTIFACT_READBACK_FAILED", "task source readback differs from published bytes"
+        )
+    return output
+
+
+def write_fresh_gui_only_task_source_freeze_receipt_v1(
+    source: FrozenGuiOnlyTaskSourceV1,
+    output_path: Path,
+    *,
+    repository_root: Path,
+) -> Path:
+    """Publish the canonical provenance receipt once beside the frozen JSONL."""
+
+    if type(source) is not FrozenGuiOnlyTaskSourceV1:
+        raise R25ArtifactBuildError("UNTRUSTED_SOURCE_FREEZE", "source freeze type is untrusted")
+    repository = _absolute_path(repository_root, "repository root").resolve(strict=True)
+    output = _repo_external(output_path, repository, "GUI-only task source freeze receipt")
+    payload = canonical_json_bytes(cast(JsonValue, frozen_gui_only_task_source_receipt_v1(source)))
+    _write_fresh_owner_file(output, payload, name="GUI-only task source freeze receipt")
+    if _read_owner_only_artifact(output, name="GUI-only task source freeze receipt") != payload:
+        raise R25ArtifactBuildError(
+            "ARTIFACT_READBACK_FAILED", "source freeze receipt readback differs"
+        )
+    return output
+
+
+def load_gui_only_task_source_freeze_receipt_v1(
+    receipt_path: Path,
+    *,
+    task_source_path: Path,
+) -> FrozenGuiOnlyTaskSourceV1:
+    """Reopen a canonical receipt, its source, and the bound historical manifest."""
+
+    receipt_raw = _read_owner_only_artifact(
+        receipt_path, name="GUI-only task source freeze receipt"
+    )
+    source_raw = _read_owner_only_artifact(task_source_path, name="GUI-only task source")
+    receipt = _strict_json(receipt_raw, "GUI-only task source freeze receipt")
+    receipt_fields = frozenset({"source_freeze", "source_freeze_sha256"})
+    receipt_item = _exact_object(receipt, receipt_fields, "GUI-only task source freeze receipt")
+    projection = receipt_item["source_freeze"]
+    if (
+        receipt_raw != canonical_json_bytes(cast(JsonValue, receipt))
+        or type(receipt_item["source_freeze_sha256"]) is not str
+        or receipt_item["source_freeze_sha256"] != canonical_sha256(cast(JsonValue, projection))
+    ):
+        raise R25ArtifactBuildError(
+            "INVALID_SOURCE_FREEZE_RECEIPT", "source freeze receipt is not canonical or bound"
+        )
+    source = _parse_frozen_gui_only_task_source_projection_v1(
+        projection, task_source_bytes=source_raw
+    )
+    _validate_source_freeze_against_historical_manifest(source)
+    return source
 
 
 def _registry_projection(records: tuple[RegistryTaskMetadataV1, ...]) -> dict[str, JsonValue]:
@@ -544,45 +1745,188 @@ def _registry_projection(records: tuple[RegistryTaskMetadataV1, ...]) -> dict[st
     }
 
 
-def current_registry_metadata() -> tuple[RegistryTaskMetadataV1, ...]:
-    """Load only local task definitions and return their selection metadata."""
+def _git_head_task_definition_blobs_v1(
+    repository_root: Path, definitions_root: Path
+) -> dict[str, str]:
+    """Return exact HEAD blob IDs for the definitions snapshot without worktree reads."""
+
+    try:
+        prefix = definitions_root.relative_to(repository_root).as_posix()
+    except ValueError as exc:
+        raise R25ArtifactBuildError(
+            "INVALID_TASK_DEFINITION_ROOT",
+            "task definitions root is outside the repository",
+        ) from exc
+    environment = {"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"}
+    try:
+        result = subprocess.run(
+            [
+                "/usr/bin/git",
+                "ls-tree",
+                "-rz",
+                "--full-tree",
+                "HEAD",
+                "--",
+                prefix,
+            ],
+            cwd=repository_root,
+            env=environment,
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise R25ArtifactBuildError(
+            "GIT_STATE_UNAVAILABLE", "task definition Git tree is unavailable"
+        ) from exc
+    if result.returncode != 0 or result.stderr:
+        raise R25ArtifactBuildError(
+            "GIT_STATE_UNAVAILABLE", "task definition Git tree is unavailable"
+        )
+    expected: dict[str, str] = {}
+    prefix_with_slash = prefix + "/"
+    for raw_entry in result.stdout.split(b"\0"):
+        if not raw_entry:
+            continue
+        try:
+            metadata, raw_path = raw_entry.split(b"\t", 1)
+            raw_mode, object_type, raw_sha1 = metadata.split(b" ", 2)
+            path = raw_path.decode("utf-8")
+            mode = raw_mode.decode("ascii")
+            sha1 = raw_sha1.decode("ascii")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise R25ArtifactBuildError(
+                "GIT_STATE_UNAVAILABLE", "task definition Git tree is malformed"
+            ) from exc
+        if (
+            object_type != b"blob"
+            or mode not in {"100644", "100755"}
+            or _GIT_SHA1.fullmatch(sha1) is None
+            or not path.startswith(prefix_with_slash)
+        ):
+            raise R25ArtifactBuildError(
+                "TASK_DEFINITION_GIT_MISMATCH",
+                "task definition Git tree contains an unsupported entry",
+            )
+        relative = path[len(prefix_with_slash) :]
+        if relative.endswith(".py"):
+            expected[relative] = sha1
+    if not expected:
+        raise R25ArtifactBuildError(
+            "TASK_DEFINITION_GIT_MISMATCH", "HEAD contains no task definitions"
+        )
+    return expected
+
+
+def _validate_task_definition_sources_against_git_v1(
+    sources: dict[str, bytes], *, repository_root: Path, definitions_root: Path
+) -> None:
+    expected = _git_head_task_definition_blobs_v1(repository_root, definitions_root)
+    if set(sources) != set(expected):
+        raise R25ArtifactBuildError(
+            "TASK_DEFINITION_GIT_MISMATCH",
+            "task definition source census differs from HEAD",
+        )
+    for relative, raw in sources.items():
+        blob_preimage = b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw
+        actual = hashlib.sha1(blob_preimage, usedforsecurity=False).hexdigest()
+        if actual != expected[relative]:
+            raise R25ArtifactBuildError(
+                "TASK_DEFINITION_GIT_MISMATCH",
+                "task definition source bytes differ from HEAD",
+            )
+
+
+def _load_registry_tasks_from_snapshots_v1(
+    sources: dict[str, bytes], *, definitions_root: Path
+) -> tuple[dict[str, object], dict[str, bytes]]:
+    """Execute only Git-matched in-memory bytes; no definition path is imported."""
 
     from mobile_world.tasks.base import BaseTask
-    from mobile_world.tasks.registry import TaskRegistry
 
-    registry = TaskRegistry()
-    registered_task_ids = set(registry.list_tasks())
-    definition_sources: dict[str, bytes] = {}
-    for source_path in sorted(
-        Path(registry.task_set_path).rglob("*.py"),
-        key=lambda item: str(item).encode("utf-8"),
-    ):
-        if source_path.name == "__init__.py":
+    tasks: dict[str, object] = {}
+    source_by_task: dict[str, bytes] = {}
+    for relative in sorted(sources, key=lambda item: item.encode("utf-8")):
+        if Path(relative).name == "__init__.py":
             continue
-        source_raw = _read_regular_file(
-            source_path.resolve(strict=True),
-            maximum=_MAX_TASK_DEFINITION_BYTES,
-            name="task definition source",
-        )
+        raw = sources[relative]
+        module_name = "mobile_world.tasks.definitions." + Path(relative).with_suffix(
+            ""
+        ).as_posix().replace("/", ".")
+        module = ModuleType(module_name)
+        module.__file__ = str(definitions_root / relative)
+        module.__package__ = module_name.rpartition(".")[0]
         try:
-            syntax = ast.parse(source_raw, filename=source_path.name)
-        except (SyntaxError, ValueError) as exc:
+            code = compile(raw, module.__file__, "exec", dont_inherit=True)
+            exec(code, module.__dict__)
+        except Exception as exc:
             raise R25ArtifactBuildError(
                 "TASK_DEFINITION_SOURCE_INVALID",
-                "task definition source cannot be audited",
+                "Git-matched task definition source cannot be loaded",
             ) from exc
-        for statement in syntax.body:
-            if not isinstance(statement, ast.ClassDef) or statement.name not in registered_task_ids:
+        for name, candidate in inspect.getmembers(module, inspect.isclass):
+            if (
+                not issubclass(candidate, BaseTask)
+                or candidate is BaseTask
+                or candidate.__module__ != module_name
+            ):
                 continue
-            if statement.name in definition_sources:
+            if name in tasks:
                 raise R25ArtifactBuildError(
                     "DUPLICATE_TASK_DEFINITION_SOURCE",
                     "task class name appears in more than one source file",
                 )
-            definition_sources[statement.name] = source_raw
+            try:
+                tasks[name] = candidate()
+            except Exception as exc:
+                raise R25ArtifactBuildError(
+                    "TASK_DEFINITION_SOURCE_INVALID",
+                    "Git-matched task definition cannot be instantiated",
+                ) from exc
+            source_by_task[name] = raw
+    if not tasks:
+        raise R25ArtifactBuildError("EMPTY_REGISTRY", "task registry is empty")
+    return tasks, source_by_task
+
+
+def current_registry_metadata() -> tuple[RegistryTaskMetadataV1, ...]:
+    """Load only local task definitions and return their selection metadata."""
+
+    from mobile_world.tasks.base import BaseTask
+
+    definitions_root = Path(__file__).absolute().parents[3] / "tasks" / "definitions"
+    repository_root = Path(__file__).absolute().parents[6]
+    held = _snapshot_task_definition_tree_v1(definitions_root)
+    try:
+        _validate_task_definition_sources_against_git_v1(
+            held.sources,
+            repository_root=repository_root,
+            definitions_root=definitions_root,
+        )
+        tasks, definition_sources = _load_registry_tasks_from_snapshots_v1(
+            held.sources, definitions_root=definitions_root
+        )
+        definition_dynamic_time: dict[str, bool] = {}
+        for task_id, source_raw in definition_sources.items():
+            try:
+                syntax = ast.parse(source_raw, filename=f"{task_id}.py")
+            except (SyntaxError, ValueError) as exc:
+                raise R25ArtifactBuildError(
+                    "TASK_DEFINITION_SOURCE_INVALID",
+                    "task definition source cannot be audited",
+                ) from exc
+            definition_dynamic_time[task_id] = _source_ast_uses_dynamic_wall_clock(syntax)
+        held.revalidate()
+        _validate_task_definition_sources_against_git_v1(
+            held.sources,
+            repository_root=repository_root,
+            definitions_root=definitions_root,
+        )
+    finally:
+        held.close()
     records: list[RegistryTaskMetadataV1] = []
-    for task_id in sorted(registry.list_tasks(), key=lambda item: item.encode("utf-8")):
-        task = cast(BaseTask, registry.get_task(task_id))
+    for task_id in sorted(tasks, key=lambda item: item.encode("utf-8")):
+        task = cast(BaseTask, tasks[task_id])
         raw_tags = task.task_tags
         raw_apps = task.app_names
         if type(raw_tags) is not set or type(raw_apps) is not set:
@@ -602,6 +1946,7 @@ def current_registry_metadata() -> tuple[RegistryTaskMetadataV1, ...]:
         dynamic_time = (
             type(task).initialize_task_hook is BaseTask.initialize_task_hook
             or bool(raw_apps & _DYNAMIC_TIME_APPS)
+            or definition_dynamic_time.get(task_id, True)
             or any(marker in definition_raw for marker in _DYNAMIC_TIME_SOURCE_MARKERS)
         )
         records.append(
@@ -966,16 +2311,22 @@ def build_authority_artifact_bundle(
         if not parent.is_dir():
             raise R25ArtifactBuildError("INVALID_PATH", f"{name} parent is not a directory")
 
-    source_task_jsonl_bytes = _read_regular_file(
-        inputs.source_task_jsonl,
-        maximum=_MAX_SOURCE_BYTES,
-        name="task source",
+    if inputs.source_freeze_receipt is None:
+        raise R25ArtifactBuildError(
+            "SOURCE_FREEZE_RECEIPT_REQUIRED",
+            "production authority construction requires historical GUI-117 provenance",
+        )
+    source_freeze = load_gui_only_task_source_freeze_receipt_v1(
+        inputs.source_freeze_receipt,
+        task_source_path=inputs.source_task_jsonl,
     )
+    source_task_jsonl_bytes = source_freeze.task_source_bytes
     bundled_source_path = bundle_directory / GUI_ONLY_TASK_SOURCE_FILENAME
     selection = select_gui_only_cohort_from_bytes(
         source_task_jsonl_bytes,
         bundled_source_path,
         registry_records,
+        cohort_size=inputs.cohort_size,
     )
     selection_bytes = canonical_json_bytes(cast(JsonValue, cohort_selection_projection(selection)))
     selection_sha256 = hashlib.sha256(selection_bytes).hexdigest()
@@ -1014,7 +2365,10 @@ def build_authority_artifact_bundle(
     cell_count = len(pilot_tasks) * 2 * 2
     max_actor_calls = cell_count * inputs.max_steps_per_cell
     joint_cell_count = len(pilot_tasks) * 2
-    max_openai_calls = joint_cell_count + 2 * joint_cell_count * inputs.max_steps_per_cell
+    # The first Joint-Sentinel decision makes exactly two rubric calls in
+    # GENERATE -> TRACK order and no history call.  Every later decision makes
+    # exactly one TRACK rubric call plus one HISTORY_POLICY call.
+    max_openai_calls = 2 * joint_cell_count * inputs.max_steps_per_cell
     pilot = FrozenPilotManifestV1(
         schema_version=FROZEN_PILOT_SCHEMA_VERSION,
         cohort_id=inputs.cohort_id,
@@ -1162,12 +2516,43 @@ def build_authority_artifact_bundle(
         smoke_plans=smokes,
         pilot=pilot,
         topology_comparison_artifact_sha256=topology_sha256,
+        resource_topology=inputs.resource_topology,
+        runtime_config_sha256=inputs.runtime_config_sha256,
+        pricing_sha256=inputs.pricing_sha256,
+        sentinel_config_sha256=production_sentinel_config_sha256_v1(),
         output_root=str(runtime_output_root),
         max_resource_preflight_wall_time_seconds=inputs.resource_preflight_wall_time_seconds,
+        max_resource_cleanup_wall_time_seconds=(inputs.max_resource_cleanup_wall_time_seconds),
+        resource_cleanup_upper_bound_sha256=(inputs.resource_cleanup_upper_bound_sha256),
+        max_model_switches=(
+            2 * len(pilot.tasks) + 1
+            if inputs.resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+            else 0
+        ),
+        max_model_switch_wall_time_seconds=(inputs.max_model_switch_wall_time_seconds),
+        max_total_model_switch_wall_time_seconds=(
+            (
+                2 * len(pilot.tasks) + 1
+                if inputs.resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+                else 0
+            )
+            * inputs.max_model_switch_wall_time_seconds
+        ),
+        max_post_run_integrity_wall_time_seconds=(inputs.max_post_run_integrity_wall_time_seconds),
         max_sequence_wall_time_seconds=(
             inputs.resource_preflight_wall_time_seconds
             + smoke_wall_time
             + inputs.max_total_wall_time_seconds
+            + (
+                (
+                    2 * len(pilot.tasks) + 1
+                    if inputs.resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+                    else 0
+                )
+                * inputs.max_model_switch_wall_time_seconds
+            )
+            + inputs.max_resource_cleanup_wall_time_seconds
+            + inputs.max_post_run_integrity_wall_time_seconds
         ),
         max_sequence_openai_calls=smoke_openai_calls + pilot.max_total_openai_calls,
         max_sequence_actor_calls=smoke_actor_calls + pilot.max_total_actor_calls,
@@ -1180,6 +2565,7 @@ def build_authority_artifact_bundle(
         pilot_manifest=pilot,
         authority_manifest=authority,
         topology_artifact=topology_artifact,
+        source_freeze=source_freeze,
     )
 
 
@@ -1401,6 +2787,9 @@ def artifact_bundle_projection(bundle: AuthorityArtifactBundleV1) -> dict[str, J
     selection_bytes = canonical_json_bytes(selection_projection)
     selection_sha256 = hashlib.sha256(selection_bytes).hexdigest()
     source_sha256 = hashlib.sha256(bundle.source_task_jsonl_bytes).hexdigest()
+    source_freeze_projection = cast(
+        JsonValue, frozen_gui_only_task_source_projection_v1(bundle.source_freeze)
+    )
     if (
         bundle.pilot_manifest.topology_comparison_artifact_sha256 != topology_sha256
         or bundle.authority_manifest.topology_comparison_artifact_sha256 != topology_sha256
@@ -1411,6 +2800,8 @@ def artifact_bundle_projection(bundle: AuthorityArtifactBundleV1) -> dict[str, J
         )
     if (
         source_sha256 != bundle.selection.source_sha256
+        or bundle.source_freeze.task_source_bytes != bundle.source_task_jsonl_bytes
+        or bundle.source_freeze.task_source_sha256 != source_sha256
         or len(bundle.source_task_jsonl_bytes) != bundle.selection.source_byte_count
         or bundle.pilot_manifest.cohort_selection_artifact_sha256 != selection_sha256
         or bundle.pilot_manifest.cohort_selection_artifact_byte_count != len(selection_bytes)
@@ -1443,6 +2834,8 @@ def artifact_bundle_projection(bundle: AuthorityArtifactBundleV1) -> dict[str, J
         "frozen_pilot_manifest": pilot_projection,
         "frozen_pilot_manifest_sha256": frozen_pilot_manifest_sha256(bundle.pilot_manifest),
         "gui_only_task_source_byte_count": len(bundle.source_task_jsonl_bytes),
+        "gui_only_task_source_freeze": source_freeze_projection,
+        "gui_only_task_source_freeze_sha256": canonical_sha256(source_freeze_projection),
         "gui_only_task_source_sha256": source_sha256,
         "schema_version": ARTIFACT_BUNDLE_SCHEMA_VERSION,
         "topology_comparison_artifact": topology_projection,
@@ -1463,24 +2856,412 @@ def artifact_bundle_output(bundle: AuthorityArtifactBundleV1) -> dict[str, JsonV
     }
 
 
+def _schema_values(repository_root: Path) -> tuple[dict[str, object], ...]:
+    schemas: list[dict[str, object]] = []
+    for relative_path in _SCHEMA_RELATIVE_PATHS:
+        raw = _read_regular_file(
+            repository_root / relative_path,
+            maximum=_MAX_ARTIFACT_BYTES,
+            name="checked-in artifact schema",
+        )
+        value = _strict_json(raw, "checked-in artifact schema")
+        if type(value) is not dict:
+            raise R25ArtifactBuildError(
+                "INVALID_ARTIFACT_SCHEMA", "checked-in artifact schema is not an object"
+            )
+        schema = cast(dict[str, object], value)
+        try:
+            Draft202012Validator.check_schema(schema)
+        except SchemaError as exc:
+            raise R25ArtifactBuildError(
+                "INVALID_ARTIFACT_SCHEMA", "checked-in artifact schema failed meta-validation"
+            ) from exc
+        schemas.append(schema)
+    return tuple(schemas)
+
+
+def validate_written_artifact_bundle_v1(
+    bundle_directory: Path,
+    *,
+    repository_root: Path,
+    expected_source_commit: str | None = None,
+    allow_unverified_cpu_fixture: bool = False,
+    _expected_bundle_identity: tuple[int, int] | None = None,
+) -> ArtifactBundleReadbackValidationV1:
+    """Independently reopen and validate the complete seven-file bundle.
+
+    This function accepts no in-memory bundle.  It recomputes current registry
+    metadata and every source/selection/manifest/hash binding from the durable
+    bytes.  A failure is non-repairing: callers must retain this directory and
+    choose a fresh path for a later publication.
+    """
+
+    if type(allow_unverified_cpu_fixture) is not bool:
+        raise R25ArtifactBuildError(
+            "INVALID_VERIFICATION_MODE", "verification mode must be exact bool"
+        )
+    if expected_source_commit is None and not allow_unverified_cpu_fixture:
+        raise R25ArtifactBuildError(
+            "SOURCE_STATE_CONFIRMATION_REQUIRED",
+            "durable bundle validation requires exact clean-HEAD confirmation",
+        )
+    repository = _absolute_path(repository_root, "repository root").resolve(strict=True)
+    if expected_source_commit is not None:
+        verify_current_source_commit(repository, expected_source_commit)
+    target = _repo_external(bundle_directory, repository, "bundle directory")
+    raw_by_name = _read_bundle_artifacts_stable(target, expected_identity=_expected_bundle_identity)
+    value_by_name: dict[str, object] = {}
+    for filename in _WRITTEN_ARTIFACT_FILENAMES - {GUI_ONLY_TASK_SOURCE_FILENAME}:
+        raw = raw_by_name[filename]
+        value = _strict_json(raw, filename)
+        if raw != canonical_json_bytes(cast(JsonValue, value)):
+            raise R25ArtifactBuildError(
+                "NONCANONICAL_ARTIFACT", f"{filename} is not exact canonical JSON"
+            )
+        value_by_name[filename] = value
+
+    schemas = _schema_values(repository)
+    schema_store = {str(schema["$id"]): schema for schema in schemas}
+    authority_schema_version = cast(
+        dict[str, object], value_by_name[RUN_AUTHORITY_MANIFEST_FILENAME]
+    ).get("schema_version")
+    if type(authority_schema_version) is not str:
+        raise R25ArtifactBuildError(
+            "INVALID_ARTIFACT_SCHEMA", "authority manifest schema version is unknown"
+        )
+    authority_schema_id = {
+        R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V1: (
+            "https://agentsentinel.local/schemas/r2_4/run_authority_manifest.v1.schema.json"
+        ),
+        R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2: (
+            "https://agentsentinel.local/schemas/r2_4/run_authority_manifest.v2.schema.json"
+        ),
+    }.get(authority_schema_version)
+    if authority_schema_id is None:
+        raise R25ArtifactBuildError(
+            "INVALID_ARTIFACT_SCHEMA", "authority manifest schema version is unknown"
+        )
+    frozen_pilot_schema_version = cast(
+        dict[str, object], value_by_name[FROZEN_PILOT_MANIFEST_FILENAME]
+    ).get("schema_version")
+    if type(frozen_pilot_schema_version) is not str:
+        raise R25ArtifactBuildError(
+            "INVALID_ARTIFACT_SCHEMA", "frozen pilot schema version is unknown"
+        )
+    frozen_pilot_schema_id = {
+        FROZEN_PILOT_SCHEMA_VERSION_V1: (
+            "https://agentsentinel.local/schemas/r2_5/frozen_pilot_manifest.v1.schema.json"
+        ),
+        FROZEN_PILOT_SCHEMA_VERSION_V2: (
+            "https://agentsentinel.local/schemas/r2_5/frozen_pilot_manifest.v2.schema.json"
+        ),
+    }.get(frozen_pilot_schema_version)
+    if frozen_pilot_schema_id is None:
+        raise R25ArtifactBuildError(
+            "INVALID_ARTIFACT_SCHEMA", "frozen pilot schema version is unknown"
+        )
+    schema_by_filename = {
+        COHORT_SELECTION_FILENAME: (
+            "https://agentsentinel.local/schemas/r2_5/cohort_selection.v1.schema.json"
+        ),
+        PILOT_TASK_SOURCE_FILENAME: (
+            "https://agentsentinel.local/schemas/r2_5/executable_task_source.v1.schema.json"
+        ),
+        FROZEN_PILOT_MANIFEST_FILENAME: frozen_pilot_schema_id,
+        RUN_AUTHORITY_MANIFEST_FILENAME: authority_schema_id,
+        TOPOLOGY_COMPARISON_FILENAME: (
+            "https://agentsentinel.local/schemas/r2_4/cpu_topology_artifact.v1.schema.json"
+        ),
+        ARTIFACT_BUNDLE_FILENAME: (
+            "https://agentsentinel.local/schemas/r2_5/artifact_bundle.v1.schema.json"
+        ),
+    }
+    try:
+        for filename, schema_id in schema_by_filename.items():
+            schema = schema_store[schema_id]
+            validator = Draft202012Validator(
+                schema,
+                resolver=RefResolver.from_schema(schema, store=schema_store),
+            )
+            validator.validate(value_by_name[filename])
+    except (KeyError, SchemaError, ValidationError) as exc:
+        raise R25ArtifactBuildError(
+            "ARTIFACT_SCHEMA_VALIDATION_FAILED", "a durable artifact failed its full schema"
+        ) from exc
+
+    try:
+        selection = parse_cohort_selection(value_by_name[COHORT_SELECTION_FILENAME])
+        pilot = parse_frozen_pilot_manifest(value_by_name[FROZEN_PILOT_MANIFEST_FILENAME])
+        authority = parse_authority_manifest(value_by_name[RUN_AUTHORITY_MANIFEST_FILENAME])
+        if authority.schema_version != R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2:
+            raise R25ArtifactBuildError(
+                "INVALID_ARTIFACT_SCHEMA",
+                "production artifact bundles require an exact v2 authority manifest",
+            )
+        assert authority.resource_topology is not None
+        assert authority.runtime_config_sha256 is not None
+        assert authority.pricing_sha256 is not None
+        assert authority.sentinel_config_sha256 is not None
+        assert authority.max_resource_cleanup_wall_time_seconds is not None
+        assert authority.resource_cleanup_upper_bound_sha256 is not None
+        assert authority.max_model_switches is not None
+        assert authority.max_model_switch_wall_time_seconds is not None
+        assert authority.max_total_model_switch_wall_time_seconds is not None
+        assert authority.max_post_run_integrity_wall_time_seconds is not None
+        topology = parse_r24_cpu_topology_artifact(value_by_name[TOPOLOGY_COMPARISON_FILENAME])
+        source_raw = raw_by_name[GUI_ONLY_TASK_SOURCE_FILENAME]
+        bundle_envelope = cast(dict[str, object], value_by_name[ARTIFACT_BUNDLE_FILENAME])
+        bundle_projection = cast(dict[str, object], bundle_envelope["artifact_bundle"])
+        source_freeze = _parse_frozen_gui_only_task_source_projection_v1(
+            bundle_projection["gui_only_task_source_freeze"],
+            task_source_bytes=source_raw,
+        )
+        if bundle_projection["gui_only_task_source_freeze_sha256"] != (
+            frozen_gui_only_task_source_sha256_v1(source_freeze)
+        ):
+            raise R25ArtifactBuildError(
+                "SOURCE_FREEZE_PROVENANCE_MISMATCH",
+                "durable bundle source-freeze hash differs",
+            )
+        _validate_source_freeze_against_historical_manifest(source_freeze)
+        recomputed_selection = select_gui_only_cohort_from_bytes(
+            source_raw,
+            target / GUI_ONLY_TASK_SOURCE_FILENAME,
+            current_registry_metadata(),
+            cohort_size=len(selection.members),
+        )
+    except R25ArtifactBuildError:
+        raise
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise R25ArtifactBuildError(
+            "ARTIFACT_READBACK_FAILED", "durable artifact reconstruction failed closed"
+        ) from exc
+    expected_cell_order = tuple(
+        (
+            member.task_id,
+            member.task_parameters_sha256,
+            member.reset_seed,
+            host,
+            arm,
+            "OFF" if arm is PilotArmV1.BASELINE else "ACTIVE",
+        )
+        for member in selection.members
+        for host in (PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)
+        for arm in (PilotArmV1.BASELINE, PilotArmV1.JOINT_SENTINEL)
+    )
+    actual_cell_order = tuple(
+        (
+            cell.task_id,
+            cell.task_parameters_sha256,
+            cell.reset_seed,
+            cell.host,
+            cell.arm,
+            cell.sentinel_mode,
+        )
+        for cell in pilot.cells
+    )
+    expected_task_order = tuple(
+        (member.task_id, member.trial, member.task_parameters_sha256, member.reset_seed)
+        for member in selection.members
+    )
+    cell_count = 4 * len(selection.members)
+    joint_cell_count = 2 * len(selection.members)
+    expected_pilot_actor_calls = cell_count * pilot.max_steps_per_cell
+    expected_pilot_openai_calls = 2 * joint_cell_count * pilot.max_steps_per_cell
+    smoke_actor_calls = sum(
+        case.max_actor_calls for plan in authority.smoke_plans for case in plan.cases
+    )
+    smoke_openai_calls = sum(
+        case.max_openai_calls for plan in authority.smoke_plans for case in plan.cases
+    )
+    smoke_cost = sum(
+        case.max_cost_usd_micros for plan in authority.smoke_plans for case in plan.cases
+    )
+    smoke_wall_time = sum(
+        case.max_wall_time_seconds for plan in authority.smoke_plans for case in plan.cases
+    )
+    expected_model_switches = (
+        2 * len(selection.members) + 1
+        if authority.resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+        else 0
+    )
+    expected_total_model_switch_wall_time = (
+        expected_model_switches * authority.max_model_switch_wall_time_seconds
+    )
+    expected_executable_task_source = executable_pilot_task_source_projection(
+        pilot.cohort_id,
+        tuple(
+            PilotTaskV1(
+                task_id=member.task_id,
+                task_parameters_sha256=member.task_parameters_sha256,
+                reset_seed=member.reset_seed,
+            )
+            for member in selection.members
+        ),
+        tuple(
+            InlinePilotTaskParametersV1(
+                task_id=member.task_id,
+                parameters=MobileWorldTaskParametersV1(
+                    task_name=member.task_id,
+                    trial=member.trial,
+                ),
+            )
+            for member in selection.members
+        ),
+    )
+    task_source_raw = raw_by_name[PILOT_TASK_SOURCE_FILENAME]
+    if (
+        cohort_selection_projection(recomputed_selection) != cohort_selection_projection(selection)
+        or selection.source_path != str(target / GUI_ONLY_TASK_SOURCE_FILENAME)
+        or pilot.task_manifest_path != str(target / PILOT_TASK_SOURCE_FILENAME)
+        or pilot.cohort_selection_artifact_path != str(target / COHORT_SELECTION_FILENAME)
+        or pilot.topology_comparison_artifact_path != str(target / TOPOLOGY_COMPARISON_FILENAME)
+        or authority.authorization.status is not RunAuthorizationStatusV1.DRAFT_NOT_AUTHORIZED
+        or authority.pilot != pilot
+        or authority.topology_comparison_artifact_sha256
+        != r24_cpu_topology_artifact_sha256(topology)
+        or value_by_name[PILOT_TASK_SOURCE_FILENAME] != expected_executable_task_source
+        or pilot.task_manifest_sha256 != hashlib.sha256(task_source_raw).hexdigest()
+        or pilot.task_manifest_byte_count != len(task_source_raw)
+        or len(pilot.tasks) != len(selection.members)
+        or tuple(
+            (task.task_id, member.trial, task.task_parameters_sha256, task.reset_seed)
+            for task, member in zip(pilot.tasks, selection.members)
+        )
+        != expected_task_order
+        or actual_cell_order != expected_cell_order
+        or len(actual_cell_order) != cell_count
+        or pilot.max_total_actor_calls != expected_pilot_actor_calls
+        or pilot.max_total_openai_calls != expected_pilot_openai_calls
+        or authority.max_sequence_actor_calls != smoke_actor_calls + pilot.max_total_actor_calls
+        or authority.max_sequence_openai_calls != smoke_openai_calls + pilot.max_total_openai_calls
+        or authority.max_sequence_cost_usd_micros != smoke_cost + pilot.max_total_cost_usd_micros
+        or authority.max_model_switches != expected_model_switches
+        or authority.max_total_model_switch_wall_time_seconds
+        != expected_total_model_switch_wall_time
+        or (
+            authority.resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+            and authority.max_model_switch_wall_time_seconds <= 0
+        )
+        or (
+            authority.resource_topology == "INDEPENDENT_GPU_CONCURRENT"
+            and authority.max_model_switch_wall_time_seconds != 0
+        )
+        or authority.max_resource_cleanup_wall_time_seconds <= 0
+        or _SHA256.fullmatch(authority.resource_cleanup_upper_bound_sha256) is None
+        or _SHA256.fullmatch(authority.runtime_config_sha256) is None
+        or _SHA256.fullmatch(authority.pricing_sha256) is None
+        or authority.sentinel_config_sha256 != production_sentinel_config_sha256_v1()
+        or authority.max_post_run_integrity_wall_time_seconds <= 0
+        or authority.max_sequence_wall_time_seconds
+        != (
+            authority.max_resource_preflight_wall_time_seconds
+            + smoke_wall_time
+            + pilot.max_total_wall_time_seconds
+            + expected_total_model_switch_wall_time
+            + authority.max_resource_cleanup_wall_time_seconds
+            + authority.max_post_run_integrity_wall_time_seconds
+        )
+    ):
+        raise R25ArtifactBuildError(
+            "ARTIFACT_BINDING_MISMATCH",
+            "durable source, selection, pilot, authority, or topology bindings differ",
+        )
+
+    selection_value = cast(JsonValue, cohort_selection_projection(selection))
+    task_source_value = cast(JsonValue, value_by_name[PILOT_TASK_SOURCE_FILENAME])
+    pilot_value = cast(JsonValue, frozen_pilot_manifest_projection(pilot))
+    authority_value = cast(JsonValue, authority_manifest_projection(authority))
+    topology_value = cast(JsonValue, r24_cpu_topology_artifact_projection(topology))
+    selection_raw = raw_by_name[COHORT_SELECTION_FILENAME]
+    topology_raw = raw_by_name[TOPOLOGY_COMPARISON_FILENAME]
+    source_sha256 = hashlib.sha256(source_raw).hexdigest()
+    source_freeze_value = cast(JsonValue, frozen_gui_only_task_source_projection_v1(source_freeze))
+    expected_projection: dict[str, JsonValue] = {
+        "authority_manifest": authority_value,
+        "authority_manifest_sha256": canonical_sha256(authority_value),
+        "authority_status": RunAuthorizationStatusV1.DRAFT_NOT_AUTHORIZED.value,
+        "cohort_selection": selection_value,
+        "cohort_selection_artifact_byte_count": len(selection_raw),
+        "cohort_selection_artifact_sha256": hashlib.sha256(selection_raw).hexdigest(),
+        "execution_census": {
+            "actor_model_calls": 0,
+            "backend_operations": 0,
+            "docker_operations": 0,
+            "gpu_operations": 0,
+            "gui_actions": 0,
+            "network_calls": 0,
+            "secret_content_reads": 0,
+        },
+        "executable_task_source": task_source_value,
+        "executable_task_source_byte_count": len(task_source_raw),
+        "executable_task_source_schema_version": (EXECUTABLE_PILOT_TASK_SOURCE_SCHEMA_VERSION),
+        "executable_task_source_sha256": hashlib.sha256(task_source_raw).hexdigest(),
+        "frozen_pilot_manifest": pilot_value,
+        "frozen_pilot_manifest_sha256": canonical_sha256(pilot_value),
+        "gui_only_task_source_byte_count": len(source_raw),
+        "gui_only_task_source_freeze": source_freeze_value,
+        "gui_only_task_source_freeze_sha256": canonical_sha256(source_freeze_value),
+        "gui_only_task_source_sha256": source_sha256,
+        "schema_version": ARTIFACT_BUNDLE_SCHEMA_VERSION,
+        "topology_comparison_artifact": topology_value,
+        "topology_comparison_artifact_byte_count": len(topology_raw),
+        "topology_comparison_artifact_sha256": hashlib.sha256(topology_raw).hexdigest(),
+    }
+    expected_output: dict[str, JsonValue] = {
+        "artifact_bundle": expected_projection,
+        "artifact_bundle_sha256": canonical_sha256(cast(JsonValue, expected_projection)),
+    }
+    if value_by_name[ARTIFACT_BUNDLE_FILENAME] != expected_output:
+        raise R25ArtifactBuildError(
+            "ARTIFACT_BUNDLE_MISMATCH", "durable bundle is not the exact recomputed projection"
+        )
+    if expected_source_commit is not None:
+        if authority.source_commit != expected_source_commit:
+            raise R25ArtifactBuildError(
+                "SOURCE_COMMIT_MISMATCH", "durable authority source commit differs"
+            )
+        verify_current_source_commit(repository, expected_source_commit)
+    return ArtifactBundleReadbackValidationV1(
+        bundle_directory=str(target),
+        artifact_bundle_sha256=cast(str, expected_output["artifact_bundle_sha256"]),
+        gui_only_task_source_sha256=source_sha256,
+        registry_sha256=selection.registry_sha256,
+        source_task_count=selection.source_task_count,
+        cohort_size=len(selection.members),
+        artifact_count=len(_WRITTEN_ARTIFACT_FILENAMES),
+    )
+
+
 def write_artifact_bundle(
     bundle: AuthorityArtifactBundleV1,
     *,
     repository_root: Path,
+    expected_source_commit: str | None = None,
+    allow_unverified_cpu_fixture: bool = False,
 ) -> tuple[Path, ...]:
     """Write once into the explicitly planned fresh, repo-external directory."""
 
+    if type(allow_unverified_cpu_fixture) is not bool:
+        raise R25ArtifactBuildError(
+            "INVALID_VERIFICATION_MODE", "verification mode must be exact bool"
+        )
+    if expected_source_commit is None and not allow_unverified_cpu_fixture:
+        raise R25ArtifactBuildError(
+            "SOURCE_STATE_CONFIRMATION_REQUIRED",
+            "durable bundle publication requires exact clean-HEAD confirmation",
+        )
+    if expected_source_commit is not None:
+        if bundle.authority_manifest.source_commit != expected_source_commit:
+            raise R25ArtifactBuildError(
+                "SOURCE_COMMIT_MISMATCH", "bundle authority source commit differs"
+            )
+        verify_current_source_commit(repository_root, expected_source_commit)
     target = _repo_external(
         Path(bundle.pilot_manifest.task_manifest_path).parent,
         repository_root,
         "bundle directory",
     )
-    try:
-        target.mkdir(mode=0o700, parents=False, exist_ok=False)
-    except OSError as exc:
-        raise R25ArtifactBuildError(
-            "OUTPUT_DIRECTORY_NOT_FRESH", "bundle directory must be a fresh direct child"
-        ) from exc
     payloads: tuple[tuple[str, bytes], ...] = (
         (GUI_ONLY_TASK_SOURCE_FILENAME, bundle.source_task_jsonl_bytes),
         (
@@ -1518,22 +3299,109 @@ def write_artifact_bundle(
         ),
     )
     written: list[Path] = []
+    parent_chain: _DirectoryChainV1 = ()
+    target_descriptor = -1
+    published_identity: tuple[int, int] | None = None
     try:
+        _, parent_chain = _open_directory_chain(target.parent, name="bundle directory parent")
+        try:
+            os.mkdir(target.name, mode=0o700, dir_fd=parent_chain[-1][0])
+        except FileExistsError as exc:
+            raise R25ArtifactBuildError(
+                "OUTPUT_DIRECTORY_NOT_FRESH",
+                "bundle directory must be a fresh direct child",
+            ) from exc
+        target_descriptor = os.open(
+            target.name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_chain[-1][0],
+        )
+        target_metadata = os.fstat(target_descriptor)
+        published_identity = (target_metadata.st_dev, target_metadata.st_ino)
+        target_named = os.stat(target.name, dir_fd=parent_chain[-1][0], follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(target_metadata.st_mode)
+            or (target_metadata.st_dev, target_metadata.st_ino)
+            != (target_named.st_dev, target_named.st_ino)
+            or stat.S_IMODE(target_metadata.st_mode) != 0o700
+            or target_metadata.st_uid != os.geteuid()
+            or target_metadata.st_gid != os.getegid()
+        ):
+            raise R25ArtifactBuildError(
+                "ARTIFACT_WRITE_FAILED", "fresh bundle directory identity differs"
+            )
         for filename, payload in payloads:
             path = target / filename
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            descriptor = os.open(
+                filename,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=target_descriptor,
+            )
             try:
-                with os.fdopen(descriptor, "wb", closefd=True) as stream:
-                    descriptor = -1
-                    stream.write(payload)
-                    stream.flush()
-                    os.fsync(stream.fileno())
+                opened = os.fstat(descriptor)
+                view = memoryview(payload)
+                offset = 0
+                while offset < len(view):
+                    count = os.write(descriptor, view[offset:])
+                    if count <= 0:
+                        raise OSError("short artifact write")
+                    offset += count
+                os.fsync(descriptor)
+                rebound = os.stat(filename, dir_fd=target_descriptor, follow_symlinks=False)
+                after = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or (rebound.st_dev, rebound.st_ino) != (opened.st_dev, opened.st_ino)
+                    or (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
+                    or after.st_nlink != 1
+                    or stat.S_IMODE(after.st_mode) != 0o600
+                    or after.st_size != len(payload)
+                ):
+                    raise R25ArtifactBuildError(
+                        "PATH_IDENTITY_DRIFT", f"{filename} changed during publication"
+                    )
             finally:
-                if descriptor >= 0:
-                    os.close(descriptor)
+                os.close(descriptor)
             written.append(path)
+        os.fsync(target_descriptor)
+        os.fsync(parent_chain[-1][0])
+        _revalidate_directory_chain(parent_chain, name="bundle directory parent")
+        rebound_target = os.stat(target.name, dir_fd=parent_chain[-1][0], follow_symlinks=False)
+        if (rebound_target.st_dev, rebound_target.st_ino) != (
+            target_metadata.st_dev,
+            target_metadata.st_ino,
+        ):
+            raise R25ArtifactBuildError(
+                "PATH_IDENTITY_DRIFT", "bundle directory path changed during publication"
+            )
+    except R25ArtifactBuildError:
+        raise
     except OSError as exc:
         raise R25ArtifactBuildError("ARTIFACT_WRITE_FAILED", "artifact write failed") from exc
+    finally:
+        if target_descriptor >= 0:
+            os.close(target_descriptor)
+        _close_directory_chain(parent_chain)
+    assert published_identity is not None
+    validation = validate_written_artifact_bundle_v1(
+        target,
+        repository_root=repository_root,
+        expected_source_commit=expected_source_commit,
+        allow_unverified_cpu_fixture=allow_unverified_cpu_fixture,
+        _expected_bundle_identity=published_identity,
+    )
+    if validation.artifact_bundle_sha256 != artifact_bundle_sha256(bundle):
+        raise R25ArtifactBuildError(
+            "ARTIFACT_BUNDLE_MISMATCH", "durable bundle differs from the built projection"
+        )
     return tuple(written)
 
 
@@ -1543,6 +3411,10 @@ __all__ = [
     "COHORT_SELECTION_ALGORITHM",
     "COHORT_SELECTION_FILENAME",
     "COHORT_SELECTION_SCHEMA_VERSION",
+    "GUI_ONLY_TASK_SOURCE_TASK_COUNT",
+    "GUI_ONLY_TASK_SOURCE_FREEZE_SCHEMA_VERSION",
+    "GUI_ONLY_TASK_SOURCE_TRIAL",
+    "GUI_ONLY_TASK_SOURCE_TRIAL_PROVENANCE",
     "CohortTaskAuditDispositionV1",
     "CohortTaskAuditRecordV1",
     "TASK_TIME_DEPENDENCY_AUDIT_ALGORITHM",
@@ -1553,8 +3425,10 @@ __all__ = [
     "TOPOLOGY_COMPARISON_FILENAME",
     "AuthorityArtifactBundleV1",
     "AuthorityArtifactInputsV1",
+    "ArtifactBundleReadbackValidationV1",
     "CohortMemberV1",
     "CohortSelectionV1",
+    "FrozenGuiOnlyTaskSourceV1",
     "R25ArtifactBuildError",
     "RegistryTaskMetadataV1",
     "RegistryTaskTimeDependencyV1",
@@ -1566,9 +3440,17 @@ __all__ = [
     "cohort_selection_projection",
     "cohort_selection_sha256",
     "current_registry_metadata",
+    "freeze_gui_only_task_source_from_historical_manifest_v1",
+    "frozen_gui_only_task_source_projection_v1",
+    "frozen_gui_only_task_source_receipt_v1",
+    "frozen_gui_only_task_source_sha256_v1",
+    "load_gui_only_task_source_freeze_receipt_v1",
     "parse_cohort_selection",
     "select_gui_only_cohort",
     "select_gui_only_cohort_from_bytes",
+    "validate_written_artifact_bundle_v1",
     "verify_current_source_commit",
     "write_artifact_bundle",
+    "write_fresh_gui_only_task_source_v1",
+    "write_fresh_gui_only_task_source_freeze_receipt_v1",
 ]

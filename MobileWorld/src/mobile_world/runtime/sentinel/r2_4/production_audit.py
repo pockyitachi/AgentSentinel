@@ -26,15 +26,28 @@ import os
 import re
 import secrets
 import stat
+import types
 from dataclasses import InitVar, dataclass, fields
-from enum import StrEnum
+from enum import Enum, StrEnum
 from hashlib import sha256
 from pathlib import Path
 from threading import Lock
 from time import monotonic_ns
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import (
+    Any,
+    Protocol,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+    runtime_checkable,
+)
 
 from mobile_world.offline.causal_replay.contracts import (
+    CAPABILITIES_SCHEMA_VERSION,
+    HISTORY_IR_SCHEMA_VERSION,
+    CodecCapabilities,
     HistoryIR,
     JsonValue,
     canonical_json_bytes,
@@ -49,7 +62,23 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelResult,
     SentinelValidationStatus,
 )
+from mobile_world.runtime.sentinel.r2_2.contracts import RuntimeOperationKind
 from mobile_world.runtime.sentinel.r2_3.contracts import (
+    MultiPathRubricV1,
+    PathRelevanceOutputV1,
+    R23ContractError,
+    RecordRelevance,
+    RecordRelevanceResultV1,
+    RelevanceDisposition,
+    RubricAuthorityV1,
+    RubricExecutionScope,
+    RubricTrackerProposalV1,
+    RubricTrackingStateV1,
+    TopologyDeclarationV1,
+    TopologyKind,
+    TopologyRunStatus,
+    TopologyRunV1,
+    TrackerOutputKind,
     multi_path_rubric_projection,
     path_relevance_output_projection,
     path_relevance_output_sha256,
@@ -57,7 +86,10 @@ from mobile_world.runtime.sentinel.r2_3.contracts import (
     tracker_proposal_projection,
 )
 from mobile_world.runtime.sentinel.r2_3.session import (
+    RubricSessionFallbackCode,
+    RubricSessionFallbackV1,
     RubricSessionResultV1,
+    RubricSessionStage,
     RubricSessionStatus,
 )
 from mobile_world.runtime.sentinel.r2_4.audit_detail import (
@@ -71,9 +103,14 @@ from mobile_world.runtime.sentinel.r2_4.capabilities import (
 )
 from mobile_world.runtime.sentinel.r2_4.contracts import (
     R24ContractError,
+    RuntimeReplacementTemplate,
+    RuntimeVerticalAdmittedPlanV1,
+    RuntimeVerticalDecisionV1,
     RuntimeVerticalExecutionScope,
+    RuntimeVerticalOperationV1,
     RuntimeVerticalPolicyOutputV1,
     RuntimeVerticalSentinelResultV1,
+    RuntimeVerticalStatus,
     snapshot_json_value,
     vertical_output_projection,
     vertical_output_sha256,
@@ -107,7 +144,10 @@ from mobile_world.runtime.sentinel.r2_4.orchestration import (
     rubric_session_result_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.renderer import (
+    RuntimeVerticalMappingKind,
     RuntimeVerticalRenderResultV1,
+    RuntimeVerticalSourceMappingV1,
+    RuntimeVerticalTextDiffV1,
     snapshot_vertical_render_result,
     validate_vertical_render_result,
     vertical_render_result_projection,
@@ -121,6 +161,9 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LiveRubricCallTrustAnchorV1,
     LiveRubricError,
     LiveRubricExecutionScopeV1,
+    LiveRubricOperationV1,
+    LiveRubricTransportAuthorityV1,
+    LiveRubricTransportKindV1,
     R24RubricBackendExtensionDescriptorV1,
     live_rubric_attempt_constraint_binding_projection,
     live_rubric_attempt_request_proof_projection,
@@ -161,6 +204,9 @@ PRODUCTION_RUNTIME_AUDIT_ADMISSION_FAILURE_RECEIPT_SCHEMA_VERSION = (
 )
 PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-production-actor-provider-attempt/v1"
+)
+PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2 = (
+    "mobileworld.runtime.sentinel-r2.5-production-actor-provider-attempt/v2"
 )
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -356,6 +402,1100 @@ def _extraction_projection(
         "validation_checks": list(value.validation_checks),
         "warnings": list(value.warnings),
     }
+
+
+def _durable_object(value: JsonValue, label: str) -> dict[str, JsonValue]:
+    if type(value) is not dict:
+        raise ProductionRuntimeAuditError("INVALID_RESTRICTED_STAGE", f"{label} is not an object")
+    return value
+
+
+def _durable_array(value: JsonValue, label: str) -> list[JsonValue]:
+    if type(value) is not list:
+        raise ProductionRuntimeAuditError("INVALID_RESTRICTED_STAGE", f"{label} is not an array")
+    return value
+
+
+class _DurableGraphBudget:
+    __slots__ = ("nodes",)
+
+    def __init__(self) -> None:
+        self.nodes = 0
+
+    def visit(self, *, depth: int) -> None:
+        if depth > 64:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", "durable typed graph is too deep"
+            )
+        self.nodes += 1
+        if self.nodes > 262_144:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", "durable typed graph is too large"
+            )
+
+
+def _rebuild_durable_typed_value(
+    value: object,
+    annotation: object,
+    *,
+    label: str,
+    budget: _DurableGraphBudget,
+    depth: int,
+) -> object:
+    """Rebuild one direct dataclass projection without trusting virtual serializers."""
+
+    budget.visit(depth=depth)
+    if isinstance(annotation, type) and type(value) is annotation:
+        return value
+    origin = get_origin(annotation)
+    arguments = get_args(annotation)
+    if origin in {types.UnionType, Union}:
+        failures: list[Exception] = []
+        for candidate in arguments:
+            try:
+                return _rebuild_durable_typed_value(
+                    value,
+                    candidate,
+                    label=label,
+                    budget=budget,
+                    depth=depth + 1,
+                )
+            except (ProductionRuntimeAuditError, TypeError, ValueError) as exc:
+                failures.append(exc)
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", f"{label} does not match its declared union"
+        ) from (failures[-1] if failures else None)
+    if annotation is type(None):
+        if value is not None:
+            raise ProductionRuntimeAuditError("INVALID_RESTRICTED_STAGE", f"{label} is not null")
+        return None
+    if annotation in {str, int, float, bool}:
+        expected = cast(type[object], annotation)
+        if type(value) is not expected:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", f"{label} scalar type differs"
+            )
+        return value
+    if origin is tuple:
+        items = _durable_array(cast(JsonValue, value), label)
+        if len(arguments) == 2 and arguments[1] is Ellipsis:
+            return tuple(
+                _rebuild_durable_typed_value(
+                    item,
+                    arguments[0],
+                    label=f"{label}[{index}]",
+                    budget=budget,
+                    depth=depth + 1,
+                )
+                for index, item in enumerate(items)
+            )
+        if len(items) != len(arguments):
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", f"{label} tuple length differs"
+            )
+        return tuple(
+            _rebuild_durable_typed_value(
+                item,
+                item_type,
+                label=f"{label}[{index}]",
+                budget=budget,
+                depth=depth + 1,
+            )
+            for index, (item, item_type) in enumerate(zip(items, arguments, strict=True))
+        )
+    if origin is list:
+        items = _durable_array(cast(JsonValue, value), label)
+        item_type = arguments[0]
+        return [
+            _rebuild_durable_typed_value(
+                item,
+                item_type,
+                label=f"{label}[{index}]",
+                budget=budget,
+                depth=depth + 1,
+            )
+            for index, item in enumerate(items)
+        ]
+    if origin is dict:
+        source = _durable_object(cast(JsonValue, value), label)
+        key_type, item_type = arguments
+        if key_type is not str:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", f"{label} mapping key type differs"
+            )
+        return {
+            key: _rebuild_durable_typed_value(
+                item,
+                item_type,
+                label=f"{label}.{key}",
+                budget=budget,
+                depth=depth + 1,
+            )
+            for key, item in source.items()
+        }
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        if type(value) is not str:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", f"{label} enum value is not text"
+            )
+        try:
+            return annotation(value)
+        except ValueError as exc:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", f"{label} enum value differs"
+            ) from exc
+    if isinstance(annotation, type) and hasattr(annotation, "__dataclass_fields__"):
+        source = _durable_object(cast(JsonValue, value), label)
+        expected_type = cast(Any, annotation)
+        hints = get_type_hints(expected_type)
+        expected_fields = {item.name for item in fields(expected_type)}
+        if set(source) != expected_fields:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", f"{label} dataclass fields differ"
+            )
+        try:
+            return expected_type(
+                **{
+                    name: _rebuild_durable_typed_value(
+                        source[name],
+                        hints[name],
+                        label=f"{label}.{name}",
+                        budget=budget,
+                        depth=depth + 1,
+                    )
+                    for name in expected_fields
+                }
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", f"{label} dataclass is invalid"
+            ) from exc
+    raise ProductionRuntimeAuditError(
+        "INVALID_RESTRICTED_STAGE", f"{label} uses an unsupported durable type"
+    )
+
+
+def _rebuild_durable_dataclass_projection(
+    value: JsonValue,
+    expected_type: type[object],
+    *,
+    label: str,
+) -> object:
+    try:
+        return _rebuild_durable_typed_value(
+            value,
+            expected_type,
+            label=label,
+            budget=_DurableGraphBudget(),
+            depth=0,
+        )
+    except RecursionError as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", f"{label} exceeds the recursion limit"
+        ) from exc
+
+
+def _parse_durable_capabilities_projection(value: JsonValue) -> CodecCapabilities:
+    source = _durable_object(value, "codec capabilities")
+    preservation = _durable_object(source.get("preservation"), "codec preservation")
+    if set(source) != {
+        "schema_version",
+        "codec_id",
+        "contract_version",
+        "history_family",
+        "level",
+        "scope",
+        "supported_operations",
+        "supported_arms",
+        "preservation",
+        "live_ready",
+        "opaque_or_server_managed",
+    } or set(preservation) != {
+        "roles",
+        "ordering",
+        "multimodal_blocks",
+        "tool_call_result_adjacency",
+        "protocol_shell",
+    }:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "codec capabilities fields differ"
+        )
+    if source["schema_version"] != CAPABILITIES_SCHEMA_VERSION:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "codec capabilities schema differs"
+        )
+    direct: JsonValue = {
+        "codec_id": source["codec_id"],
+        "contract_version": source["contract_version"],
+        "history_family": source["history_family"],
+        "level": source["level"],
+        "scope": source["scope"],
+        "supported_operations": source["supported_operations"],
+        "supported_arms": source["supported_arms"],
+        "preserves_roles": preservation["roles"],
+        "preserves_order": preservation["ordering"],
+        "preserves_multimodal_blocks": preservation["multimodal_blocks"],
+        "preserves_tool_adjacency": preservation["tool_call_result_adjacency"],
+        "preserves_protocol_shell": preservation["protocol_shell"],
+        "live_ready": source["live_ready"],
+        "opaque_or_server_managed": source["opaque_or_server_managed"],
+    }
+    capabilities = cast(
+        CodecCapabilities,
+        _rebuild_durable_dataclass_projection(
+            direct, CodecCapabilities, label="codec capabilities"
+        ),
+    )
+    if capabilities.to_dict() != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "codec capabilities projection differs"
+        )
+    return capabilities
+
+
+def _parse_durable_history_ir_projection(value: JsonValue) -> HistoryIR:
+    source = _durable_object(value, "History IR")
+    expected_fields = {item.name for item in fields(HistoryIR)} | {"schema_version"}
+    if set(source) != expected_fields or source["schema_version"] != HISTORY_IR_SCHEMA_VERSION:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "History IR fields/schema differ"
+        )
+    direct: dict[str, object] = {
+        name: source[name] for name in expected_fields - {"schema_version"}
+    }
+    direct["capabilities"] = _rebuild_durable_dataclass_projection(
+        source["capabilities"], CodecCapabilities, label="History IR capabilities"
+    )
+    history = cast(
+        HistoryIR,
+        _rebuild_durable_dataclass_projection(
+            cast(JsonValue, direct), HistoryIR, label="History IR"
+        ),
+    )
+    if trusted_history_ir_projection(history) != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "History IR projection differs"
+        )
+    return history
+
+
+def _parse_durable_vertical_output_projection(
+    value: JsonValue,
+) -> RuntimeVerticalPolicyOutputV1:
+    source = _durable_object(value, "vertical output")
+    plan_source = _durable_object(source.get("admitted_plan"), "vertical admitted plan")
+    decisions_source = _durable_array(source.get("decisions"), "vertical decisions")
+    operations_source = _durable_array(plan_source.get("operations"), "vertical operations")
+    try:
+        decisions = tuple(
+            RuntimeVerticalDecisionV1(
+                decision_id=cast(str, item["decision_id"]),
+                target_id=cast(str, item["target_id"]),
+                operation=RuntimeOperationKind(cast(str, item["operation"])),
+                source_decision_sha256=cast(str, item["source_decision_sha256"]),
+            )
+            for item in (_durable_object(raw, "vertical decision") for raw in decisions_source)
+        )
+        operations = tuple(
+            RuntimeVerticalOperationV1(
+                operation_id=cast(str, item["operation_id"]),
+                decision_id=cast(str, item["decision_id"]),
+                target_id=cast(str, item["target_id"]),
+                target_record_id=cast(str, item["target_record_id"]),
+                target_span_sha256=cast(str, item["target_span_sha256"]),
+                kind=RuntimeOperationKind(cast(str, item["kind"])),
+                source_operation_sha256=cast(str, item["source_operation_sha256"]),
+                replacement_template=(
+                    None
+                    if item["replacement_template"] is None
+                    else RuntimeReplacementTemplate(cast(str, item["replacement_template"]))
+                ),
+            )
+            for item in (_durable_object(raw, "vertical operation") for raw in operations_source)
+        )
+        plan = RuntimeVerticalAdmittedPlanV1(
+            plan_id=cast(str, plan_source["plan_id"]),
+            logical_call_id=cast(str, plan_source["logical_call_id"]),
+            host_id=cast(str, plan_source["host_id"]),
+            history_family=cast(str, plan_source["history_family"]),
+            history_codec_id=cast(str, plan_source["history_codec_id"]),
+            history_codec_contract_version=cast(str, plan_source["history_codec_contract_version"]),
+            source_request_sha256=cast(str, plan_source["source_request_sha256"]),
+            source_policy_output_sha256=cast(str, plan_source["source_policy_output_sha256"]),
+            source_policy_receipt_sha256=cast(str, plan_source["source_policy_receipt_sha256"]),
+            source_transport_descriptor_sha256=cast(
+                str, plan_source["source_transport_descriptor_sha256"]
+            ),
+            source_transport_binding_sha256=cast(
+                str, plan_source["source_transport_binding_sha256"]
+            ),
+            source_r22_admitted_plan_sha256=cast(
+                str, plan_source["source_r22_admitted_plan_sha256"]
+            ),
+            operations=operations,
+            execution_authority_sha256=cast(str, plan_source["execution_authority_sha256"]),
+            execution_scope=RuntimeVerticalExecutionScope(
+                cast(str, plan_source["execution_scope"])
+            ),
+            schema_version=cast(str, plan_source["schema_version"]),
+        )
+        output = RuntimeVerticalPolicyOutputV1(
+            policy_id=cast(str, source["policy_id"]),
+            status=RuntimeVerticalStatus(cast(str, source["status"])),
+            decisions=decisions,
+            admitted_plan=plan,
+            source_policy_output_sha256=cast(str, source["source_policy_output_sha256"]),
+            source_policy_receipt_sha256=cast(str, source["source_policy_receipt_sha256"]),
+            source_transport_descriptor_sha256=cast(
+                str, source["source_transport_descriptor_sha256"]
+            ),
+            source_transport_binding_sha256=cast(str, source["source_transport_binding_sha256"]),
+            validation_checks=tuple(cast(list[str], source["validation_checks"])),
+            execution_authority_sha256=cast(str, source["execution_authority_sha256"]),
+            execution_scope=RuntimeVerticalExecutionScope(cast(str, source["execution_scope"])),
+            schema_version=cast(str, source["schema_version"]),
+        )
+    except (KeyError, TypeError, ValueError, R24ContractError) as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "vertical output is not a trusted projection"
+        ) from exc
+    if vertical_output_projection(output) != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "vertical output projection differs"
+        )
+    return output
+
+
+def _parse_durable_path_relevance_projection(value: JsonValue) -> PathRelevanceOutputV1:
+    source = _durable_object(value, "path relevance output")
+    records_source = _durable_array(source.get("records"), "path relevance records")
+    topology_source = _durable_object(source.get("topology"), "path relevance topology")
+    authority_source = _durable_object(source.get("authority"), "path relevance authority")
+    try:
+        output = PathRelevanceOutputV1(
+            linkage_id=cast(str, source["linkage_id"]),
+            logical_call_id=cast(str, source["logical_call_id"]),
+            rubric_state_sha256=cast(str, source["rubric_state_sha256"]),
+            records=tuple(
+                RecordRelevanceResultV1(
+                    record_id=cast(str, item["record_id"]),
+                    relevance=RecordRelevance(cast(str, item["relevance"])),
+                    linked_path_ids=tuple(cast(list[str], item["linked_path_ids"])),
+                    supported_record_binding_sha256=cast(
+                        str | None, item["supported_record_binding_sha256"]
+                    ),
+                    disposition=RelevanceDisposition(cast(str, item["disposition"])),
+                )
+                for item in (
+                    _durable_object(raw, "path relevance record") for raw in records_source
+                )
+            ),
+            topology=TopologyDeclarationV1(
+                kind=TopologyKind(cast(str, topology_source["kind"])),
+                independent_grounding_claim_eligible=cast(
+                    bool, topology_source["independent_grounding_claim_eligible"]
+                ),
+            ),
+            execution_scope=RubricExecutionScope(cast(str, source["execution_scope"])),
+            authority=RubricAuthorityV1(
+                factual_truth_authority=cast(bool, authority_source["factual_truth_authority"]),
+                history_edit_authority=cast(bool, authority_source["history_edit_authority"]),
+                action_or_tool_authority=cast(bool, authority_source["action_or_tool_authority"]),
+                archive_execution_authority=cast(
+                    bool, authority_source["archive_execution_authority"]
+                ),
+            ),
+            output_kind=TrackerOutputKind(cast(str, source["output_kind"])),
+            schema_version=cast(str, source["schema_version"]),
+        )
+    except (KeyError, TypeError, ValueError, R23ContractError) as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "path relevance is not a trusted projection"
+        ) from exc
+    if path_relevance_output_projection(output) != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "path relevance projection differs"
+        )
+    return output
+
+
+def _parse_durable_live_call_binding_projection(
+    value: JsonValue,
+) -> ResolvedLivePolicyCallBindingV1:
+    source = _durable_object(value, "live call binding")
+    try:
+        binding = ResolvedLivePolicyCallBindingV1(
+            logical_call_id=cast(str, source["logical_call_id"]),
+            actor_call_index=cast(int, source["actor_call_index"]),
+            actor_request_sha256=cast(str, source["actor_request_sha256"]),
+            policy_id=cast(str, source["policy_id"]),
+            execution_authority_sha256=cast(str, source["execution_authority_sha256"]),
+            source_transport_descriptor_sha256=cast(
+                str, source["source_transport_descriptor_sha256"]
+            ),
+            source_transport_binding_sha256=cast(
+                str | None, source["source_transport_binding_sha256"]
+            ),
+            case_execution_lease_sha256=cast(str, source["case_execution_lease_sha256"]),
+            preflight_report_sha256=cast(str, source["preflight_report_sha256"]),
+            factory_binding_sha256=cast(str, source["factory_binding_sha256"]),
+            pricing_binding_sha256=cast(str, source["pricing_binding_sha256"]),
+            rubric_backend_extension_descriptor_sha256=cast(
+                str, source["rubric_backend_extension_descriptor_sha256"]
+            ),
+            rubric_attempt_receipt_sha256s=tuple(
+                cast(list[str], source["rubric_attempt_receipt_sha256s"])
+            ),
+            rubric_call_receipt_sha256s=tuple(
+                cast(list[str], source["rubric_call_receipt_sha256s"])
+            ),
+            history_policy_attempt_receipt_sha256=cast(
+                str | None, source["history_policy_attempt_receipt_sha256"]
+            ),
+            output_sha256=cast(str | None, source["output_sha256"]),
+            openai_calls=cast(int, source["openai_calls"]),
+            cost_usd_micros=cast(int, source["cost_usd_micros"]),
+        )
+    except (KeyError, TypeError, ValueError, R24ContractError) as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "live call binding is not a trusted projection"
+        ) from exc
+    if resolved_live_policy_call_binding_projection(binding) != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "live call binding projection differs"
+        )
+    return binding
+
+
+def _parse_durable_rubric_backend_extension_projection(
+    value: JsonValue,
+) -> R24RubricBackendExtensionDescriptorV1:
+    source = _durable_object(value, "rubric backend extension")
+    try:
+        extension = R24RubricBackendExtensionDescriptorV1(
+            descriptor_id=cast(str, source["descriptor_id"]),
+            descriptor_version=cast(str, source["descriptor_version"]),
+            execution_scope=LiveRubricExecutionScopeV1(cast(str, source["execution_scope"])),
+            transport_kind=LiveRubricTransportKindV1(cast(str, source["transport_kind"])),
+            transport_authority=LiveRubricTransportAuthorityV1(
+                cast(str, source["transport_authority"])
+            ),
+            r23_compatibility_descriptor_sha256=cast(
+                str, source["r23_compatibility_descriptor_sha256"]
+            ),
+            provider_config_sha256=cast(str, source["provider_config_sha256"]),
+            prompt_sha256=cast(str, source["prompt_sha256"]),
+            rubric_schema_sha256=cast(str, source["rubric_schema_sha256"]),
+            tracking_packet_schema_sha256=cast(str, source["tracking_packet_schema_sha256"]),
+            tracker_schema_sha256=cast(str, source["tracker_schema_sha256"]),
+            generate_output_schema_sha256=cast(str, source["generate_output_schema_sha256"]),
+            track_output_schema_sha256=cast(str, source["track_output_schema_sha256"]),
+            configured_model=cast(str, source["configured_model"]),
+            external_network_attempted=cast(bool, source["external_network_attempted"]),
+            model_call_attempted=cast(bool, source["model_call_attempted"]),
+            local_gpu_used=cast(bool, source["local_gpu_used"]),
+            schema_version=cast(str, source["schema_version"]),
+        )
+    except (KeyError, TypeError, ValueError, LiveRubricError) as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE",
+            "rubric backend extension is not a trusted projection",
+        ) from exc
+    if r24_rubric_backend_extension_descriptor_projection(extension) != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "rubric backend extension projection differs"
+        )
+    return extension
+
+
+def _parse_durable_rubric_call_receipt_projection(
+    value: JsonValue,
+) -> LiveRubricCallReceiptV1:
+    source = _durable_object(value, "rubric call receipt")
+    try:
+        receipt = LiveRubricCallReceiptV1(
+            receipt_id=cast(str, source["receipt_id"]),
+            operation=LiveRubricOperationV1(cast(str, source["operation"])),
+            execution_scope=LiveRubricExecutionScopeV1(cast(str, source["execution_scope"])),
+            task_run_id=cast(str, source["task_run_id"]),
+            logical_call_id=cast(str, source["logical_call_id"]),
+            backend_extension_descriptor_sha256=cast(
+                str, source["backend_extension_descriptor_sha256"]
+            ),
+            r23_compatibility_descriptor_sha256=cast(
+                str, source["r23_compatibility_descriptor_sha256"]
+            ),
+            transport_kind=LiveRubricTransportKindV1(cast(str, source["transport_kind"])),
+            transport_authority=LiveRubricTransportAuthorityV1(
+                cast(str, source["transport_authority"])
+            ),
+            prompt_sha256=cast(str, source["prompt_sha256"]),
+            provider_input_schema_version=cast(str, source["provider_input_schema_version"]),
+            provider_output_schema_sha256=cast(str, source["provider_output_schema_sha256"]),
+            provider_request_sha256=cast(str, source["provider_request_sha256"]),
+            provider_output_sha256=cast(str, source["provider_output_sha256"]),
+            transport_binding_sha256=cast(str, source["transport_binding_sha256"]),
+            pricing_binding_sha256=cast(str | None, source.get("pricing_binding_sha256")),
+            current_image_binding_sha256=cast(
+                str | None, source.get("current_image_binding_sha256")
+            ),
+            manifest_sha256=cast(str | None, source.get("manifest_sha256")),
+            preflight_sha256=cast(str | None, source.get("preflight_sha256")),
+            case_execution_lease_sha256=cast(str | None, source.get("case_execution_lease_sha256")),
+            stage_sha256=cast(str | None, source.get("stage_sha256")),
+            attempt_authority_sha256=cast(str | None, source.get("attempt_authority_sha256")),
+            attempt_receipt_sha256=cast(str | None, source.get("attempt_receipt_sha256")),
+            requested_model=cast(str | None, source.get("requested_model")),
+            returned_model=cast(str | None, source.get("returned_model")),
+            dispatch_count=cast(int, source["dispatch_count"]),
+            input_tokens=cast(int | None, source.get("input_tokens")),
+            output_tokens=cast(int | None, source.get("output_tokens")),
+            total_tokens=cast(int | None, source.get("total_tokens")),
+            cost_usd_micros=cast(int | None, source.get("cost_usd_micros")),
+            raw_task_or_image_persisted=cast(bool, source["raw_task_or_image_persisted"]),
+            provider_output_persisted=cast(bool, source["provider_output_persisted"]),
+            actor_history_included=cast(bool, source["actor_history_included"]),
+            history_ir_included=cast(bool, source["history_ir_included"]),
+            action_or_tool_authority=cast(bool, source["action_or_tool_authority"]),
+            schema_version=cast(str, source["schema_version"]),
+        )
+    except (KeyError, TypeError, ValueError, LiveRubricError) as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "rubric call receipt is not a trusted projection"
+        ) from exc
+    if live_rubric_call_receipt_projection(receipt) != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "rubric call receipt projection differs"
+        )
+    return receipt
+
+
+def _parse_durable_render_projection(
+    value: JsonValue,
+    *,
+    source_request: JsonValue,
+) -> RuntimeVerticalRenderResultV1:
+    source = _durable_object(value, "render result")
+    candidate_request = source.get("candidate_request")
+    exact_diff = _durable_object(source.get("exact_diff"), "render exact diff")
+    raw_diffs = _durable_array(exact_diff.get("text_diffs"), "render text diffs")
+    raw_mappings = _durable_array(exact_diff.get("source_mappings"), "render source mappings")
+    try:
+        diffs = tuple(
+            RuntimeVerticalTextDiffV1(
+                operation_id=cast(str, item["operation_id"]),
+                kind=RuntimeOperationKind(cast(str, item["kind"])),
+                container_path=tuple(cast(list[str | int], item["container_path"])),
+                source_char_start=cast(int, item["source_char_start"]),
+                source_char_end=cast(int, item["source_char_end"]),
+                rendered_char_start=cast(int, item["rendered_char_start"]),
+                rendered_char_end=cast(int, item["rendered_char_end"]),
+                original_text=cast(str, item["original_text"]),
+                rendered_text=cast(str, item["rendered_text"]),
+                original_sha256=cast(str, item["original_sha256"]),
+                rendered_sha256=cast(str, item["rendered_sha256"]),
+            )
+            for item in (_durable_object(raw, "render text diff") for raw in raw_diffs)
+        )
+        mappings = tuple(
+            RuntimeVerticalSourceMappingV1(
+                container_path=tuple(cast(list[str | int], item["container_path"])),
+                source_char_start=cast(int, item["source_char_start"]),
+                source_char_end=cast(int, item["source_char_end"]),
+                rendered_char_start=cast(int, item["rendered_char_start"]),
+                rendered_char_end=cast(int, item["rendered_char_end"]),
+                kind=RuntimeVerticalMappingKind(cast(str, item["kind"])),
+                operation_id=cast(str | None, item["operation_id"]),
+            )
+            for item in (_durable_object(raw, "render source mapping") for raw in raw_mappings)
+        )
+        render = RuntimeVerticalRenderResultV1(
+            source_request_canonical_bytes=canonical_json_bytes(source_request),
+            candidate_request_canonical_bytes=canonical_json_bytes(candidate_request),
+            source_request_sha256=cast(str, source["source_request_sha256"]),
+            candidate_request_sha256=cast(str, source["candidate_request_sha256"]),
+            admitted_plan_sha256=cast(str, source["admitted_plan_sha256"]),
+            exact_diff_sha256=cast(str, source["exact_diff_sha256"]),
+            text_diffs=diffs,
+            source_mappings=mappings,
+            validation_checks=tuple(cast(list[str], source["validation_checks"])),
+            execution_scope=RuntimeVerticalExecutionScope(cast(str, source["execution_scope"])),
+            schema_version=cast(str, source["schema_version"]),
+        )
+    except (KeyError, TypeError, ValueError, R24ContractError) as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "render result is not a trusted projection"
+        ) from exc
+    expected = {
+        **vertical_render_result_projection(render),
+        "candidate_request": candidate_request,
+        "exact_diff": {
+            "text_diffs": [vertical_text_diff_projection(item) for item in diffs],
+            "source_mappings": [vertical_source_mapping_projection(item) for item in mappings],
+        },
+    }
+    if expected != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "render result projection differs"
+        )
+    return render
+
+
+_RUBRIC_RESULT_SUMMARY_FIELDS = frozenset(
+    {
+        "stage",
+        "status",
+        "rubric_sha256",
+        "state_sha256",
+        "proposal_sha256",
+        "relevance_sha256",
+        "fallback",
+        "backend_called",
+        "receipt_sha256",
+    }
+)
+_RUBRIC_RESULT_DETAIL_FIELDS = _RUBRIC_RESULT_SUMMARY_FIELDS | {
+    "rubric",
+    "tracking_state",
+    "tracker_proposal",
+    "path_relevance",
+}
+
+
+def _validate_durable_rubric_result_projection(
+    value: JsonValue,
+) -> tuple[RubricSessionResultV1, str]:
+    source = _durable_object(value, "rubric session result")
+    if set(source) != _RUBRIC_RESULT_DETAIL_FIELDS:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "rubric session result fields differ"
+        )
+    if (
+        type(source["stage"]) is not str
+        or type(source["status"]) is not str
+        or type(source["backend_called"]) is not bool
+        or type(source["receipt_sha256"]) is not str
+    ):
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "rubric session result scalar types differ"
+        )
+    _require_sha256(source["receipt_sha256"], "rubric receipt SHA-256")
+    typed_children: dict[str, object | None] = {}
+    for child_name, hash_name, expected_type, projection_function in (
+        ("rubric", "rubric_sha256", MultiPathRubricV1, multi_path_rubric_projection),
+        (
+            "tracking_state",
+            "state_sha256",
+            RubricTrackingStateV1,
+            rubric_tracking_state_projection,
+        ),
+        (
+            "tracker_proposal",
+            "proposal_sha256",
+            RubricTrackerProposalV1,
+            tracker_proposal_projection,
+        ),
+    ):
+        child = source[child_name]
+        digest = source[hash_name]
+        if child is None:
+            if digest is not None:
+                raise ProductionRuntimeAuditError(
+                    "INVALID_RESTRICTED_STAGE",
+                    f"rubric session {child_name} absence differs from its hash",
+                )
+            typed_children[child_name] = None
+            continue
+        trusted_child = _rebuild_durable_dataclass_projection(
+            child, expected_type, label=f"rubric session {child_name}"
+        )
+        trusted_projection = cast(Any, projection_function)(trusted_child)
+        if trusted_projection != child or canonical_sha256(child) != digest:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE",
+                f"rubric session {child_name} projection/hash differs",
+            )
+        typed_children[child_name] = trusted_child
+    relevance_source = source["path_relevance"]
+    relevance_digest = source["relevance_sha256"]
+    if relevance_source is None:
+        if relevance_digest is not None:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE",
+                "rubric session path relevance absence differs from its hash",
+            )
+        relevance = None
+    else:
+        relevance = _parse_durable_path_relevance_projection(relevance_source)
+        if canonical_sha256(relevance_source) != relevance_digest:
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", "rubric session path relevance hash differs"
+            )
+    fallback = source["fallback"]
+    if fallback is not None and (
+        type(fallback) is not dict
+        or set(fallback) != {"code", "contract_code"}
+        or type(fallback["code"]) is not str
+        or type(fallback["contract_code"]) is not str
+    ):
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "rubric session fallback differs"
+        )
+    try:
+        result = RubricSessionResultV1(
+            stage=RubricSessionStage(source["stage"]),
+            status=RubricSessionStatus(source["status"]),
+            rubric=cast(MultiPathRubricV1 | None, typed_children["rubric"]),
+            state=cast(RubricTrackingStateV1 | None, typed_children["tracking_state"]),
+            proposal=cast(RubricTrackerProposalV1 | None, typed_children["tracker_proposal"]),
+            relevance=relevance,
+            fallback=(
+                None
+                if fallback is None
+                else RubricSessionFallbackV1(
+                    code=RubricSessionFallbackCode(cast(str, fallback["code"])),
+                    contract_code=cast(str | None, fallback["contract_code"]),
+                )
+            ),
+            backend_called=source["backend_called"],
+            receipt_sha256=cast(str | None, source["receipt_sha256"]),
+        )
+    except (TypeError, ValueError, R23ContractError) as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "rubric session result is invalid"
+        ) from exc
+    if _rubric_result_detail_projection(result) != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "rubric session result projection differs"
+        )
+    return result, rubric_session_result_sha256(result)
+
+
+def _validate_durable_coordinated_record_projection(
+    value: JsonValue,
+    *,
+    generation_result: RubricSessionResultV1,
+    rubric_result: RubricSessionResultV1,
+) -> R24CoordinatedCallRecordV1:
+    source = _durable_object(value, "coordinated record")
+    expected_fields = {
+        "schema_version",
+        "logical_call_id",
+        "task_run_id",
+        "call_input_sha256",
+        "evidence_snapshot_latency_ns",
+        "history_free_stimulus_sha256",
+        "gpt56_evidence_packet_sha256",
+        "generation_result_sha256",
+        "tracking_packet_sha256",
+        "rubric_result_sha256",
+        "topology_run",
+    }
+    topology = _durable_object(source.get("topology_run"), "coordinated topology run")
+    if set(source) != expected_fields or set(topology) != {
+        "kind",
+        "independent_grounding_claim_eligible",
+        "status",
+        "rubric_input_sha256",
+        "rubric_output_sha256",
+        "rubric_receipt_sha256",
+        "history_policy_input_sha256",
+        "history_policy_output_sha256",
+        "failure_code",
+        "total_latency_ns",
+    }:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "coordinated record fields differ"
+        )
+    for name in (
+        "call_input_sha256",
+        "history_free_stimulus_sha256",
+        "generation_result_sha256",
+        "tracking_packet_sha256",
+        "rubric_result_sha256",
+    ):
+        value_or_none = source[name]
+        if value_or_none is not None:
+            _require_sha256(value_or_none, f"coordinated {name}")
+    for name in (
+        "rubric_input_sha256",
+        "rubric_output_sha256",
+        "rubric_receipt_sha256",
+        "history_policy_input_sha256",
+        "history_policy_output_sha256",
+    ):
+        value_or_none = topology[name]
+        if value_or_none is not None:
+            _require_sha256(value_or_none, f"coordinated topology {name}")
+    try:
+        record = R24CoordinatedCallRecordV1(
+            logical_call_id=cast(str, source["logical_call_id"]),
+            task_run_id=cast(str, source["task_run_id"]),
+            call_input_sha256=cast(str, source["call_input_sha256"]),
+            evidence_snapshot_latency_ns=cast(int, source["evidence_snapshot_latency_ns"]),
+            history_free_stimulus_sha256=cast(str, source["history_free_stimulus_sha256"]),
+            gpt56_evidence_packet_sha256=cast(str | None, source["gpt56_evidence_packet_sha256"]),
+            generation_result_sha256=cast(str, source["generation_result_sha256"]),
+            generation_result=generation_result,
+            tracking_packet_sha256=cast(str | None, source["tracking_packet_sha256"]),
+            rubric_result_sha256=cast(str, source["rubric_result_sha256"]),
+            rubric_result=rubric_result,
+            topology_run=TopologyRunV1(
+                topology=TopologyDeclarationV1(
+                    kind=TopologyKind(cast(str, topology["kind"])),
+                    independent_grounding_claim_eligible=cast(
+                        bool, topology["independent_grounding_claim_eligible"]
+                    ),
+                ),
+                status=TopologyRunStatus(cast(str, topology["status"])),
+                rubric_input_sha256=cast(str | None, topology["rubric_input_sha256"]),
+                rubric_output_sha256=cast(str | None, topology["rubric_output_sha256"]),
+                rubric_receipt_sha256=cast(str | None, topology["rubric_receipt_sha256"]),
+                history_policy_input_sha256=cast(
+                    str | None, topology["history_policy_input_sha256"]
+                ),
+                history_policy_output_sha256=cast(
+                    str | None, topology["history_policy_output_sha256"]
+                ),
+                failure_code=cast(str | None, topology["failure_code"]),
+                total_latency_ns=cast(int, topology["total_latency_ns"]),
+            ),
+            schema_version=cast(str, source["schema_version"]),
+        )
+    except (KeyError, TypeError, ValueError, R23ContractError, R24ContractError) as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "coordinated record is invalid"
+        ) from exc
+    if r24_coordinated_call_record_projection(record) != source:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "coordinated record projection differs"
+        )
+    return record
+
+
+_READY_RESTRICTED_FIELDS = frozenset(
+    {
+        "raw_request",
+        "extraction",
+        "history_ir",
+        "vertical_output",
+        "coordinated_record",
+        "rubric_generation_result",
+        "rubric_result",
+        "path_relevance_output",
+        "render_result",
+        "final_request",
+        "validator_result",
+        "live_call_binding",
+        "live_attempt_receipts",
+        "r2_4_rubric_call_receipts",
+        "r2_4_rubric_request_proofs",
+        "r2_4_history_policy_request_proof",
+        "r2_4_rubric_backend_extension",
+        "semantic_stage_projections_persisted",
+        "raw_request_persisted_in_owner_only_detail",
+        "provider_response_via_collector_locator",
+        "provider_reasoning_persisted",
+    }
+)
+_NO_HISTORY_RESTRICTED_FIELDS = frozenset(
+    {
+        "kind",
+        "raw_request",
+        "final_request",
+        "sentinel_receipt",
+        "coordinated_record",
+        "rubric_generation_result",
+        "rubric_result",
+        "path_relevance_output",
+        "validator_result",
+        "live_failure_code",
+        "live_call_binding",
+        "live_attempt_receipts",
+        "r2_4_rubric_call_receipts",
+        "r2_4_rubric_request_proofs",
+        "r2_4_history_policy_request_proof",
+        "r2_4_rubric_backend_extension",
+        "semantic_stage_projections_persisted",
+        "raw_request_persisted_in_owner_only_detail",
+        "provider_response_via_collector_locator",
+        "provider_reasoning_persisted",
+    }
+)
+_FALLBACK_RESTRICTED_FIELDS = frozenset(
+    {
+        "kind",
+        "raw_request",
+        "final_request",
+        "sentinel_receipt",
+        "validator_result",
+        "live_failure_code",
+        "live_call_binding",
+        "live_attempt_receipts",
+        "r2_4_rubric_call_receipts",
+        "r2_4_rubric_request_proofs",
+        "r2_4_history_policy_request_proof",
+        "r2_4_rubric_backend_extension",
+        "raw_request_persisted_in_owner_only_detail",
+        "provider_response_via_collector_locator",
+        "provider_reasoning_persisted",
+    }
+)
+_BYPASS_RESTRICTED_FIELDS = frozenset(
+    {
+        "kind",
+        "raw_request",
+        "final_request",
+        "sentinel_receipt",
+        "validator_result",
+        "provider_response_via_collector_locator",
+        "provider_reasoning_persisted",
+    }
+)
+_OFF_RESTRICTED_FIELDS = frozenset(
+    {
+        "kind",
+        "raw_request",
+        "final_request",
+        "validator_result_sha256",
+        "semantic_text_persisted",
+        "reasoning_persisted",
+    }
+)
+
+
+def _parse_durable_sentinel_receipt_projection(value: JsonValue) -> SentinelReceipt:
+    receipt = cast(
+        SentinelReceipt,
+        _rebuild_durable_dataclass_projection(value, SentinelReceipt, label="Sentinel receipt"),
+    )
+    if _sentinel_receipt_projection(receipt) != value:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "Sentinel receipt projection differs"
+        )
+    return receipt
+
+
+def _parse_durable_live_attempt_projection(value: JsonValue) -> LiveAttemptReceiptV1:
+    receipt = cast(
+        LiveAttemptReceiptV1,
+        _rebuild_durable_dataclass_projection(
+            value, LiveAttemptReceiptV1, label="live attempt receipt"
+        ),
+    )
+    if live_attempt_receipt_projection(receipt) != value:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "live attempt receipt projection differs"
+        )
+    return receipt
+
+
+def _validate_restricted_common_requests(
+    restricted: dict[str, JsonValue],
+    pre: ProductionRuntimeAuditPreProviderV1,
+) -> tuple[
+    JsonValue,
+    JsonValue,
+    ResolvedLivePolicyCallBindingV1 | None,
+    tuple[LiveAttemptReceiptV1, ...],
+    tuple[LiveRubricCallReceiptV1, ...],
+    R24RubricBackendExtensionDescriptorV1 | None,
+]:
+    raw = restricted["raw_request"]
+    final = restricted["final_request"]
+    if (
+        canonical_sha256(raw) != pre.raw_request_sha256
+        or canonical_sha256(final) != pre.final_request_sha256
+    ):
+        raise ProductionRuntimeAuditError(
+            "TRACE_BINDING_MISMATCH", "restricted raw/final request hashes differ"
+        )
+    raw_attempts = _durable_array(restricted.get("live_attempt_receipts"), "live attempt receipts")
+    attempts = tuple(_parse_durable_live_attempt_projection(item) for item in raw_attempts)
+    attempt_hashes = tuple(live_attempt_receipt_sha256(item) for item in attempts)
+    if (
+        attempt_hashes != pre.live_attempt_receipt_sha256s
+        or (None if not attempts else live_attempt_receipt_root_sha256(attempts))
+        != pre.live_attempt_receipt_root_sha256
+        or sum(item.dispatch_count for item in attempts) != pre.live_openai_calls
+        or sum(item.cost_usd_micros or 0 for item in attempts) != pre.live_cost_usd_micros
+        or all(item.cost_usd_micros is not None for item in attempts) != pre.live_cost_exact
+    ):
+        raise ProductionRuntimeAuditError(
+            "TRACE_BINDING_MISMATCH", "restricted live attempt census differs"
+        )
+    raw_calls = _durable_array(restricted.get("r2_4_rubric_call_receipts"), "rubric call receipts")
+    calls = tuple(_parse_durable_rubric_call_receipt_projection(item) for item in raw_calls)
+    binding_value = restricted.get("live_call_binding")
+    binding = (
+        None
+        if binding_value is None
+        else _parse_durable_live_call_binding_projection(binding_value)
+    )
+    extension_value = restricted.get("r2_4_rubric_backend_extension")
+    extension = (
+        None
+        if extension_value is None
+        else _parse_durable_rubric_backend_extension_projection(extension_value)
+    )
+    if binding is None:
+        if pre.live_call_binding_sha256 is not None or calls or extension is not None:
+            raise ProductionRuntimeAuditError(
+                "TRACE_BINDING_MISMATCH", "absent live binding has child evidence"
+            )
+    else:
+        rubric_attempt_hashes = tuple(
+            live_attempt_receipt_sha256(item)
+            for item in attempts
+            if item.role is LiveAttemptRoleV1.RUBRIC
+        )
+        history_attempts = tuple(
+            item for item in attempts if item.role is LiveAttemptRoleV1.HISTORY_POLICY
+        )
+        if (
+            resolved_live_policy_call_binding_sha256(binding) != pre.live_call_binding_sha256
+            or binding.logical_call_id != pre.logical_call_id
+            or binding.actor_request_sha256 != pre.raw_request_sha256
+            or binding.execution_authority_sha256 != pre.execution_authority_sha256
+            or binding.case_execution_lease_sha256 != pre.case_execution_lease_sha256
+            or binding.preflight_report_sha256 != pre.preflight_report_sha256
+            or binding.factory_binding_sha256 != pre.factory_binding_sha256
+            or binding.pricing_binding_sha256 != pre.pricing_binding_sha256
+            or binding.source_transport_binding_sha256 != pre.source_transport_binding_sha256
+            or binding.rubric_attempt_receipt_sha256s != rubric_attempt_hashes
+            or binding.rubric_call_receipt_sha256s
+            != tuple(live_rubric_call_receipt_sha256(item) for item in calls)
+            or binding.history_policy_attempt_receipt_sha256
+            != (None if not history_attempts else live_attempt_receipt_sha256(history_attempts[0]))
+            or binding.openai_calls != pre.live_openai_calls
+            or binding.cost_usd_micros != pre.live_cost_usd_micros
+        ):
+            raise ProductionRuntimeAuditError(
+                "TRACE_BINDING_MISMATCH", "restricted live call binding differs"
+            )
+        if extension is None or (
+            binding.rubric_backend_extension_descriptor_sha256 != extension.sha256
+        ):
+            raise ProductionRuntimeAuditError(
+                "TRACE_BINDING_MISMATCH", "rubric backend extension binding differs"
+            )
+        if tuple(item.attempt_receipt_sha256 for item in calls) != rubric_attempt_hashes:
+            raise ProductionRuntimeAuditError(
+                "TRACE_BINDING_MISMATCH", "rubric call/attempt receipt order differs"
+            )
+        for call in calls:
+            if (
+                call.logical_call_id != pre.logical_call_id
+                or call.backend_extension_descriptor_sha256 != extension.sha256
+                or call.manifest_sha256 != pre.execution_authority_sha256
+                or call.preflight_sha256 != pre.preflight_report_sha256
+                or call.case_execution_lease_sha256 != pre.case_execution_lease_sha256
+                or call.pricing_binding_sha256 != pre.pricing_binding_sha256
+            ):
+                raise ProductionRuntimeAuditError(
+                    "TRACE_BINDING_MISMATCH", "rubric call receipt roots differ"
+                )
+    return raw, final, binding, attempts, calls, extension
 
 
 def _exact_diff_projection(value: RuntimeVerticalRenderResultV1) -> dict[str, JsonValue]:
@@ -1066,11 +2206,23 @@ class ProductionActorProviderAttemptV1:
     latency_ns: int
     failure_code: str | None
     schema_version: str = PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION
+    cached_input_tokens: int | None = None
 
     def __post_init__(self) -> None:
         _require_id(self.attempt_id, "attempt_id")
-        if self.schema_version != PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION:
+        if self.schema_version not in {
+            PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION,
+            PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2,
+        }:
             raise ProductionRuntimeAuditError("UNKNOWN_SCHEMA_VERSION", "attempt schema differs")
+        if (
+            self.schema_version == PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION
+            and self.cached_input_tokens is not None
+        ):
+            raise ProductionRuntimeAuditError(
+                "INVALID_PROVIDER_METADATA",
+                "legacy actor attempts cannot carry cached-token metadata",
+            )
         if type(self.attempt_index) is not int or self.attempt_index < 1:
             raise ProductionRuntimeAuditError("INVALID_ATTEMPT_CENSUS", "attempt index is invalid")
         _require_sha256(self.sdk_arguments_sha256, "sdk_arguments_sha256")
@@ -1109,6 +2261,7 @@ class ProductionActorProviderAttemptV1:
             )
         for token_value, label in (
             (self.input_tokens, "input_tokens"),
+            (self.cached_input_tokens, "cached_input_tokens"),
             (self.output_tokens, "output_tokens"),
             (self.total_tokens, "total_tokens"),
         ):
@@ -1122,6 +2275,12 @@ class ProductionActorProviderAttemptV1:
             or self.total_tokens != self.input_tokens + self.output_tokens
         ):
             raise ProductionRuntimeAuditError("INVALID_PROVIDER_METADATA", "token census differs")
+        if self.cached_input_tokens is not None and (
+            self.input_tokens is None or self.cached_input_tokens > self.input_tokens
+        ):
+            raise ProductionRuntimeAuditError(
+                "INVALID_PROVIDER_METADATA", "cached input token census differs"
+            )
         if type(self.latency_ns) is not int or self.latency_ns < 0:
             raise ProductionRuntimeAuditError("INVALID_LATENCY", "provider latency is invalid")
         if self.status is ProductionActorProviderAttemptStatusV1.SUCCEEDED:
@@ -1149,7 +2308,7 @@ def production_actor_provider_attempt_projection(
 ) -> dict[str, JsonValue]:
     if type(value) is not ProductionActorProviderAttemptV1:
         raise ProductionRuntimeAuditError("UNTRUSTED_TYPE", "provider attempt type differs")
-    return {
+    projection: dict[str, JsonValue] = {
         "schema_version": value.schema_version,
         "attempt_id": value.attempt_id,
         "attempt_index": value.attempt_index,
@@ -1170,6 +2329,9 @@ def production_actor_provider_attempt_projection(
         "provider_response_persisted": False,
         "reasoning_persisted": False,
     }
+    if value.schema_version == PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2:
+        projection["cached_input_tokens"] = value.cached_input_tokens
+    return projection
 
 
 @dataclass(frozen=True, slots=True)
@@ -1352,6 +2514,507 @@ def production_runtime_audit_detail_projection(
 
 def production_runtime_audit_detail_sha256(value: ProductionRuntimeAuditDetailV1) -> str:
     return canonical_sha256(cast(JsonValue, production_runtime_audit_detail_projection(value)))
+
+
+def _validate_restricted_sentinel_receipt(
+    restricted: dict[str, JsonValue],
+    detail: ProductionRuntimeAuditDetailV1,
+) -> SentinelReceipt:
+    receipt = _parse_durable_sentinel_receipt_projection(restricted["sentinel_receipt"])
+    pre = detail.pre_provider
+    receipt_projection = cast(JsonValue, _sentinel_receipt_projection(receipt))
+    if (
+        canonical_sha256(receipt_projection) != detail.sentinel_receipt_sha256
+        or receipt.logical_call_id != pre.logical_call_id
+        or receipt.host_id != pre.host_id
+        or receipt.configured_mode is not pre.configured_mode
+        or receipt.effective_mode is not pre.effective_mode
+        or receipt.fallback_reason is not pre.fallback_reason
+        or receipt.raw_request_sha256 != pre.raw_request_sha256
+        or receipt.candidate_request_sha256 != pre.candidate_request_sha256
+        or receipt.final_request_sha256 != pre.final_request_sha256
+        or receipt.exact_diff_sha256 != pre.exact_diff_sha256
+    ):
+        raise ProductionRuntimeAuditError(
+            "TRACE_BINDING_MISMATCH", "restricted Sentinel receipt differs"
+        )
+    return receipt
+
+
+def _validate_restricted_rubric_graph(
+    restricted: dict[str, JsonValue],
+    pre: ProductionRuntimeAuditPreProviderV1,
+) -> tuple[R24CoordinatedCallRecordV1, PathRelevanceOutputV1]:
+    generation, generation_hash = _validate_durable_rubric_result_projection(
+        restricted["rubric_generation_result"]
+    )
+    rubric_result, rubric_hash = _validate_durable_rubric_result_projection(
+        restricted["rubric_result"]
+    )
+    coordinated = _validate_durable_coordinated_record_projection(
+        restricted["coordinated_record"],
+        generation_result=generation,
+        rubric_result=rubric_result,
+    )
+    relevance = _parse_durable_path_relevance_projection(restricted["path_relevance_output"])
+    if (
+        generation_hash != coordinated.generation_result_sha256
+        or rubric_hash != coordinated.rubric_result_sha256
+        or rubric_hash != pre.rubric_result_sha256
+        or r24_coordinated_call_record_sha256(coordinated) != pre.coordinated_record_sha256
+        or rubric_result.relevance is None
+        or path_relevance_output_projection(rubric_result.relevance)
+        != path_relevance_output_projection(relevance)
+        or path_relevance_output_sha256(relevance) != pre.path_relevance_output_sha256
+        or coordinated.logical_call_id != pre.logical_call_id
+    ):
+        raise ProductionRuntimeAuditError(
+            "TRACE_BINDING_MISMATCH", "restricted coordinated rubric graph differs"
+        )
+    return coordinated, relevance
+
+
+def _validate_restricted_request_proof_shapes(
+    restricted: dict[str, JsonValue],
+    *,
+    require_history: bool,
+) -> None:
+    proofs = _durable_array(restricted["r2_4_rubric_request_proofs"], "rubric request proofs")
+    for proof in proofs:
+        _durable_object(proof, "rubric request proof")
+    history_proof = restricted["r2_4_history_policy_request_proof"]
+    if require_history:
+        _durable_object(history_proof, "history-policy request proof")
+    elif history_proof is not None:
+        raise ProductionRuntimeAuditError(
+            "TRACE_BINDING_MISMATCH", "unexpected history-policy request proof"
+        )
+
+
+def validate_production_runtime_audit_restricted_stage_projection_v1(
+    detail: ProductionRuntimeAuditDetailV1,
+) -> None:
+    """Strictly rebuild every persisted semantic child used by R2.5 analysis.
+
+    The outer detail parser proves the sealed envelope.  This validator also
+    reconstructs the hash-bound History IR, R2.3 rubric graph, R2.4 admitted
+    plan, renderer result, live-call binding, and live/rubric receipts.  It is
+    intentionally separate so legacy CPU-only analysis fixtures cannot be
+    mistaken for production-complete evidence.
+    """
+
+    if type(detail) is not ProductionRuntimeAuditDetailV1:
+        raise ProductionRuntimeAuditError(
+            "UNTRUSTED_TYPE", "production detail needs its exact trusted type"
+        )
+    pre = detail.pre_provider
+    restricted = _durable_object(pre.restricted_stage_projection, "restricted stage")
+
+    if pre.status is ProductionRuntimeAuditPreProviderStatusV1.OFF:
+        if (
+            set(restricted) != _OFF_RESTRICTED_FIELDS
+            or restricted["kind"] != "OFF_NO_SEMANTIC_WORK"
+            or restricted["semantic_text_persisted"] is not False
+            or restricted["reasoning_persisted"] is not False
+            or restricted["raw_request"] != restricted["final_request"]
+            or canonical_sha256(restricted["raw_request"]) != pre.raw_request_sha256
+            or restricted["validator_result_sha256"] != pre.validator_result_sha256
+        ):
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", "OFF restricted stage differs"
+            )
+        return
+
+    if pre.status is ProductionRuntimeAuditPreProviderStatusV1.BYPASSED_ORIGINAL:
+        if (
+            set(restricted) != _BYPASS_RESTRICTED_FIELDS
+            or restricted["kind"] != "BYPASSED_ORIGINAL"
+            or restricted["provider_response_via_collector_locator"] is not True
+            or restricted["provider_reasoning_persisted"] is not False
+        ):
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", "bypass restricted stage differs"
+            )
+        raw = restricted["raw_request"]
+        final = restricted["final_request"]
+        validator = restricted["validator_result"]
+        _durable_object(validator, "bypass validator result")
+        receipt = _validate_restricted_sentinel_receipt(restricted, detail)
+        if (
+            raw != final
+            or canonical_sha256(raw) != pre.raw_request_sha256
+            or canonical_sha256(final) != pre.final_request_sha256
+            or canonical_sha256(validator) != pre.validator_result_sha256
+            or receipt.validation_status is not SentinelValidationStatus.BYPASSED
+            or receipt.bypass_reason is None
+            or receipt.policy_evaluated
+        ):
+            raise ProductionRuntimeAuditError(
+                "TRACE_BINDING_MISMATCH", "bypass restricted bindings differ"
+            )
+        return
+
+    if pre.outcome is ProductionRuntimeAuditPreProviderOutcomeV1.GENERIC_FALLBACK_ORIGINAL:
+        if (
+            set(restricted) != _FALLBACK_RESTRICTED_FIELDS
+            or restricted["kind"] != "FALLBACK_ORIGINAL"
+            or restricted["raw_request_persisted_in_owner_only_detail"] is not True
+            or restricted["provider_response_via_collector_locator"] is not True
+            or restricted["provider_reasoning_persisted"] is not False
+        ):
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", "fallback restricted stage differs"
+            )
+        raw, final, binding, attempts, _calls, _extension = _validate_restricted_common_requests(
+            restricted, pre
+        )
+        receipt = _validate_restricted_sentinel_receipt(restricted, detail)
+        validator = _durable_object(restricted["validator_result"], "fallback validator result")
+        history_attempts = tuple(
+            item for item in attempts if item.role is LiveAttemptRoleV1.HISTORY_POLICY
+        )
+        _validate_restricted_request_proof_shapes(
+            restricted, require_history=bool(history_attempts)
+        )
+        if (
+            raw != final
+            or canonical_sha256(validator) != pre.validator_result_sha256
+            or receipt.validation_status is not SentinelValidationStatus.FALLBACK_ORIGINAL
+            or receipt.fallback_reason is None
+            or restricted["live_failure_code"] is not None
+            and type(restricted["live_failure_code"]) is not str
+            or (binding is None) != (not attempts)
+        ):
+            raise ProductionRuntimeAuditError(
+                "TRACE_BINDING_MISMATCH", "fallback restricted bindings differ"
+            )
+        return
+
+    if (
+        pre.outcome
+        is ProductionRuntimeAuditPreProviderOutcomeV1.NO_HISTORY_RUBRIC_FALLBACK_ORIGINAL
+    ):
+        if (
+            set(restricted) != _NO_HISTORY_RESTRICTED_FIELDS
+            or restricted["kind"] != "NO_HISTORY_RUBRIC_FALLBACK_ORIGINAL"
+            or restricted["semantic_stage_projections_persisted"] is not True
+            or restricted["raw_request_persisted_in_owner_only_detail"] is not True
+            or restricted["provider_response_via_collector_locator"] is not True
+            or restricted["provider_reasoning_persisted"] is not False
+            or restricted["live_failure_code"] is not None
+        ):
+            raise ProductionRuntimeAuditError(
+                "INVALID_RESTRICTED_STAGE", "no-history restricted stage differs"
+            )
+        raw, final, binding, attempts, _calls, _extension = _validate_restricted_common_requests(
+            restricted, pre
+        )
+        receipt = _validate_restricted_sentinel_receipt(restricted, detail)
+        coordinated, relevance = _validate_restricted_rubric_graph(restricted, pre)
+        validator = _durable_object(restricted["validator_result"], "no-history validator result")
+        _validate_restricted_request_proof_shapes(restricted, require_history=False)
+        if (
+            raw != final
+            or binding is None
+            or coordinated.gpt56_evidence_packet_sha256 is not None
+            or relevance.records
+            or any(item.role is LiveAttemptRoleV1.HISTORY_POLICY for item in attempts)
+            or canonical_sha256(validator) != pre.validator_result_sha256
+            or receipt.validation_status is not SentinelValidationStatus.FALLBACK_ORIGINAL
+            or receipt.fallback_reason is not SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE
+        ):
+            raise ProductionRuntimeAuditError(
+                "TRACE_BINDING_MISMATCH", "no-history restricted bindings differ"
+            )
+        return
+
+    if pre.status is not ProductionRuntimeAuditPreProviderStatusV1.READY or (
+        set(restricted) != _READY_RESTRICTED_FIELDS
+        or restricted["semantic_stage_projections_persisted"] is not True
+        or restricted["raw_request_persisted_in_owner_only_detail"] is not True
+        or restricted["provider_response_via_collector_locator"] is not True
+        or restricted["provider_reasoning_persisted"] is not False
+    ):
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "READY restricted stage differs"
+        )
+    raw, final, binding, attempts, _calls, _extension = _validate_restricted_common_requests(
+        restricted, pre
+    )
+    if binding is None:
+        raise ProductionRuntimeAuditError(
+            "TRACE_BINDING_MISMATCH", "READY stage has no live call binding"
+        )
+    extraction = _durable_object(restricted["extraction"], "history extraction")
+    if set(extraction) != {
+        "schema_version",
+        "status",
+        "raw_request_sha256",
+        "overlay",
+        "overlay_sha256",
+        "capabilities_sha256",
+        "history_ir_sha256",
+        "reason_code",
+        "validation_checks",
+        "warnings",
+    }:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "history extraction fields differ"
+        )
+    overlay = cast(
+        RuntimeCodecOverlayDeclarationV1,
+        _rebuild_durable_dataclass_projection(
+            extraction["overlay"],
+            RuntimeCodecOverlayDeclarationV1,
+            label="runtime codec overlay",
+        ),
+    )
+    if _overlay_projection(overlay) != extraction["overlay"]:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "runtime codec overlay projection differs"
+        )
+    history = _parse_durable_history_ir_projection(restricted["history_ir"])
+    try:
+        validate_history_ir(raw, history)
+    except Exception as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "History IR does not validate against raw request"
+        ) from exc
+    if (
+        extraction["status"] != RuntimeHistoryExtractionStatusV1.READY.value
+        or extraction["raw_request_sha256"] != pre.raw_request_sha256
+        or extraction["reason_code"] is not None
+        or canonical_sha256(cast(JsonValue, extraction)) != pre.extraction_sha256
+        or canonical_sha256(cast(JsonValue, extraction["overlay"])) != pre.codec_overlay_sha256
+        or extraction["overlay_sha256"] != pre.codec_overlay_sha256
+        or canonical_sha256(restricted["history_ir"]) != pre.history_ir_sha256
+        or extraction["history_ir_sha256"] != pre.history_ir_sha256
+        or extraction["capabilities_sha256"] != canonical_sha256(history.capabilities.to_dict())
+        or history.host_id != pre.host_id
+        or history.raw_request_sha256 != pre.raw_request_sha256
+        or history.codec_id != overlay.base_codec_id
+        or history.codec_contract_version != overlay.base_codec_contract_version
+        or canonical_sha256(history.capabilities.to_dict()) != overlay.base_capability_sha256
+        or list(history.warnings) != extraction["warnings"]
+    ):
+        raise ProductionRuntimeAuditError(
+            "TRACE_BINDING_MISMATCH", "history extraction bindings differ"
+        )
+    vertical = _parse_durable_vertical_output_projection(restricted["vertical_output"])
+    coordinated, relevance = _validate_restricted_rubric_graph(restricted, pre)
+    render = _parse_durable_render_projection(restricted["render_result"], source_request=raw)
+    try:
+        validate_vertical_render_result(raw, history, vertical.admitted_plan, render)
+    except R24ContractError as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_RESTRICTED_STAGE", "render result does not validate"
+        ) from exc
+    validator = _durable_object(restricted["validator_result"], "READY validator result")
+    history_attempts = tuple(
+        item for item in attempts if item.role is LiveAttemptRoleV1.HISTORY_POLICY
+    )
+    _validate_restricted_request_proof_shapes(restricted, require_history=True)
+    if (
+        not history_attempts
+        or vertical_output_sha256(vertical) != pre.vertical_output_sha256
+        or vertical.admitted_plan.logical_call_id != pre.logical_call_id
+        or vertical.admitted_plan.host_id != pre.host_id
+        or vertical.admitted_plan.source_request_sha256 != pre.raw_request_sha256
+        or vertical.execution_authority_sha256 != pre.execution_authority_sha256
+        or vertical.source_transport_binding_sha256 != pre.source_transport_binding_sha256
+        or vertical_render_result_sha256(render) != pre.render_result_sha256
+        or render.candidate_request_sha256 != pre.candidate_request_sha256
+        or render.exact_diff_sha256 != pre.exact_diff_sha256
+        or canonical_sha256(validator) != pre.validator_result_sha256
+        or coordinated.gpt56_evidence_packet_sha256 is None
+        or relevance.logical_call_id != pre.logical_call_id
+        or binding.output_sha256 != pre.vertical_output_sha256
+        or (
+            pre.effective_mode is SentinelMode.ACTIVE
+            and canonical_sha256(final) != render.candidate_request_sha256
+        )
+        or (
+            pre.effective_mode is SentinelMode.SHADOW
+            and canonical_sha256(final) != canonical_sha256(raw)
+        )
+    ):
+        raise ProductionRuntimeAuditError(
+            "TRACE_BINDING_MISMATCH", "READY restricted bindings differ"
+        )
+
+
+def parse_production_runtime_audit_detail_projection_v1(
+    value: JsonValue,
+) -> ProductionRuntimeAuditDetailV1:
+    """Strictly rebuild one persisted production-audit detail projection.
+
+    The writer owns sealed dataclasses, while downstream R2.5 analysis reads
+    their durable JSON projections.  Reconstructing the sealed graph here and
+    requiring an exact round trip prevents a selective reader from silently
+    accepting omitted, additional, or type-coerced evidence fields.
+    """
+
+    projection = _canonical_snapshot(value)
+    if type(projection) is not dict:
+        raise ProductionRuntimeAuditError(
+            "INVALID_AUDIT_DETAIL", "production audit detail is not an object"
+        )
+    try:
+        raw_pre = projection["pre_provider"]
+        raw_attempts = projection["actor_provider_attempts"]
+        terminal = projection["terminal"]
+        if (
+            type(raw_pre) is not dict
+            or type(raw_attempts) is not list
+            or type(terminal) is not dict
+        ):
+            raise ProductionRuntimeAuditError(
+                "INVALID_AUDIT_DETAIL", "production audit child shape differs"
+            )
+        pre_latencies = raw_pre["latencies_ns"]
+        persistence = raw_pre["content_persistence"]
+        terminal_latencies = terminal["latencies_ns"]
+        if (
+            type(pre_latencies) is not dict
+            or type(persistence) is not dict
+            or type(terminal_latencies) is not dict
+        ):
+            raise ProductionRuntimeAuditError(
+                "INVALID_AUDIT_DETAIL", "production audit metadata shape differs"
+            )
+        fallback_value = raw_pre["fallback_reason"]
+        pre = ProductionRuntimeAuditPreProviderV1(
+            logical_call_id=cast(str, raw_pre["logical_call_id"]),
+            host_id=cast(str, raw_pre["host_id"]),
+            status=ProductionRuntimeAuditPreProviderStatusV1(cast(str, raw_pre["status"])),
+            outcome=ProductionRuntimeAuditPreProviderOutcomeV1(cast(str, raw_pre["outcome"])),
+            configured_mode=SentinelMode(cast(str, raw_pre["configured_mode"])),
+            effective_mode=SentinelMode(cast(str, raw_pre["effective_mode"])),
+            fallback_reason=(
+                None
+                if fallback_value is None
+                else SentinelFallbackReason(cast(str, fallback_value))
+            ),
+            fallback_check=cast(str | None, raw_pre["fallback_check"]),
+            raw_request_sha256=cast(str, raw_pre["raw_request_sha256"]),
+            extraction_sha256=cast(str | None, raw_pre["extraction_sha256"]),
+            history_ir_sha256=cast(str | None, raw_pre["history_ir_sha256"]),
+            codec_overlay_sha256=cast(str | None, raw_pre["codec_overlay_sha256"]),
+            vertical_output_sha256=cast(str | None, raw_pre["vertical_output_sha256"]),
+            coordinated_record_sha256=cast(str | None, raw_pre["coordinated_record_sha256"]),
+            rubric_result_sha256=cast(str | None, raw_pre["rubric_result_sha256"]),
+            path_relevance_output_sha256=cast(str | None, raw_pre["path_relevance_output_sha256"]),
+            render_result_sha256=cast(str | None, raw_pre["render_result_sha256"]),
+            candidate_request_sha256=cast(str, raw_pre["candidate_request_sha256"]),
+            exact_diff_sha256=cast(str, raw_pre["exact_diff_sha256"]),
+            validator_result_sha256=cast(str, raw_pre["validator_result_sha256"]),
+            final_request_sha256=cast(str, raw_pre["final_request_sha256"]),
+            live_call_binding_sha256=cast(str | None, raw_pre["live_call_binding_sha256"]),
+            live_attempt_receipt_sha256s=tuple(
+                cast(list[str], raw_pre["live_attempt_receipt_sha256s"])
+            ),
+            live_attempt_receipt_root_sha256=cast(
+                str | None, raw_pre["live_attempt_receipt_root_sha256"]
+            ),
+            case_execution_lease_sha256=cast(str | None, raw_pre["case_execution_lease_sha256"]),
+            preflight_report_sha256=cast(str | None, raw_pre["preflight_report_sha256"]),
+            factory_binding_sha256=cast(str | None, raw_pre["factory_binding_sha256"]),
+            execution_authority_sha256=cast(str | None, raw_pre["execution_authority_sha256"]),
+            source_transport_binding_sha256=cast(
+                str | None, raw_pre["source_transport_binding_sha256"]
+            ),
+            pricing_binding_sha256=cast(str | None, raw_pre["pricing_binding_sha256"]),
+            live_openai_calls=cast(int, raw_pre["live_openai_calls"]),
+            live_cost_usd_micros=cast(int, raw_pre["live_cost_usd_micros"]),
+            live_cost_exact=cast(bool, raw_pre["live_cost_exact"]),
+            restricted_stage_projection=raw_pre["restricted_stage_projection"],
+            restricted_stage_projection_sha256=cast(
+                str, raw_pre["restricted_stage_projection_sha256"]
+            ),
+            evidence_snapshot_ns=cast(int, pre_latencies["evidence_snapshot"]),
+            history_extract_ns=cast(int, pre_latencies["history_extract"]),
+            rubric_ns=cast(int, pre_latencies["rubric"]),
+            policy_ns=cast(int, pre_latencies["policy"]),
+            render_ns=cast(int, pre_latencies["render"]),
+            validator_ns=cast(int, pre_latencies["validator"]),
+            pre_provider_total_ns=cast(int, pre_latencies["pre_provider_total"]),
+            schema_version=cast(str, raw_pre["schema_version"]),
+            _seal=_PRE_PROVIDER_SEAL,
+        )
+        attempts: list[ProductionActorProviderAttemptV1] = []
+        for raw_attempt in raw_attempts:
+            if type(raw_attempt) is not dict:
+                raise ProductionRuntimeAuditError(
+                    "INVALID_AUDIT_DETAIL", "production actor attempt is not an object"
+                )
+            attempt_schema_version = cast(str, raw_attempt["schema_version"])
+            attempts.append(
+                ProductionActorProviderAttemptV1(
+                    attempt_id=cast(str, raw_attempt["attempt_id"]),
+                    attempt_index=cast(int, raw_attempt["attempt_index"]),
+                    sdk_arguments_sha256=cast(str, raw_attempt["sdk_arguments_sha256"]),
+                    final_request_sha256=cast(str, raw_attempt["final_request_sha256"]),
+                    collector_request_locator=raw_attempt["collector_request_locator"],
+                    collector_terminal_locator=raw_attempt["collector_terminal_locator"],
+                    status=ProductionActorProviderAttemptStatusV1(cast(str, raw_attempt["status"])),
+                    provider_response_sha256=cast(
+                        str | None, raw_attempt["provider_response_sha256"]
+                    ),
+                    response_id_sha256=cast(str | None, raw_attempt["response_id_sha256"]),
+                    model_id_sha256=cast(str | None, raw_attempt["model_id_sha256"]),
+                    finish_reason=cast(str | None, raw_attempt["finish_reason"]),
+                    input_tokens=cast(int | None, raw_attempt["input_tokens"]),
+                    output_tokens=cast(int | None, raw_attempt["output_tokens"]),
+                    total_tokens=cast(int | None, raw_attempt["total_tokens"]),
+                    latency_ns=cast(int, raw_attempt["latency_ns"]),
+                    failure_code=cast(str | None, raw_attempt["failure_code"]),
+                    schema_version=attempt_schema_version,
+                    cached_input_tokens=(
+                        cast(int | None, raw_attempt["cached_input_tokens"])
+                        if attempt_schema_version
+                        == PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2
+                        else None
+                    ),
+                )
+            )
+        detail = ProductionRuntimeAuditDetailV1(
+            detail_id=cast(str, projection["detail_id"]),
+            logical_call_id=cast(str, projection["logical_call_id"]),
+            pre_provider=pre,
+            pre_provider_sha256=cast(str, projection["pre_provider_sha256"]),
+            sentinel_receipt_sha256=cast(str, projection["sentinel_receipt_sha256"]),
+            actor_provider_attempts=tuple(attempts),
+            actor_provider_attempt_root_sha256=cast(
+                str, projection["actor_provider_attempt_root_sha256"]
+            ),
+            successful_provider_response_sha256=cast(
+                str, terminal["successful_provider_response_sha256"]
+            ),
+            normalized_actor_output_sha256=cast(str, terminal["normalized_actor_output_sha256"]),
+            parser_input_sha256=cast(str, terminal["parser_input_sha256"]),
+            parser_id=cast(str, terminal["parser_id"]),
+            parser_status=ParserResultStatusV1(cast(str, terminal["parser_status"])),
+            parser_attempt_count=cast(int, terminal["parser_attempt_count"]),
+            parsed_action=terminal["parsed_action"],
+            parsed_action_sha256=cast(str, terminal["parsed_action_sha256"]),
+            action_executed=cast(bool, terminal["action_executed"]),
+            executed_action_sha256=cast(str | None, terminal["executed_action_sha256"]),
+            provider_total_ns=cast(int, terminal_latencies["provider_total"]),
+            parser_ns=cast(int, terminal_latencies["parser"]),
+            action_execution_ns=cast(int, terminal_latencies["action_execution"]),
+            total_ns=cast(int, terminal_latencies["total"]),
+            schema_version=cast(str, projection["schema_version"]),
+            _seal=_DETAIL_SEAL,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProductionRuntimeAuditError(
+            "INVALID_AUDIT_DETAIL", "production audit projection is incomplete or ill-typed"
+        ) from exc
+    if production_runtime_audit_detail_projection(detail) != projection:
+        raise ProductionRuntimeAuditError(
+            "INVALID_AUDIT_DETAIL", "production audit projection is not exact"
+        )
+    return detail
 
 
 @dataclass(frozen=True, slots=True)
@@ -2427,6 +4090,7 @@ class ProductionRuntimeAuditV1:
         policy: OwnerAuthorizedLivePerCallPolicyV1 | None,
         sink: ProductionRuntimeAuditSinkV1,
         run_fatal_latch: ProductionRunFatalLatchV1 | None = None,
+        actor_attempt_schema_version: str = PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION,
     ) -> None:
         if policy is not None and type(policy) is not OwnerAuthorizedLivePerCallPolicyV1:
             raise TypeError("production audit policy must be an exact per-call live policy or None")
@@ -2434,11 +4098,17 @@ class ProductionRuntimeAuditV1:
             raise TypeError("production audit sink does not implement its protocol")
         if run_fatal_latch is not None and type(run_fatal_latch) is not ProductionRunFatalLatchV1:
             raise TypeError("production audit run-fatal latch type differs")
+        if actor_attempt_schema_version not in {
+            PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION,
+            PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2,
+        }:
+            raise TypeError("production actor attempt schema version is unsupported")
         self._policy = policy
         self._sink_begin = sink.begin
         self._run_fatal_latch = (
             build_production_run_fatal_latch_v1() if run_fatal_latch is None else run_fatal_latch
         )
+        self._actor_attempt_schema_version = actor_attempt_schema_version
         self._pending: dict[str, _PendingProductionAudit] = {}
         self._completed: dict[str, ProductionRuntimeAuditReceiptV1] = {}
         self._failures: dict[str, ProductionRuntimeAuditFailureReceiptV1] = {}
@@ -3970,6 +5640,7 @@ class ProductionRuntimeAuditV1:
         model_id: str | None = None,
         finish_reason: str | None = None,
         input_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
         output_tokens: int | None = None,
         total_tokens: int | None = None,
     ) -> ProductionActorProviderAttemptV1:
@@ -4012,6 +5683,13 @@ class ProductionRuntimeAuditV1:
                 total_tokens=total_tokens,
                 latency_ns=actual_latency,
                 failure_code=None if succeeded else "PROVIDER_EXCEPTION",
+                schema_version=self._actor_attempt_schema_version,
+                cached_input_tokens=(
+                    cached_input_tokens
+                    if self._actor_attempt_schema_version
+                    == PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2
+                    else None
+                ),
             )
             pending.attempts.append(attempt)
             return attempt
@@ -4487,6 +6165,7 @@ __all__ = [
     "ExternalProductionRuntimeAuditSinkV1",
     "MemoryProductionRuntimeAuditSinkV1",
     "PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION",
+    "PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2",
     "PRODUCTION_RUNTIME_AUDIT_DETAIL_SCHEMA_VERSION",
     "PRODUCTION_RUNTIME_AUDIT_ADMISSION_FAILURE_RECEIPT_SCHEMA_VERSION",
     "PRODUCTION_RUNTIME_AUDIT_COMMIT_FAILURE_RECEIPT_SCHEMA_VERSION",
@@ -4513,6 +6192,8 @@ __all__ = [
     "ProductionRuntimeAuditTransactionV1",
     "ProductionRuntimeAuditV1",
     "production_actor_provider_attempt_projection",
+    "parse_production_runtime_audit_detail_projection_v1",
+    "validate_production_runtime_audit_restricted_stage_projection_v1",
     "production_runtime_audit_admission_failure_receipt_projection",
     "production_runtime_audit_admission_failure_receipt_sha256",
     "production_runtime_audit_detail_projection",

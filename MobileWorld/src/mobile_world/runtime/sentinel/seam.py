@@ -1150,6 +1150,7 @@ class PromptSentinel:
         model_id: str | None = None,
         finish_reason: str | None = None,
         input_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
         output_tokens: int | None = None,
         total_tokens: int | None = None,
     ) -> None:
@@ -1165,6 +1166,7 @@ class PromptSentinel:
             model_id=model_id,
             finish_reason=finish_reason,
             input_tokens=input_tokens,
+            cached_input_tokens=cached_input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
         )
@@ -2638,6 +2640,7 @@ class SentinelLogicalCall:
         model_id: str | None = None,
         finish_reason: str | None = None,
         input_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
         output_tokens: int | None = None,
         total_tokens: int | None = None,
         raw_response: Any = None,
@@ -2650,7 +2653,7 @@ class SentinelLogicalCall:
         for text_value in (response_id, model_id, finish_reason):
             if text_value is not None and type(text_value) is not str:
                 raise TypeError("provider text metadata must use exact strings")
-        for count_value in (input_tokens, output_tokens, total_tokens):
+        for count_value in (input_tokens, cached_input_tokens, output_tokens, total_tokens):
             if count_value is not None and (type(count_value) is not int or count_value < 0):
                 raise TypeError("provider token metadata must be non-negative integers")
         self._sentinel.record_production_actor_provider_attempt(
@@ -2663,6 +2666,7 @@ class SentinelLogicalCall:
             model_id=model_id,
             finish_reason=finish_reason,
             input_tokens=input_tokens,
+            cached_input_tokens=cached_input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
         )

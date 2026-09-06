@@ -24,6 +24,7 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
 from mobile_world.runtime.sentinel.r2_4.live_executor import ProductionR24R25ExecutorV1
 from mobile_world.runtime.sentinel.r2_4.live_run import (
     R24_R25_RUN_AUTHORITY_SCHEMA_VERSION,
+    R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V1,
     SNAPSHOT_TREE_ALGORITHM_V1,
     HostLiveSmokePlanV1,
     LiveRunContractError,
@@ -47,11 +48,14 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     compute_snapshot_tree_digest,
     inspect_local_resources,
     load_authority_manifest,
+    load_owner_authorized_authority_manifest_v2,
     parse_authority_manifest,
+    production_sentinel_config_sha256_v1,
     run_authorized_sequence_with_executor,
 )
 from mobile_world.runtime.sentinel.r2_4.production_driver import (
     ProductionRuntimeConfigV1,
+    build_production_resource_lifecycle_adapter_v1,
     production_runtime_config_projection,
     production_runtime_config_sha256,
 )
@@ -66,6 +70,7 @@ from mobile_world.runtime.sentinel.r2_5.artifact_builder import (
 )
 from mobile_world.runtime.sentinel.r2_5.pilot import (
     FROZEN_PILOT_SCHEMA_VERSION,
+    FROZEN_PILOT_SCHEMA_VERSION_V1,
     FrozenPilotManifestV1,
     InlinePilotTaskParametersV1,
     MobileWorldTaskParametersV1,
@@ -81,6 +86,8 @@ from mobile_world.runtime.sentinel.r2_5.pilot import (
     frozen_pilot_manifest_sha256,
     parse_frozen_pilot_manifest,
     pilot_task_source_projection,
+    resolve_pilot_task_inputs_v1,
+    resolved_pilot_task_inputs_sha256,
 )
 
 _TEST_NOW = datetime.now(UTC).replace(microsecond=0)
@@ -97,6 +104,7 @@ def _sha(raw: bytes) -> str:
 def _write_bound(path: Path, raw: bytes) -> tuple[str, int]:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(raw)
+    path.chmod(0o600)
     return _sha(raw), len(raw)
 
 
@@ -113,6 +121,7 @@ def _pilot(tmp_path: Path, *, count: int = 20) -> FrozenPilotManifestV1:
         ),
         encoding="utf-8",
     )
+    cohort_source.chmod(0o600)
     selection = select_gui_only_cohort(cohort_source, registry, cohort_size=count)
     tasks = tuple(
         PilotTaskV1(
@@ -146,6 +155,7 @@ def _pilot(tmp_path: Path, *, count: int = 20) -> FrozenPilotManifestV1:
     )
     topology_path = tmp_path / "inputs" / "topology.json"
     topology_sha256, topology_byte_count = write_cpu_topology_artifact(topology_path)
+    topology_path.chmod(0o600)
     selection_path = tmp_path / "inputs" / "cohort-selection.json"
     selection_sha256, selection_byte_count = _write_bound(
         selection_path,
@@ -181,8 +191,8 @@ def _pilot(tmp_path: Path, *, count: int = 20) -> FrozenPilotManifestV1:
         max_steps_per_cell=3,
         per_cell_timeout_seconds=60,
         max_total_wall_time_seconds=10_000,
-        max_total_actor_calls=160,
-        max_total_openai_calls=160,
+        max_total_actor_calls=240,
+        max_total_openai_calls=240,
         max_total_cost_usd_micros=1_000_000,
     )
 
@@ -346,11 +356,21 @@ def _manifest(
         smoke_plans=smokes,
         pilot=pilot,
         topology_comparison_artifact_sha256=pilot.topology_comparison_artifact_sha256,
+        resource_topology="SINGLE_GPU_SEQUENTIAL_SHARED",
+        runtime_config_sha256=_sha(b"runtime-config"),
+        pricing_sha256=_sha(b"pricing"),
+        sentinel_config_sha256=production_sentinel_config_sha256_v1(),
         output_root=str(tmp_path / "new-output"),
         max_resource_preflight_wall_time_seconds=100,
-        max_sequence_wall_time_seconds=10_460,
-        max_sequence_openai_calls=172,
-        max_sequence_actor_calls=166,
+        max_resource_cleanup_wall_time_seconds=8,
+        resource_cleanup_upper_bound_sha256=_sha(b"cleanup-upper-bound"),
+        max_model_switches=41,
+        max_model_switch_wall_time_seconds=1,
+        max_total_model_switch_wall_time_seconds=41,
+        max_post_run_integrity_wall_time_seconds=1,
+        max_sequence_wall_time_seconds=10_510,
+        max_sequence_openai_calls=252,
+        max_sequence_actor_calls=246,
         max_sequence_cost_usd_micros=1_000_600,
     )
 
@@ -372,6 +392,122 @@ def test_frozen_pilot_is_exact_20_task_matched_matrix(tmp_path: Path) -> None:
             projected, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
         ).encode()
     )
+
+
+def test_v2_n20_s8_requires_exact_640_pilot_and_646_652_sequence_caps(
+    tmp_path: Path,
+) -> None:
+    base = _manifest(tmp_path)
+    pilot = replace(
+        base.pilot,
+        max_steps_per_cell=8,
+        max_total_actor_calls=640,
+        max_total_openai_calls=640,
+    )
+    manifest = replace(
+        base,
+        pilot=pilot,
+        max_sequence_actor_calls=646,
+        max_sequence_openai_calls=652,
+    )
+
+    assert parse_authority_manifest(authority_manifest_projection(manifest)) == manifest
+    assert manifest.pilot.max_total_actor_calls == 640
+    assert manifest.pilot.max_total_openai_calls == 640
+
+    with pytest.raises(R25PilotContractError, match="OpenAI-call cap"):
+        replace(pilot, max_total_openai_calls=641)
+
+
+def test_legacy_v1_projection_remains_extension_free_and_byte_stable(tmp_path: Path) -> None:
+    base = _manifest(tmp_path)
+    fixed_pilot = replace(
+        base.pilot,
+        schema_version=FROZEN_PILOT_SCHEMA_VERSION_V1,
+        task_manifest_path="/fixtures/r25/tasks.json",
+        task_manifest_sha256="1" * 64,
+        task_manifest_byte_count=123,
+        topology_comparison_artifact_path="/fixtures/r25/topology.json",
+        topology_comparison_artifact_sha256="2" * 64,
+        topology_comparison_artifact_byte_count=456,
+        cohort_selection_artifact_path="/fixtures/r25/cohort.json",
+        cohort_selection_artifact_sha256="3" * 64,
+        cohort_selection_artifact_byte_count=789,
+        cohort_selection_sha256="3" * 64,
+    )
+    fixed_resources = tuple(
+        replace(
+            resource,
+            snapshot_path=f"/fixtures/models/{resource.host.value}/snapshot",
+            snapshot_storage_root=f"/fixtures/models/{resource.host.value}",
+            snapshot_tree_sha256=_sha(resource.host.value.encode("utf-8")),
+            snapshot_total_bytes=100,
+            snapshot_file_count=2,
+        )
+        for resource in base.actor_resources
+    )
+    fixed_smokes = tuple(
+        replace(
+            plan,
+            cases=tuple(
+                replace(
+                    case,
+                    request_fixture_path=(
+                        f"/fixtures/smoke/{plan.host.value}/{case.mode.value}.json"
+                    ),
+                )
+                for case in plan.cases
+            ),
+        )
+        for plan in base.smoke_plans
+    )
+    manifest = replace(
+        base,
+        schema_version=R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V1,
+        authorization=replace(
+            base.authorization,
+            issued_at_utc="2026-09-01T00:00:00Z",
+            expires_at_utc="2026-09-02T00:00:00Z",
+        ),
+        secret=replace(base.secret, path="/fixtures/owner/openai.key"),
+        actor_resources=fixed_resources,
+        smoke_plans=fixed_smokes,
+        pilot=fixed_pilot,
+        topology_comparison_artifact_sha256=(fixed_pilot.topology_comparison_artifact_sha256),
+        output_root="/fixtures/output/r24-r25-v1",
+        resource_topology=None,
+        runtime_config_sha256=None,
+        pricing_sha256=None,
+        sentinel_config_sha256=None,
+        max_resource_cleanup_wall_time_seconds=None,
+        resource_cleanup_upper_bound_sha256=None,
+        max_model_switches=None,
+        max_model_switch_wall_time_seconds=None,
+        max_total_model_switch_wall_time_seconds=None,
+        max_post_run_integrity_wall_time_seconds=None,
+        max_sequence_wall_time_seconds=(
+            base.max_resource_preflight_wall_time_seconds
+            + sum(case.max_wall_time_seconds for plan in base.smoke_plans for case in plan.cases)
+            + fixed_pilot.max_total_wall_time_seconds
+        ),
+    )
+    projection = authority_manifest_projection(manifest)
+    normalized = canonical_json_bytes(cast(JsonValue, projection))
+
+    assert parse_authority_manifest(projection) == manifest
+    assert not {
+        "resource_topology",
+        "runtime_config_sha256",
+        "pricing_sha256",
+        "sentinel_config_sha256",
+        "max_resource_cleanup_wall_time_seconds",
+        "resource_cleanup_upper_bound_sha256",
+        "max_model_switches",
+        "max_model_switch_wall_time_seconds",
+        "max_total_model_switch_wall_time_seconds",
+        "max_post_run_integrity_wall_time_seconds",
+    }.intersection(projection)
+    assert _sha(normalized) == "4fee6f7fc2610cc6876956121911214075fbcdf012a39e55634dfe0f7cf83fca"
 
 
 @pytest.mark.parametrize("count", [19, 31])
@@ -413,7 +549,7 @@ def test_manifest_binds_exact_modes_models_endpoints_commit_and_budgets(tmp_path
     with pytest.raises(LiveRunContractError, match="RETRIES_FORBIDDEN"):
         replace(manifest.openai_stages[0], max_attempts=2)
     with pytest.raises(LiveRunContractError, match="BUDGET_BINDING_MISMATCH"):
-        replace(manifest, max_sequence_actor_calls=167)
+        replace(manifest, max_sequence_actor_calls=247)
     with pytest.raises(LiveRunContractError, match="TOPOLOGY_BINDING_MISMATCH"):
         replace(manifest, topology_comparison_artifact_sha256="f" * 64)
 
@@ -512,6 +648,74 @@ def test_load_manifest_rejects_nonfinite_json_number(tmp_path: Path) -> None:
     with pytest.raises(LiveRunContractError) as raised:
         load_authority_manifest(path)
     assert raised.value.code == "NON_CANONICAL_JSON"
+
+
+def test_owner_authority_v2_loader_requires_canonical_owner_file_and_confirmation(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(tmp_path)
+    path = tmp_path / "owner-authority.json"
+    path.write_bytes(canonical_json_bytes(authority_manifest_projection(manifest)))
+    path.chmod(0o600)
+    confirmed = authority_manifest_sha256(manifest)
+
+    assert (
+        load_owner_authorized_authority_manifest_v2(
+            path,
+            confirmed_manifest_sha256=confirmed,
+        )
+        == manifest
+    )
+    with pytest.raises(LiveRunContractError) as mismatch:
+        load_owner_authorized_authority_manifest_v2(
+            path,
+            confirmed_manifest_sha256="0" * 64,
+        )
+    assert mismatch.value.code == "MANIFEST_CONFIRMATION_MISMATCH"
+
+    alias = tmp_path / "authority-hardlink.json"
+    alias.hardlink_to(path)
+    with pytest.raises(LiveRunContractError) as hardlink:
+        load_owner_authorized_authority_manifest_v2(
+            path,
+            confirmed_manifest_sha256=confirmed,
+        )
+    assert hardlink.value.code == "INVALID_MANIFEST_FILE"
+
+
+def test_owner_authority_v2_loader_rejects_parent_swap_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mobile_world.runtime.sentinel.r2_4 import live_run
+
+    manifest = _manifest(tmp_path)
+    parent = tmp_path / "authority-root"
+    parent.mkdir()
+    path = parent / "owner-authority.json"
+    path.write_bytes(canonical_json_bytes(authority_manifest_projection(manifest)))
+    path.chmod(0o600)
+    retained = tmp_path / "retained-authority-root"
+    original_read = live_run.os.read
+    swapped = False
+
+    def read_after_parent_swap(descriptor: int, byte_count: int) -> bytes:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            parent.rename(retained)
+            parent.mkdir()
+        return original_read(descriptor, byte_count)
+
+    monkeypatch.setattr(live_run.os, "read", read_after_parent_swap)
+    with pytest.raises(LiveRunContractError) as raised:
+        load_owner_authorized_authority_manifest_v2(
+            path,
+            confirmed_manifest_sha256=authority_manifest_sha256(manifest),
+        )
+    assert raised.value.code == "MANIFEST_PATH_IDENTITY_DRIFT"
+    assert list(parent.iterdir()) == []
+    assert (retained / path.name).is_file()
 
 
 class _RecordingExecutor(SequenceStageExecutorV1):
@@ -634,9 +838,8 @@ def test_cli_execute_requires_complete_owner_pinned_inputs_and_emits_no_secret(
 ) -> None:
     manifest = _manifest(tmp_path)
     path = tmp_path / "authority.json"
-    path.write_text(
-        json.dumps(authority_manifest_projection(manifest), sort_keys=True), encoding="utf-8"
-    )
+    path.write_bytes(canonical_json_bytes(cast(JsonValue, authority_manifest_projection(manifest))))
+    path.chmod(0o600)
     module = _load_cli_module()
     result = module.main(
         [
@@ -666,9 +869,6 @@ def test_cli_execute_constructs_exact_production_executor_before_dispatch(
 
     manifest = _manifest(tmp_path)
     manifest_path = tmp_path / "authority.json"
-    manifest_path.write_text(
-        json.dumps(authority_manifest_projection(manifest), sort_keys=True), encoding="utf-8"
-    )
     module = _load_cli_module()
     repository = tmp_path / "repo"
     module.REPOSITORY_ROOT = repository
@@ -708,10 +908,10 @@ def test_cli_execute_constructs_exact_production_executor_before_dispatch(
         backend_environment_file_mtime_ns=environment_info.st_mtime_ns,
     )
     runtime_path = tmp_path / "runtime.json"
-    runtime_path.write_text(
-        json.dumps(production_runtime_config_projection(runtime_config), sort_keys=True),
-        encoding="utf-8",
+    runtime_path.write_bytes(
+        canonical_json_bytes(cast(JsonValue, production_runtime_config_projection(runtime_config)))
     )
+    runtime_path.chmod(0o600)
     pricing = LiveAttemptPricingV1(
         pricing_id="owner-cli-cpu-construction",
         model="gpt-5.6-sol",
@@ -722,9 +922,41 @@ def test_cli_execute_constructs_exact_production_executor_before_dispatch(
         effective_at_utc="2026-09-03T00:00:00Z",
     )
     pricing_path = tmp_path / "pricing.json"
-    pricing_path.write_text(
-        json.dumps(live_attempt_pricing_projection(pricing), sort_keys=True), encoding="utf-8"
+    pricing_path.write_bytes(
+        canonical_json_bytes(cast(JsonValue, live_attempt_pricing_projection(pricing)))
     )
+    pricing_path.chmod(0o600)
+    runtime_sha256 = production_runtime_config_sha256(runtime_config)
+    resource_adapter = build_production_resource_lifecycle_adapter_v1(
+        runtime_config,
+        confirmed_config_sha256=runtime_sha256,
+    )
+    pricing_sha256 = live_attempt_pricing_sha256(pricing)
+    smoke_wall_time = sum(
+        case.max_wall_time_seconds for plan in manifest.smoke_plans for case in plan.cases
+    )
+    manifest = replace(
+        manifest,
+        runtime_config_sha256=runtime_sha256,
+        pricing_sha256=pricing_sha256,
+        resource_topology=runtime_config.resource_topology.value,
+        max_resource_cleanup_wall_time_seconds=(resource_adapter.full_cleanup_upper_bound_seconds),
+        resource_cleanup_upper_bound_sha256=(resource_adapter.full_cleanup_upper_bound_sha256),
+        max_model_switches=0,
+        max_model_switch_wall_time_seconds=0,
+        max_total_model_switch_wall_time_seconds=0,
+        max_sequence_wall_time_seconds=(
+            manifest.max_resource_preflight_wall_time_seconds
+            + smoke_wall_time
+            + manifest.pilot.max_total_wall_time_seconds
+            + resource_adapter.full_cleanup_upper_bound_seconds
+            + cast(int, manifest.max_post_run_integrity_wall_time_seconds)
+        ),
+    )
+    manifest_path.write_bytes(
+        canonical_json_bytes(cast(JsonValue, authority_manifest_projection(manifest)))
+    )
+    manifest_path.chmod(0o600)
     # The full suite can import this module more than five minutes before this
     # test runs.  Take the production-preflight timestamp at the actual CLI
     # construction boundary so the fixture exercises the intended fresh-report
@@ -735,6 +967,16 @@ def test_cli_execute_constructs_exact_production_executor_before_dispatch(
         confirmed_manifest_sha256=authority_manifest_sha256(manifest),
         repository_root=repository,
         now=preflight_now,
+        confirmed_runtime_config_sha256=runtime_sha256,
+        confirmed_pricing_sha256=pricing_sha256,
+        confirmed_sentinel_config_sha256=cast(str, manifest.sentinel_config_sha256),
+        confirmed_resource_topology=runtime_config.resource_topology.value,
+        confirmed_resource_cleanup_upper_bound_seconds=(
+            resource_adapter.full_cleanup_upper_bound_seconds
+        ),
+        confirmed_resource_cleanup_upper_bound_sha256=(
+            resource_adapter.full_cleanup_upper_bound_sha256
+        ),
     )
     assert report.eligible_for_post_preflight_factory
     seen: list[ProductionR24R25ExecutorV1] = []
@@ -750,6 +992,7 @@ def test_cli_execute_constructs_exact_production_executor_before_dispatch(
         )
         assert confirmed_manifest_sha256 == authority_manifest_sha256(manifest)
         assert type(executor) is ProductionR24R25ExecutorV1
+        executor._sequence_started_ns = module.time.monotonic_ns()
         seen.append(executor)
         return SequenceRunResultV1(
             schema_version="mobileworld.runtime.sentinel-r2.4-r2.5-sequence-result/v1",
@@ -764,6 +1007,50 @@ def test_cli_execute_constructs_exact_production_executor_before_dispatch(
     monkeypatch.setattr(
         module, "run_authorized_sequence_with_executor", run_without_external_operations
     )
+    gate_artifact: dict[str, JsonValue] = {
+        "collector_run_count": len(manifest.pilot.cells) + 6,
+        "ordered_collector_integrity_root_sha256": _sha(b"ordered-integrity-root"),
+        "ordered_pilot_collector_integrity_root_sha256": _sha(b"ordered-pilot-integrity-root"),
+        "ordered_smoke_collector_integrity_root_sha256": _sha(b"ordered-smoke-integrity-root"),
+        "pilot_collector_run_count": len(manifest.pilot.cells),
+        "smoke_collector_run_count": 6,
+        "status": "VALID",
+    }
+    gate_sha256 = _sha(b"post-run-integrity")
+    gate_path = tmp_path / "post-run-integrity.v1.json"
+    gate_calls: list[str] = []
+
+    def run_gate(**kwargs: object) -> tuple[dict[str, JsonValue], str, Path]:
+        assert kwargs["sequence_output_root"] == Path(manifest.output_root)
+        authority = kwargs["authority"]
+        assert authority.expected_cell_count == len(manifest.pilot.cells)
+        assert authority.factory_binding_sha256 == seen[0].factory_binding_sha256
+        assert authority.run_manifest == manifest
+        assert authority.source_commit == manifest.source_commit
+        assert authority.pilot_manifest == manifest.pilot
+        assert authority.backend_endpoint == f"http://127.0.0.1:{runtime_config.backend_port}"
+        assert authority.resolved_pilot_inputs_sha256 == resolved_pilot_task_inputs_sha256(
+            resolve_pilot_task_inputs_v1(
+                manifest.pilot,
+                authorized_input_root=runtime_config.authorized_pilot_input_root,
+                repository_root=repository,
+            )
+        )
+        assert kwargs["sequence_started_monotonic_ns"] == (seen[0].sequence_started_monotonic_ns)
+        assert kwargs["sequence_deadline_monotonic_ns"] == (
+            seen[0].post_run_integrity_deadline_monotonic_ns
+        )
+        gate_calls.append("run")
+        return gate_artifact, gate_sha256, gate_path
+
+    def reopen_gate(*args: object, **kwargs: object) -> tuple[dict[str, JsonValue], str]:
+        assert args == (gate_path,)
+        assert kwargs["rerun_official_checker"] is False
+        gate_calls.append("reopen")
+        return gate_artifact, gate_sha256
+
+    monkeypatch.setattr(module, "run_post_run_integrity_gate_v1", run_gate)
+    monkeypatch.setattr(module, "reopen_validate_post_run_integrity_artifact_v1", reopen_gate)
     result = module.main(
         [
             "--authority-manifest",
@@ -788,10 +1075,16 @@ def test_cli_execute_constructs_exact_production_executor_before_dispatch(
         ]
     )
     captured = capsys.readouterr()
-    assert result == 0
+    assert result == 0, captured.err
     assert captured.err == ""
     assert len(seen) == 1
-    assert json.loads(captured.out)["dry_run"] is False
+    output = json.loads(captured.out)
+    assert output["dry_run"] is False
+    assert output["integrity"]["artifact_sha256"] == gate_sha256
+    assert output["integrity"]["collector_run_count"] == len(manifest.pilot.cells) + 6
+    assert output["integrity"]["pilot_collector_run_count"] == len(manifest.pilot.cells)
+    assert output["integrity"]["smoke_collector_run_count"] == 6
+    assert gate_calls == ["run", "reopen"]
     assert not Path(manifest.output_root).exists()
 
 

@@ -6,6 +6,8 @@ no provider, GPU, Docker, emulator, backend, or action side effects.
 
 from mobile_world.runtime.sentinel.r2_5.pilot import (
     FROZEN_PILOT_SCHEMA_VERSION,
+    FROZEN_PILOT_SCHEMA_VERSION_V1,
+    FROZEN_PILOT_SCHEMA_VERSION_V2,
     PILOT_TASK_SOURCE_SCHEMA_VERSION,
     FrozenPilotManifestV1,
     PilotArmV1,
@@ -23,6 +25,8 @@ from mobile_world.runtime.sentinel.r2_5.pilot import (
 
 __all__ = [
     "FROZEN_PILOT_SCHEMA_VERSION",
+    "FROZEN_PILOT_SCHEMA_VERSION_V1",
+    "FROZEN_PILOT_SCHEMA_VERSION_V2",
     "PILOT_TASK_SOURCE_SCHEMA_VERSION",
     "FrozenPilotManifestV1",
     "PilotArmV1",

@@ -8,11 +8,12 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from mobile_world.runtime.sentinel.r2_4.live_executor import (
+    LIVE_EXECUTOR_BINDING_SCHEMA_VERSION,
     PRODUCTION_ROOT_HOOKS_V1,
     CpuTestFaultV1,
     CpuTestR24R25ExecutorV1,
@@ -42,6 +43,7 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     SmokeModeV1,
     SnapshotResourceV1,
     authority_manifest_sha256,
+    production_sentinel_config_sha256_v1,
     run_authorized_sequence_with_executor,
 )
 from mobile_world.runtime.sentinel.r2_5.pilot import (
@@ -105,8 +107,8 @@ def _pilot(tmp_path: Path) -> FrozenPilotManifestV1:
         max_steps_per_cell=3,
         per_cell_timeout_seconds=60,
         max_total_wall_time_seconds=10_000,
-        max_total_actor_calls=160,
-        max_total_openai_calls=160,
+        max_total_actor_calls=240,
+        max_total_openai_calls=240,
         max_total_cost_usd_micros=1_000_000,
     )
 
@@ -170,6 +172,22 @@ def _manifest(tmp_path: Path) -> R24R25RunAuthorityManifestV1:
         _smokes(tmp_path, PilotHostV1.QWEN3_VL),
         _smokes(tmp_path, PilotHostV1.MAI_UI),
     )
+    runtime_config_sha256 = _sha("runtime-config")
+    cleanup_upper_bound_preimage = json.dumps(
+        {
+            "domain": "cpu-test-full-resource-cleanup-bound",
+            "schema_version": LIVE_EXECUTOR_BINDING_SCHEMA_VERSION,
+            "value": {
+                "cleanup_upper_bound_seconds": 8,
+                "resource_topology": "SINGLE_GPU_SEQUENTIAL_SHARED",
+                "runtime_config_sha256": runtime_config_sha256,
+            },
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
     return R24R25RunAuthorityManifestV1(
         schema_version=R24_R25_RUN_AUTHORITY_SCHEMA_VERSION,
         run_id="cpu-executor-run",
@@ -253,11 +271,23 @@ def _manifest(tmp_path: Path) -> R24R25RunAuthorityManifestV1:
         smoke_plans=smokes,
         pilot=pilot,
         topology_comparison_artifact_sha256=pilot.topology_comparison_artifact_sha256,
+        resource_topology="SINGLE_GPU_SEQUENTIAL_SHARED",
+        runtime_config_sha256=runtime_config_sha256,
+        pricing_sha256=_sha("pricing"),
+        sentinel_config_sha256=production_sentinel_config_sha256_v1(),
         output_root=str(tmp_path / "external-output"),
         max_resource_preflight_wall_time_seconds=100,
-        max_sequence_wall_time_seconds=10_460,
-        max_sequence_openai_calls=172,
-        max_sequence_actor_calls=166,
+        max_resource_cleanup_wall_time_seconds=8,
+        resource_cleanup_upper_bound_sha256=hashlib.sha256(
+            cleanup_upper_bound_preimage
+        ).hexdigest(),
+        max_model_switches=41,
+        max_model_switch_wall_time_seconds=1,
+        max_total_model_switch_wall_time_seconds=41,
+        max_post_run_integrity_wall_time_seconds=1,
+        max_sequence_wall_time_seconds=10_510,
+        max_sequence_openai_calls=252,
+        max_sequence_actor_calls=246,
         max_sequence_cost_usd_micros=1_000_600,
     )
 
@@ -335,7 +365,9 @@ def test_cpu_executor_commits_complete_hash_bound_external_stage_evidence(
         "01-qwen-live-smoke.json",
         "02-mai-live-smoke.json",
         "03-r25-pilot.json",
+        "04-resource-cleanup.json",
         "manifest-binding.json",
+        "terminal.json",
     ]
     serialized = b"".join(path.read_bytes() for path in files)
     assert authority_manifest_sha256(manifest).encode() in serialized
@@ -352,6 +384,13 @@ def test_cpu_executor_commits_complete_hash_bound_external_stage_evidence(
             separators=(",", ":"),
         ).encode()
         assert hashlib.sha256(evidence_preimage).hexdigest() == receipt.evidence_sha256
+    terminal = json.loads((output / "terminal.json").read_text(encoding="utf-8"))
+    assert terminal["status"] == "COMPLETE"
+    assert terminal["acceptance_status"] == "EXECUTION_COMPLETE_INTEGRITY_PENDING"
+    assert terminal["total_model_switch_count"] == 41
+    assert terminal["handoff_model_switch_count"] == 1
+    assert terminal["pilot_model_switch_count"] == 40
+    assert terminal["executor_census"]["cleanup_wall_time_ms"] >= 0
 
 
 def test_output_transaction_fsyncs_files_staging_and_parent_directory(
@@ -374,6 +413,55 @@ def test_output_transaction_fsyncs_files_staging_and_parent_directory(
     assert any(stat.S_ISREG(mode) for mode in fsynced_modes)
     # Staging entries and the final rename are each followed by directory fsync.
     assert sum(stat.S_ISDIR(mode) for mode in fsynced_modes) >= 7
+
+
+@pytest.mark.parametrize("swap", ("staging", "parent"))
+def test_full_output_transaction_rejects_directory_identity_swap_without_deleting_replacement(
+    tmp_path: Path,
+    swap: str,
+) -> None:
+    from mobile_world.runtime.sentinel.r2_4 import live_executor
+
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    parent = tmp_path / "external"
+    parent.mkdir()
+    output = parent / "run-output"
+    manifest_sha256 = _sha("dirfd-output-manifest")
+    transaction = live_executor.AtomicExternalOutputTransactionV1(
+        output_root=output,
+        repository_root=repository,
+        run_id="dirfd-output-run",
+        source_commit="a" * 40,
+        manifest_sha256=manifest_sha256,
+    )
+    transaction.begin()
+    staging = parent / f".{output.name}.{manifest_sha256[:16]}.partial"
+
+    if swap == "staging":
+        retained = parent / "retained-original-staging"
+        staging.rename(retained)
+        staging.mkdir(mode=0o700)
+        replacement = staging
+    else:
+        retained = tmp_path / "retained-original-parent"
+        parent.rename(retained)
+        parent.mkdir(mode=0o700)
+        replacement = parent
+
+    with pytest.raises(RuntimeError, match="identity drifted"):
+        transaction._write_once("must-not-land.json", b"{}")
+    assert list(replacement.iterdir()) == []
+    with pytest.raises(RuntimeError, match="identity drifted"):
+        transaction.rollback()
+    assert replacement.is_dir()
+    assert not (replacement / "must-not-land.json").exists()
+    retained_staging = (
+        retained
+        if swap == "staging"
+        else retained / f".{output.name}.{manifest_sha256[:16]}.partial"
+    )
+    assert (retained_staging / "manifest-binding.json").is_file()
 
 
 def test_smoke_failure_is_redacted_stops_sequence_and_publishes_failure_evidence(
@@ -409,7 +497,7 @@ def test_smoke_failure_plus_stubborn_cleanup_persists_primary_and_residual_evide
 
     assert result.status is SequenceStatusV1.FAILED
     assert result.failed_stage is RunStageV1.QWEN_LIVE_SMOKE
-    assert result.failure_code == "EXECUTOR_CLEANUP_FAILED"
+    assert result.failure_code == "STAGE_ADAPTER_FAILED"
     assert tuple(receipt.stage for receipt in result.receipts) == (RunStageV1.RESOURCE_PREFLIGHT,)
     assert executor.census.cleanup_attempted
     assert not executor.census.cleanup_succeeded
@@ -436,6 +524,111 @@ def test_smoke_failure_plus_stubborn_cleanup_persists_primary_and_residual_evide
     assert (
         failure["resource_cleanup_evidence_sha256"] == hashlib.sha256(cleanup_preimage).hexdigest()
     )
+
+
+def test_invalid_adapter_result_remains_primary_when_broker_close_also_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mobile_world.runtime.sentinel.r2_4 import live_executor
+
+    manifest = _manifest(tmp_path)
+    executor = build_cpu_test_executor_v1(
+        manifest,
+        confirmed_manifest_sha256=authority_manifest_sha256(manifest),
+        repository_root=tmp_path / "repo",
+        fault=CpuTestFaultV1.QWEN_CASE_BROKER_CLOSE_FAILURE,
+    )
+    executor.run_stage(RunStageV1.RESOURCE_PREFLIGHT, manifest)
+    monkeypatch.setattr(
+        live_executor._CpuSmokeAdapterV1,
+        "run_host",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    with pytest.raises(LiveRunContractError) as raised:
+        executor.run_stage(RunStageV1.QWEN_LIVE_SMOKE, manifest)
+
+    assert raised.value.code == "INVALID_ADAPTER_RESULT"
+    failure = json.loads((Path(manifest.output_root) / "failure.json").read_text())
+    stage_evidence = failure["stage_failure_evidence"]
+    assert stage_evidence["primary_failure_code"] == "INVALID_ADAPTER_RESULT"
+    assert stage_evidence["secondary_failure_codes"] == ["CASE_AUTHORITY_BROKER_CLOSE_FAILED"]
+    assert executor.census.secret_leases_acquired == 1
+    assert executor.census.secret_leases_closed == 0
+
+
+def test_pilot_broker_close_failure_preserves_returned_eighty_cell_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mobile_world.runtime.sentinel.r2_4 import live_executor
+
+    manifest = _manifest(tmp_path)
+    executor = build_cpu_test_executor_v1(
+        manifest,
+        confirmed_manifest_sha256=authority_manifest_sha256(manifest),
+        repository_root=tmp_path / "repo",
+        fault=CpuTestFaultV1.PILOT_CASE_BROKER_CLOSE_FAILURE,
+    )
+    pilot_type = live_executor._CpuPilotAdapterV1
+    original_run = pilot_type.run_pilot
+
+    def durable_result(adapter: object, *args: Any, **kwargs: Any) -> object:
+        result = original_run(cast(Any, adapter), *args, **kwargs)
+        evidence = json.dumps(
+            {
+                "cells": [
+                    {
+                        "arm": cell.arm.value,
+                        "host": cell.host.value,
+                        "sequence_index": index,
+                        "task_id": cell.task_id,
+                    }
+                    for index, cell in enumerate(manifest.pilot.cells)
+                ],
+                "domain": "cpu-eighty-cell-pilot-evidence",
+                "manifest_sha256": authority_manifest_sha256(manifest),
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return replace(
+            result,
+            evidence_preimage=evidence,
+            evidence_sha256=hashlib.sha256(evidence).hexdigest(),
+        )
+
+    monkeypatch.setattr(pilot_type, "run_pilot", durable_result)
+    for stage in manifest.safety.stages[:3]:
+        executor.run_stage(stage, manifest)
+
+    with pytest.raises(LiveRunContractError) as raised:
+        executor.run_stage(RunStageV1.R25_PILOT, manifest)
+
+    assert raised.value.code == "CASE_AUTHORITY_BROKER_CLOSE_FAILED"
+    failure = json.loads((Path(manifest.output_root) / "failure.json").read_text())
+    stage_evidence = failure["stage_failure_evidence"]
+    assert stage_evidence["primary_failure_code"] == "CASE_AUTHORITY_BROKER_CLOSE_FAILED"
+    assert stage_evidence["secondary_failure_codes"] == []
+    assert len(stage_evidence["completed_adapter_evidence"]["cells"]) == 80
+    assert (
+        stage_evidence["completed_adapter_evidence_sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                stage_evidence["completed_adapter_evidence"],
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )
+    assert executor.census.secret_leases_acquired == 3
+    assert executor.census.secret_leases_closed == 2
+    assert executor.census.cleanup_succeeded
 
 
 def test_budget_overrun_fails_before_receipt_admission_and_cleans_everything(
@@ -466,7 +659,7 @@ def test_adapter_success_then_executor_wall_overrun_preserves_stage_preimage(
     manifest = replace(
         _manifest(tmp_path),
         max_resource_preflight_wall_time_seconds=1,
-        max_sequence_wall_time_seconds=10_361,
+        max_sequence_wall_time_seconds=10_411,
     )
     executor = build_cpu_test_executor_v1(
         manifest,
@@ -479,7 +672,7 @@ def test_adapter_success_then_executor_wall_overrun_preserves_stage_preimage(
     def monotonic_with_stage_overrun() -> int:
         nonlocal calls
         calls += 1
-        return base_ns if calls <= 2 else base_ns + 2_000_000_000
+        return base_ns + calls * 2_000_000_000
 
     monkeypatch.setattr(live_executor.time, "monotonic_ns", monotonic_with_stage_overrun)
     with pytest.raises(LiveRunContractError) as raised:
@@ -507,6 +700,46 @@ def test_adapter_success_then_executor_wall_overrun_preserves_stage_preimage(
     )
 
 
+def test_full_executor_freezes_resource_preflight_stage_deadline_before_adapter_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mobile_world.runtime.sentinel.r2_4 import live_executor
+
+    manifest = _manifest(tmp_path)
+    executor = build_cpu_test_executor_v1(
+        manifest,
+        confirmed_manifest_sha256=authority_manifest_sha256(manifest),
+        repository_root=tmp_path / "repo",
+    )
+    resource_type = live_executor._CpuResourceAdapterV1
+    original_prepare = resource_type.prepare
+    observed_contexts: list[live_executor.StageAdapterContextV1] = []
+    stage_started_ns = time.monotonic_ns()
+
+    def capture_context(
+        adapter: object,
+        resources: tuple[SnapshotResourceV1, ...],
+        context: live_executor.StageAdapterContextV1,
+    ) -> live_executor.AdapterStageResultV1:
+        observed_contexts.append(context)
+        return original_prepare(cast(object, adapter), resources, context)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(live_executor.time, "monotonic_ns", lambda: stage_started_ns)
+    monkeypatch.setattr(resource_type, "prepare", capture_context)
+
+    executor.run_stage(RunStageV1.RESOURCE_PREFLIGHT, manifest)
+
+    assert len(observed_contexts) == 1
+    context = observed_contexts[0]
+    assert context.authority_deadline_monotonic_ns == (
+        stage_started_ns + manifest.max_resource_preflight_wall_time_seconds * 1_000_000_000
+    )
+    assert context.remaining_wall_time_ms == (
+        manifest.max_resource_preflight_wall_time_seconds * 1000
+    )
+
+
 @pytest.mark.parametrize("failure_point", ("write", "rename"))
 def test_failure_publication_error_preserves_prior_stage_bytes_and_recovery_marker(
     tmp_path: Path,
@@ -524,7 +757,7 @@ def test_failure_publication_error_preserves_prior_stage_bytes_and_recovery_mark
     )
     executor.run_stage(RunStageV1.RESOURCE_PREFLIGHT, manifest)
     if failure_point == "write":
-        original_write_once = live_executor.AtomicExternalOutputTransactionV1._write_once
+        original_write_once = live_executor.AtomicExternalOutputTransactionV1._write_atomic_terminal
 
         def fail_failure_write(
             transaction: live_executor.AtomicExternalOutputTransactionV1,
@@ -537,7 +770,7 @@ def test_failure_publication_error_preserves_prior_stage_bytes_and_recovery_mark
 
         monkeypatch.setattr(
             live_executor.AtomicExternalOutputTransactionV1,
-            "_write_once",
+            "_write_atomic_terminal",
             fail_failure_write,
         )
     else:
@@ -551,7 +784,7 @@ def test_failure_publication_error_preserves_prior_stage_bytes_and_recovery_mark
 
     with pytest.raises(LiveRunContractError) as raised:
         executor.run_stage(RunStageV1.QWEN_LIVE_SMOKE, manifest)
-    assert raised.value.code == "EXECUTOR_FAILURE_PUBLICATION_FAILED"
+    assert raised.value.code == "STAGE_ADAPTER_FAILED"
     staging = Path(manifest.output_root).parent / (
         f".{Path(manifest.output_root).name}.{authority_manifest_sha256(manifest)[:16]}.partial"
     )
@@ -612,11 +845,42 @@ def test_cleanup_failure_is_explicit_and_transaction_never_commits(tmp_path: Pat
 
     assert result.status is SequenceStatusV1.FAILED
     assert result.failed_stage is RunStageV1.R25_PILOT
-    assert result.failure_code == "EXECUTOR_CLEANUP_FAILED"
+    assert result.failure_code == "RESOURCE_CLEANUP_FAILED"
     assert executor.census.cleanup_attempted
     assert not executor.census.cleanup_succeeded
     assert not executor.census.output_committed
-    _assert_failure_bundle(manifest, stage=RunStageV1.R25_PILOT, code="EXECUTOR_CLEANUP_FAILED")
+    _assert_failure_bundle(
+        manifest,
+        stage=RunStageV1.R25_PILOT,
+        code="RESOURCE_CLEANUP_FAILED",
+    )
+
+
+def test_cleanup_tenant_drift_reclaims_owned_resources_but_never_commits(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(tmp_path)
+    executor, result = _run(
+        manifest,
+        CpuTestFaultV1.RESOURCE_CLEANUP_TENANT_DRIFT,
+    )
+
+    assert result.status is SequenceStatusV1.FAILED
+    assert result.failed_stage is RunStageV1.R25_PILOT
+    assert result.failure_code == "GPU_SHARED_TENANT_DRIFT"
+    assert executor.census.cleanup_attempted
+    assert not executor.census.cleanup_succeeded
+    assert not executor.census.output_committed
+    output = Path(manifest.output_root)
+    assert not (output / "terminal.json").exists()
+    failure = json.loads((output / "failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_code"] == "GPU_SHARED_TENANT_DRIFT"
+    assert failure["resource_cleanup_failure_code"] == "GPU_SHARED_TENANT_DRIFT"
+    assert failure["resource_cleanup_status"] == ("OWNED_RESOURCES_CLEANED_TENANT_DRIFT")
+    cleanup = failure["resource_cleanup_evidence"]
+    assert cleanup["domain"] == "production-resource-cleanup-failure-evidence"
+    assert cleanup["value"]["status"] == "FAILED_TENANT_CONTINUITY"
+    assert cleanup["value"]["cleanup_outcome"] == ("OWNED_RESOURCES_RECLAIMED_TENANT_DRIFT")
 
 
 def test_stage_order_and_manifest_drift_are_terminal_before_external_work(tmp_path: Path) -> None:
@@ -673,6 +937,12 @@ def test_production_executor_is_unconstructible_until_exact_module_adapters_exis
         ProductionR24R25ExecutorV1(
             manifest,
             confirmed_manifest_sha256=authority_manifest_sha256(manifest),
+            preflight_report_sha256="a" * 64,
+            factory_binding_sha256="b" * 64,
+            confirmed_runtime_config_sha256=manifest.runtime_config_sha256,
+            resource_cleanup_upper_bound_seconds=(manifest.max_resource_cleanup_wall_time_seconds),
+            resource_cleanup_upper_bound_preimage=b"{}",
+            resource_cleanup_upper_bound_sha256=hashlib.sha256(b"{}").hexdigest(),
             repository_root=tmp_path / "repo",
             module_owned_adapters=object(),
         )

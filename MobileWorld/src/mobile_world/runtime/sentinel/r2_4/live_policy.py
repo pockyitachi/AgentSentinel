@@ -3087,7 +3087,9 @@ def _manifest_case_descriptor(
     expected_mode = SmokeModeV1.OFF if cell.arm is PilotArmV1.BASELINE else SmokeModeV1.ACTIVE
     if cell.host is not host or mode is not expected_mode:
         raise R24ContractError("CASE_OUTSIDE_MANIFEST", "pilot cell binding differs")
-    possible_openai_calls = 2 * joint_manifest.pilot.max_steps_per_cell + 1
+    possible_openai_calls = (
+        0 if cell.arm is PilotArmV1.BASELINE else 2 * joint_manifest.pilot.max_steps_per_cell
+    )
     return OwnerAuthorizedLiveCaseDescriptorV1(
         stage=stage,
         host=host,
@@ -4099,6 +4101,11 @@ class OwnerAuthorizedLivePerCallPolicyV1:
             actor_call_index = len(self._call_inputs) + 1
             if actor_call_index > self._case.max_actor_calls:
                 raise R24ContractError("CASE_ACTOR_CALL_BUDGET_EXCEEDED", "actor call cap reached")
+            if self._case.stage is RunStageV1.R25_PILOT and actor_call_index > 1:
+                raise R24ContractError(
+                    "PILOT_LATER_CALL_HISTORY_REQUIRED",
+                    "R2.5 calls after the first must use the typed history path",
+                )
             self._call_inputs[context.logical_call_id] = input_sha256
             self._call_indices[context.logical_call_id] = actor_call_index
             reservation: _LiveBudgetReservationV1 | None = None
@@ -4270,6 +4277,13 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 raise R24ContractError("CASE_ACTOR_CALL_BUDGET_EXCEEDED", "actor call cap reached")
             self._call_inputs[context.logical_call_id] = input_sha256
             self._call_indices[context.logical_call_id] = actor_call_index
+            if self._case.stage is RunStageV1.R25_PILOT and actor_call_index == 1:
+                code = "PILOT_FIRST_CALL_HISTORY_FORBIDDEN"
+                self._failures[context.logical_call_id] = code
+                raise R24ContractError(
+                    code,
+                    "the first pilot decision must use the typed no-history path",
+                )
             reservation: _LiveBudgetReservationV1 | None = None
             try:
                 task_run_id = self._require_case_context(

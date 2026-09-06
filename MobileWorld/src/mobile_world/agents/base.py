@@ -672,6 +672,13 @@ class BaseAgent(ABC):
             def optional_count(value: Any) -> int | None:
                 return value if type(value) is int and value >= 0 else None
 
+            prompt_token_details = getattr(usage, "prompt_tokens_details", None)
+            cached_input_tokens = optional_count(
+                prompt_token_details.get("cached_tokens")
+                if type(prompt_token_details) is dict
+                else getattr(prompt_token_details, "cached_tokens", None)
+            )
+
             logical_call.record_actor_provider_attempt(
                 latency_ns=max(0, time.monotonic_ns() - started_ns),
                 succeeded=succeeded,
@@ -679,6 +686,7 @@ class BaseAgent(ABC):
                 model_id=optional_text(response_model) or optional_text(provider_model),
                 finish_reason=optional_text(finish_reason),
                 input_tokens=optional_count(getattr(usage, "prompt_tokens", None)),
+                cached_input_tokens=cached_input_tokens,
                 output_tokens=optional_count(getattr(usage, "completion_tokens", None)),
                 total_tokens=optional_count(getattr(usage, "total_tokens", None)),
                 raw_response=response,

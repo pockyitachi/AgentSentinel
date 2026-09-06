@@ -103,9 +103,11 @@ from mobile_world.runtime.sentinel.r2_4.live_policy import (
 )
 from mobile_world.runtime.sentinel.r2_4.live_run import (
     HostLiveSmokePlanV1,
+    LiveRunContractError,
     LiveSmokeCaseV1,
     OpenAIResponsesStageV1,
     OpenAIRoleV1,
+    R24R25RunAuthorityManifestV1,
     RunStageV1,
     SecretFileReferenceV1,
     SmokeModeV1,
@@ -113,6 +115,8 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     compute_snapshot_tree_digest,
 )
 from mobile_world.runtime.sentinel.r2_4.production_audit import (
+    PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION,
+    PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2,
     ExternalProductionRuntimeAuditSinkV1,
     ProductionRuntimeAuditAdmissionFailureReceiptV1,
     ProductionRuntimeAuditCommitFailureReceiptV1,
@@ -142,6 +146,9 @@ from mobile_world.runtime.sentinel.r2_4.run_fatal import (
     production_run_fatal_state_sha256,
 )
 from mobile_world.runtime.sentinel.r2_5.pilot import (
+    OFFICIAL_SUCCESS_METRIC_ID_V1,
+    OFFICIAL_SUCCESS_OPERATOR_V1,
+    OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1,
     FrozenPilotManifestV1,
     PilotArmV1,
     PilotCellV1,
@@ -187,14 +194,26 @@ PRODUCTION_SHARED_RESOURCE_EVIDENCE_SCHEMA_VERSION_V2: Final[str] = (
 PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2: Final[str] = (
     "mobileworld.runtime.sentinel-r2.4-shared-smoke-evidence/v2"
 )
+PRODUCTION_FULL_SMOKE_EVIDENCE_SCHEMA_VERSION_V3: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.5-production-smoke-evidence/v3"
+)
+PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.5-production-pilot-evidence/v2"
+)
 PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
     "mobileworld.runtime.sentinel-r2.4-model-handoff-evidence/v1"
+)
+PRODUCTION_PILOT_MODEL_SWITCH_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.5-pilot-model-switch-evidence/v1"
 )
 PRODUCTION_RESOURCE_CLEANUP_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
     "mobileworld.runtime.sentinel-r2.4-resource-cleanup-evidence/v1"
 )
 PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1: Final[str] = (
     "mobileworld.runtime.sentinel-r2.4-resource-cleanup-bound/v1"
+)
+PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V2: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.5-resource-cleanup-bound/v2"
 )
 OFFICIAL_RESULT_EVALUATOR_ID_V1: Final[str] = "mobileworld.task.official-success/v1"
 
@@ -254,8 +273,15 @@ _PILOT_GUI_ACTION_TYPES: Final[frozenset[str]] = frozenset(
 class ProductionDriverError(ValueError):
     """Stable, secret-free failure from the sealed driver boundary."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        secondary_failure_code: str | None = None,
+    ) -> None:
         self.code = code
+        self.secondary_failure_code = secondary_failure_code
         super().__init__(f"{code}: {message}")
 
 
@@ -344,6 +370,97 @@ class ProductionResourceTopologyV1(StrEnum):
     SINGLE_GPU_SEQUENTIAL_SHARED = "SINGLE_GPU_SEQUENTIAL_SHARED"
 
 
+@dataclass(frozen=True, slots=True)
+class ProductionPilotSwitchAuthorityV1:
+    """Sealed limits for the single-GPU R2.5 model-switch schedule."""
+
+    manifest_sha256: str
+    sequence_scope_authority_sha256: str
+    factory_binding_sha256: str
+    runtime_config_sha256: str
+    host_blocks: tuple[PilotHostV1, ...]
+    max_model_switches: int
+    max_model_switch_wall_time_seconds: int
+    max_total_model_switch_wall_time_seconds: int
+    resource_cleanup_upper_bound_seconds: int
+    resource_cleanup_upper_bound_sha256: str
+    _seal: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _MODULE_SEAL:
+            raise PermissionError("pilot switch authority is module-owned")
+        for name in (
+            "manifest_sha256",
+            "sequence_scope_authority_sha256",
+            "factory_binding_sha256",
+            "runtime_config_sha256",
+            "resource_cleanup_upper_bound_sha256",
+        ):
+            _require_sha256(getattr(self, name), name)
+        raw_blocks: object = self.host_blocks
+        if (
+            type(raw_blocks) is not tuple
+            or not 40 <= len(self.host_blocks) <= 60
+            or len(self.host_blocks) % 2 != 0
+            or any(type(item) is not PilotHostV1 for item in self.host_blocks)
+            or self.host_blocks
+            != tuple(
+                host
+                for _ in range(len(self.host_blocks) // 2)
+                for host in (PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)
+            )
+        ):
+            raise ProductionDriverError(
+                "INVALID_PILOT_SWITCH_AUTHORITY",
+                "pilot switch host blocks are not the frozen Qwen/MAI schedule",
+            )
+        if (
+            type(self.max_model_switches) is not int
+            or self.max_model_switches != len(self.host_blocks) + 1
+            or type(self.max_model_switch_wall_time_seconds) is not int
+            or not 1 <= self.max_model_switch_wall_time_seconds <= 3_600
+            or type(self.max_total_model_switch_wall_time_seconds) is not int
+            or self.max_total_model_switch_wall_time_seconds
+            != self.max_model_switches * self.max_model_switch_wall_time_seconds
+            or type(self.resource_cleanup_upper_bound_seconds) is not int
+            or self.resource_cleanup_upper_bound_seconds <= 0
+        ):
+            raise ProductionDriverError(
+                "INVALID_PILOT_SWITCH_AUTHORITY", "pilot switch bounds differ"
+            )
+
+
+def production_pilot_switch_authority_projection(
+    value: ProductionPilotSwitchAuthorityV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not ProductionPilotSwitchAuthorityV1 or value._seal is not _MODULE_SEAL:
+        raise ProductionDriverError("UNTRUSTED_TYPE", "pilot switch authority type differs")
+    projection: dict[str, JsonValue] = {
+        "factory_binding_sha256": value.factory_binding_sha256,
+        "host_blocks": [item.value for item in value.host_blocks],
+        "manifest_sha256": value.manifest_sha256,
+        "max_model_switches": value.max_model_switches,
+        "max_model_switch_wall_time_seconds": value.max_model_switch_wall_time_seconds,
+        "max_total_model_switch_wall_time_seconds": (
+            value.max_total_model_switch_wall_time_seconds
+        ),
+        "resource_cleanup_upper_bound_seconds": value.resource_cleanup_upper_bound_seconds,
+        "resource_cleanup_upper_bound_sha256": value.resource_cleanup_upper_bound_sha256,
+        "runtime_config_sha256": value.runtime_config_sha256,
+        "sequence_scope_authority_sha256": value.sequence_scope_authority_sha256,
+    }
+    return projection
+
+
+def production_pilot_switch_authority_sha256(
+    value: ProductionPilotSwitchAuthorityV1,
+) -> str:
+    return _hash_projection(
+        "production-pilot-switch-authority",
+        cast(JsonValue, production_pilot_switch_authority_projection(value)),
+    )
+
+
 def _require_sha256(value: object, name: str) -> str:
     if type(value) is not str or _SHA256.fullmatch(value) is None:
         raise ProductionDriverError("INVALID_EVIDENCE", f"{name} is not lowercase SHA-256")
@@ -363,7 +480,11 @@ def _require_nonnegative(value: object, name: str) -> int:
 
 
 def _hash_projection(domain: str, value: JsonValue) -> str:
-    return canonical_sha256(
+    return hashlib.sha256(_projection_preimage(domain, value)).hexdigest()
+
+
+def _projection_preimage(domain: str, value: JsonValue) -> bytes:
+    return canonical_json_bytes(
         cast(
             JsonValue,
             {
@@ -373,6 +494,18 @@ def _hash_projection(domain: str, value: JsonValue) -> str:
             },
         )
     )
+
+
+def _require_projection_envelope(value: object, *, domain: str) -> dict[str, JsonValue]:
+    if (
+        type(value) is not dict
+        or set(value) != {"domain", "schema_version", "value"}
+        or value.get("domain") != domain
+        or value.get("schema_version") != PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+        or type(value.get("value")) is not dict
+    ):
+        raise ProductionDriverError("INVALID_EVIDENCE", f"{domain} canonical envelope differs")
+    return cast(dict[str, JsonValue], value["value"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,18 +1004,13 @@ def production_runtime_config_sha256(value: ProductionRuntimeConfigV1) -> str:
     )
 
 
-def _production_resource_cleanup_bound_projection(
+def _production_resource_cleanup_bound_v2_projection(
     config: ProductionRuntimeConfigV1,
 ) -> dict[str, JsonValue]:
-    """Return the complete bounded-wait budget for one shared cleanup call."""
+    """Return the complete bounded-wait budget for one full cleanup call."""
 
     if type(config) is not ProductionRuntimeConfigV1:
         raise ProductionDriverError("UNTRUSTED_TYPE", "cleanup bound config type differs")
-    if config.resource_topology is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED:
-        raise ProductionDriverError(
-            "CLEANUP_BOUND_UNAVAILABLE",
-            "the sealed cleanup bound applies only to shared sequential resources",
-        )
     poll_ceiling_seconds = (config.health_poll_interval_ms + 999) // 1_000
     admitted_model_seconds = 5 * config.shutdown_grace_seconds + 3 * poll_ceiling_seconds
     partial_model_seconds = 3 * config.shutdown_grace_seconds + 2 * poll_ceiling_seconds
@@ -893,17 +1021,31 @@ def _production_resource_cleanup_bound_projection(
     )
     pending_backend_seconds = 7 * _RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1
     backend_seconds = max(admitted_backend_seconds, pending_backend_seconds)
-    final_shared_gpu_attestation_seconds = 4 * _RESOURCE_ATTESTATION_COMMAND_TIMEOUT_SECONDS_V1
-    cleanup_upper_bound_seconds = (
-        model_seconds + backend_seconds + final_shared_gpu_attestation_seconds
+    maximum_model_cleanup_count = (
+        1
+        if config.resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        else 2
     )
-    return {
+    final_shared_gpu_attestation_slots = (
+        4
+        if config.resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        else 0
+    )
+    final_shared_gpu_attestation_seconds = (
+        final_shared_gpu_attestation_slots * _RESOURCE_ATTESTATION_COMMAND_TIMEOUT_SECONDS_V1
+    )
+    cleanup_upper_bound_seconds = (
+        maximum_model_cleanup_count * model_seconds
+        + backend_seconds
+        + final_shared_gpu_attestation_seconds
+    )
+    projection: dict[str, JsonValue] = {
         "admitted_backend_cleanup_upper_bound_seconds": admitted_backend_seconds,
         "admitted_model_cleanup_upper_bound_seconds": admitted_model_seconds,
         "backend_cleanup_upper_bound_seconds": backend_seconds,
         "cleanup_upper_bound_seconds": cleanup_upper_bound_seconds,
         "docker_command_timeout_seconds": _RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
-        "final_shared_gpu_attestation_command_slots": 4,
+        "final_shared_gpu_attestation_command_slots": final_shared_gpu_attestation_slots,
         "final_shared_gpu_attestation_upper_bound_seconds": (final_shared_gpu_attestation_seconds),
         "health_poll_interval_ceiling_seconds": poll_ceiling_seconds,
         "health_poll_interval_ms": config.health_poll_interval_ms,
@@ -922,6 +1064,23 @@ def _production_resource_cleanup_bound_projection(
         "runtime_config_sha256": production_runtime_config_sha256(config),
         "shutdown_grace_seconds": config.shutdown_grace_seconds,
     }
+    projection["maximum_model_cleanup_count"] = maximum_model_cleanup_count
+    return projection
+
+
+def _production_resource_cleanup_bound_projection(
+    config: ProductionRuntimeConfigV1,
+) -> dict[str, JsonValue]:
+    """Preserve the accepted R2.4 shared cleanup-bound/v1 bytes exactly."""
+
+    if config.resource_topology is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED:
+        raise ProductionDriverError(
+            "CLEANUP_BOUND_UNAVAILABLE",
+            "the legacy cleanup-bound/v1 applies only to shared smoke resources",
+        )
+    projection = _production_resource_cleanup_bound_v2_projection(config)
+    projection.pop("maximum_model_cleanup_count")
+    return projection
 
 
 def _production_resource_cleanup_bound_preimage(config: ProductionRuntimeConfigV1) -> bytes:
@@ -932,6 +1091,19 @@ def _production_resource_cleanup_bound_preimage(config: ProductionRuntimeConfigV
                 "domain": "production-resource-cleanup-bound",
                 "schema_version": PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1,
                 "value": _production_resource_cleanup_bound_projection(config),
+            },
+        )
+    )
+
+
+def _production_resource_cleanup_bound_v2_preimage(config: ProductionRuntimeConfigV1) -> bytes:
+    return canonical_json_bytes(
+        cast(
+            JsonValue,
+            {
+                "domain": "production-resource-cleanup-bound",
+                "schema_version": PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V2,
+                "value": _production_resource_cleanup_bound_v2_projection(config),
             },
         )
     )
@@ -1446,7 +1618,7 @@ def _validate_shared_gpu_cleanup(
     *,
     baseline: ProductionSharedGpuAttestationV1,
     stopped_models: tuple[ProductionModelStopEvidenceV1, ...],
-) -> None:
+) -> str | None:
     if value.gpu_index != baseline.gpu_index or value.gpu_uuid != baseline.gpu_uuid:
         raise ProductionDriverError("GPU_IDENTITY_MISMATCH", "shared physical GPU drifted")
     stopped_sessions = {(item.process.uid, item.process.session_id) for item in stopped_models}
@@ -1463,6 +1635,19 @@ def _validate_shared_gpu_cleanup(
             "MODEL_REAP_UNCONFIRMED",
             "an owned model identity remains in the final shared GPU census",
         )
+    # Cleanup is also an admission boundary: baseline co-tenants may have
+    # exited, but no new PID or changed PID/pgrp/session/uid/start identity may
+    # appear while the project-owned model is being reaped.
+    try:
+        _validate_shared_gpu_tenants(value, baseline=baseline, owned_identity=None)
+    except ProductionDriverError as exc:
+        if exc.code != "GPU_SHARED_TENANT_DRIFT":
+            raise
+        # A foreign tenant anomaly must never grant authority to signal that
+        # process or prevent release of the project lease after owned cleanup.
+        # Persist the anomaly in the terminal cleanup evidence instead.
+        return exc.code
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1485,6 +1670,7 @@ class ProductionResourceStageEvidenceV1:
     minimum_free_gpu_memory_mib: int
     sequence_execution_scope: str
     sequence_scope_authority_sha256: str
+    pilot_switch_authority_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.resource_topology) is not ProductionResourceTopologyV1:
@@ -1576,7 +1762,7 @@ class ProductionResourceStageEvidenceV1:
                 )
                 or self.vllm_gpu_memory_utilization != _SHARED_VLLM_GPU_MEMORY_UTILIZATION_V1
                 or self.minimum_free_gpu_memory_mib != _SHARED_MINIMUM_FREE_GPU_MEMORY_MIB_V1
-                or self.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY"
+                or self.sequence_execution_scope not in {"R24_LIVE_SMOKE_ONLY", "R24_R25_FULL"}
             ):
                 raise ProductionDriverError(
                     "INVALID_RESOURCE_EVIDENCE", "shared sequential resource evidence differs"
@@ -1585,6 +1771,16 @@ class ProductionResourceStageEvidenceV1:
                 self.sequence_scope_authority_sha256,
                 "sequence_scope_authority_sha256",
             )
+            if self.sequence_execution_scope == "R24_R25_FULL":
+                _require_sha256(
+                    self.pilot_switch_authority_sha256,
+                    "pilot_switch_authority_sha256",
+                )
+            elif self.pilot_switch_authority_sha256 is not None:
+                raise ProductionDriverError(
+                    "INVALID_RESOURCE_EVIDENCE",
+                    "smoke-only resources cannot bind pilot switch authority",
+                )
             baseline, ready = self.shared_gpu_attestations
             _require_shared_gpu_capacity(baseline)
             if (
@@ -1607,6 +1803,7 @@ class ProductionResourceStageEvidenceV1:
             or self.vllm_gpu_memory_utilization != "0.90"
             or self.minimum_free_gpu_memory_mib != 0
             or self.sequence_execution_scope != "R24_R25_FULL"
+            or self.pilot_switch_authority_sha256 is not None
         ):
             raise ProductionDriverError(
                 "INVALID_RESOURCE_EVIDENCE", "concurrent resource evidence differs"
@@ -1659,6 +1856,8 @@ def production_resource_stage_evidence_projection(
                 "sequence_scope_authority_sha256": value.sequence_scope_authority_sha256,
             }
         )
+        if value.pilot_switch_authority_sha256 is not None:
+            projection["pilot_switch_authority_sha256"] = value.pilot_switch_authority_sha256
     return projection
 
 
@@ -1789,9 +1988,8 @@ class ProductionModelHandoffEvidenceV1:
             _require_sha256(getattr(self, name), name)
         if (
             self.resource_topology is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
-            or self.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY"
-            or self.source_host is not PilotHostV1.QWEN3_VL
-            or self.target_host is not PilotHostV1.MAI_UI
+            or self.sequence_execution_scope not in {"R24_LIVE_SMOKE_ONLY", "R24_R25_FULL"}
+            or self.source_host is self.target_host
             or self.source_stop.host is not self.source_host
             or type(self.target_process) is not OwnedProcessIdentityV1
         ):
@@ -1906,6 +2104,80 @@ def _production_model_handoff_evidence_preimage(
             },
         )
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionPilotModelSwitchEvidenceV1:
+    switch_authority_sha256: str
+    switch_index: int
+    pilot_host_block_count: int
+    max_model_switches: int
+    max_model_switch_wall_time_seconds: int
+    max_total_model_switch_wall_time_seconds: int
+    transition: ProductionModelHandoffEvidenceV1
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.switch_authority_sha256, "switch_authority_sha256")
+        if (
+            type(self.switch_index) is not int
+            or type(self.pilot_host_block_count) is not int
+            or not 0 <= self.switch_index < self.pilot_host_block_count
+            or type(self.max_model_switches) is not int
+            or self.max_model_switches != self.pilot_host_block_count + 1
+            or type(self.max_model_switch_wall_time_seconds) is not int
+            or self.max_model_switch_wall_time_seconds <= 0
+            or type(self.max_total_model_switch_wall_time_seconds) is not int
+            or self.max_total_model_switch_wall_time_seconds
+            != self.max_model_switches * self.max_model_switch_wall_time_seconds
+            or type(self.transition) is not ProductionModelHandoffEvidenceV1
+            or self.transition.sequence_execution_scope != "R24_R25_FULL"
+        ):
+            raise ProductionDriverError(
+                "INVALID_PILOT_MODEL_SWITCH", "pilot model-switch evidence differs"
+            )
+
+
+def production_pilot_model_switch_evidence_projection(
+    value: ProductionPilotModelSwitchEvidenceV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not ProductionPilotModelSwitchEvidenceV1:
+        raise ProductionDriverError("UNTRUSTED_TYPE", "pilot model-switch type differs")
+    return {
+        "max_model_switches": value.max_model_switches,
+        "max_model_switch_wall_time_seconds": value.max_model_switch_wall_time_seconds,
+        "max_total_model_switch_wall_time_seconds": (
+            value.max_total_model_switch_wall_time_seconds
+        ),
+        "pilot_host_block_count": value.pilot_host_block_count,
+        "status": "COMPLETED",
+        "switch_authority_sha256": value.switch_authority_sha256,
+        "switch_index": value.switch_index,
+        "transition": cast(
+            JsonValue, production_model_handoff_evidence_projection(value.transition)
+        ),
+        "transition_sha256": production_model_handoff_evidence_sha256(value.transition),
+    }
+
+
+def _production_pilot_model_switch_evidence_preimage(
+    value: ProductionPilotModelSwitchEvidenceV1,
+) -> bytes:
+    return canonical_json_bytes(
+        cast(
+            JsonValue,
+            {
+                "domain": "production-pilot-model-switch-evidence",
+                "schema_version": PRODUCTION_PILOT_MODEL_SWITCH_EVIDENCE_SCHEMA_VERSION_V1,
+                "value": production_pilot_model_switch_evidence_projection(value),
+            },
+        )
+    )
+
+
+def production_pilot_model_switch_evidence_sha256(
+    value: ProductionPilotModelSwitchEvidenceV1,
+) -> str:
+    return hashlib.sha256(_production_pilot_model_switch_evidence_preimage(value)).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2246,21 +2518,50 @@ def _drain_owned_session(
     *,
     shutdown_grace_seconds: int,
     poll_interval_ms: int,
+    deadline_monotonic_ns: int | None = None,
 ) -> tuple[_OwnedSessionMemberV1, ...]:
     """Signal only stable PID identities proven to belong to one owned session."""
 
+    if deadline_monotonic_ns is None:
+        members = _owned_session_members(identity)
+        for member in members:
+            _signal_owned_session_member(member, signal.SIGTERM)
+        term_deadline_ns = time.monotonic_ns() + shutdown_grace_seconds * 1_000_000_000
+        while members and time.monotonic_ns() < term_deadline_ns:
+            time.sleep(poll_interval_ms / 1_000)
+            members = _owned_session_members(identity)
+        kill_deadline_ns = time.monotonic_ns() + shutdown_grace_seconds * 1_000_000_000
+        while members and time.monotonic_ns() < kill_deadline_ns:
+            for member in members:
+                _signal_owned_session_member(member, signal.SIGKILL)
+            time.sleep(poll_interval_ms / 1_000)
+            members = _owned_session_members(identity)
+        return members
+    if type(deadline_monotonic_ns) is not int or deadline_monotonic_ns <= time.monotonic_ns():
+        raise ProductionDriverError(
+            "PILOT_SWITCH_DEADLINE_EXCEEDED",
+            "model-session cleanup deadline is absent or elapsed",
+        )
     members = _owned_session_members(identity)
     for member in members:
         _signal_owned_session_member(member, signal.SIGTERM)
-    term_deadline_ns = time.monotonic_ns() + shutdown_grace_seconds * 1_000_000_000
+    now_ns = time.monotonic_ns()
+    # Reserve half of the still-authorized window for SIGKILL escalation.
+    term_deadline_ns = now_ns + max(0, (deadline_monotonic_ns - now_ns) // 2)
     while members and time.monotonic_ns() < term_deadline_ns:
-        time.sleep(poll_interval_ms / 1_000)
+        remaining_ns = term_deadline_ns - time.monotonic_ns()
+        if remaining_ns <= 0:
+            break
+        time.sleep(min(poll_interval_ms / 1_000, remaining_ns / 1_000_000_000))
         members = _owned_session_members(identity)
-    kill_deadline_ns = time.monotonic_ns() + shutdown_grace_seconds * 1_000_000_000
+    kill_deadline_ns = deadline_monotonic_ns
     while members and time.monotonic_ns() < kill_deadline_ns:
         for member in members:
             _signal_owned_session_member(member, signal.SIGKILL)
-        time.sleep(poll_interval_ms / 1_000)
+        remaining_ns = kill_deadline_ns - time.monotonic_ns()
+        if remaining_ns <= 0:
+            break
+        time.sleep(min(poll_interval_ms / 1_000, remaining_ns / 1_000_000_000))
         members = _owned_session_members(identity)
     return members
 
@@ -2270,6 +2571,8 @@ def _regular_file_sha256(
     *,
     expected_byte_count: int,
     require_executable: bool,
+    deadline_monotonic_ns: int | None = None,
+    deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
 ) -> str:
     path = Path(path_text)
     descriptor = -1
@@ -2295,6 +2598,11 @@ def _regular_file_sha256(
         digest = hashlib.sha256()
         remaining = expected_byte_count
         while remaining:
+            _require_monotonic_deadline(
+                deadline_monotonic_ns,
+                failure_code=deadline_failure_code,
+                message="resource-file attestation deadline elapsed",
+            )
             chunk = os.read(descriptor, min(1_048_576, remaining))
             if not chunk:
                 raise ProductionDriverError(
@@ -2306,6 +2614,11 @@ def _regular_file_sha256(
             raise ProductionDriverError(
                 "RESOURCE_FILE_BINDING_MISMATCH", "resource file grew during attestation"
             )
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="resource-file attestation crossed its deadline",
+        )
         return digest.hexdigest()
     except OSError as exc:
         raise ProductionDriverError(
@@ -2316,7 +2629,17 @@ def _regular_file_sha256(
             os.close(descriptor)
 
 
-def _attest_vllm_executable(config: ProductionRuntimeConfigV1) -> str:
+def _attest_vllm_executable(
+    config: ProductionRuntimeConfigV1,
+    *,
+    deadline_monotonic_ns: int | None = None,
+    deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
+) -> str:
+    _require_monotonic_deadline(
+        deadline_monotonic_ns,
+        failure_code=deadline_failure_code,
+        message="vLLM executable attestation deadline elapsed",
+    )
     declared = Path(config.vllm_python_executable)
     try:
         declared.lstat()
@@ -2335,6 +2658,8 @@ def _attest_vllm_executable(config: ProductionRuntimeConfigV1) -> str:
         str(resolved),
         expected_byte_count=config.vllm_python_byte_count,
         require_executable=True,
+        deadline_monotonic_ns=deadline_monotonic_ns,
+        deadline_failure_code=deadline_failure_code,
     )
     if digest != config.vllm_python_sha256:
         raise ProductionDriverError(
@@ -2364,9 +2689,26 @@ def _attest_openai_sdk_version(stages: tuple[OpenAIResponsesStageV1, ...]) -> st
     return installed
 
 
-def _attest_snapshot_resource(resource: SnapshotResourceV1) -> str:
+def _attest_snapshot_resource(
+    resource: SnapshotResourceV1,
+    *,
+    deadline_monotonic_ns: int | None = None,
+    deadline_failure_code: str = "PILOT_SWITCH_DEADLINE_EXCEEDED",
+) -> str:
     try:
-        digest = compute_snapshot_tree_digest(resource)
+        digest = compute_snapshot_tree_digest(
+            resource,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+        )
+    except LiveRunContractError as exc:
+        if exc.code == "SNAPSHOT_ATTESTATION_DEADLINE_EXCEEDED":
+            raise ProductionDriverError(
+                deadline_failure_code,
+                "snapshot attestation exceeded its absolute deadline",
+            ) from exc
+        raise ProductionDriverError(
+            "SNAPSHOT_TREE_BINDING_MISMATCH", "model snapshot cannot be re-attested"
+        ) from exc
     except Exception as exc:
         raise ProductionDriverError(
             "SNAPSHOT_TREE_BINDING_MISMATCH", "model snapshot cannot be re-attested"
@@ -2383,7 +2725,17 @@ def _attest_snapshot_resource(resource: SnapshotResourceV1) -> str:
     return digest.sha256
 
 
-def _attest_backend_environment_file(config: ProductionRuntimeConfigV1) -> str:
+def _attest_backend_environment_file(
+    config: ProductionRuntimeConfigV1,
+    *,
+    deadline_monotonic_ns: int | None = None,
+    deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
+) -> str:
+    _require_monotonic_deadline(
+        deadline_monotonic_ns,
+        failure_code=deadline_failure_code,
+        message="backend environment attestation deadline elapsed",
+    )
     path = Path(config.backend_environment_file)
     repository = Path(config.repository_root)
     try:
@@ -2444,6 +2796,11 @@ def _attest_backend_environment_file(config: ProductionRuntimeConfigV1) -> str:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+    _require_monotonic_deadline(
+        deadline_monotonic_ns,
+        failure_code=deadline_failure_code,
+        message="backend environment attestation crossed its deadline",
+    )
     return _hash_projection(
         "backend-environment-file-metadata",
         cast(
@@ -2513,6 +2870,37 @@ def _assert_loopback_port_free(port: int) -> None:
         probe.close()
 
 
+def _require_monotonic_deadline(
+    deadline_monotonic_ns: int | None,
+    *,
+    failure_code: str,
+    message: str,
+) -> None:
+    if deadline_monotonic_ns is None:
+        return
+    if type(deadline_monotonic_ns) is not int or time.monotonic_ns() >= deadline_monotonic_ns:
+        raise ProductionDriverError(failure_code, message)
+
+
+def _deadline_timeout_seconds(
+    deadline_monotonic_ns: int | None,
+    *,
+    maximum_seconds: float,
+    failure_code: str,
+    message: str,
+) -> float:
+    if type(maximum_seconds) not in {int, float} or maximum_seconds <= 0:
+        raise ProductionDriverError(failure_code, "operation timeout bound is invalid")
+    if deadline_monotonic_ns is None:
+        return float(maximum_seconds)
+    if type(deadline_monotonic_ns) is not int:
+        raise ProductionDriverError(failure_code, message)
+    remaining_seconds = (deadline_monotonic_ns - time.monotonic_ns()) / 1_000_000_000
+    if remaining_seconds <= 0:
+        raise ProductionDriverError(failure_code, message)
+    return min(float(maximum_seconds), remaining_seconds)
+
+
 def _bounded_http_bytes(endpoint: str, path: str, *, timeout_seconds: float) -> bytes:
     host, port, _ = _exact_loopback_endpoint(endpoint, permitted_paths=frozenset({""}))
     connection = http.client.HTTPConnection(host, port, timeout=timeout_seconds)
@@ -2571,21 +2959,41 @@ class _PosixProductionResourceSystemV1:
 
     @staticmethod
     def _docker_run(
-        argv: tuple[str, ...], *, timeout_seconds: int
+        argv: tuple[str, ...],
+        *,
+        timeout_seconds: int | float,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
     ) -> subprocess.CompletedProcess[str]:
         if not argv or argv[0] != _DOCKER_EXECUTABLE:
             raise ProductionDriverError("INVALID_DOCKER_COMMAND", "Docker argv differs")
+        bounded_timeout_seconds = _deadline_timeout_seconds(
+            deadline_monotonic_ns,
+            maximum_seconds=float(timeout_seconds),
+            failure_code=deadline_failure_code,
+            message="Docker operation deadline elapsed",
+        )
         try:
-            return subprocess.run(
+            result = subprocess.run(
                 list(argv),
                 shell=False,
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=timeout_seconds,
+                timeout=bounded_timeout_seconds,
                 env={"PATH": "/usr/bin:/bin"},
             )
+            _require_monotonic_deadline(
+                deadline_monotonic_ns,
+                failure_code=deadline_failure_code,
+                message="Docker operation crossed its deadline",
+            )
+            return result
         except subprocess.TimeoutExpired as exc:
+            if deadline_monotonic_ns is not None:
+                raise ProductionDriverError(
+                    deadline_failure_code, "Docker operation exceeded its absolute deadline"
+                ) from exc
             raise ProductionDriverError(
                 "DOCKER_COMMAND_TIMEOUT", "fixed Docker command exceeded its bound"
             ) from exc
@@ -2599,15 +3007,24 @@ class _PosixProductionResourceSystemV1:
         argv: tuple[str, ...],
         *,
         cwd: Path | None = None,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "PILOT_SWITCH_DEADLINE_EXCEEDED",
+        deadline_termination_failure_code: str = "PILOT_SWITCH_TERMINATION_UNCONFIRMED",
     ) -> subprocess.CompletedProcess[str]:
+        timeout_seconds = _deadline_timeout_seconds(
+            deadline_monotonic_ns,
+            maximum_seconds=_RESOURCE_ATTESTATION_COMMAND_TIMEOUT_SECONDS_V1,
+            failure_code=deadline_failure_code,
+            message="resource-attestation deadline elapsed",
+        )
         try:
-            return subprocess.run(
+            result = subprocess.run(
                 list(argv),
                 shell=False,
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=_RESOURCE_ATTESTATION_COMMAND_TIMEOUT_SECONDS_V1,
+                timeout=timeout_seconds,
                 cwd=cwd,
                 env={
                     "DO_NOT_TRACK": "1",
@@ -2623,19 +3040,50 @@ class _PosixProductionResourceSystemV1:
                     "VLLM_NO_USAGE_STATS": "1",
                 },
             )
+            _require_monotonic_deadline(
+                deadline_monotonic_ns,
+                failure_code=deadline_failure_code,
+                message="resource attestation crossed its deadline",
+            )
+            return result
+        except subprocess.TimeoutExpired as exc:
+            if deadline_monotonic_ns is not None:
+                raise ProductionDriverError(
+                    deadline_failure_code,
+                    "resource attestation exceeded its absolute deadline",
+                ) from exc
+            raise ProductionDriverError(
+                "RUNTIME_ATTESTATION_FAILED",
+                "fixed runtime-attestation command exceeded its bound",
+            ) from exc
         except (OSError, subprocess.SubprocessError) as exc:
             raise ProductionDriverError(
                 "RUNTIME_ATTESTATION_FAILED",
                 "fixed runtime-attestation command did not complete",
             ) from exc
 
-    def attest_runtime(self, config: ProductionRuntimeConfigV1, *, source_commit: str) -> str:
+    def attest_runtime(
+        self,
+        config: ProductionRuntimeConfigV1,
+        *,
+        source_commit: str,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
+    ) -> str:
         if config != self._config or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
             raise ProductionDriverError(
                 "RUNTIME_ATTESTATION_FAILED", "runtime attestation authority differs"
             )
-        _attest_vllm_executable(config)
-        _attest_backend_environment_file(config)
+        _attest_vllm_executable(
+            config,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
+        _attest_backend_environment_file(
+            config,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         repository = Path(config.repository_root).resolve(strict=True)
         source = Path(config.mobileworld_source_root)
         try:
@@ -2661,14 +3109,23 @@ class _PosixProductionResourceSystemV1:
             "-c",
             "core.hooksPath=/dev/null",
         )
-        head = self._attestation_run((*git_prefix, "rev-parse", "HEAD"), cwd=repository)
+        head = self._attestation_run(
+            (*git_prefix, "rev-parse", "HEAD"),
+            cwd=repository,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         status = self._attestation_run(
             (*git_prefix, "status", "--porcelain=v1", "--untracked-files=all"),
             cwd=repository,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
         )
         tree = self._attestation_run(
             (*git_prefix, "rev-parse", f"{source_commit}:MobileWorld/src"),
             cwd=repository,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
         )
         tree_sha1 = tree.stdout.strip()
         if (
@@ -2694,7 +3151,11 @@ class _PosixProductionResourceSystemV1:
             "-c",
             "import importlib.metadata as m; print(m.version('vllm'))",
         )
-        version = self._attestation_run(version_argv)
+        version = self._attestation_run(
+            version_argv,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         if (
             version.returncode != 0
             or version.stderr
@@ -2706,6 +3167,8 @@ class _PosixProductionResourceSystemV1:
         network = self._docker_run(
             (_DOCKER_EXECUTABLE, "network", "inspect", "--format", "{{.Name}}", _DOCKER_NETWORK),
             timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
         )
         image = self._docker_run(
             (
@@ -2717,6 +3180,8 @@ class _PosixProductionResourceSystemV1:
                 _MOBILEWORLD_BACKEND_IMAGE,
             ),
             timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
         )
         if (
             network.returncode != 0
@@ -2735,14 +3200,24 @@ class _PosixProductionResourceSystemV1:
             source_tree_git_sha1=tree_sha1,
         )
 
-    def attest_gpu_idle(self, gpu_index: int) -> str:
+    def attest_gpu_idle(
+        self,
+        gpu_index: int,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
+    ) -> str:
         identity_command = (
             _NVIDIA_SMI_EXECUTABLE,
             f"--id={gpu_index}",
             "--query-gpu=index,uuid",
             "--format=csv,noheader,nounits",
         )
-        identity = self._attestation_run(identity_command)
+        identity = self._attestation_run(
+            identity_command,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         identity_fields = tuple(item.strip() for item in identity.stdout.strip().split(","))
         if (
             identity.returncode != 0
@@ -2761,7 +3236,11 @@ class _PosixProductionResourceSystemV1:
             "--query-compute-apps=gpu_uuid,pid",
             "--format=csv,noheader,nounits",
         )
-        processes = self._attestation_run(process_command)
+        processes = self._attestation_run(
+            process_command,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         if processes.returncode != 0 or processes.stderr or processes.stdout.strip():
             raise ProductionDriverError(
                 "GPU_ALREADY_OCCUPIED",
@@ -2785,6 +3264,8 @@ class _PosixProductionResourceSystemV1:
         gpu_index: int,
         *,
         minimum_free_memory_mib: int,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "PILOT_SWITCH_DEADLINE_EXCEEDED",
     ) -> ProductionSharedGpuAttestationV1:
         identity_command = (
             _NVIDIA_SMI_EXECUTABLE,
@@ -2793,7 +3274,11 @@ class _PosixProductionResourceSystemV1:
             "utilization.gpu,utilization.memory",
             "--format=csv,noheader,nounits",
         )
-        identity = self._attestation_run(identity_command)
+        identity = self._attestation_run(
+            identity_command,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         identity_fields = tuple(item.strip() for item in identity.stdout.strip().split(","))
         if (
             identity.returncode != 0
@@ -2823,7 +3308,11 @@ class _PosixProductionResourceSystemV1:
             "--query-compute-apps=gpu_uuid,pid,used_gpu_memory",
             "--format=csv,noheader,nounits",
         )
-        process_result = self._attestation_run(process_command)
+        process_result = self._attestation_run(
+            process_command,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         if process_result.returncode != 0 or process_result.stderr:
             raise ProductionDriverError(
                 "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU compute census is unavailable"
@@ -2832,7 +3321,11 @@ class _PosixProductionResourceSystemV1:
             process_result.stdout,
             gpu_uuid=identity_fields[1],
         )
-        process_result_after = self._attestation_run(process_command)
+        process_result_after = self._attestation_run(
+            process_command,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         if process_result_after.returncode != 0 or process_result_after.stderr:
             raise ProductionDriverError(
                 "GPU_PROCESS_ATTESTATION_RACED",
@@ -2856,7 +3349,11 @@ class _PosixProductionResourceSystemV1:
                 "shared GPU compute rows changed during process identity binding",
             )
         processes = processes_after
-        identity_after = self._attestation_run(identity_command)
+        identity_after = self._attestation_run(
+            identity_command,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         identity_fields_after = tuple(
             item.strip() for item in identity_after.stdout.strip().split(",")
         )
@@ -2883,6 +3380,11 @@ class _PosixProductionResourceSystemV1:
             raise ProductionDriverError(
                 "GPU_CAPACITY_ATTESTATION_FAILED", "shared GPU capacity fields differ"
             ) from exc
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="shared-GPU attestation crossed its deadline",
+        )
         return ProductionSharedGpuAttestationV1(
             gpu_index=gpu_index,
             gpu_uuid=identity_fields[1],
@@ -2901,15 +3403,35 @@ class _PosixProductionResourceSystemV1:
         spec: ProductionCommandSpecV1,
         *,
         log_label: str,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "PILOT_SWITCH_DEADLINE_EXCEEDED",
+        deadline_termination_failure_code: str = "PILOT_SWITCH_TERMINATION_UNCONFIRMED",
     ) -> _OwnedModelProcessV1:
+        def require_start_deadline() -> None:
+            if deadline_monotonic_ns is not None and (
+                type(deadline_monotonic_ns) is not int
+                or time.monotonic_ns() >= deadline_monotonic_ns
+            ):
+                raise ProductionDriverError(
+                    deadline_failure_code,
+                    "model start exceeded its switch deadline",
+                )
+
+        require_start_deadline()
         if (
             spec.kind not in {"VLLM_QWEN", "VLLM_MAI"}
             or spec.argv[0] != self._config.vllm_python_executable
         ):
             raise ProductionDriverError("INVALID_MODEL_COMMAND", "model argv differs")
-        _attest_vllm_executable(self._config)
+        _attest_vllm_executable(
+            self._config,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
+        require_start_deadline()
         _, port, _ = _exact_loopback_endpoint(spec.endpoint, permitted_paths=frozenset({""}))
         _assert_loopback_port_free(port)
+        require_start_deadline()
         log_root = Path(self._config.process_log_root)
         if not log_root.exists():
             log_root.mkdir(mode=0o700, parents=False)
@@ -2953,6 +3475,7 @@ class _PosixProductionResourceSystemV1:
         stderr_handle = os.fdopen(stderr_descriptor, "wb", buffering=0)
         process: subprocess.Popen[bytes] | None = None
         try:
+            require_start_deadline()
             process = subprocess.Popen(
                 list(spec.argv),
                 shell=False,
@@ -2977,6 +3500,10 @@ class _PosixProductionResourceSystemV1:
                 stdout_handle=stdout_handle,
                 stderr_handle=stderr_handle,
             )
+            # A spawn that returns after its exact switch deadline is not an
+            # admitted model.  Keep it in the partial-process table until this
+            # final adjudication so the exception path reaps it immediately.
+            require_start_deadline()
             self._models[identity.pid] = owned
             self._partial_models.pop(identity.pid, None)
             return owned
@@ -2984,23 +3511,62 @@ class _PosixProductionResourceSystemV1:
             if process is None:
                 stdout_handle.close()
                 stderr_handle.close()
+                stdout_path.unlink(missing_ok=True)
+                stderr_path.unlink(missing_ok=True)
                 raise
+            start_code = _exception_code(exc, "MODEL_PARTIAL_START_RECOVERED")
             try:
-                self._stop_partial_model(process.pid)
+                self._stop_partial_model(
+                    process.pid,
+                    deadline_monotonic_ns=deadline_monotonic_ns,
+                    deadline_failure_code=deadline_termination_failure_code,
+                )
             except Exception as cleanup_exc:
-                raise ProductionDriverError(
+                cleanup_code = _exception_code(
+                    cleanup_exc,
                     "MODEL_PARTIAL_START_CLEANUP_FAILED",
+                )
+                raise ProductionDriverError(
+                    start_code,
                     "partially started model remains owned for cleanup retry",
+                    secondary_failure_code=cleanup_code,
                 ) from cleanup_exc
             raise ProductionDriverError(
-                "MODEL_PARTIAL_START_RECOVERED",
+                start_code,
                 "partially started model was reclaimed before admission",
+                secondary_failure_code=_exception_secondary_failure_code(exc),
             ) from exc
 
-    def _stop_partial_model(self, pid: int) -> None:
+    def _stop_partial_model(
+        self,
+        pid: int,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "PILOT_SWITCH_TERMINATION_UNCONFIRMED",
+    ) -> None:
         partial = self._partial_models.get(pid)
         if partial is None:
             return
+        if deadline_monotonic_ns is not None and type(deadline_monotonic_ns) is not int:
+            raise ProductionDriverError(
+                deadline_failure_code,
+                "partial model cleanup deadline is invalid",
+            )
+
+        def cleanup_failure_code() -> str:
+            return (
+                deadline_failure_code
+                if deadline_monotonic_ns is not None
+                else "MODEL_PARTIAL_CLEANUP_FAILED"
+            )
+
+        def require_cleanup_deadline(message: str) -> None:
+            if deadline_monotonic_ns is not None and (time.monotonic_ns() >= deadline_monotonic_ns):
+                raise ProductionDriverError(
+                    deadline_failure_code,
+                    message,
+                )
+
         process = partial.process
         partial_identity = OwnedProcessIdentityV1(
             pid=pid,
@@ -3024,17 +3590,30 @@ class _PosixProductionResourceSystemV1:
                     "partial model did not retain its owned session",
                 )
             os.killpg(process_group_id, signal.SIGKILL)
+            wait_timeout_seconds = float(self._config.shutdown_grace_seconds)
+            if deadline_monotonic_ns is not None:
+                remaining_ns = deadline_monotonic_ns - time.monotonic_ns()
+                wait_timeout_seconds = max(
+                    0.0,
+                    min(wait_timeout_seconds, remaining_ns / 1_000_000_000),
+                )
             try:
-                process.wait(timeout=self._config.shutdown_grace_seconds)
+                process.wait(timeout=wait_timeout_seconds)
             except subprocess.TimeoutExpired as exc:
                 raise ProductionDriverError(
-                    "MODEL_PARTIAL_CLEANUP_FAILED", "partial model did not exit"
+                    cleanup_failure_code(),
+                    "partial model did not exit within its cleanup deadline",
                 ) from exc
+        require_cleanup_deadline(
+            "partial model session could not be checked before the switch deadline"
+        )
         session_members = _drain_owned_session(
             partial_identity,
             shutdown_grace_seconds=self._config.shutdown_grace_seconds,
             poll_interval_ms=self._config.health_poll_interval_ms,
+            deadline_monotonic_ns=deadline_monotonic_ns,
         )
+        require_cleanup_deadline("partial model session cleanup reached the switch deadline")
         _, port, _ = _exact_loopback_endpoint(
             partial.spec.endpoint, permitted_paths=frozenset({""})
         )
@@ -3042,24 +3621,75 @@ class _PosixProductionResourceSystemV1:
             _assert_loopback_port_free(port)
         except ProductionDriverError as exc:
             raise ProductionDriverError(
-                "MODEL_PARTIAL_CLEANUP_FAILED",
+                cleanup_failure_code(),
                 "partial model loopback port remains live",
             ) from exc
+        require_cleanup_deadline("partial model port check reached the switch deadline")
         if session_members:
             raise ProductionDriverError(
-                "MODEL_PARTIAL_CLEANUP_FAILED",
+                cleanup_failure_code(),
                 "partial model session remains live",
             )
         for handle in (partial.stdout_handle, partial.stderr_handle):
             close = getattr(handle, "close", None)
             if callable(close):
                 close()
+        require_cleanup_deadline("partial model evidence close reached the switch deadline")
         self._partial_models.pop(pid, None)
 
     @staticmethod
-    def _health_once(spec: ProductionCommandSpecV1) -> str:
-        health = _bounded_http_bytes(spec.endpoint, "/health", timeout_seconds=2.0)
-        models = _bounded_http_json(spec.endpoint, "/v1/models", timeout_seconds=2.0)
+    def _health_once(
+        spec: ProductionCommandSpecV1,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "OWNER_AUTHORITY_EXPIRED",
+    ) -> str:
+        try:
+            health = _bounded_http_bytes(
+                spec.endpoint,
+                "/health",
+                timeout_seconds=_deadline_timeout_seconds(
+                    deadline_monotonic_ns,
+                    maximum_seconds=2.0,
+                    failure_code=deadline_failure_code,
+                    message="model health deadline elapsed",
+                ),
+            )
+        except Exception as exc:
+            if deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns:
+                raise ProductionDriverError(
+                    deadline_failure_code,
+                    "model health exhausted its absolute deadline",
+                ) from exc
+            raise
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="model health crossed its deadline",
+        )
+        try:
+            models = _bounded_http_json(
+                spec.endpoint,
+                "/v1/models",
+                timeout_seconds=_deadline_timeout_seconds(
+                    deadline_monotonic_ns,
+                    maximum_seconds=2.0,
+                    failure_code=deadline_failure_code,
+                    message="model registry deadline elapsed",
+                ),
+            )
+        except Exception as exc:
+            if deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns:
+                raise ProductionDriverError(
+                    deadline_failure_code,
+                    "model registry exhausted its absolute deadline",
+                ) from exc
+            raise
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="model registry crossed its deadline",
+        )
         if type(models) is not dict:
             raise ProductionDriverError("RESOURCE_HEALTH_FAILED", "model registry is not an object")
         raw_data = cast(dict[object, object], models).get("data")
@@ -3085,7 +3715,13 @@ class _PosixProductionResourceSystemV1:
             ),
         )
 
-    def await_model(self, owned: _OwnedModelProcessV1, *, deadline_ns: int) -> str:
+    def await_model(
+        self,
+        owned: _OwnedModelProcessV1,
+        *,
+        deadline_ns: int,
+        deadline_failure_code: str = "MODEL_STARTUP_TIMEOUT",
+    ) -> str:
         last_error: Exception | None = None
         while time.monotonic_ns() < deadline_ns:
             process = owned.process
@@ -3094,15 +3730,38 @@ class _PosixProductionResourceSystemV1:
                     "MODEL_PROCESS_EXITED", "model server exited before readiness"
                 )
             try:
-                return self._health_once(owned.spec)
+                return self._health_once(
+                    owned.spec,
+                    deadline_monotonic_ns=deadline_ns,
+                    deadline_failure_code=deadline_failure_code,
+                )
             except Exception as exc:
                 last_error = exc
-            time.sleep(self._config.health_poll_interval_ms / 1_000)
+            remaining_ns = deadline_ns - time.monotonic_ns()
+            if remaining_ns <= 0:
+                break
+            time.sleep(
+                min(
+                    self._config.health_poll_interval_ms / 1_000,
+                    remaining_ns / 1_000_000_000,
+                )
+            )
         raise ProductionDriverError(
-            "MODEL_STARTUP_TIMEOUT", "model server did not become ready"
+            deadline_failure_code, "model server did not become ready before its deadline"
         ) from last_error
 
-    def attest_model(self, owned: _OwnedModelProcessV1) -> str:
+    def attest_model(
+        self,
+        owned: _OwnedModelProcessV1,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "OWNER_AUTHORITY_EXPIRED",
+    ) -> str:
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="model dispatch attestation deadline elapsed",
+        )
         registered = self._models.get(owned.identity.pid)
         process = owned.process
         if registered is not owned or process is None or process.poll() is not None:
@@ -3113,12 +3772,40 @@ class _PosixProductionResourceSystemV1:
             raise ProductionDriverError(
                 "MODEL_DISPATCH_IDENTITY_LOST", "model PID/starttime identity changed"
             )
-        return self._health_once(owned.spec)
+        return self._health_once(
+            owned.spec,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
 
-    def stop_model(self, owned: _OwnedModelProcessV1) -> ProductionModelStopEvidenceV1:
+    def stop_model(
+        self,
+        owned: _OwnedModelProcessV1,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "PILOT_SWITCH_DEADLINE_EXCEEDED",
+    ) -> ProductionModelStopEvidenceV1:
         registered = self._models.get(owned.identity.pid)
         if registered is not owned:
             raise ProductionDriverError("UNOWNED_PROCESS", "model process is not module-owned")
+
+        def remaining_wait_seconds() -> float:
+            if deadline_monotonic_ns is None:
+                return float(self._config.shutdown_grace_seconds)
+            if type(deadline_monotonic_ns) is not int:
+                raise ProductionDriverError(
+                    deadline_failure_code,
+                    "model-stop deadline type differs",
+                )
+            remaining = (deadline_monotonic_ns - time.monotonic_ns()) / 1_000_000_000
+            if remaining <= 0:
+                raise ProductionDriverError(
+                    deadline_failure_code,
+                    "model stop exceeded its switch deadline",
+                )
+            return min(float(self._config.shutdown_grace_seconds), remaining)
+
+        remaining_wait_seconds()
         process = owned.process
         if process is not None and process.poll() is None:
             current = _read_owned_process_identity(owned.identity.pid)
@@ -3128,7 +3815,7 @@ class _PosixProductionResourceSystemV1:
                 )
             os.killpg(owned.identity.process_group_id, signal.SIGTERM)
             try:
-                process.wait(timeout=self._config.shutdown_grace_seconds)
+                process.wait(timeout=remaining_wait_seconds())
             except subprocess.TimeoutExpired:
                 current = _read_owned_process_identity(owned.identity.pid)
                 if current != owned.identity:
@@ -3136,15 +3823,18 @@ class _PosixProductionResourceSystemV1:
                         "OWNED_PROCESS_IDENTITY_LOST", "PID changed during cleanup"
                     )
                 os.killpg(owned.identity.process_group_id, signal.SIGKILL)
-                process.wait(timeout=self._config.shutdown_grace_seconds)
+                process.wait(timeout=remaining_wait_seconds())
         session_members = _drain_owned_session(
             owned.identity,
             shutdown_grace_seconds=self._config.shutdown_grace_seconds,
             poll_interval_ms=self._config.health_poll_interval_ms,
+            deadline_monotonic_ns=deadline_monotonic_ns,
         )
         port_available = False
         _, port, _ = _exact_loopback_endpoint(owned.spec.endpoint, permitted_paths=frozenset({""}))
         port_deadline_ns = time.monotonic_ns() + self._config.shutdown_grace_seconds * 1_000_000_000
+        if deadline_monotonic_ns is not None:
+            port_deadline_ns = min(port_deadline_ns, deadline_monotonic_ns)
         while time.monotonic_ns() < port_deadline_ns:
             try:
                 _assert_loopback_port_free(port)
@@ -3154,7 +3844,20 @@ class _PosixProductionResourceSystemV1:
                 port_available = True
             if port_available:
                 break
-            time.sleep(self._config.health_poll_interval_ms / 1_000)
+            remaining_ns = port_deadline_ns - time.monotonic_ns()
+            if remaining_ns <= 0:
+                break
+            time.sleep(
+                min(
+                    self._config.health_poll_interval_ms / 1_000,
+                    remaining_ns / 1_000_000_000,
+                )
+            )
+        if deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns:
+            raise ProductionDriverError(
+                deadline_failure_code,
+                "model stop exceeded its switch deadline",
+            )
         if session_members or not port_available:
             raise ProductionDriverError(
                 "MODEL_REAP_UNCONFIRMED",
@@ -3174,16 +3877,33 @@ class _PosixProductionResourceSystemV1:
             port_available=True,
         )
 
-    def start_backend(self, spec: ProductionCommandSpecV1) -> _OwnedBackendContainerV1:
+    def start_backend(
+        self,
+        spec: ProductionCommandSpecV1,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
+    ) -> _OwnedBackendContainerV1:
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="backend start deadline elapsed",
+        )
         if spec.kind != "MOBILEWORLD_BACKEND":
             raise ProductionDriverError("INVALID_BACKEND_COMMAND", "backend spec differs")
-        _attest_backend_environment_file(self._config)
+        _attest_backend_environment_file(
+            self._config,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
         _, port, _ = _exact_loopback_endpoint(spec.endpoint, permitted_paths=frozenset({""}))
         _assert_loopback_port_free(port)
         name = spec.argv[spec.argv.index("--name") + 1]
         existing = self._docker_run(
             (_DOCKER_EXECUTABLE, "container", "inspect", name),
             timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
         )
         if existing.returncode == 0:
             raise ProductionDriverError(
@@ -3197,7 +3917,10 @@ class _PosixProductionResourceSystemV1:
         self._pending_backend_names[name] = spec
         try:
             launched = self._docker_run(
-                spec.argv, timeout_seconds=self._config.startup_timeout_seconds
+                spec.argv,
+                timeout_seconds=self._config.startup_timeout_seconds,
+                deadline_monotonic_ns=deadline_monotonic_ns,
+                deadline_failure_code=deadline_failure_code,
             )
         except ProductionDriverError as exc:
             candidate = self._recover_backend_candidate(name, spec)
@@ -3205,7 +3928,9 @@ class _PosixProductionResourceSystemV1:
                 if exc.code != "DOCKER_COMMAND_TIMEOUT":
                     self._pending_backend_names.pop(name, None)
                 raise ProductionDriverError(
-                    (
+                    exc.code
+                    if exc.code == deadline_failure_code
+                    else (
                         "BACKEND_PARTIAL_START_UNRESOLVED"
                         if exc.code == "DOCKER_COMMAND_TIMEOUT"
                         else "BACKEND_START_FAILED"
@@ -3216,11 +3941,14 @@ class _PosixProductionResourceSystemV1:
                 self._stop_backend_capability(candidate)
             except Exception as cleanup_exc:
                 raise ProductionDriverError(
-                    "BACKEND_PARTIAL_START_CLEANUP_FAILED",
+                    exc.code,
                     "timed-out backend remains owned for cleanup retry",
+                    secondary_failure_code="BACKEND_PARTIAL_START_CLEANUP_FAILED",
                 ) from cleanup_exc
             raise ProductionDriverError(
-                "BACKEND_PARTIAL_START_RECOVERED",
+                exc.code
+                if exc.code == deadline_failure_code
+                else "BACKEND_PARTIAL_START_RECOVERED",
                 "timed-out backend was reconciled and reclaimed",
             ) from exc
         container_id = launched.stdout.strip()
@@ -3253,6 +3981,8 @@ class _PosixProductionResourceSystemV1:
                 container_id,
             ),
             timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
         )
         if inspected.returncode != 0 or inspected.stdout.strip() != (
             f"{container_id} /{name} sha256:{self._config.backend_image_id_sha256} true"
@@ -3368,11 +4098,31 @@ class _PosixProductionResourceSystemV1:
             )
         self._forget_backend_capability(owned)
 
-    def await_backend(self, owned: _OwnedBackendContainerV1, *, deadline_ns: int) -> str:
+    def await_backend(
+        self,
+        owned: _OwnedBackendContainerV1,
+        *,
+        deadline_ns: int,
+        deadline_failure_code: str = "BACKEND_STARTUP_TIMEOUT",
+    ) -> str:
         last_error: Exception | None = None
         while time.monotonic_ns() < deadline_ns:
             try:
-                health = _bounded_http_json(owned.spec.endpoint, "/health", timeout_seconds=2.0)
+                health = _bounded_http_json(
+                    owned.spec.endpoint,
+                    "/health",
+                    timeout_seconds=_deadline_timeout_seconds(
+                        deadline_ns,
+                        maximum_seconds=2.0,
+                        failure_code=deadline_failure_code,
+                        message="backend readiness deadline elapsed",
+                    ),
+                )
+                _require_monotonic_deadline(
+                    deadline_ns,
+                    failure_code=deadline_failure_code,
+                    message="backend readiness crossed its deadline",
+                )
                 if type(health) is dict and cast(dict[object, object], health).get("ok") is True:
                     return _hash_projection(
                         "backend-health",
@@ -3380,12 +4130,32 @@ class _PosixProductionResourceSystemV1:
                     )
             except Exception as exc:
                 last_error = exc
-            time.sleep(self._config.health_poll_interval_ms / 1_000)
+            remaining_ns = deadline_ns - time.monotonic_ns()
+            if remaining_ns <= 0:
+                break
+            time.sleep(
+                min(
+                    self._config.health_poll_interval_ms / 1_000,
+                    remaining_ns / 1_000_000_000,
+                )
+            )
         raise ProductionDriverError(
-            "BACKEND_STARTUP_TIMEOUT", "MobileWorld backend did not become ready"
+            deadline_failure_code,
+            "MobileWorld backend did not become ready before its deadline",
         ) from last_error
 
-    def attest_backend(self, owned: _OwnedBackendContainerV1) -> str:
+    def attest_backend(
+        self,
+        owned: _OwnedBackendContainerV1,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "OWNER_AUTHORITY_EXPIRED",
+    ) -> str:
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="backend dispatch attestation deadline elapsed",
+        )
         if self._backend_candidates.get(owned.container_id) is not owned:
             raise ProductionDriverError(
                 "BACKEND_DISPATCH_IDENTITY_LOST", "backend is not the owned container"
@@ -3400,6 +4170,8 @@ class _PosixProductionResourceSystemV1:
                 owned.container_id,
             ),
             timeout_seconds=_RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
         )
         if inspected.returncode != 0 or inspected.stdout.strip() != (
             f"{owned.container_id} /{owned.name} sha256:{self._config.backend_image_id_sha256} true"
@@ -3408,7 +4180,29 @@ class _PosixProductionResourceSystemV1:
                 "BACKEND_DISPATCH_IDENTITY_LOST",
                 "backend container ID/image/running state changed",
             )
-        health = _bounded_http_json(owned.spec.endpoint, "/health", timeout_seconds=2.0)
+        try:
+            health = _bounded_http_json(
+                owned.spec.endpoint,
+                "/health",
+                timeout_seconds=_deadline_timeout_seconds(
+                    deadline_monotonic_ns,
+                    maximum_seconds=2.0,
+                    failure_code=deadline_failure_code,
+                    message="backend health deadline elapsed",
+                ),
+            )
+        except Exception as exc:
+            if deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns:
+                raise ProductionDriverError(
+                    deadline_failure_code,
+                    "backend health exhausted its absolute deadline",
+                ) from exc
+            raise
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="backend health crossed its deadline",
+        )
         if type(health) is not dict or cast(dict[object, object], health).get("ok") is not True:
             raise ProductionDriverError("BACKEND_DISPATCH_HEALTH_FAILED", "backend health differs")
         return _hash_projection(
@@ -3576,7 +4370,19 @@ class _CpuRecordingResourceSystemV1:
         self._shared_attestation_count = 0
         self._stop_fault_consumed = False
 
-    def attest_runtime(self, config: ProductionRuntimeConfigV1, *, source_commit: str) -> str:
+    def attest_runtime(
+        self,
+        config: ProductionRuntimeConfigV1,
+        *,
+        source_commit: str,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
+    ) -> str:
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU runtime attestation deadline elapsed",
+        )
         git_prefix = (
             "/usr/bin/git",
             "-c",
@@ -3614,13 +4420,30 @@ class _CpuRecordingResourceSystemV1:
                 ),
             )
         )
-        return _runtime_attestation_sha256(
+        result = _runtime_attestation_sha256(
             config,
             source_commit=source_commit,
             source_tree_git_sha1=_hash_projection("cpu-source-tree-git-sha1", source_commit)[:40],
         )
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU runtime attestation crossed its deadline",
+        )
+        return result
 
-    def attest_gpu_idle(self, gpu_index: int) -> str:
+    def attest_gpu_idle(
+        self,
+        gpu_index: int,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
+    ) -> str:
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU idle-GPU attestation deadline elapsed",
+        )
         identity_command = (
             _NVIDIA_SMI_EXECUTABLE,
             f"--id={gpu_index}",
@@ -3634,7 +4457,7 @@ class _CpuRecordingResourceSystemV1:
             "--format=csv,noheader,nounits",
         )
         self._commands.extend((identity_command, process_command))
-        return _hash_projection(
+        result = _hash_projection(
             "cpu-gpu-idle-attestation",
             cast(
                 JsonValue,
@@ -3646,13 +4469,26 @@ class _CpuRecordingResourceSystemV1:
                 },
             ),
         )
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU idle-GPU attestation crossed its deadline",
+        )
+        return result
 
     def attest_gpu_shared_capacity(
         self,
         gpu_index: int,
         *,
         minimum_free_memory_mib: int,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "PILOT_SWITCH_DEADLINE_EXCEEDED",
     ) -> ProductionSharedGpuAttestationV1:
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU shared-GPU attestation deadline elapsed",
+        )
         identity_command = (
             _NVIDIA_SMI_EXECUTABLE,
             f"--id={gpu_index}",
@@ -3730,7 +4566,7 @@ class _CpuRecordingResourceSystemV1:
                     used_gpu_memory_mib=1_024,
                 )
             )
-        return ProductionSharedGpuAttestationV1(
+        result = ProductionSharedGpuAttestationV1(
             gpu_index=gpu_index,
             gpu_uuid=f"GPU-{gpu_index:08x}-0000-0000-0000-000000000000",
             total_memory_mib=total_memory_mib,
@@ -3744,8 +4580,35 @@ class _CpuRecordingResourceSystemV1:
             minimum_free_memory_mib=minimum_free_memory_mib,
             processes=tuple(processes),
         )
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU shared-GPU attestation crossed its deadline",
+        )
+        return result
 
-    def start_model(self, spec: ProductionCommandSpecV1, *, log_label: str) -> _OwnedModelProcessV1:
+    def start_model(
+        self,
+        spec: ProductionCommandSpecV1,
+        *,
+        log_label: str,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "PILOT_SWITCH_DEADLINE_EXCEEDED",
+        deadline_termination_failure_code: str = "PILOT_SWITCH_TERMINATION_UNCONFIRMED",
+    ) -> _OwnedModelProcessV1:
+        del deadline_termination_failure_code
+
+        def require_start_deadline() -> None:
+            if deadline_monotonic_ns is not None and (
+                type(deadline_monotonic_ns) is not int
+                or time.monotonic_ns() >= deadline_monotonic_ns
+            ):
+                raise ProductionDriverError(
+                    deadline_failure_code,
+                    "CPU model-start deadline elapsed",
+                )
+
+        require_start_deadline()
         del log_label
         self._commands.append(spec.argv)
         pid = self._next_pid
@@ -3774,23 +4637,76 @@ class _CpuRecordingResourceSystemV1:
             stderr_handle=None,
         )
         self._active_models[pid] = owned
+        try:
+            require_start_deadline()
+        except Exception:
+            self._active_models.pop(pid, None)
+            raise
         return owned
 
-    def await_model(self, owned: _OwnedModelProcessV1, *, deadline_ns: int) -> str:
-        del deadline_ns
+    def await_model(
+        self,
+        owned: _OwnedModelProcessV1,
+        *,
+        deadline_ns: int,
+        deadline_failure_code: str = "MODEL_STARTUP_TIMEOUT",
+    ) -> str:
+        _require_monotonic_deadline(
+            deadline_ns,
+            failure_code=deadline_failure_code,
+            message="CPU model readiness deadline elapsed",
+        )
         self._health.extend(f"{owned.spec.endpoint}{path}" for path in owned.spec.health_paths)
-        return _hash_projection(
+        result = _hash_projection(
             "cpu-model-health",
             cast(JsonValue, production_command_spec_projection(owned.spec)),
         )
+        _require_monotonic_deadline(
+            deadline_ns,
+            failure_code=deadline_failure_code,
+            message="CPU model readiness crossed its deadline",
+        )
+        return result
 
-    def attest_model(self, owned: _OwnedModelProcessV1) -> str:
+    def attest_model(
+        self,
+        owned: _OwnedModelProcessV1,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "OWNER_AUTHORITY_EXPIRED",
+    ) -> str:
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU model dispatch attestation deadline elapsed",
+        )
         self._dispatch.append(f"model:{owned.spec.kind}:{owned.identity.starttime_ticks}")
         if self._fault is CpuResourceLifecycleFaultV1.DISPATCH_MODEL_IDENTITY:
             raise ProductionDriverError("MODEL_DISPATCH_IDENTITY_LOST", "CPU model identity drift")
-        return self.await_model(owned, deadline_ns=time.monotonic_ns() + 1_000_000_000)
+        return self.await_model(
+            owned,
+            deadline_ns=(
+                time.monotonic_ns() + 1_000_000_000
+                if deadline_monotonic_ns is None
+                else deadline_monotonic_ns
+            ),
+            deadline_failure_code=deadline_failure_code,
+        )
 
-    def stop_model(self, owned: _OwnedModelProcessV1) -> ProductionModelStopEvidenceV1:
+    def stop_model(
+        self,
+        owned: _OwnedModelProcessV1,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "PILOT_SWITCH_DEADLINE_EXCEEDED",
+    ) -> ProductionModelStopEvidenceV1:
+        if deadline_monotonic_ns is not None and (
+            type(deadline_monotonic_ns) is not int or time.monotonic_ns() >= deadline_monotonic_ns
+        ):
+            raise ProductionDriverError(
+                deadline_failure_code,
+                "CPU model-stop deadline elapsed",
+            )
         if (
             self._fault
             in {
@@ -3808,6 +4724,11 @@ class _CpuRecordingResourceSystemV1:
             raise ProductionDriverError(code, "CPU one-shot cleanup failure")
         self._cleanup.append(f"pid:{owned.identity.pid}")
         self._active_models.pop(owned.identity.pid, None)
+        if deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns:
+            raise ProductionDriverError(
+                deadline_failure_code,
+                "CPU model stop crossed its switch deadline",
+            )
         return ProductionModelStopEvidenceV1(
             host=(PilotHostV1.QWEN3_VL if owned.spec.kind == "VLLM_QWEN" else PilotHostV1.MAI_UI),
             process=owned.identity,
@@ -3817,7 +4738,18 @@ class _CpuRecordingResourceSystemV1:
             port_available=True,
         )
 
-    def start_backend(self, spec: ProductionCommandSpecV1) -> _OwnedBackendContainerV1:
+    def start_backend(
+        self,
+        spec: ProductionCommandSpecV1,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
+    ) -> _OwnedBackendContainerV1:
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU backend start deadline elapsed",
+        )
         self._commands.append(spec.argv)
         owned = _OwnedBackendContainerV1(
             container_id=_hash_projection(
@@ -3837,22 +4769,62 @@ class _CpuRecordingResourceSystemV1:
                 else "BACKEND_OWNERSHIP_MISMATCH_RECOVERABLE"
             )
             raise ProductionDriverError(code, "CPU backend candidate awaits cleanup")
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU backend start crossed its deadline",
+        )
         return owned
 
-    def await_backend(self, owned: _OwnedBackendContainerV1, *, deadline_ns: int) -> str:
-        del deadline_ns
+    def await_backend(
+        self,
+        owned: _OwnedBackendContainerV1,
+        *,
+        deadline_ns: int,
+        deadline_failure_code: str = "BACKEND_STARTUP_TIMEOUT",
+    ) -> str:
+        _require_monotonic_deadline(
+            deadline_ns,
+            failure_code=deadline_failure_code,
+            message="CPU backend readiness deadline elapsed",
+        )
         self._health.append(f"{owned.spec.endpoint}/health")
-        return _hash_projection(
+        result = _hash_projection(
             "cpu-backend-health", cast(JsonValue, {"container_id": owned.container_id})
         )
+        _require_monotonic_deadline(
+            deadline_ns,
+            failure_code=deadline_failure_code,
+            message="CPU backend readiness crossed its deadline",
+        )
+        return result
 
-    def attest_backend(self, owned: _OwnedBackendContainerV1) -> str:
+    def attest_backend(
+        self,
+        owned: _OwnedBackendContainerV1,
+        *,
+        deadline_monotonic_ns: int | None = None,
+        deadline_failure_code: str = "OWNER_AUTHORITY_EXPIRED",
+    ) -> str:
+        _require_monotonic_deadline(
+            deadline_monotonic_ns,
+            failure_code=deadline_failure_code,
+            message="CPU backend dispatch attestation deadline elapsed",
+        )
         self._dispatch.append(f"backend:{owned.container_id}")
         if self._fault is CpuResourceLifecycleFaultV1.DISPATCH_BACKEND_IDENTITY:
             raise ProductionDriverError(
                 "BACKEND_DISPATCH_IDENTITY_LOST", "CPU backend identity drift"
             )
-        return self.await_backend(owned, deadline_ns=time.monotonic_ns() + 1_000_000_000)
+        return self.await_backend(
+            owned,
+            deadline_ns=(
+                time.monotonic_ns() + 1_000_000_000
+                if deadline_monotonic_ns is None
+                else deadline_monotonic_ns
+            ),
+            deadline_failure_code=deadline_failure_code,
+        )
 
     def stop_backend(self, owned: _OwnedBackendContainerV1) -> None:
         self._cleanup.append(f"container:{owned.container_id}")
@@ -3912,6 +4884,10 @@ class ProductionResourceLifecycleAdapterV1:
         "_failure_evidence",
         "_handoff_evidence",
         "_handoff_failure_evidence",
+        "_model_switch_evidence",
+        "_model_switch_failure_evidence",
+        "_pending_model_switch_evidence",
+        "_pilot_switch_authority",
         "_last_dispatch_evidence",
         "_last_dispatch_failure_evidence",
         "_gpu_leases",
@@ -3923,7 +4899,9 @@ class ProductionResourceLifecycleAdapterV1:
         "_shared_gpu_baseline",
         "_cleanup_success_evidence",
         "_cleanup_failure_evidence",
+        "_execution_factory_binding_sha256",
         "_last_shared_cleanup_attestation",
+        "_last_shared_cleanup_tenant_anomaly",
         "_reclaimed_cleanup_outcome",
         "_reclaimed_cleanup_values",
         "_stop_evidence",
@@ -3956,11 +4934,17 @@ class ProductionResourceLifecycleAdapterV1:
         self._failure_evidence: bytes | None = None
         self._handoff_evidence: ProductionModelHandoffEvidenceV1 | None = None
         self._handoff_failure_evidence: bytes | None = None
+        self._model_switch_evidence: list[bytes] = []
+        self._model_switch_failure_evidence: bytes | None = None
+        self._pending_model_switch_evidence: dict[PilotHostV1, bytes] = {}
+        self._pilot_switch_authority: ProductionPilotSwitchAuthorityV1 | None = None
         self._last_dispatch_evidence: bytes | None = None
         self._last_dispatch_failure_evidence: bytes | None = None
         self._cleanup_success_evidence: bytes | None = None
         self._cleanup_failure_evidence: bytes | None = None
+        self._execution_factory_binding_sha256: str | None = None
         self._last_shared_cleanup_attestation: ProductionSharedGpuAttestationV1 | None = None
+        self._last_shared_cleanup_tenant_anomaly: str | None = None
         self._reclaimed_cleanup_outcome: bytes | None = None
         self._reclaimed_cleanup_values: (
             tuple[ProductionSharedGpuAttestationV1 | None, tuple[str, ...], str | None] | None
@@ -3968,6 +4952,26 @@ class ProductionResourceLifecycleAdapterV1:
         self._shared_gpu_baseline: ProductionSharedGpuAttestationV1 | None = None
         self._stop_evidence: list[ProductionModelStopEvidenceV1] = []
         self._lock = threading.RLock()
+
+    def _bind_execution_factory(self, factory: ProductionPostPreflightFactoryV1) -> None:
+        """Bind the lifecycle to the exact factory used by the execution port."""
+
+        if type(factory) is not ProductionPostPreflightFactoryV1:
+            raise ProductionDriverError(
+                "POST_PREFLIGHT_FACTORY_REQUIRED", "exact execution factory is required"
+            )
+        binding = factory.factory_binding_sha256
+        _require_sha256(binding, "factory_binding_sha256")
+        with self._lock:
+            if (
+                self._execution_factory_binding_sha256 is not None
+                and self._execution_factory_binding_sha256 != binding
+            ):
+                raise ProductionDriverError(
+                    "PILOT_SWITCH_FACTORY_MISMATCH",
+                    "resource lifecycle is already bound to another execution factory",
+                )
+            self._execution_factory_binding_sha256 = binding
 
     def _cache_reclaimed_cleanup(
         self,
@@ -4077,12 +5081,45 @@ class ProductionResourceLifecycleAdapterV1:
         self,
         resources: tuple[SnapshotResourceV1, ...],
         context: StageAdapterContextV1,
+        *,
+        pilot_switch_authority: ProductionPilotSwitchAuthorityV1 | None = None,
     ) -> AdapterStageResultV1:
         trusted_context = _snapshot_context(context)
         if self._config.resource_topology is (
             ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
         ):
-            if trusted_context.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY":
+            full_shared = trusted_context.sequence_execution_scope == "R24_R25_FULL"
+            if full_shared:
+                if pilot_switch_authority is None:
+                    raise ProductionDriverError(
+                        "RESOURCE_SCOPE_UNAUTHORIZED",
+                        "shared full resources require sealed pilot switch authority",
+                    )
+                if (
+                    type(pilot_switch_authority) is not ProductionPilotSwitchAuthorityV1
+                    or pilot_switch_authority._seal is not _MODULE_SEAL
+                    or self._execution_factory_binding_sha256 is None
+                    or pilot_switch_authority.factory_binding_sha256
+                    != self._execution_factory_binding_sha256
+                    or pilot_switch_authority.manifest_sha256 != trusted_context.manifest_sha256
+                    or pilot_switch_authority.sequence_scope_authority_sha256
+                    != trusted_context.sequence_scope_authority_sha256
+                    or pilot_switch_authority.runtime_config_sha256
+                    != production_runtime_config_sha256(self._config)
+                    or pilot_switch_authority.resource_cleanup_upper_bound_sha256
+                    != self.full_cleanup_upper_bound_sha256
+                    or pilot_switch_authority.resource_cleanup_upper_bound_seconds
+                    != self.full_cleanup_upper_bound_seconds
+                ):
+                    raise ProductionDriverError(
+                        "PILOT_SWITCH_AUTHORITY_MISMATCH",
+                        "shared full resources lack exact runtime/switch/cleanup authority",
+                    )
+                self._pilot_switch_authority = pilot_switch_authority
+            elif (
+                trusted_context.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY"
+                or pilot_switch_authority is not None
+            ):
                 raise ProductionDriverError(
                     "RESOURCE_SCOPE_UNAUTHORIZED",
                     "shared sequential resources require smoke-only sequence authority",
@@ -4135,20 +5172,42 @@ class ProductionResourceLifecycleAdapterV1:
             raise ProductionDriverError(
                 "HOST_DISABLED", "a host kill/disable gate was set before resource startup"
             )
+        preflight_failure_code = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED"
+        preflight_started_ns = time.monotonic_ns()
+        deadline_ns = min(
+            trusted_context.authority_deadline_monotonic_ns,
+            preflight_started_ns + self._config.startup_timeout_seconds * 1_000_000_000,
+        )
         self._resources = {item.host: item for item in trusted_resources}
 
         def require_dispatch_authority() -> None:
-            if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+            if time.monotonic_ns() >= deadline_ns:
                 raise ProductionDriverError(
-                    "OWNER_AUTHORITY_EXPIRED", "resource dispatch authority elapsed"
+                    preflight_failure_code,
+                    "resource preflight authority elapsed",
                 )
 
-        require_dispatch_authority()
-        # Preflight evidence is not a lease on mutable model directories.  Rehash
-        # both complete trees immediately before any Docker/process operation.
-        for resource in trusted_resources:
-            _attest_snapshot_resource(resource)
+        try:
             require_dispatch_authority()
+            # Preflight evidence is not a lease on mutable model directories.  Rehash
+            # both complete trees immediately before any Docker/process operation.
+            for resource in trusted_resources:
+                _attest_snapshot_resource(
+                    resource,
+                    deadline_monotonic_ns=deadline_ns,
+                    deadline_failure_code=preflight_failure_code,
+                )
+                require_dispatch_authority()
+        except Exception as exc:
+            self._resources.clear()
+            self._cache_reclaimed_cleanup(trusted_context, (None, (), None))
+            self._failure_evidence = self._resource_failure_preimage(
+                trusted_context,
+                failure_code=_exception_code(exc, "RESOURCE_ATTESTATION_FAILED"),
+                status="FAILED",
+                cleanup_status="RECLAIMED",
+            )
+            raise
         try:
             lease_hosts = (
                 (PilotHostV1.QWEN3_VL,)
@@ -4167,6 +5226,7 @@ class ProductionResourceLifecycleAdapterV1:
                     if type(self._system) is _PosixProductionResourceSystemV1
                     else _CpuExclusiveGpuLeaseV1(gpu_index, seal=_MODULE_SEAL)
                 )
+                require_dispatch_authority()
         except Exception as exc:
             lease_sha256s = tuple(lease.lease_sha256 for lease in self._gpu_leases.values())
             for lease in self._gpu_leases.values():
@@ -4184,15 +5244,13 @@ class ProductionResourceLifecycleAdapterV1:
                 cleanup_status="RECLAIMED",
             )
             raise
-        deadline_ns = min(
-            trusted_context.authority_deadline_monotonic_ns,
-            time.monotonic_ns() + self._config.startup_timeout_seconds * 1_000_000_000,
-        )
         try:
             require_dispatch_authority()
             runtime_attestation_sha256 = self._system.attest_runtime(
                 self._config,
                 source_commit=trusted_context.source_commit,
+                deadline_monotonic_ns=deadline_ns,
+                deadline_failure_code=preflight_failure_code,
             )
             backend_spec = _backend_command_spec(
                 self._config, manifest_sha256=trusted_context.manifest_sha256
@@ -4232,9 +5290,17 @@ class ProductionResourceLifecycleAdapterV1:
             raise
         try:
             require_dispatch_authority()
-            self._backend = self._system.start_backend(backend_spec)
+            self._backend = self._system.start_backend(
+                backend_spec,
+                deadline_monotonic_ns=deadline_ns,
+                deadline_failure_code=preflight_failure_code,
+            )
             require_dispatch_authority()
-            backend_health = self._system.await_backend(self._backend, deadline_ns=deadline_ns)
+            backend_health = self._system.await_backend(
+                self._backend,
+                deadline_ns=deadline_ns,
+                deadline_failure_code=preflight_failure_code,
+            )
             model_health: list[str] = []
             gpu_idle_attestations: list[str] = []
             shared_gpu_attestations: list[ProductionSharedGpuAttestationV1] = []
@@ -4258,21 +5324,45 @@ class ProductionResourceLifecycleAdapterV1:
                     baseline = self._system.attest_gpu_shared_capacity(
                         gpu_index,
                         minimum_free_memory_mib=self._config.minimum_free_gpu_memory_mib,
+                        deadline_monotonic_ns=deadline_ns,
+                        deadline_failure_code=preflight_failure_code,
                     )
                     self._shared_gpu_baseline = baseline
                     shared_gpu_attestations.append(baseline)
                     _require_shared_gpu_capacity(baseline)
                 else:
-                    gpu_idle_attestations.append(self._system.attest_gpu_idle(gpu_index))
+                    gpu_idle_attestations.append(
+                        self._system.attest_gpu_idle(
+                            gpu_index,
+                            deadline_monotonic_ns=deadline_ns,
+                            deadline_failure_code=preflight_failure_code,
+                        )
+                    )
                 require_dispatch_authority()
                 owned = self._system.start_model(
-                    spec, log_label=f"{trusted_context.run_id}-{resource.host.value.lower()}"
+                    spec,
+                    log_label=f"{trusted_context.run_id}-{resource.host.value.lower()}",
+                    deadline_monotonic_ns=deadline_ns,
+                    deadline_failure_code=preflight_failure_code,
+                    deadline_termination_failure_code=(
+                        "RESOURCE_PREFLIGHT_TERMINATION_UNCONFIRMED"
+                    ),
                 )
                 self._models[resource.host] = owned
-                model_health.append(self._system.await_model(owned, deadline_ns=deadline_ns))
+                model_health.append(
+                    self._system.await_model(
+                        owned,
+                        deadline_ns=deadline_ns,
+                        deadline_failure_code=preflight_failure_code,
+                    )
+                )
                 # Bind the loaded/READY model to the same immutable tree that was
                 # checked before Popen; a mutable snapshot may not race startup.
-                _attest_snapshot_resource(resource)
+                _attest_snapshot_resource(
+                    resource,
+                    deadline_monotonic_ns=deadline_ns,
+                    deadline_failure_code=preflight_failure_code,
+                )
                 require_dispatch_authority()
                 if (
                     self._config.resource_topology
@@ -4282,6 +5372,8 @@ class ProductionResourceLifecycleAdapterV1:
                     ready_attestation = self._system.attest_gpu_shared_capacity(
                         gpu_index,
                         minimum_free_memory_mib=0,
+                        deadline_monotonic_ns=deadline_ns,
+                        deadline_failure_code=preflight_failure_code,
                     )
                     _validate_shared_gpu_tenants(
                         ready_attestation,
@@ -4317,8 +5409,9 @@ class ProductionResourceLifecycleAdapterV1:
                     cleanup_failure_code=cleanup_failure_code,
                 )
                 raise ProductionDriverError(
-                    "RESOURCE_CLEANUP_FAILED",
+                    failure_code,
                     "resource startup failed and owned cleanup requires retry",
+                    secondary_failure_code=cleanup_failure_code,
                 ) from cleanup_exc
             self._failure_evidence = self._resource_failure_preimage(
                 trusted_context,
@@ -4327,6 +5420,7 @@ class ProductionResourceLifecycleAdapterV1:
                 cleanup_status="RECLAIMED",
             )
             raise
+        require_dispatch_authority()
         assert self._backend is not None
         evidence = ProductionResourceStageEvidenceV1(
             manifest_sha256=trusted_context.manifest_sha256,
@@ -4349,9 +5443,15 @@ class ProductionResourceLifecycleAdapterV1:
             minimum_free_gpu_memory_mib=self._config.minimum_free_gpu_memory_mib,
             sequence_execution_scope=trusted_context.sequence_execution_scope,
             sequence_scope_authority_sha256=(trusted_context.sequence_scope_authority_sha256),
+            pilot_switch_authority_sha256=(
+                None
+                if self._pilot_switch_authority is None
+                else production_pilot_switch_authority_sha256(self._pilot_switch_authority)
+            ),
         )
-        self._evidence = evidence
         evidence_preimage = _production_resource_stage_evidence_preimage(evidence)
+        require_dispatch_authority()
+        self._evidence = evidence
         return AdapterStageResultV1(
             stage=RunStageV1.RESOURCE_PREFLIGHT,
             manifest_sha256=trusted_context.manifest_sha256,
@@ -4365,7 +5465,12 @@ class ProductionResourceLifecycleAdapterV1:
             provider_final_request_proven=False,
         )
 
-    def handoff_to_mai(self, context: StageAdapterContextV1) -> AdapterStageResultV1:
+    def handoff_to_mai(
+        self,
+        context: StageAdapterContextV1,
+        *,
+        switch_deadline_monotonic_ns: int | None = None,
+    ) -> AdapterStageResultV1:
         """Replace Qwen with MAI on the same leased shared GPU exactly once."""
 
         trusted_context = _snapshot_context(context)
@@ -4405,8 +5510,42 @@ class ProductionResourceLifecycleAdapterV1:
                 completed_units=("resource-handoff:not-required-concurrent",),
                 provider_final_request_proven=False,
             )
+        full_shared_authorized = (
+            trusted_context.sequence_execution_scope == "R24_R25_FULL"
+            and type(self._pilot_switch_authority) is ProductionPilotSwitchAuthorityV1
+            and self._pilot_switch_authority.manifest_sha256 == trusted_context.manifest_sha256
+            and self._pilot_switch_authority.sequence_scope_authority_sha256
+            == trusted_context.sequence_scope_authority_sha256
+        )
+        if full_shared_authorized:
+            assert self._pilot_switch_authority is not None
+            now_ns = time.monotonic_ns()
+            if (
+                type(switch_deadline_monotonic_ns) is not int
+                or not now_ns
+                < switch_deadline_monotonic_ns
+                <= trusted_context.authority_deadline_monotonic_ns
+                or switch_deadline_monotonic_ns - now_ns
+                > self._pilot_switch_authority.max_model_switch_wall_time_seconds * 1_000_000_000
+            ):
+                raise ProductionDriverError(
+                    "PILOT_SWITCH_DEADLINE_INVALID",
+                    "full smoke handoff lacks its bounded switch deadline",
+                )
+            trusted_context = replace(
+                trusted_context,
+                authority_deadline_monotonic_ns=switch_deadline_monotonic_ns,
+            )
+        elif switch_deadline_monotonic_ns is not None:
+            raise ProductionDriverError(
+                "PILOT_SWITCH_AUTHORITY_MISMATCH",
+                "smoke-only handoff cannot accept pilot switch authority",
+            )
         if (
-            trusted_context.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY"
+            (
+                trusted_context.sequence_execution_scope != "R24_LIVE_SMOKE_ONLY"
+                and not full_shared_authorized
+            )
             or self._manifest_sha256 != trusted_context.manifest_sha256
             or self._evidence is None
             or self._evidence.sequence_scope_authority_sha256
@@ -4443,7 +5582,11 @@ class ProductionResourceLifecycleAdapterV1:
             target_ready: ProductionSharedGpuAttestationV1 | None = None
             source_stop: ProductionModelStopEvidenceV1 | None = None
             try:
-                source_stop = self._system.stop_model(qwen)
+                source_stop = self._system.stop_model(
+                    qwen,
+                    deadline_monotonic_ns=trusted_context.authority_deadline_monotonic_ns,
+                    deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
+                )
                 self._stop_evidence.append(source_stop)
                 self._models.pop(PilotHostV1.QWEN3_VL)
                 progress["source_stop"] = cast(
@@ -4456,6 +5599,8 @@ class ProductionResourceLifecycleAdapterV1:
                 post_stop = self._system.attest_gpu_shared_capacity(
                     self._config.qwen_gpu_index,
                     minimum_free_memory_mib=self._config.minimum_free_gpu_memory_mib,
+                    deadline_monotonic_ns=trusted_context.authority_deadline_monotonic_ns,
+                    deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
                 )
                 if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
                     raise ProductionDriverError(
@@ -4472,7 +5617,11 @@ class ProductionResourceLifecycleAdapterV1:
                     owned_identity=None,
                 )
                 mai_resource = self._resources[PilotHostV1.MAI_UI]
-                target_snapshot_attestation_sha256 = _attest_snapshot_resource(mai_resource)
+                target_snapshot_attestation_sha256 = _attest_snapshot_resource(
+                    mai_resource,
+                    deadline_monotonic_ns=trusted_context.authority_deadline_monotonic_ns,
+                    deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
+                )
                 progress["target_snapshot_attestation_sha256"] = target_snapshot_attestation_sha256
                 target_spec = self._model_specs[PilotHostV1.MAI_UI]
                 if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
@@ -4483,6 +5632,9 @@ class ProductionResourceLifecycleAdapterV1:
                 target = self._system.start_model(
                     target_spec,
                     log_label=f"{trusted_context.run_id}-{PilotHostV1.MAI_UI.value.lower()}",
+                    deadline_monotonic_ns=trusted_context.authority_deadline_monotonic_ns,
+                    deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
+                    deadline_termination_failure_code="HANDOFF_TERMINATION_UNCONFIRMED",
                 )
                 self._models[PilotHostV1.MAI_UI] = target
                 progress["target_process"] = cast(
@@ -4504,14 +5656,22 @@ class ProductionResourceLifecycleAdapterV1:
                     trusted_context.authority_deadline_monotonic_ns,
                     time.monotonic_ns() + self._config.startup_timeout_seconds * 1_000_000_000,
                 )
-                target_health = self._system.await_model(target, deadline_ns=deadline_ns)
+                target_health = self._system.await_model(
+                    target,
+                    deadline_ns=deadline_ns,
+                    deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
+                )
                 if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
                     raise ProductionDriverError(
                         "OWNER_AUTHORITY_EXPIRED",
                         "handoff owner authority elapsed during MAI readiness",
                     )
                 progress["target_health_sha256"] = target_health
-                target_snapshot_attestation_after_sha256 = _attest_snapshot_resource(mai_resource)
+                target_snapshot_attestation_after_sha256 = _attest_snapshot_resource(
+                    mai_resource,
+                    deadline_monotonic_ns=trusted_context.authority_deadline_monotonic_ns,
+                    deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
+                )
                 if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
                     raise ProductionDriverError(
                         "OWNER_AUTHORITY_EXPIRED",
@@ -4524,6 +5684,8 @@ class ProductionResourceLifecycleAdapterV1:
                 target_ready = self._system.attest_gpu_shared_capacity(
                     self._config.mai_gpu_index,
                     minimum_free_memory_mib=0,
+                    deadline_monotonic_ns=trusted_context.authority_deadline_monotonic_ns,
+                    deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
                 )
                 if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
                     raise ProductionDriverError(
@@ -4538,6 +5700,11 @@ class ProductionResourceLifecycleAdapterV1:
                     baseline=self._shared_gpu_baseline,
                     owned_identity=target.identity,
                 )
+                if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                    raise ProductionDriverError(
+                        "OWNER_AUTHORITY_EXPIRED",
+                        "handoff owner authority elapsed during final ready validation",
+                    )
                 evidence = ProductionModelHandoffEvidenceV1(
                     manifest_sha256=trusted_context.manifest_sha256,
                     runtime_config_sha256=production_runtime_config_sha256(self._config),
@@ -4582,12 +5749,269 @@ class ProductionResourceLifecycleAdapterV1:
                         "status": "FAILED_CLEANUP_REQUIRED",
                     }
                 )
+                secondary_failure_code = _exception_secondary_failure_code(exc)
+                if secondary_failure_code is not None:
+                    progress["secondary_failure_code"] = secondary_failure_code
                 self._handoff_failure_evidence = canonical_json_bytes(
                     cast(
                         JsonValue,
                         {
                             "domain": "production-model-handoff-failure-evidence",
                             "schema_version": (PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1),
+                            "value": progress,
+                        },
+                    )
+                )
+                raise
+
+    def ensure_pilot_host(
+        self,
+        target_host: PilotHostV1,
+        context: StageAdapterContextV1,
+        authority: ProductionPilotSwitchAuthorityV1,
+        *,
+        switch_index: int,
+        switch_deadline_monotonic_ns: int,
+    ) -> AdapterStageResultV1:
+        """Switch one frozen R2.5 host block on the leased shared GPU."""
+
+        trusted_context = _snapshot_context(context)
+        if (
+            self._config.resource_topology
+            is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+            or trusted_context.sequence_execution_scope != "R24_R25_FULL"
+            or type(target_host) is not PilotHostV1
+            or type(authority) is not ProductionPilotSwitchAuthorityV1
+            or authority._seal is not _MODULE_SEAL
+            or authority is not self._pilot_switch_authority
+            or self._execution_factory_binding_sha256 is None
+            or authority.factory_binding_sha256 != self._execution_factory_binding_sha256
+            or production_pilot_switch_authority_sha256(authority)
+            != (None if self._evidence is None else self._evidence.pilot_switch_authority_sha256)
+            or authority.manifest_sha256 != trusted_context.manifest_sha256
+            or authority.sequence_scope_authority_sha256
+            != trusted_context.sequence_scope_authority_sha256
+            or authority.runtime_config_sha256 != production_runtime_config_sha256(self._config)
+            or type(switch_index) is not int
+            or not 0 <= switch_index < len(authority.host_blocks)
+            or authority.host_blocks[switch_index] is not target_host
+            or type(switch_deadline_monotonic_ns) is not int
+            or switch_deadline_monotonic_ns > trusted_context.authority_deadline_monotonic_ns
+        ):
+            raise ProductionDriverError(
+                "PILOT_SWITCH_AUTHORITY_MISMATCH",
+                "pilot host switch is outside its exact full authority",
+            )
+        now_ns = time.monotonic_ns()
+        if (
+            switch_deadline_monotonic_ns <= now_ns
+            or switch_deadline_monotonic_ns - now_ns
+            > authority.max_model_switch_wall_time_seconds * 1_000_000_000
+        ):
+            raise ProductionDriverError(
+                "PILOT_SWITCH_DEADLINE_INVALID", "pilot switch deadline differs"
+            )
+        with self._lock:
+            if (
+                switch_index != len(self._model_switch_evidence)
+                or self._pending_model_switch_evidence
+                or self._manifest_sha256 != trusted_context.manifest_sha256
+                or self._evidence is None
+                or self._shared_gpu_baseline is None
+                or len(self._models) != 1
+                or set(self._gpu_leases) != {PilotHostV1.QWEN3_VL}
+                or target_host not in self._model_specs
+                or target_host in self._disabled_hosts
+            ):
+                raise ProductionDriverError(
+                    "PILOT_SWITCH_INVALID_STATE", "pilot host switch state differs"
+                )
+            source_host, source = next(iter(self._models.items()))
+            expected_source = (
+                PilotHostV1.MAI_UI if target_host is PilotHostV1.QWEN3_VL else PilotHostV1.QWEN3_VL
+            )
+            if source_host is not expected_source:
+                raise ProductionDriverError(
+                    "PILOT_SWITCH_SOURCE_MISMATCH", "active source host differs"
+                )
+            lease = self._gpu_leases[PilotHostV1.QWEN3_VL]
+            progress: dict[str, JsonValue] = {
+                "completed_switch_sha256s": [
+                    hashlib.sha256(item).hexdigest() for item in self._model_switch_evidence
+                ],
+                "manifest_sha256": trusted_context.manifest_sha256,
+                "runtime_config_sha256": production_runtime_config_sha256(self._config),
+                "sequence_scope_authority_sha256": (
+                    trusted_context.sequence_scope_authority_sha256
+                ),
+                "source_host": source_host.value,
+                "status": "STARTED",
+                "switch_authority_sha256": production_pilot_switch_authority_sha256(authority),
+                "switch_index": switch_index,
+                "target_host": target_host.value,
+            }
+
+            def require_switch_deadline(message: str) -> None:
+                if time.monotonic_ns() >= switch_deadline_monotonic_ns:
+                    raise ProductionDriverError("PILOT_SWITCH_DEADLINE_EXCEEDED", message)
+
+            try:
+                require_switch_deadline("pilot switch authority elapsed before source stop")
+                source_stop = self._system.stop_model(
+                    source,
+                    deadline_monotonic_ns=switch_deadline_monotonic_ns,
+                )
+                self._stop_evidence.append(source_stop)
+                self._models.pop(source_host)
+                progress["source_stop"] = cast(
+                    JsonValue, production_model_stop_evidence_projection(source_stop)
+                )
+                require_switch_deadline("pilot switch authority elapsed before GPU re-attestation")
+                post_stop = self._system.attest_gpu_shared_capacity(
+                    self._config.qwen_gpu_index,
+                    minimum_free_memory_mib=self._config.minimum_free_gpu_memory_mib,
+                    deadline_monotonic_ns=switch_deadline_monotonic_ns,
+                )
+                progress["post_stop_shared_gpu_attestation"] = cast(
+                    JsonValue, production_shared_gpu_attestation_projection(post_stop)
+                )
+                _require_shared_gpu_capacity(post_stop)
+                _validate_shared_gpu_tenants(
+                    post_stop,
+                    baseline=self._shared_gpu_baseline,
+                    owned_identity=None,
+                )
+                require_switch_deadline("pilot switch authority elapsed before snapshot hash")
+                target_resource = self._resources[target_host]
+                snapshot_before = _attest_snapshot_resource(
+                    target_resource,
+                    deadline_monotonic_ns=switch_deadline_monotonic_ns,
+                )
+                progress["target_snapshot_attestation_sha256"] = snapshot_before
+                require_switch_deadline("pilot switch authority elapsed before target start")
+                target = self._system.start_model(
+                    self._model_specs[target_host],
+                    log_label=(
+                        f"{trusted_context.run_id}-pilot-switch-{switch_index:03d}-"
+                        f"{target_host.value.lower()}"
+                    ),
+                    deadline_monotonic_ns=switch_deadline_monotonic_ns,
+                )
+                self._models[target_host] = target
+                progress["target_process"] = cast(
+                    JsonValue,
+                    {
+                        "pid": target.identity.pid,
+                        "process_group_id": target.identity.process_group_id,
+                        "session_id": target.identity.session_id,
+                        "starttime_ticks": target.identity.starttime_ticks,
+                        "uid": target.identity.uid,
+                    },
+                )
+                require_switch_deadline("pilot switch authority elapsed before target readiness")
+                target_health = self._system.await_model(
+                    target,
+                    deadline_ns=switch_deadline_monotonic_ns,
+                    deadline_failure_code="PILOT_SWITCH_DEADLINE_EXCEEDED",
+                )
+                progress["target_health_sha256"] = target_health
+                require_switch_deadline("pilot switch authority elapsed before snapshot rehash")
+                snapshot_after = _attest_snapshot_resource(
+                    target_resource,
+                    deadline_monotonic_ns=switch_deadline_monotonic_ns,
+                )
+                if snapshot_after != snapshot_before:
+                    raise ProductionDriverError(
+                        "SNAPSHOT_BINDING_MISMATCH", "target snapshot changed during startup"
+                    )
+                require_switch_deadline("pilot switch authority elapsed before ready attestation")
+                target_ready = self._system.attest_gpu_shared_capacity(
+                    self._config.qwen_gpu_index,
+                    minimum_free_memory_mib=0,
+                    deadline_monotonic_ns=switch_deadline_monotonic_ns,
+                )
+                progress["target_ready_shared_gpu_attestation"] = cast(
+                    JsonValue, production_shared_gpu_attestation_projection(target_ready)
+                )
+                _validate_shared_gpu_tenants(
+                    target_ready,
+                    baseline=self._shared_gpu_baseline,
+                    owned_identity=target.identity,
+                )
+                require_switch_deadline(
+                    "pilot switch authority elapsed during final ready validation"
+                )
+                transition = ProductionModelHandoffEvidenceV1(
+                    manifest_sha256=trusted_context.manifest_sha256,
+                    runtime_config_sha256=production_runtime_config_sha256(self._config),
+                    sequence_execution_scope=trusted_context.sequence_execution_scope,
+                    sequence_scope_authority_sha256=(
+                        trusted_context.sequence_scope_authority_sha256
+                    ),
+                    resource_topology=self._config.resource_topology,
+                    gpu_lease_sha256=lease.lease_sha256,
+                    source_host=source_host,
+                    target_host=target_host,
+                    source_stop=source_stop,
+                    baseline_shared_gpu_attestation=self._shared_gpu_baseline,
+                    post_stop_shared_gpu_attestation=post_stop,
+                    target_command_sha256=production_command_spec_sha256(target.spec),
+                    target_process=target.identity,
+                    target_health_sha256=target_health,
+                    target_snapshot_attestation_sha256=snapshot_before,
+                    target_ready_shared_gpu_attestation=target_ready,
+                )
+                evidence = ProductionPilotModelSwitchEvidenceV1(
+                    switch_authority_sha256=production_pilot_switch_authority_sha256(authority),
+                    switch_index=switch_index,
+                    pilot_host_block_count=len(authority.host_blocks),
+                    max_model_switches=authority.max_model_switches,
+                    max_model_switch_wall_time_seconds=(
+                        authority.max_model_switch_wall_time_seconds
+                    ),
+                    max_total_model_switch_wall_time_seconds=(
+                        authority.max_total_model_switch_wall_time_seconds
+                    ),
+                    transition=transition,
+                )
+                preimage = _production_pilot_model_switch_evidence_preimage(evidence)
+                self._model_switch_evidence.append(preimage)
+                self._pending_model_switch_evidence[target_host] = preimage
+                return AdapterStageResultV1(
+                    stage=RunStageV1.R25_PILOT,
+                    manifest_sha256=trusted_context.manifest_sha256,
+                    evidence_sha256=hashlib.sha256(preimage).hexdigest(),
+                    evidence_preimage=preimage,
+                    actor_calls=0,
+                    openai_calls=0,
+                    actor_actions=0,
+                    cost_usd_micros=0,
+                    completed_units=(
+                        f"pilot-model-switch-{switch_index:03d}:"
+                        f"{source_host.value}:{target_host.value}",
+                    ),
+                    provider_final_request_proven=False,
+                )
+            except Exception as exc:
+                progress.update(
+                    {
+                        "failure_code": _exception_code(exc, "PILOT_MODEL_SWITCH_FAILED"),
+                        "gpu_lease_sha256": lease.lease_sha256,
+                        "residual_capabilities": self._system.residual_capabilities(),
+                        "status": "FAILED_GLOBAL_CLEANUP_REQUIRED",
+                    }
+                )
+                secondary_failure_code = _exception_secondary_failure_code(exc)
+                if secondary_failure_code is not None:
+                    progress["secondary_failure_code"] = secondary_failure_code
+                self._model_switch_failure_evidence = canonical_json_bytes(
+                    cast(
+                        JsonValue,
+                        {
+                            "domain": "production-pilot-model-switch-failure-evidence",
+                            "schema_version": (
+                                PRODUCTION_PILOT_MODEL_SWITCH_EVIDENCE_SCHEMA_VERSION_V1
+                            ),
                             "value": progress,
                         },
                     )
@@ -4643,7 +6067,7 @@ class ProductionResourceLifecycleAdapterV1:
                     self._config.qwen_gpu_index,
                     minimum_free_memory_mib=0,
                 )
-                _validate_shared_gpu_cleanup(
+                self._last_shared_cleanup_tenant_anomaly = _validate_shared_gpu_cleanup(
                     final_shared_attestation,
                     baseline=self._shared_gpu_baseline,
                     stopped_models=tuple(self._stop_evidence),
@@ -4773,10 +6197,51 @@ class ProductionResourceLifecycleAdapterV1:
                             production_shared_gpu_attestation_sha256(final_shared_attestation)
                         ),
                         "minimum_free_gpu_memory_mib": (self._config.minimum_free_gpu_memory_mib),
+                        "shared_gpu_tenant_continuity_status": (
+                            "UNCHANGED_OR_EXITED"
+                            if self._last_shared_cleanup_tenant_anomaly is None
+                            else self._last_shared_cleanup_tenant_anomaly
+                        ),
                         "vllm_gpu_memory_utilization": (self._config.vllm_gpu_memory_utilization),
                     }
                 )
-        self._cleanup_success_evidence = canonical_json_bytes(
+            if self._model_switch_evidence:
+                ordered_switch_evidence: list[JsonValue] = []
+                ordered_switch_sha256s: list[str] = []
+                for raw in self._model_switch_evidence:
+                    try:
+                        decoded = json.loads(raw)
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        raise ProductionDriverError(
+                            "RESOURCE_CLEANUP_FAILED",
+                            "pilot switch evidence cannot be reopened",
+                        ) from exc
+                    if (
+                        type(decoded) is not dict
+                        or canonical_json_bytes(cast(JsonValue, decoded)) != raw
+                    ):
+                        raise ProductionDriverError(
+                            "RESOURCE_CLEANUP_FAILED",
+                            "pilot switch evidence preimage is not canonical",
+                        )
+                    ordered_switch_evidence.append(cast(JsonValue, decoded))
+                    ordered_switch_sha256s.append(hashlib.sha256(raw).hexdigest())
+                projection.update(
+                    {
+                        "pilot_model_switch_evidence": ordered_switch_evidence,
+                        "pilot_model_switch_evidence_sha256s": cast(
+                            JsonValue, ordered_switch_sha256s
+                        ),
+                        "unconsumed_pilot_model_switch_evidence_sha256s": [
+                            hashlib.sha256(item).hexdigest()
+                            for _, item in sorted(
+                                self._pending_model_switch_evidence.items(),
+                                key=lambda pair: pair[0].value,
+                            )
+                        ],
+                    }
+                )
+        cleanup_envelope = canonical_json_bytes(
             cast(
                 JsonValue,
                 {
@@ -4786,12 +6251,62 @@ class ProductionResourceLifecycleAdapterV1:
                 },
             )
         )
+        self._pending_model_switch_evidence.clear()
+        if self._last_shared_cleanup_tenant_anomaly is not None:
+            failed_projection = dict(projection)
+            failed_projection.update(
+                {
+                    "cleanup_outcome": "OWNED_RESOURCES_RECLAIMED_TENANT_DRIFT",
+                    "failure_code": self._last_shared_cleanup_tenant_anomaly,
+                    "status": "FAILED_TENANT_CONTINUITY",
+                }
+            )
+            self._failure_evidence = canonical_json_bytes(
+                cast(
+                    JsonValue,
+                    {
+                        "domain": "production-resource-cleanup-failure-evidence",
+                        "schema_version": (PRODUCTION_RESOURCE_CLEANUP_EVIDENCE_SCHEMA_VERSION_V1),
+                        "value": failed_projection,
+                    },
+                )
+            )
+            self._cleanup_failure_evidence = self._failure_evidence
+            raise ProductionDriverError(
+                self._last_shared_cleanup_tenant_anomaly,
+                "owned cleanup completed but shared GPU tenant continuity failed closed",
+            )
+        self._cleanup_success_evidence = cleanup_envelope
 
     def cleanup_success_evidence_preimage(self) -> bytes | None:
         return self._cleanup_success_evidence
 
     def handoff_failure_evidence_preimage(self) -> bytes | None:
         return self._handoff_failure_evidence
+
+    def consume_pilot_switch_evidence(
+        self,
+        host: PilotHostV1,
+        *,
+        expected_sha256: str,
+    ) -> bytes:
+        """Move exactly one successful switch proof into its first cell journal."""
+
+        if type(host) is not PilotHostV1:
+            raise ProductionDriverError("UNTRUSTED_TYPE", "pilot switch host differs")
+        _require_sha256(expected_sha256, "expected pilot switch evidence sha256")
+        with self._lock:
+            raw = self._pending_model_switch_evidence.get(host)
+            if raw is None or hashlib.sha256(raw).hexdigest() != expected_sha256:
+                raise ProductionDriverError(
+                    "PILOT_SWITCH_EVIDENCE_MISMATCH",
+                    "pending pilot switch proof differs",
+                )
+            del self._pending_model_switch_evidence[host]
+            return raw
+
+    def pilot_switch_failure_evidence_preimage(self) -> bytes | None:
+        return self._model_switch_failure_evidence
 
     def last_dispatch_evidence_preimage(self) -> bytes | None:
         return self._last_dispatch_evidence
@@ -4878,6 +6393,14 @@ class ProductionResourceLifecycleAdapterV1:
             raise ProductionDriverError(
                 "OWNER_AUTHORITY_EXPIRED", "dispatch owner authority elapsed"
             )
+
+        def require_dispatch_deadline(message: str) -> None:
+            _require_monotonic_deadline(
+                authority_deadline_monotonic_ns,
+                failure_code="OWNER_AUTHORITY_EXPIRED",
+                message=message,
+            )
+
         with self._lock:
             if host in self._disabled_hosts:
                 raise ProductionDriverError("HOST_DISABLED", "host dispatch gate is disabled")
@@ -4916,9 +6439,17 @@ class ProductionResourceLifecycleAdapterV1:
             }
             try:
                 dispatch_projection["backend_attestation_sha256"] = self._system.attest_backend(
-                    backend
+                    backend,
+                    deadline_monotonic_ns=authority_deadline_monotonic_ns,
+                    deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
                 )
-                dispatch_projection["model_attestation_sha256"] = self._system.attest_model(model)
+                require_dispatch_deadline("backend dispatch attestation crossed its deadline")
+                dispatch_projection["model_attestation_sha256"] = self._system.attest_model(
+                    model,
+                    deadline_monotonic_ns=authority_deadline_monotonic_ns,
+                    deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
+                )
+                require_dispatch_deadline("model dispatch attestation crossed its deadline")
                 if (
                     self._config.resource_topology
                     is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
@@ -4930,6 +6461,11 @@ class ProductionResourceLifecycleAdapterV1:
                     shared_gpu_attestation = self._system.attest_gpu_shared_capacity(
                         self._config.qwen_gpu_index,
                         minimum_free_memory_mib=0,
+                        deadline_monotonic_ns=authority_deadline_monotonic_ns,
+                        deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
+                    )
+                    require_dispatch_deadline(
+                        "shared-GPU dispatch attestation crossed its deadline"
                     )
                     dispatch_projection["shared_gpu_attestation"] = cast(
                         JsonValue,
@@ -4943,6 +6479,7 @@ class ProductionResourceLifecycleAdapterV1:
                         baseline=self._shared_gpu_baseline,
                         owned_identity=model.identity,
                     )
+                    require_dispatch_deadline("shared-GPU dispatch validation crossed its deadline")
             except Exception as exc:
                 if (
                     self._config.resource_topology
@@ -4965,6 +6502,7 @@ class ProductionResourceLifecycleAdapterV1:
                         )
                     )
                 raise
+            require_dispatch_deadline("dispatch evidence admission crossed its deadline")
             dispatch_projection["status"] = "PASSED"
             self._last_dispatch_evidence = canonical_json_bytes(
                 cast(
@@ -5000,6 +6538,10 @@ class ProductionResourceLifecycleAdapterV1:
         return production_runtime_config_sha256(self._config)
 
     @property
+    def pilot_switch_authority(self) -> ProductionPilotSwitchAuthorityV1 | None:
+        return self._pilot_switch_authority
+
+    @property
     def cleanup_upper_bound_seconds(self) -> int:
         projection = _production_resource_cleanup_bound_projection(self._config)
         return cast(int, projection["cleanup_upper_bound_seconds"])
@@ -5011,6 +6553,19 @@ class ProductionResourceLifecycleAdapterV1:
     @property
     def cleanup_upper_bound_sha256(self) -> str:
         return hashlib.sha256(self.cleanup_upper_bound_preimage).hexdigest()
+
+    @property
+    def full_cleanup_upper_bound_seconds(self) -> int:
+        projection = _production_resource_cleanup_bound_v2_projection(self._config)
+        return cast(int, projection["cleanup_upper_bound_seconds"])
+
+    @property
+    def full_cleanup_upper_bound_preimage(self) -> bytes:
+        return _production_resource_cleanup_bound_v2_preimage(self._config)
+
+    @property
+    def full_cleanup_upper_bound_sha256(self) -> str:
+        return hashlib.sha256(self.full_cleanup_upper_bound_preimage).hexdigest()
 
     def failure_evidence_preimage(self, stage: RunStageV1) -> bytes | None:
         if stage is RunStageV1.RESOURCE_PREFLIGHT:
@@ -5057,6 +6612,88 @@ def build_production_resource_lifecycle_adapter_v1(
         config,
         system=_PosixProductionResourceSystemV1(config, seal=_MODULE_SEAL),
         seal=_MODULE_SEAL,
+    )
+
+
+def _pilot_host_blocks(pilot: FrozenPilotManifestV1) -> tuple[PilotHostV1, ...]:
+    if type(pilot) is not FrozenPilotManifestV1:
+        raise ProductionDriverError("UNTRUSTED_TYPE", "pilot manifest type differs")
+    blocks: list[PilotHostV1] = []
+    for cell in pilot.cells:
+        if not blocks or blocks[-1] is not cell.host:
+            blocks.append(cell.host)
+    expected = tuple(
+        host for _ in pilot.tasks for host in (PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)
+    )
+    if tuple(blocks) != expected:
+        raise ProductionDriverError(
+            "PILOT_SWITCH_SCHEDULE_MISMATCH", "pilot host blocks differ from frozen order"
+        )
+    return tuple(blocks)
+
+
+def build_production_pilot_switch_authority_v1(
+    *,
+    factory: ProductionPostPreflightFactoryV1,
+    resource_lifecycle: ProductionResourceLifecycleAdapterV1,
+    confirmed_runtime_config_sha256: str,
+    confirmed_cleanup_upper_bound_sha256: str,
+) -> ProductionPilotSwitchAuthorityV1:
+    """Issue no capability until full owner authority binds every resource limit."""
+
+    if (
+        type(factory) is not ProductionPostPreflightFactoryV1
+        or type(resource_lifecycle) is not ProductionResourceLifecycleAdapterV1
+        or factory.sequence_execution_scope.value != "R24_R25_FULL"
+        or factory.runtime_config_sha256 != confirmed_runtime_config_sha256
+        or resource_lifecycle.runtime_config_sha256 != confirmed_runtime_config_sha256
+        or resource_lifecycle.resource_topology
+        is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        or resource_lifecycle.full_cleanup_upper_bound_sha256
+        != confirmed_cleanup_upper_bound_sha256
+    ):
+        raise ProductionDriverError(
+            "PILOT_SWITCH_AUTHORITY_MISMATCH",
+            "full factory/runtime/cleanup bindings do not authorize shared switching",
+        )
+    manifest = factory.manifest_snapshot()
+    if type(manifest) is not R24R25RunAuthorityManifestV1:
+        raise ProductionDriverError(
+            "PILOT_SWITCH_AUTHORITY_MISMATCH", "full authority manifest is absent"
+        )
+    host_blocks = _pilot_host_blocks(manifest.pilot)
+    declared_topology = getattr(manifest, "resource_topology", None)
+    declared_runtime = getattr(manifest, "runtime_config_sha256", None)
+    declared_max_switches = getattr(manifest, "max_model_switches", None)
+    declared_per_switch = getattr(manifest, "max_model_switch_wall_time_seconds", None)
+    declared_total_switch = getattr(manifest, "max_total_model_switch_wall_time_seconds", None)
+    declared_cleanup_seconds = getattr(manifest, "max_resource_cleanup_wall_time_seconds", None)
+    declared_cleanup_sha256 = getattr(manifest, "resource_cleanup_upper_bound_sha256", None)
+    if (
+        declared_topology != ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED.value
+        or declared_runtime != confirmed_runtime_config_sha256
+        or declared_max_switches != len(host_blocks) + 1
+        or type(declared_per_switch) is not int
+        or declared_total_switch != declared_max_switches * declared_per_switch
+        or declared_cleanup_seconds != resource_lifecycle.full_cleanup_upper_bound_seconds
+        or declared_cleanup_sha256 != confirmed_cleanup_upper_bound_sha256
+    ):
+        raise ProductionDriverError(
+            "PILOT_SWITCH_AUTHORITY_MISMATCH",
+            "owner manifest does not exactly bind shared switch and cleanup limits",
+        )
+    return ProductionPilotSwitchAuthorityV1(
+        manifest_sha256=factory.manifest_sha256,
+        sequence_scope_authority_sha256=factory.manifest_sha256,
+        factory_binding_sha256=factory.factory_binding_sha256,
+        runtime_config_sha256=confirmed_runtime_config_sha256,
+        host_blocks=host_blocks,
+        max_model_switches=declared_max_switches,
+        max_model_switch_wall_time_seconds=declared_per_switch,
+        max_total_model_switch_wall_time_seconds=declared_total_switch,
+        resource_cleanup_upper_bound_seconds=resource_lifecycle.full_cleanup_upper_bound_seconds,
+        resource_cleanup_upper_bound_sha256=confirmed_cleanup_upper_bound_sha256,
+        _seal=_MODULE_SEAL,
     )
 
 
@@ -5514,6 +7151,10 @@ class SmokeCaseEvidenceV1:
 class OfficialTaskResultEvidenceV1:
     task_id: str
     evaluator_id: str
+    official_success_metric_id: str
+    official_success_operator: str
+    official_success_threshold_float_hex: str
+    score_float_hex: str
     score_ppm: int
     successful: bool
     result_payload_sha256: str
@@ -5524,6 +7165,32 @@ class OfficialTaskResultEvidenceV1:
         if self.evaluator_id != OFFICIAL_RESULT_EVALUATOR_ID_V1:
             raise ProductionDriverError(
                 "INVALID_OFFICIAL_RESULT", "official evaluator identity differs"
+            )
+        if (
+            self.official_success_metric_id != OFFICIAL_SUCCESS_METRIC_ID_V1
+            or self.official_success_operator != OFFICIAL_SUCCESS_OPERATOR_V1
+            or self.official_success_threshold_float_hex != OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1
+            or type(self.score_float_hex) is not str
+        ):
+            raise ProductionDriverError(
+                "INVALID_OFFICIAL_RESULT", "official success metric binding differs"
+            )
+        try:
+            raw_score = float.fromhex(self.score_float_hex)
+        except (TypeError, ValueError) as exc:
+            raise ProductionDriverError(
+                "INVALID_OFFICIAL_RESULT", "raw score encoding differs"
+            ) from exc
+        threshold = float.fromhex(OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1)
+        if (
+            not math.isfinite(raw_score)
+            or not 0.0 <= raw_score <= 1.0
+            or raw_score.hex() != self.score_float_hex
+            or round(raw_score * 1_000_000) != self.score_ppm
+            or self.successful is not (raw_score > threshold)
+        ):
+            raise ProductionDriverError(
+                "INVALID_OFFICIAL_RESULT", "raw score/metric result binding differs"
             )
         if type(self.score_ppm) is not int or not 0 <= self.score_ppm <= 1_000_000:
             raise ProductionDriverError("INVALID_OFFICIAL_RESULT", "score is outside [0, 1]")
@@ -5552,6 +7219,13 @@ class PilotCellEvidenceV1:
     official_result: OfficialTaskResultEvidenceV1
     cleanup_receipt_sha256: str
     census: DriverStageCensusV1
+    reset_evidence_preimage: bytes | None = None
+    official_result_evidence_preimage: bytes | None = None
+    cleanup_evidence_preimage: bytes | None = None
+    collector_run_locator_preimage: bytes | None = None
+    unit_journal_preimage: bytes | None = None
+    unit_journal_sha256: str | None = None
+    unit_journal_validated_reference: _ValidatedUnitJournalReferenceV1 | None = None
 
     def __post_init__(self) -> None:
         _require_sha256(self.manifest_sha256, "manifest_sha256")
@@ -5585,6 +7259,291 @@ class PilotCellEvidenceV1:
             type(self.census) is not DriverStageCensusV1
         ):
             raise ProductionDriverError("INVALID_EVIDENCE", "pilot result/census type differs")
+        durable_values = (
+            self.reset_evidence_preimage,
+            self.official_result_evidence_preimage,
+            self.cleanup_evidence_preimage,
+            self.collector_run_locator_preimage,
+            self.unit_journal_preimage,
+            self.unit_journal_sha256,
+        )
+        if all(value is None for value in durable_values):
+            if self.unit_journal_validated_reference is not None:
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "legacy pilot cell has orphan validation"
+                )
+            return
+        if any(value is None for value in durable_values):
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL", "production pilot durable evidence is incomplete"
+            )
+        assert self.reset_evidence_preimage is not None
+        assert self.official_result_evidence_preimage is not None
+        assert self.cleanup_evidence_preimage is not None
+        assert self.collector_run_locator_preimage is not None
+        assert self.unit_journal_preimage is not None
+        assert self.unit_journal_sha256 is not None
+        decoded: list[object] = []
+        for raw, expected_sha256 in (
+            (self.reset_evidence_preimage, self.reset_receipt_sha256),
+            (
+                self.official_result_evidence_preimage,
+                self.official_result.result_payload_sha256,
+            ),
+            (self.cleanup_evidence_preimage, self.cleanup_receipt_sha256),
+            (self.collector_run_locator_preimage, None),
+            (self.unit_journal_preimage, self.unit_journal_sha256),
+        ):
+            if type(raw) is not bytes:
+                raise ProductionDriverError("INVALID_EVIDENCE", "pilot preimage type differs")
+            try:
+                value = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ProductionDriverError(
+                    "INVALID_EVIDENCE", "pilot preimage is not JSON"
+                ) from exc
+            if canonical_json_bytes(cast(JsonValue, value)) != raw or (
+                expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256
+            ):
+                raise ProductionDriverError(
+                    "INVALID_EVIDENCE", "pilot preimage/hash binding differs"
+                )
+            decoded.append(value)
+        reset_value = _require_projection_envelope(decoded[0], domain="production-pilot-reset")
+        official_value = _require_projection_envelope(
+            decoded[1], domain="production-official-result"
+        )
+        cleanup_value = _require_projection_envelope(decoded[2], domain="production-unit-cleanup")
+        if set(reset_value) != {
+            "backend_endpoint",
+            "case_id",
+            "effective_reset_state",
+            "effective_reset_state_sha256",
+            "manifest_sha256",
+            "observation_screenshot_sha256",
+            "reset_seed",
+            "resolved_inputs_sha256",
+            "resource_switch_evidence_sha256",
+            "task_id",
+            "task_name",
+            "task_parameters_sha256",
+            "trial",
+        }:
+            raise ProductionDriverError("INVALID_EVIDENCE", "pilot reset evidence fields differ")
+        effective_reset = reset_value.get("effective_reset_state")
+        if (
+            type(effective_reset) is not dict
+            or set(effective_reset)
+            != {
+                "observation_screenshot_sha256",
+                "reset_seed",
+                "task_goal_sha256",
+                "task_id",
+                "task_name",
+                "task_parameters_sha256",
+                "trial",
+            }
+            or reset_value.get("manifest_sha256") != self.manifest_sha256
+            or reset_value.get("case_id") != f"pilot-cell-{self.sequence_index:03d}"
+            or reset_value.get("task_id") != self.task_id
+            or reset_value.get("task_parameters_sha256") != self.task_parameters_sha256
+            or reset_value.get("reset_seed") != self.reset_seed
+            or reset_value.get("effective_reset_state_sha256") != self.effective_reset_state_sha256
+            or reset_value.get("observation_screenshot_sha256")
+            != effective_reset.get("observation_screenshot_sha256")
+            or effective_reset.get("task_id") != self.task_id
+            or effective_reset.get("task_parameters_sha256") != self.task_parameters_sha256
+            or effective_reset.get("reset_seed") != self.reset_seed
+            or effective_reset.get("task_name") != reset_value.get("task_name")
+            or effective_reset.get("trial") != reset_value.get("trial")
+            or _hash_projection(
+                "production-pilot-effective-reset-state",
+                cast(JsonValue, effective_reset),
+            )
+            != self.effective_reset_state_sha256
+        ):
+            raise ProductionDriverError("INVALID_EVIDENCE", "pilot reset evidence binding differs")
+        if (
+            set(official_value)
+            != {
+                "evaluator_id",
+                "official_success_metric_id",
+                "official_success_operator",
+                "official_success_threshold_float_hex",
+                "reason",
+                "reason_sha256",
+                "score_float_hex",
+                "score_ppm",
+                "task_id",
+            }
+            or official_value.get("evaluator_id") != self.official_result.evaluator_id
+            or official_value.get("official_success_metric_id")
+            != self.official_result.official_success_metric_id
+            or official_value.get("official_success_operator")
+            != self.official_result.official_success_operator
+            or official_value.get("official_success_threshold_float_hex")
+            != self.official_result.official_success_threshold_float_hex
+            or official_value.get("task_id") != self.task_id
+            or official_value.get("score_float_hex") != self.official_result.score_float_hex
+            or official_value.get("score_ppm") != self.official_result.score_ppm
+            or official_value.get("reason_sha256") != self.official_result.reason_sha256
+            or type(official_value.get("reason")) is not str
+            or hashlib.sha256(cast(str, official_value["reason"]).encode("utf-8")).hexdigest()
+            != self.official_result.reason_sha256
+        ):
+            raise ProductionDriverError(
+                "INVALID_OFFICIAL_RESULT", "official result preimage binding differs"
+            )
+        locator = decoded[3]
+        if type(locator) is not dict or set(locator) != {
+            "collector_manifest_capture_complete",
+            "collector_manifest_final_byte_count",
+            "collector_manifest_final_path",
+            "collector_manifest_final_sha256",
+            "collector_manifest_runtime_status",
+            "collector_run_id",
+            "collector_run_root",
+            "collector_task_run_id",
+            "manifest_sha256",
+            "run_id",
+            "sequence_index",
+            "task_id",
+            "unit_id",
+            "unit_journal_sha256",
+        }:
+            raise ProductionDriverError("INVALID_EVIDENCE", "pilot Collector locator fields differ")
+        if (
+            locator.get("manifest_sha256") != self.manifest_sha256
+            or locator.get("run_id") != self.run_id
+            or locator.get("sequence_index") != self.sequence_index
+            or locator.get("task_id") != self.task_id
+            or locator.get("unit_id") != f"pilot:{self.sequence_index:03d}"
+            or locator.get("unit_journal_sha256") != self.unit_journal_sha256
+            or locator.get("collector_manifest_capture_complete") is not True
+            or locator.get("collector_manifest_runtime_status") != "completed"
+            or type(locator.get("collector_manifest_final_byte_count")) is not int
+            or cast(int, locator["collector_manifest_final_byte_count"]) <= 0
+            or type(locator.get("collector_manifest_final_sha256")) is not str
+            or _SHA256.fullmatch(cast(str, locator["collector_manifest_final_sha256"])) is None
+            or type(locator.get("collector_run_id")) is not str
+            or type(locator.get("collector_task_run_id")) is not str
+            or type(locator.get("collector_run_root")) is not str
+            or not Path(cast(str, locator["collector_run_root"])).is_absolute()
+            or type(locator.get("collector_manifest_final_path")) is not str
+            or not Path(cast(str, locator["collector_manifest_final_path"])).is_absolute()
+            or Path(cast(str, locator["collector_manifest_final_path"])).parent
+            != Path(cast(str, locator["collector_run_root"]))
+            or Path(cast(str, locator["collector_manifest_final_path"])).name
+            != "manifest.final.json"
+        ):
+            raise ProductionDriverError(
+                "INVALID_EVIDENCE", "pilot Collector locator binding differs"
+            )
+        locator_path = Path(cast(str, locator["collector_manifest_final_path"]))
+        locator_root = Path(cast(str, locator["collector_run_root"]))
+        if (
+            str(locator_path) != os.path.normpath(str(locator_path))
+            or str(locator_root) != os.path.normpath(str(locator_root))
+            or set(cleanup_value)
+            != {
+                "cleanup_dispatch_authorized",
+                "collector_manifest_sha256",
+                "collector_run_locator",
+                "collector_run_locator_sha256",
+                "deadline_binding",
+                "manifest_sha256",
+                "task_run_id",
+                "teardown_attempted",
+                "teardown_result",
+                "teardown_result_sha256",
+                "unit_id",
+                "unit_journal_sha256",
+            }
+            or cleanup_value.get("cleanup_dispatch_authorized") is not True
+            or cleanup_value.get("manifest_sha256") != self.manifest_sha256
+            or cleanup_value.get("unit_id") != f"pilot:{self.sequence_index:03d}"
+            or cleanup_value.get("unit_journal_sha256") != self.unit_journal_sha256
+            or cleanup_value.get("collector_manifest_sha256")
+            != locator.get("collector_manifest_final_sha256")
+            or cleanup_value.get("collector_run_locator") != locator
+            or cleanup_value.get("collector_run_locator_sha256")
+            != hashlib.sha256(self.collector_run_locator_preimage).hexdigest()
+            or cleanup_value.get("task_run_id") != locator.get("collector_task_run_id")
+            or cleanup_value.get("teardown_attempted") is not True
+        ):
+            raise ProductionDriverError(
+                "INVALID_EVIDENCE", "pilot cleanup evidence binding differs"
+            )
+        teardown_value = cleanup_value.get("teardown_result")
+        if (
+            type(teardown_value) is not dict
+            or set(teardown_value)
+            != {"message", "message_sha256", "request_dispatched", "status", "task_name"}
+            or type(teardown_value.get("message")) is not str
+            or teardown_value.get("message_sha256")
+            != hashlib.sha256(cast(str, teardown_value["message"]).encode("utf-8")).hexdigest()
+            or teardown_value.get("request_dispatched") is not True
+            or teardown_value.get("status") != CleanupTaskTeardownStatusV1.SUCCEEDED.value
+            or cleanup_value.get("teardown_result_sha256")
+            != _hash_projection("production-task-teardown-result", cast(JsonValue, teardown_value))
+        ):
+            raise ProductionDriverError(
+                "INVALID_EVIDENCE", "pilot teardown evidence binding differs"
+            )
+        journal = decoded[4]
+        if type(journal) is not dict:
+            raise ProductionDriverError("INVALID_UNIT_JOURNAL", "pilot journal differs")
+        is_blob_reference = (
+            journal.get("schema_version") == _UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION
+            or journal.get("storage") == _UNIT_EVIDENCE_BLOB_STORAGE_KIND
+        )
+        if is_blob_reference:
+            validation = self.unit_journal_validated_reference
+            if type(validation) is not _ValidatedUnitJournalReferenceV1:
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "pilot blob journal lacks readback validation"
+                )
+            validation.revalidate(
+                self.unit_journal_preimage,
+                expected_unit_id=f"pilot:{self.sequence_index:03d}",
+            )
+        else:
+            if (
+                self.unit_journal_validated_reference is not None
+                or journal.get("unit_id") != f"pilot:{self.sequence_index:03d}"
+            ):
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "inline pilot journal binding differs"
+                )
+            collector_binding = {
+                key: locator[key]
+                for key in (
+                    "collector_manifest_capture_complete",
+                    "collector_manifest_final_byte_count",
+                    "collector_manifest_final_path",
+                    "collector_manifest_final_sha256",
+                    "collector_manifest_runtime_status",
+                    "collector_run_id",
+                    "collector_run_root",
+                    "collector_task_run_id",
+                )
+            }
+            if (
+                journal.get("reset_evidence") != reset_value
+                or journal.get("reset_evidence_sha256") != self.reset_receipt_sha256
+                or journal.get("official_result_evidence") != official_value
+                or journal.get("official_result_evidence_sha256")
+                != self.official_result.result_payload_sha256
+                or journal.get("collector_run_binding") != collector_binding
+                or journal.get("collector_run_binding_sha256")
+                != _hash_projection(
+                    "production-collector-run-binding",
+                    cast(JsonValue, collector_binding),
+                )
+            ):
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "pilot journal canonical bindings differ"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -5603,6 +7562,7 @@ class SmokeStageEvidenceV1:
         if self.schema_version not in {
             PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
             PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2,
+            PRODUCTION_FULL_SMOKE_EVIDENCE_SCHEMA_VERSION_V3,
         }:
             raise ProductionDriverError("UNKNOWN_SCHEMA", "smoke evidence schema differs")
         _require_sha256(self.manifest_sha256, "manifest_sha256")
@@ -5621,7 +7581,11 @@ class SmokeStageEvidenceV1:
             raise ProductionDriverError("INVALID_CENSUS", "smoke stage census type differs")
         journals_present = tuple(item.unit_journal_preimage is not None for item in self.cases)
         if (
-            self.schema_version == PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2
+            self.schema_version
+            in {
+                PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2,
+                PRODUCTION_FULL_SMOKE_EVIDENCE_SCHEMA_VERSION_V3,
+            }
             and not all(journals_present)
         ) or (
             self.schema_version == PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
@@ -5630,6 +7594,81 @@ class SmokeStageEvidenceV1:
             raise ProductionDriverError(
                 "INVALID_UNIT_JOURNAL", "smoke stage schema/journal variant differs"
             )
+        if self.schema_version == PRODUCTION_FULL_SMOKE_EVIDENCE_SCHEMA_VERSION_V3:
+            collector_identities: list[tuple[str, str, str, str]] = []
+            for case in self.cases:
+                assert case.unit_journal_preimage is not None
+                try:
+                    journal = json.loads(case.unit_journal_preimage)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ProductionDriverError(
+                        "INVALID_UNIT_JOURNAL",
+                        "full smoke journal is not independently readable",
+                    ) from exc
+                if type(journal) is not dict:
+                    raise ProductionDriverError(
+                        "INVALID_UNIT_JOURNAL",
+                        "full smoke journal is not an exact object",
+                    )
+                binding = journal.get("collector_run_binding")
+                expected_unit_id = f"smoke:{case.host.value}:{case.mode.value}"
+                if (
+                    journal.get("unit_id") != expected_unit_id
+                    or journal.get("schema_version") == _UNIT_EVIDENCE_BLOB_REFERENCE_SCHEMA_VERSION
+                    or type(binding) is not dict
+                    or set(binding)
+                    != {
+                        "collector_manifest_capture_complete",
+                        "collector_manifest_final_byte_count",
+                        "collector_manifest_final_path",
+                        "collector_manifest_final_sha256",
+                        "collector_manifest_runtime_status",
+                        "collector_run_id",
+                        "collector_run_root",
+                        "collector_task_run_id",
+                    }
+                    or binding.get("collector_manifest_capture_complete") is not True
+                    or binding.get("collector_manifest_runtime_status") != "completed"
+                    or type(binding.get("collector_manifest_final_byte_count")) is not int
+                    or cast(int, binding["collector_manifest_final_byte_count"]) < 1
+                    or type(binding.get("collector_manifest_final_sha256")) is not str
+                    or re.fullmatch(
+                        r"[0-9a-f]{64}",
+                        cast(str, binding["collector_manifest_final_sha256"]),
+                    )
+                    is None
+                    or type(binding.get("collector_manifest_final_path")) is not str
+                    or type(binding.get("collector_run_root")) is not str
+                    or type(binding.get("collector_run_id")) is not str
+                    or type(binding.get("collector_task_run_id")) is not str
+                    or not Path(cast(str, binding["collector_manifest_final_path"])).is_absolute()
+                    or not Path(cast(str, binding["collector_run_root"])).is_absolute()
+                    or Path(cast(str, binding["collector_manifest_final_path"])).name
+                    != "manifest.final.json"
+                    or str(Path(cast(str, binding["collector_manifest_final_path"])).parent)
+                    != binding.get("collector_run_root")
+                    or journal.get("collector_run_binding_sha256")
+                    != _hash_projection(
+                        "production-collector-run-binding", cast(JsonValue, binding)
+                    )
+                ):
+                    raise ProductionDriverError(
+                        "INVALID_UNIT_JOURNAL",
+                        "full smoke journal lacks its exact Collector run binding",
+                    )
+                collector_identities.append(
+                    (
+                        cast(str, binding["collector_run_id"]),
+                        cast(str, binding["collector_task_run_id"]),
+                        cast(str, binding["collector_run_root"]),
+                        cast(str, binding["collector_manifest_final_path"]),
+                    )
+                )
+            if len(set(collector_identities)) != len(self.cases):
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL",
+                    "full smoke Collector run bindings are not unique",
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -5644,7 +7683,10 @@ class PilotStageEvidenceV1:
     schema_version: str = PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION:
+        if self.schema_version not in {
+            PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
+            PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2,
+        }:
             raise ProductionDriverError("UNKNOWN_SCHEMA", "pilot evidence schema differs")
         _require_sha256(self.manifest_sha256, "manifest_sha256")
         _require_safe_id(self.run_id, "run_id")
@@ -5665,6 +7707,13 @@ class PilotStageEvidenceV1:
             )
         if type(self.census) is not DriverStageCensusV1:
             raise ProductionDriverError("INVALID_CENSUS", "pilot stage census type differs")
+        durable = tuple(item.unit_journal_preimage is not None for item in self.cells)
+        if (
+            self.schema_version == PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2 and not all(durable)
+        ) or (self.schema_version == PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION and any(durable)):
+            raise ProductionDriverError(
+                "INVALID_UNIT_JOURNAL", "pilot stage schema/journal variant differs"
+            )
 
 
 def _census_projection(value: DriverStageCensusV1 | DriverCallCensusV1) -> dict[str, JsonValue]:
@@ -5754,7 +7803,7 @@ def _smoke_case_evidence_projection(value: SmokeCaseEvidenceV1) -> dict[str, Jso
 
 def _pilot_cell_evidence_projection(value: PilotCellEvidenceV1) -> dict[str, JsonValue]:
     official = value.official_result
-    return {
+    projection: dict[str, JsonValue] = {
         "actor_resource_sha256": value.actor_resource_sha256,
         "arm": value.arm.value,
         "census": _census_projection(value.census),
@@ -5766,8 +7815,12 @@ def _pilot_cell_evidence_projection(value: PilotCellEvidenceV1) -> dict[str, Jso
         "manifest_sha256": value.manifest_sha256,
         "official_result": {
             "evaluator_id": official.evaluator_id,
+            "official_success_metric_id": official.official_success_metric_id,
+            "official_success_operator": official.official_success_operator,
+            "official_success_threshold_float_hex": (official.official_success_threshold_float_hex),
             "reason_sha256": official.reason_sha256,
             "result_payload_sha256": official.result_payload_sha256,
+            "score_float_hex": official.score_float_hex,
             "score_ppm": official.score_ppm,
             "successful": official.successful,
             "task_id": official.task_id,
@@ -5780,6 +7833,41 @@ def _pilot_cell_evidence_projection(value: PilotCellEvidenceV1) -> dict[str, Jso
         "task_id": value.task_id,
         "task_parameters_sha256": value.task_parameters_sha256,
     }
+    if value.unit_journal_preimage is not None:
+        assert value.reset_evidence_preimage is not None
+        assert value.official_result_evidence_preimage is not None
+        assert value.cleanup_evidence_preimage is not None
+        assert value.collector_run_locator_preimage is not None
+        assert value.unit_journal_sha256 is not None
+        projection.update(
+            {
+                "cleanup_evidence": cast(JsonValue, json.loads(value.cleanup_evidence_preimage)),
+                "cleanup_evidence_sha256": value.cleanup_receipt_sha256,
+                "collector_run_locator": cast(
+                    JsonValue, json.loads(value.collector_run_locator_preimage)
+                ),
+                "collector_run_locator_sha256": hashlib.sha256(
+                    value.collector_run_locator_preimage
+                ).hexdigest(),
+                "official_result_evidence": cast(
+                    JsonValue, json.loads(value.official_result_evidence_preimage)
+                ),
+                "official_result_evidence_sha256": (value.official_result.result_payload_sha256),
+                "reset_evidence": cast(JsonValue, json.loads(value.reset_evidence_preimage)),
+                "reset_evidence_sha256": value.reset_receipt_sha256,
+                "unit_journal": cast(JsonValue, json.loads(value.unit_journal_preimage)),
+                "unit_journal_byte_count": len(value.unit_journal_preimage),
+                "unit_journal_sha256": value.unit_journal_sha256,
+            }
+        )
+        if value.unit_journal_validated_reference is not None:
+            projection["unit_journal_validated_reference"] = cast(
+                JsonValue,
+                _validated_unit_journal_reference_projection(
+                    value.unit_journal_validated_reference
+                ),
+            )
+    return projection
 
 
 def smoke_stage_evidence_projection(value: SmokeStageEvidenceV1) -> dict[str, JsonValue]:
@@ -6247,6 +8335,7 @@ class _PilotInvocationV1:
     cleanup_deadline_monotonic_ns: int
     authority_deadline_monotonic_ns: int
     attempt_termination_upper_bound_ns: int
+    resource_switch_evidence_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -6260,23 +8349,47 @@ class _SmokePortResultV1:
 class _PilotResetResultV1:
     reset_receipt_sha256: str
     effective_reset_state_sha256: str
+    reset_evidence_preimage: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _PilotPortResultV1:
     decisions: tuple[ActorDecisionEvidenceV1, ...]
     official_result: OfficialTaskResultEvidenceV1
+    official_result_evidence_preimage: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _CleanupResultV1:
     cleanup_receipt_sha256: str
+    cleanup_evidence_preimage: bytes | None = None
+    collector_run_locator_preimage: bytes | None = None
     unit_journal_preimage: bytes | None = None
     unit_journal_sha256: str | None = None
     unit_journal_validated_reference: _ValidatedUnitJournalReferenceV1 | None = None
 
     def __post_init__(self) -> None:
         _require_sha256(self.cleanup_receipt_sha256, "cleanup_receipt_sha256")
+        for raw, name, expected_sha256 in (
+            (
+                self.cleanup_evidence_preimage,
+                "cleanup_evidence_preimage",
+                self.cleanup_receipt_sha256,
+            ),
+            (self.collector_run_locator_preimage, "collector_run_locator_preimage", None),
+        ):
+            if raw is None:
+                continue
+            if type(raw) is not bytes:
+                raise ProductionDriverError("INVALID_EVIDENCE", f"{name} type differs")
+            try:
+                decoded = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ProductionDriverError("INVALID_EVIDENCE", f"{name} is not JSON") from exc
+            if canonical_json_bytes(cast(JsonValue, decoded)) != raw or (
+                expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256
+            ):
+                raise ProductionDriverError("INVALID_EVIDENCE", f"{name} binding differs")
         if (self.unit_journal_preimage is None) != (self.unit_journal_sha256 is None):
             raise ProductionDriverError(
                 "INVALID_UNIT_JOURNAL", "unit journal preimage/hash presence differs"
@@ -6403,6 +8516,14 @@ def _exception_code(error: BaseException | None, default: str) -> str:
     return default
 
 
+def _exception_secondary_failure_code(error: BaseException | None) -> str | None:
+    if isinstance(error, ProductionDriverError) and (
+        type(error.secondary_failure_code) is str and error.secondary_failure_code
+    ):
+        return error.secondary_failure_code
+    return None
+
+
 def _cleanup_outcome_projection(
     cleanup: _CleanupResultV1 | None,
     *,
@@ -6491,8 +8612,14 @@ def _pilot_current_unit_projection(
                 "decisions": [_decision_projection(item) for item in port_result.decisions],
                 "official_result": {
                     "evaluator_id": official.evaluator_id,
+                    "official_success_metric_id": official.official_success_metric_id,
+                    "official_success_operator": official.official_success_operator,
+                    "official_success_threshold_float_hex": (
+                        official.official_success_threshold_float_hex
+                    ),
                     "reason_sha256": official.reason_sha256,
                     "result_payload_sha256": official.result_payload_sha256,
+                    "score_float_hex": official.score_float_hex,
                     "score_ppm": official.score_ppm,
                     "successful": official.successful,
                     "task_id": official.task_id,
@@ -6508,6 +8635,7 @@ def _pilot_current_unit_projection(
         ),
         "host": invocation.cell.host.value,
         "port_result": port_projection,
+        "resource_switch_evidence_sha256": invocation.resource_switch_evidence_sha256,
         "reset_result": reset_projection,
         "sequence_index": invocation.sequence_index,
         "sentinel_mode": invocation.cell.sentinel_mode,
@@ -6692,8 +8820,12 @@ class _CpuFixedExecutionPortV1:
         raw = _hash_projection("cpu-raw-request", binding)
         final = _hash_projection("cpu-final-request", binding) if transform_request else raw
         parsed_action = _hash_projection("cpu-parsed-action", binding)
-        rubric_calls = 2 if semantic_mode else 0
-        history_calls = 1 if semantic_mode else 0
+        rubric_calls = (2 if actor_call_index == 1 else 1) if semantic_mode else 0
+        history_calls = (
+            0
+            if semantic_mode and stage is RunStageV1.R25_PILOT and actor_call_index == 1
+            else (1 if semantic_mode else 0)
+        )
         openai_calls = rubric_calls + history_calls
         logical_call_id = f"cpu-{_hash_projection('cpu-logical-call', binding)[:32]}"
         case_lease: CaseExecutionLeaseBindingV1 | None = None
@@ -6726,7 +8858,7 @@ class _CpuFixedExecutionPortV1:
                     "CASE_EXECUTION_LEASE_MISMATCH", "case broker returned a mismatched lease"
                 )
         history_attempt_sha256: str | None = None
-        if semantic_mode:
+        if history_calls:
             history_attempt_sha256 = _hash_projection("cpu-history-policy-attempt", binding)
         census = DriverCallCensusV1(
             actor_calls=1,
@@ -6919,8 +9051,13 @@ class _CpuFixedExecutionPortV1:
             broker=lease,
         )
         score = 1_000_000 if invocation.sequence_index % 2 == 0 else 0
+        score_float_hex = (score / 1_000_000).hex()
         official_binding: JsonValue = {
             "evaluator_id": OFFICIAL_RESULT_EVALUATOR_ID_V1,
+            "official_success_metric_id": OFFICIAL_SUCCESS_METRIC_ID_V1,
+            "official_success_operator": OFFICIAL_SUCCESS_OPERATOR_V1,
+            "official_success_threshold_float_hex": OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1,
+            "score_float_hex": score_float_hex,
             "score_ppm": score,
             "task_id": invocation.cell.task_id,
             "unit_id": unit_id,
@@ -6934,8 +9071,13 @@ class _CpuFixedExecutionPortV1:
                 else invocation.cell.task_id
             ),
             evaluator_id=OFFICIAL_RESULT_EVALUATOR_ID_V1,
+            official_success_metric_id=OFFICIAL_SUCCESS_METRIC_ID_V1,
+            official_success_operator=OFFICIAL_SUCCESS_OPERATOR_V1,
+            official_success_threshold_float_hex=OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1,
+            score_float_hex=score_float_hex,
             score_ppm=score,
-            successful=score == 1_000_000,
+            successful=float.fromhex(score_float_hex)
+            > float.fromhex(OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1),
             result_payload_sha256=_hash_projection("cpu-official-result", official_binding),
             reason_sha256=_hash_projection("cpu-official-reason", official_binding),
         )
@@ -7010,6 +9152,9 @@ class _ProductionUnitStateV1:
     terminal_audit_sha256s: set[str] = field(default_factory=set)
     cleanup_recovery_outcome: dict[str, JsonValue] | None = None
     resource_dispatch_journal: list[dict[str, JsonValue]] = field(default_factory=list)
+    reset_evidence: dict[str, JsonValue] | None = None
+    official_result_evidence: dict[str, JsonValue] | None = None
+    collector_run_binding: dict[str, JsonValue] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -7104,6 +9249,7 @@ class _ProductionFixedExecutionPortV1:
             raise ProductionDriverError(
                 "PRODUCTION_AUTHORITY_MISMATCH", "factory/pricing authority differs"
             )
+        resource_lifecycle._bind_execution_factory(factory)
         self._factory = factory
         self._config = config
         self._pricing = pricing
@@ -7406,6 +9552,11 @@ class _ProductionFixedExecutionPortV1:
             policy=live_policy,
             sink=self._audit_sink,
             run_fatal_latch=self._run_fatal_latch,
+            actor_attempt_schema_version=(
+                PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION_V2
+                if stage is RunStageV1.R25_PILOT
+                else PRODUCTION_ACTOR_PROVIDER_ATTEMPT_SCHEMA_VERSION
+            ),
         )
         timeout_ms = max(1, (deadline_ns - time.monotonic_ns()) // 1_000_000)
         config = SentinelHostConfig(
@@ -8179,6 +10330,53 @@ class _ProductionFixedExecutionPortV1:
                         "production-unit-resource-dispatch-journal",
                         cast(JsonValue, resource_dispatches),
                     ),
+                    **(
+                        {
+                            "collector_run_binding": (
+                                None
+                                if state.collector_run_binding is None
+                                else dict(state.collector_run_binding)
+                            ),
+                            "collector_run_binding_sha256": (
+                                None
+                                if state.collector_run_binding is None
+                                else _hash_projection(
+                                    "production-collector-run-binding",
+                                    cast(JsonValue, state.collector_run_binding),
+                                )
+                            ),
+                            "official_result_evidence": (
+                                None
+                                if state.official_result_evidence is None
+                                else dict(state.official_result_evidence)
+                            ),
+                            "official_result_evidence_sha256": (
+                                None
+                                if state.official_result_evidence is None
+                                else _hash_projection(
+                                    "production-official-result",
+                                    cast(JsonValue, state.official_result_evidence),
+                                )
+                            ),
+                            "reset_evidence": (
+                                None if state.reset_evidence is None else dict(state.reset_evidence)
+                            ),
+                            "reset_evidence_sha256": (
+                                None
+                                if state.reset_evidence is None
+                                else _hash_projection(
+                                    "production-pilot-reset",
+                                    cast(JsonValue, state.reset_evidence),
+                                )
+                            ),
+                        }
+                        if (
+                            state.reset_evidence is not None
+                            or state.official_result_evidence is not None
+                            or state.collector_run_binding is not None
+                        )
+                        else {}
+                    ),
                     "unit_deadline": cast(
                         JsonValue,
                         _deadline_projection(
@@ -8552,6 +10750,20 @@ class _ProductionFixedExecutionPortV1:
     def prepare_pilot(self, pilot: FrozenPilotManifestV1) -> None:
         self._require_pilot_scope_authorized()
         with self._lock:
+            if (
+                self._resource_lifecycle.resource_topology
+                is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+            ):
+                switch_authority = self._resource_lifecycle.pilot_switch_authority
+                if (
+                    type(switch_authority) is not ProductionPilotSwitchAuthorityV1
+                    or switch_authority.factory_binding_sha256
+                    != self._factory.factory_binding_sha256
+                ):
+                    raise ProductionDriverError(
+                        "PILOT_SWITCH_FACTORY_MISMATCH",
+                        "pilot switch authority and execution factory differ",
+                    )
             if self._pilot_inputs is not None:
                 raise ProductionDriverError("PILOT_ALREADY_PREPARED", "pilot inputs repeat")
             resolved = resolve_pilot_task_inputs_v1(
@@ -8616,6 +10828,14 @@ class _ProductionFixedExecutionPortV1:
                 task_input=task_input,
             )
             self._units[unit_id] = state
+        if invocation.resource_switch_evidence_sha256 is not None:
+            switch_raw = self._resource_lifecycle.consume_pilot_switch_evidence(
+                invocation.cell.host,
+                expected_sha256=invocation.resource_switch_evidence_sha256,
+            )
+            state.resource_dispatch_journal.append(
+                cast(dict[str, JsonValue], json.loads(switch_raw))
+            )
         self._require_resource_dispatch(
             invocation.cell.host,
             ProductionDispatchKindV1.BACKEND_RESET,
@@ -8642,42 +10862,42 @@ class _ProductionFixedExecutionPortV1:
         state.observation = observation
         state.task_goal = task_goal
         screenshot_sha256 = hashlib.sha256(_pil_png_bytes(observation.screenshot)).hexdigest()
+        effective_reset_state: dict[str, JsonValue] = {
+            "observation_screenshot_sha256": screenshot_sha256,
+            "reset_seed": task_input.reset_seed,
+            "task_goal_sha256": hashlib.sha256(task_goal.encode("utf-8")).hexdigest(),
+            "task_id": task_input.task_id,
+            "task_name": task_input.task_name,
+            "task_parameters_sha256": task_input.task_parameters_sha256,
+            "trial": task_input.trial,
+        }
         effective_reset_state_sha256 = _hash_projection(
             "production-pilot-effective-reset-state",
-            cast(
-                JsonValue,
-                {
-                    "observation_screenshot_sha256": screenshot_sha256,
-                    "reset_seed": task_input.reset_seed,
-                    "task_goal_sha256": hashlib.sha256(task_goal.encode("utf-8")).hexdigest(),
-                    "task_id": task_input.task_id,
-                    "task_name": task_input.task_name,
-                    "task_parameters_sha256": task_input.task_parameters_sha256,
-                    "trial": task_input.trial,
-                },
-            ),
+            cast(JsonValue, effective_reset_state),
+        )
+        reset_evidence: dict[str, JsonValue] = {
+            "backend_endpoint": f"http://127.0.0.1:{self._config.backend_port}",
+            "case_id": f"pilot-cell-{invocation.sequence_index:03d}",
+            "effective_reset_state": cast(JsonValue, effective_reset_state),
+            "effective_reset_state_sha256": effective_reset_state_sha256,
+            "manifest_sha256": invocation.manifest_sha256,
+            "observation_screenshot_sha256": screenshot_sha256,
+            "resolved_inputs_sha256": resolved_pilot_task_inputs_sha256(resolved),
+            "reset_seed": task_input.reset_seed,
+            "resource_switch_evidence_sha256": invocation.resource_switch_evidence_sha256,
+            "task_id": task_input.task_id,
+            "task_name": task_input.task_name,
+            "task_parameters_sha256": task_input.task_parameters_sha256,
+            "trial": task_input.trial,
+        }
+        state.reset_evidence = dict(reset_evidence)
+        reset_evidence_preimage = _projection_preimage(
+            "production-pilot-reset", cast(JsonValue, reset_evidence)
         )
         return _PilotResetResultV1(
-            reset_receipt_sha256=_hash_projection(
-                "production-pilot-reset",
-                cast(
-                    JsonValue,
-                    {
-                        "backend_endpoint": f"http://127.0.0.1:{self._config.backend_port}",
-                        "case_id": f"pilot-cell-{invocation.sequence_index:03d}",
-                        "manifest_sha256": invocation.manifest_sha256,
-                        "effective_reset_state_sha256": effective_reset_state_sha256,
-                        "observation_screenshot_sha256": screenshot_sha256,
-                        "resolved_inputs_sha256": resolved_pilot_task_inputs_sha256(resolved),
-                        "task_id": task_input.task_id,
-                        "task_name": task_input.task_name,
-                        "task_parameters_sha256": task_input.task_parameters_sha256,
-                        "trial": task_input.trial,
-                        "reset_seed": task_input.reset_seed,
-                    },
-                ),
-            ),
+            reset_receipt_sha256=hashlib.sha256(reset_evidence_preimage).hexdigest(),
             effective_reset_state_sha256=effective_reset_state_sha256,
+            reset_evidence_preimage=reset_evidence_preimage,
         )
 
     def run_smoke_case(
@@ -8899,30 +11119,43 @@ class _ProductionFixedExecutionPortV1:
         ):
             raise ProductionDriverError("INVALID_OFFICIAL_RESULT", "official score differs")
         score_ppm = round(score * 1_000_000)
+        score_float_hex = score.hex()
         reason_hash = hashlib.sha256(reason.encode("utf-8")).hexdigest()
+        official_result_evidence: dict[str, JsonValue] = {
+            "evaluator_id": OFFICIAL_RESULT_EVALUATOR_ID_V1,
+            "official_success_metric_id": OFFICIAL_SUCCESS_METRIC_ID_V1,
+            "official_success_operator": OFFICIAL_SUCCESS_OPERATOR_V1,
+            "official_success_threshold_float_hex": OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1,
+            "reason": reason,
+            "reason_sha256": reason_hash,
+            "score_float_hex": score_float_hex,
+            "score_ppm": score_ppm,
+            "task_id": invocation.cell.task_id,
+        }
+        official_result_evidence_preimage = _projection_preimage(
+            "production-official-result", cast(JsonValue, official_result_evidence)
+        )
         official = OfficialTaskResultEvidenceV1(
             task_id=invocation.cell.task_id,
             evaluator_id=OFFICIAL_RESULT_EVALUATOR_ID_V1,
+            official_success_metric_id=OFFICIAL_SUCCESS_METRIC_ID_V1,
+            official_success_operator=OFFICIAL_SUCCESS_OPERATOR_V1,
+            official_success_threshold_float_hex=OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1,
+            score_float_hex=score_float_hex,
             score_ppm=score_ppm,
-            successful=score_ppm == 1_000_000,
-            result_payload_sha256=_hash_projection(
-                "production-official-result",
-                cast(
-                    JsonValue,
-                    {
-                        "evaluator_id": OFFICIAL_RESULT_EVALUATOR_ID_V1,
-                        "reason_sha256": reason_hash,
-                        "score_ppm": score_ppm,
-                        "task_id": invocation.cell.task_id,
-                    },
-                ),
-            ),
+            successful=score > float.fromhex(OFFICIAL_SUCCESS_THRESHOLD_FLOAT_HEX_V1),
+            result_payload_sha256=hashlib.sha256(official_result_evidence_preimage).hexdigest(),
             reason_sha256=reason_hash,
         )
+        state.official_result_evidence = dict(official_result_evidence)
         state.score = score
         state.score_reason = reason
         state.completed = True
-        return _PilotPortResultV1(decisions=tuple(decisions), official_result=official)
+        return _PilotPortResultV1(
+            decisions=tuple(decisions),
+            official_result=official,
+            official_result_evidence_preimage=official_result_evidence_preimage,
+        )
 
     def _unpublished_unit_evidence_for(self, unit_id: str) -> _UnpublishedUnitEvidenceV1 | None:
         archive = getattr(self, "_unpublished_unit_evidence", None)
@@ -9121,6 +11354,12 @@ class _ProductionFixedExecutionPortV1:
 
     def cleanup_unit(self, invocation: _SmokeInvocationV1 | _PilotInvocationV1) -> _CleanupResultV1:
         unit_id = self._unit_id(invocation)
+        factory = getattr(self, "_factory", None)
+        durable_full_unit = (
+            type(factory) is ProductionPostPreflightFactoryV1
+            and factory.sequence_execution_scope.value == "R24_R25_FULL"
+        )
+        durable_pilot = type(invocation) is _PilotInvocationV1 and durable_full_unit
         with self._lock:
             state = self._units.get(unit_id)
         if state is None:
@@ -9159,6 +11398,7 @@ class _ProductionFixedExecutionPortV1:
         if journal_failure_code is not None:
             failures.append(journal_failure_code)
         teardown_result: object = None
+        teardown_result_evidence: dict[str, JsonValue] | None = None
         teardown_result_sha256: str | None = None
         teardown_attempted = False
         if state.environment is not None and not cleanup_deadline_expired:
@@ -9238,19 +11478,18 @@ class _ProductionFixedExecutionPortV1:
                         cleanup_dispatch_failure_code = "TASK_TEARDOWN_RESULT_INVALID"
                         failures.append(cleanup_dispatch_failure_code)
                     else:
+                        teardown_result_evidence = {
+                            "message": teardown_result.message,
+                            "message_sha256": hashlib.sha256(
+                                teardown_result.message.encode("utf-8")
+                            ).hexdigest(),
+                            "request_dispatched": teardown_result.request_dispatched,
+                            "status": teardown_result.status.value,
+                            "task_name": state.task_name,
+                        }
                         teardown_result_sha256 = _hash_projection(
                             "production-task-teardown-result",
-                            cast(
-                                JsonValue,
-                                {
-                                    "message_sha256": hashlib.sha256(
-                                        teardown_result.message.encode("utf-8")
-                                    ).hexdigest(),
-                                    "request_dispatched": teardown_result.request_dispatched,
-                                    "status": teardown_result.status.value,
-                                    "task_name": state.task_name,
-                                },
-                            ),
+                            cast(JsonValue, teardown_result_evidence),
                         )
             except Exception as exc:
                 cleanup_dispatch_failure_code = (
@@ -9277,6 +11516,10 @@ class _ProductionFixedExecutionPortV1:
             except Exception:
                 failures.append("AGENT_CLOSE_FAILED")
         final_manifest_hash: str | None = None
+        final_manifest_byte_count: int | None = None
+        final_manifest_path: Path | None = None
+        final_manifest_capture_complete: bool | None = None
+        final_manifest_runtime_status: str | None = None
         task_run_id: str | None = None
         if state.lifecycle is not None and state.task_binding is not None:
             binding = state.task_binding
@@ -9329,6 +11572,33 @@ class _ProductionFixedExecutionPortV1:
                 else:
                     raw = final_path.read_bytes()
                     final_manifest_hash = hashlib.sha256(raw).hexdigest()
+                    final_manifest_byte_count = len(raw)
+                    if durable_full_unit:
+                        try:
+                            final_manifest_value = json.loads(raw)
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            failures.append("COLLECTOR_FINALIZE_FAILED")
+                        else:
+                            recorder = getattr(state.lifecycle, "recorder", None)
+                            if (
+                                type(final_manifest_value) is not dict
+                                or type(final_manifest_value.get("capture_complete")) is not bool
+                                or final_manifest_value.get("runtime_status")
+                                not in {"completed", "aborted", "crashed"}
+                                or final_manifest_value.get("run_id") != state.lifecycle.run_id
+                                or final_path.name != "manifest.final.json"
+                                or recorder is None
+                                or final_path.parent != recorder.run_root
+                            ):
+                                failures.append("COLLECTOR_FINALIZE_FAILED")
+                            else:
+                                final_manifest_path = final_path.absolute()
+                                final_manifest_capture_complete = cast(
+                                    bool, final_manifest_value["capture_complete"]
+                                )
+                                final_manifest_runtime_status = cast(
+                                    str, final_manifest_value["runtime_status"]
+                                )
             except Exception:
                 failures.append("COLLECTOR_FINALIZE_FAILED")
         if (
@@ -9342,9 +11612,35 @@ class _ProductionFixedExecutionPortV1:
         resource_lifecycle = getattr(self, "_resource_lifecycle", None)
         if (
             not failures
+            and durable_full_unit
+            and final_manifest_path is not None
+            and final_manifest_hash is not None
+            and final_manifest_byte_count is not None
+            and final_manifest_capture_complete is not None
+            and final_manifest_runtime_status is not None
+            and task_run_id is not None
+            and state.lifecycle is not None
+        ):
+            state.collector_run_binding = {
+                "collector_manifest_capture_complete": final_manifest_capture_complete,
+                "collector_manifest_final_byte_count": final_manifest_byte_count,
+                "collector_manifest_final_path": str(final_manifest_path),
+                "collector_manifest_final_sha256": final_manifest_hash,
+                "collector_manifest_runtime_status": final_manifest_runtime_status,
+                "collector_run_id": state.lifecycle.run_id,
+                "collector_run_root": str(final_manifest_path.parent),
+                "collector_task_run_id": task_run_id,
+            }
+        if not failures and durable_full_unit and state.collector_run_binding is None:
+            failures.append("COLLECTOR_DURABLE_BINDING_INCOMPLETE")
+        if (
+            not failures
             and type(resource_lifecycle) is ProductionResourceLifecycleAdapterV1
-            and resource_lifecycle.resource_topology
-            is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+            and (
+                durable_full_unit
+                or resource_lifecycle.resource_topology
+                is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+            )
         ):
             try:
                 final_unit_journal_preimage = self._unit_journal_snapshot(state)
@@ -9371,6 +11667,71 @@ class _ProductionFixedExecutionPortV1:
             if final_unit_journal_preimage is None
             else hashlib.sha256(final_unit_journal_preimage).hexdigest()
         )
+        if durable_pilot:
+            assert type(invocation) is _PilotInvocationV1
+            if (
+                state.collector_run_binding is None
+                or final_unit_journal_preimage is None
+                or final_unit_journal_sha256 is None
+                or teardown_result_evidence is None
+                or teardown_result_sha256 is None
+            ):
+                raise ProductionDriverError(
+                    "PILOT_DURABLE_EVIDENCE_INCOMPLETE",
+                    "pilot cleanup lacks its canonical Collector/teardown journal",
+                )
+            collector_run_locator: dict[str, JsonValue] = {
+                **state.collector_run_binding,
+                "manifest_sha256": invocation.manifest_sha256,
+                "run_id": invocation.run_id,
+                "sequence_index": invocation.sequence_index,
+                "task_id": invocation.cell.task_id,
+                "unit_id": unit_id,
+                "unit_journal_sha256": final_unit_journal_sha256,
+            }
+            collector_run_locator_preimage = canonical_json_bytes(
+                cast(JsonValue, collector_run_locator)
+            )
+            collector_run_locator_sha256 = hashlib.sha256(
+                collector_run_locator_preimage
+            ).hexdigest()
+            cleanup_evidence: dict[str, JsonValue] = {
+                "cleanup_dispatch_authorized": (
+                    teardown_attempted if state.environment is not None else None
+                ),
+                "collector_manifest_sha256": final_manifest_hash,
+                "collector_run_locator": cast(JsonValue, collector_run_locator),
+                "collector_run_locator_sha256": collector_run_locator_sha256,
+                "deadline_binding": cast(
+                    JsonValue,
+                    _deadline_projection(
+                        execution_deadline=state.deadline_monotonic_ns,
+                        cleanup_deadline=state.cleanup_deadline_monotonic_ns,
+                        authority_deadline=state.authority_deadline_monotonic_ns,
+                        attempt_termination_upper_bound_ns=(
+                            state.attempt_termination_upper_bound_ns
+                        ),
+                    ),
+                ),
+                "manifest_sha256": invocation.manifest_sha256,
+                "task_run_id": task_run_id,
+                "teardown_attempted": teardown_attempted,
+                "teardown_result": cast(JsonValue, teardown_result_evidence),
+                "teardown_result_sha256": teardown_result_sha256,
+                "unit_journal_sha256": final_unit_journal_sha256,
+                "unit_id": unit_id,
+            }
+            cleanup_evidence_preimage = _projection_preimage(
+                "production-unit-cleanup", cast(JsonValue, cleanup_evidence)
+            )
+            return _CleanupResultV1(
+                cleanup_receipt_sha256=hashlib.sha256(cleanup_evidence_preimage).hexdigest(),
+                cleanup_evidence_preimage=cleanup_evidence_preimage,
+                collector_run_locator_preimage=collector_run_locator_preimage,
+                unit_journal_preimage=final_unit_journal_preimage,
+                unit_journal_sha256=final_unit_journal_sha256,
+                unit_journal_validated_reference=final_unit_journal_validation,
+            )
         return _CleanupResultV1(
             cleanup_receipt_sha256=_hash_projection(
                 "production-unit-cleanup",
@@ -9475,16 +11836,17 @@ def _validate_pilot_decisions(
             )
         expected_rubric_calls = 2 if value.actor_call_index == 1 else 1
         if cell.arm is PilotArmV1.JOINT_SENTINEL:
-            no_history_first_call = (
-                value.actor_call_index == 1 and value.history_policy_attempt_receipt_sha256 is None
-            )
-            expected_history_calls = 0 if no_history_first_call else 1
+            expected_history_calls = 0 if value.actor_call_index == 1 else 1
             if (
                 value.census.offline_rubric_evaluations != 0
                 or value.census.rubric_openai_calls != expected_rubric_calls
                 or value.census.history_policy_openai_calls != expected_history_calls
                 or value.census.openai_calls != expected_rubric_calls + expected_history_calls
                 or len(value.rubric_attempt_receipt_sha256s) != expected_rubric_calls
+                or (
+                    value.actor_call_index == 1
+                    and value.history_policy_attempt_receipt_sha256 is not None
+                )
                 or (
                     value.actor_call_index > 1
                     and value.history_policy_attempt_receipt_sha256 is None
@@ -9619,11 +11981,17 @@ class FixedLiveSmokeAdapterV1:
                     cleanup_error = exc
                 if cleanup_error is not None:
                     cleanup_failure_code = _exception_code(cleanup_error, "UNIT_CLEANUP_FAILED")
+                    first_failure_code = (
+                        _exception_code(dispatch_error, "SMOKE_CASE_EXECUTION_FAILED")
+                        if dispatch_error is not None
+                        else cleanup_failure_code
+                    )
+                    first_failure_phase = "DISPATCH" if dispatch_error is not None else "CLEANUP"
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
-                            failure_phase="CLEANUP",
-                            failure_code=cleanup_failure_code,
+                            failure_phase=first_failure_phase,
+                            failure_code=first_failure_code,
                         )
                     self._failure_evidence[stage] = _smoke_unit_failure_preimage(
                         context=trusted_context,
@@ -9635,21 +12003,25 @@ class FixedLiveSmokeAdapterV1:
                         cleanup_attempted=cleanup_attempted,
                         cleanup_error=cleanup_error,
                         dispatch_error=dispatch_error,
-                        failure_phase="CLEANUP",
-                        failure_code=cleanup_failure_code,
+                        failure_phase=first_failure_phase,
+                        failure_code=first_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         self._port._release_unpublished_unit_evidence(invocation)
                     raise ProductionDriverError(
-                        cleanup_failure_code, "smoke unit cleanup failed closed"
+                        first_failure_code,
+                        "smoke unit first failure retained; cleanup also failed",
                     ) from None
                 if dispatch_error is not None or port_result is None:
+                    dispatch_failure_code = _exception_code(
+                        dispatch_error, "SMOKE_CASE_EXECUTION_FAILED"
+                    )
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
                             failure_phase="DISPATCH",
-                            failure_code="SMOKE_CASE_EXECUTION_FAILED",
+                            failure_code=dispatch_failure_code,
                         )
                     self._failure_evidence[stage] = _smoke_unit_failure_preimage(
                         context=trusted_context,
@@ -9662,13 +12034,13 @@ class FixedLiveSmokeAdapterV1:
                         cleanup_error=None,
                         dispatch_error=dispatch_error,
                         failure_phase="DISPATCH",
-                        failure_code="SMOKE_CASE_EXECUTION_FAILED",
+                        failure_code=dispatch_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         self._port._release_unpublished_unit_evidence(invocation)
                     raise ProductionDriverError(
-                        "SMOKE_CASE_EXECUTION_FAILED", "smoke case failed closed"
+                        dispatch_failure_code, "smoke case dispatch failed closed"
                     ) from None
                 assert cleanup is not None
                 try:
@@ -9774,7 +12146,12 @@ class FixedLiveSmokeAdapterV1:
                 cases=tuple(records),
                 census=census,
                 schema_version=(
-                    PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2
+                    PRODUCTION_FULL_SMOKE_EVIDENCE_SCHEMA_VERSION_V3
+                    if (
+                        type(self._port) is _ProductionFixedExecutionPortV1
+                        and trusted_context.sequence_execution_scope == "R24_R25_FULL"
+                    )
+                    else PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2
                     if any(item.unit_journal_preimage is not None for item in records)
                     else PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
                 ),
@@ -9869,7 +12246,6 @@ class FixedPilotAdapterV1:
             _, policy_sha = _history_policy_stage(openai_stages)
             _validate_lease(lease, trusted_context.manifest_sha256)
             _validate_pilot_reservation(trusted_pilot, trusted_context)
-            self._port.prepare_pilot(trusted_pilot)
             resource_hashes = {value.host: _resource_sha256(value) for value in resources}
             resources_sha = _hash_projection(
                 "actor-resource-matrix",
@@ -9886,7 +12262,128 @@ class FixedPilotAdapterV1:
             )
             records: list[PilotCellEvidenceV1] = []
             effective_reset_states: dict[str, str] = {}
+            resource_lifecycle = (
+                self._port._resource_lifecycle
+                if type(self._port) is _ProductionFixedExecutionPortV1
+                else None
+            )
+            switch_authority = (
+                None if resource_lifecycle is None else resource_lifecycle.pilot_switch_authority
+            )
+            shared_sequential = (
+                resource_lifecycle is not None
+                and resource_lifecycle.resource_topology
+                is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+            )
+            if shared_sequential and (
+                type(switch_authority) is not ProductionPilotSwitchAuthorityV1
+                or switch_authority.host_blocks != _pilot_host_blocks(trusted_pilot)
+            ):
+                raise ProductionDriverError(
+                    "PILOT_SWITCH_AUTHORITY_MISMATCH",
+                    "pilot manifest and shared switch authority differ",
+                )
+            if shared_sequential:
+                assert switch_authority is not None
+                required_pilot_wall_time_ms = (
+                    trusted_pilot.max_total_wall_time_seconds
+                    + len(switch_authority.host_blocks)
+                    * switch_authority.max_model_switch_wall_time_seconds
+                ) * 1_000
+                if trusted_context.remaining_wall_time_ms < required_pilot_wall_time_ms:
+                    raise ProductionDriverError(
+                        "PILOT_WALL_RESERVATION_UNAVAILABLE",
+                        "full pilot plus every model switch lacks a complete reservation",
+                    )
+            self._port.prepare_pilot(trusted_pilot)
+            switch_index = 0
+            previous_host: PilotHostV1 | None = None
             for index, cell in enumerate(trusted_pilot.cells):
+                switch_evidence_sha256: str | None = None
+                if shared_sequential and (previous_host is None or previous_host is not cell.host):
+                    assert resource_lifecycle is not None
+                    assert switch_authority is not None
+                    switch_deadline_ns = min(
+                        trusted_context.authority_deadline_monotonic_ns,
+                        time.monotonic_ns()
+                        + switch_authority.max_model_switch_wall_time_seconds * 1_000_000_000,
+                    )
+                    try:
+                        switch_result = resource_lifecycle.ensure_pilot_host(
+                            cell.host,
+                            trusted_context,
+                            switch_authority,
+                            switch_index=switch_index,
+                            switch_deadline_monotonic_ns=switch_deadline_ns,
+                        )
+                        if (
+                            type(switch_result) is not AdapterStageResultV1
+                            or switch_result.stage is not RunStageV1.R25_PILOT
+                            or switch_result.manifest_sha256 != trusted_context.manifest_sha256
+                            or switch_result.actor_calls != 0
+                            or switch_result.openai_calls != 0
+                            or switch_result.actor_actions != 0
+                            or switch_result.cost_usd_micros != 0
+                            or switch_result.provider_final_request_proven
+                            or hashlib.sha256(switch_result.evidence_preimage).hexdigest()
+                            != switch_result.evidence_sha256
+                        ):
+                            raise ProductionDriverError(
+                                "INVALID_PILOT_SWITCH_RESULT",
+                                "pilot switch evidence binding differs",
+                            )
+                        switch_evidence_sha256 = switch_result.evidence_sha256
+                    except Exception as exc:
+                        switch_failure = resource_lifecycle.pilot_switch_failure_evidence_preimage()
+                        completed_records = [
+                            _pilot_cell_evidence_projection(item) for item in records
+                        ]
+                        failure_code = _exception_code(exc, "PILOT_MODEL_SWITCH_FAILED")
+                        self._failure_evidence = canonical_json_bytes(
+                            cast(
+                                JsonValue,
+                                {
+                                    "completed_cell_indices": [
+                                        item.sequence_index for item in records
+                                    ],
+                                    "completed_records": completed_records,
+                                    "completed_records_sha256": _hash_projection(
+                                        "pilot-completed-unit-journal",
+                                        cast(JsonValue, completed_records),
+                                    ),
+                                    "failed_cell_index": index,
+                                    "failed_task_id": cell.task_id,
+                                    "failure_code": failure_code,
+                                    "failure_phase": "RESOURCE_SWITCH",
+                                    "manifest_sha256": trusted_context.manifest_sha256,
+                                    "resource_switch_failure_evidence": (
+                                        None
+                                        if switch_failure is None
+                                        else cast(JsonValue, json.loads(switch_failure))
+                                    ),
+                                    "resource_switch_failure_evidence_sha256": (
+                                        None
+                                        if switch_failure is None
+                                        else hashlib.sha256(switch_failure).hexdigest()
+                                    ),
+                                    "run_id": trusted_context.run_id,
+                                    "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
+                                    "stage": RunStageV1.R25_PILOT.value,
+                                    "status": "FAILED_GLOBAL_RESOURCE_CLEANUP_REQUIRED",
+                                },
+                            )
+                        )
+                        if isinstance(exc, ProductionDriverError):
+                            raise
+                        raise ProductionDriverError(
+                            failure_code, "pilot resource switch failed closed"
+                        ) from exc
+                    switch_index += 1
+                    previous_host = cell.host
+                # A host switch owns a separate manifest-bound deadline.  Only
+                # after it completes do we start the cell clock, so the switch
+                # budget is neither charged to nor double-counted with the
+                # per-cell execution budget.
                 unit_started_ns = time.monotonic_ns()
                 execution_deadline_ns, cleanup_deadline_ns = _freeze_unit_deadlines(
                     unit_started_ns=unit_started_ns,
@@ -9915,6 +12412,7 @@ class FixedPilotAdapterV1:
                     attempt_termination_upper_bound_ns=(
                         self._port.attempt_termination_upper_bound_ns
                     ),
+                    resource_switch_evidence_sha256=switch_evidence_sha256,
                 )
                 reset: _PilotResetResultV1 | None = None
                 port_result: _PilotPortResultV1 | None = None
@@ -9955,11 +12453,17 @@ class FixedPilotAdapterV1:
                     cleanup_error = exc
                 if cleanup_error is not None:
                     cleanup_failure_code = _exception_code(cleanup_error, "UNIT_CLEANUP_FAILED")
+                    first_failure_code = (
+                        _exception_code(dispatch_error, "PILOT_CELL_EXECUTION_FAILED")
+                        if dispatch_error is not None
+                        else cleanup_failure_code
+                    )
+                    first_failure_phase = "DISPATCH" if dispatch_error is not None else "CLEANUP"
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
-                            failure_phase="CLEANUP",
-                            failure_code=cleanup_failure_code,
+                            failure_phase=first_failure_phase,
+                            failure_code=first_failure_code,
                         )
                     self._failure_evidence = _pilot_unit_failure_preimage(
                         context=trusted_context,
@@ -9971,21 +12475,25 @@ class FixedPilotAdapterV1:
                         cleanup_attempted=cleanup_attempted,
                         cleanup_error=cleanup_error,
                         dispatch_error=dispatch_error,
-                        failure_phase="CLEANUP",
-                        failure_code=cleanup_failure_code,
+                        failure_phase=first_failure_phase,
+                        failure_code=first_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         self._port._release_unpublished_unit_evidence(invocation)
                     raise ProductionDriverError(
-                        cleanup_failure_code, "pilot unit cleanup failed closed"
+                        first_failure_code,
+                        "pilot unit first failure retained; cleanup also failed",
                     ) from None
                 if dispatch_error is not None or reset is None or port_result is None:
+                    dispatch_failure_code = _exception_code(
+                        dispatch_error, "PILOT_CELL_EXECUTION_FAILED"
+                    )
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         unit_failure_evidence = self._port._recoverable_failure_evidence_for_unit(
                             invocation,
                             failure_phase="DISPATCH",
-                            failure_code="PILOT_CELL_EXECUTION_FAILED",
+                            failure_code=dispatch_failure_code,
                         )
                     self._failure_evidence = _pilot_unit_failure_preimage(
                         context=trusted_context,
@@ -9998,13 +12506,13 @@ class FixedPilotAdapterV1:
                         cleanup_error=None,
                         dispatch_error=dispatch_error,
                         failure_phase="DISPATCH",
-                        failure_code="PILOT_CELL_EXECUTION_FAILED",
+                        failure_code=dispatch_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
                     )
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         self._port._release_unpublished_unit_evidence(invocation)
                     raise ProductionDriverError(
-                        "PILOT_CELL_EXECUTION_FAILED", "pilot cell failed closed"
+                        dispatch_failure_code, "pilot cell dispatch failed closed"
                     ) from None
                 assert cleanup is not None
                 try:
@@ -10060,7 +12568,30 @@ class FixedPilotAdapterV1:
                         official_result=port_result.official_result,
                         cleanup_receipt_sha256=cleanup.cleanup_receipt_sha256,
                         census=cell_census,
+                        reset_evidence_preimage=reset.reset_evidence_preimage,
+                        official_result_evidence_preimage=(
+                            port_result.official_result_evidence_preimage
+                        ),
+                        cleanup_evidence_preimage=cleanup.cleanup_evidence_preimage,
+                        collector_run_locator_preimage=(cleanup.collector_run_locator_preimage),
+                        unit_journal_preimage=cleanup.unit_journal_preimage,
+                        unit_journal_sha256=cleanup.unit_journal_sha256,
+                        unit_journal_validated_reference=(cleanup.unit_journal_validated_reference),
                     )
+                    admission_wall_ms = max(
+                        record.census.wall_time_ms,
+                        (time.monotonic_ns() - unit_started_ns + 999_999) // 1_000_000,
+                    )
+                    if admission_wall_ms > trusted_pilot.per_cell_timeout_seconds * 1_000:
+                        raise ProductionDriverError(
+                            "PILOT_CELL_TIMEOUT",
+                            "pilot cell evidence admission exceeded its wall budget",
+                        )
+                    if admission_wall_ms != record.census.wall_time_ms:
+                        record = replace(
+                            record,
+                            census=replace(record.census, wall_time_ms=admission_wall_ms),
+                        )
                     cumulative = _sum_census(tuple(item.census for item in (*records, record)))
                     if (
                         cumulative.actor_calls > trusted_pilot.max_total_actor_calls
@@ -10073,6 +12604,82 @@ class FixedPilotAdapterV1:
                             "PILOT_BUDGET_EXCEEDED",
                             "pilot cumulative census exceeded authority",
                         )
+                    completed_records = [
+                        _pilot_cell_evidence_projection(item) for item in (*records, record)
+                    ]
+                    next_failure_evidence = canonical_json_bytes(
+                        cast(
+                            JsonValue,
+                            {
+                                "completed_cell_indices": [
+                                    item.sequence_index for item in (*records, record)
+                                ],
+                                "completed_records": completed_records,
+                                "completed_records_sha256": _hash_projection(
+                                    "pilot-completed-unit-journal",
+                                    cast(JsonValue, completed_records),
+                                ),
+                                "failure_code": "PILOT_STAGE_INTERRUPTED",
+                                "manifest_sha256": trusted_context.manifest_sha256,
+                                "run_id": trusted_context.run_id,
+                                "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
+                                "stage": RunStageV1.R25_PILOT.value,
+                                "status": "IN_PROGRESS",
+                            },
+                        )
+                    )
+                    admitted_ns = time.monotonic_ns()
+                    admitted_wall_ms = max(
+                        record.census.wall_time_ms,
+                        (admitted_ns - unit_started_ns + 999_999) // 1_000_000,
+                    )
+                    if (
+                        admitted_ns >= cleanup_deadline_ns
+                        or admitted_wall_ms > trusted_pilot.per_cell_timeout_seconds * 1_000
+                    ):
+                        raise ProductionDriverError(
+                            "PILOT_CELL_TIMEOUT",
+                            "pilot cell durable evidence crossed its wall deadline",
+                        )
+                    if admitted_wall_ms != record.census.wall_time_ms:
+                        record = replace(
+                            record,
+                            census=replace(record.census, wall_time_ms=admitted_wall_ms),
+                        )
+                        completed_records = [
+                            _pilot_cell_evidence_projection(item) for item in (*records, record)
+                        ]
+                        next_failure_evidence = canonical_json_bytes(
+                            cast(
+                                JsonValue,
+                                {
+                                    "completed_cell_indices": [
+                                        item.sequence_index for item in (*records, record)
+                                    ],
+                                    "completed_records": completed_records,
+                                    "completed_records_sha256": _hash_projection(
+                                        "pilot-completed-unit-journal",
+                                        cast(JsonValue, completed_records),
+                                    ),
+                                    "failure_code": "PILOT_STAGE_INTERRUPTED",
+                                    "manifest_sha256": trusted_context.manifest_sha256,
+                                    "run_id": trusted_context.run_id,
+                                    "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
+                                    "stage": RunStageV1.R25_PILOT.value,
+                                    "status": "IN_PROGRESS",
+                                },
+                            )
+                        )
+                        final_admission_ns = time.monotonic_ns()
+                        if (
+                            final_admission_ns >= cleanup_deadline_ns
+                            or (final_admission_ns - unit_started_ns + 999_999) // 1_000_000
+                            > trusted_pilot.per_cell_timeout_seconds * 1_000
+                        ):
+                            raise ProductionDriverError(
+                                "PILOT_CELL_TIMEOUT",
+                                "pilot cell final evidence projection crossed its wall deadline",
+                            )
                 except Exception as exc:
                     failure_code = _exception_code(exc, "PILOT_POST_DISPATCH_ADMISSION_FAILED")
                     if type(self._port) is _ProductionFixedExecutionPortV1:
@@ -10104,25 +12711,12 @@ class FixedPilotAdapterV1:
                         "pilot evidence admission failed closed",
                     ) from exc
                 records.append(record)
-                completed_records = [_pilot_cell_evidence_projection(item) for item in records]
-                self._failure_evidence = canonical_json_bytes(
-                    cast(
-                        JsonValue,
-                        {
-                            "completed_cell_indices": [item.sequence_index for item in records],
-                            "completed_records": completed_records,
-                            "completed_records_sha256": _hash_projection(
-                                "pilot-completed-unit-journal",
-                                cast(JsonValue, completed_records),
-                            ),
-                            "failure_code": "PILOT_STAGE_INTERRUPTED",
-                            "manifest_sha256": trusted_context.manifest_sha256,
-                            "run_id": trusted_context.run_id,
-                            "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
-                            "stage": RunStageV1.R25_PILOT.value,
-                            "status": "IN_PROGRESS",
-                        },
-                    )
+                self._failure_evidence = next_failure_evidence
+            if shared_sequential and (
+                switch_authority is None or switch_index != len(switch_authority.host_blocks)
+            ):
+                raise ProductionDriverError(
+                    "PILOT_SWITCH_CENSUS_MISMATCH", "pilot switch census differs"
                 )
             census = _sum_census(tuple(record.census for record in records))
             evidence = PilotStageEvidenceV1(
@@ -10133,11 +12727,21 @@ class FixedPilotAdapterV1:
                 history_policy_stage_sha256=policy_sha,
                 cells=tuple(records),
                 census=census,
+                schema_version=(
+                    PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2
+                    if all(item.unit_journal_preimage is not None for item in records)
+                    else PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+                ),
             )
             self._evidence = evidence
             evidence_preimage = canonical_json_bytes(
                 cast(JsonValue, pilot_stage_evidence_projection(evidence))
             )
+            if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                raise ProductionDriverError(
+                    "PILOT_STAGE_DEADLINE_EXCEEDED",
+                    "pilot stage evidence crossed its absolute authority deadline",
+                )
             return AdapterStageResultV1(
                 stage=RunStageV1.R25_PILOT,
                 manifest_sha256=trusted_context.manifest_sha256,
@@ -10247,25 +12851,22 @@ def build_production_driver_v1(
             "RESOURCE_LIFECYCLE_REQUIRED",
             "exact shared production resource lifecycle is required",
         )
-    shared_binding_claimed = (
-        factory.sequence_execution_scope.value == "R24_LIVE_SMOKE_ONLY"
-        or runtime_config.resource_topology
-        is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
-        or resource_lifecycle.resource_topology
-        is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
-    )
-    if shared_binding_claimed and (
-        factory.sequence_execution_scope.value != "R24_LIVE_SMOKE_ONLY"
-        or factory.runtime_config_sha256 != confirmed_runtime_config_sha256
+    scope = factory.sequence_execution_scope.value
+    common_resource_mismatch = (
+        factory.runtime_config_sha256 != confirmed_runtime_config_sha256
         or resource_lifecycle.runtime_config_sha256 != confirmed_runtime_config_sha256
-        or runtime_config.resource_topology
+        or resource_lifecycle.resource_topology is not runtime_config.resource_topology
+    )
+    smoke_topology_mismatch = scope == "R24_LIVE_SMOKE_ONLY" and (
+        runtime_config.resource_topology
         is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
-        or resource_lifecycle.resource_topology
-        is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+    )
+    if scope not in {"R24_LIVE_SMOKE_ONLY", "R24_R25_FULL"} or (
+        common_resource_mismatch or smoke_topology_mismatch
     ):
         raise ProductionDriverError(
             "SHARED_RESOURCE_AUTHORITY_MISMATCH",
-            "shared resource scope/runtime/lifecycle authority differs",
+            "resource scope/runtime/lifecycle authority differs",
         )
     if type(pricing) is not LiveAttemptPricingV1 or (
         confirmed_pricing_sha256 != live_attempt_pricing_sha256(pricing)
@@ -10308,10 +12909,13 @@ __all__ = [
     "OFFICIAL_RESULT_EVALUATOR_ID_V1",
     "PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION",
     "PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1",
+    "PRODUCTION_PILOT_MODEL_SWITCH_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1",
+    "PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V2",
     "PRODUCTION_RESOURCE_CLEANUP_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_SHARED_RESOURCE_EVIDENCE_SCHEMA_VERSION_V2",
     "PRODUCTION_SHARED_SMOKE_EVIDENCE_SCHEMA_VERSION_V2",
+    "PRODUCTION_FULL_SMOKE_EVIDENCE_SCHEMA_VERSION_V3",
     "PRODUCTION_DRIVER_REQUIRED_BINDINGS_V1",
     "PRODUCTION_DRIVER_REQUIRED_HOOKS_V1",
     "ActorDecisionEvidenceV1",
@@ -10333,6 +12937,8 @@ __all__ = [
     "ProductionDriverHookV1",
     "ProductionDispatchKindV1",
     "ProductionModelHandoffEvidenceV1",
+    "ProductionPilotModelSwitchEvidenceV1",
+    "ProductionPilotSwitchAuthorityV1",
     "ProductionModelStopEvidenceV1",
     "ProductionResourceLifecycleAdapterV1",
     "ProductionResourceStageEvidenceV1",
@@ -10345,6 +12951,7 @@ __all__ = [
     "build_cpu_test_production_driver_v1",
     "build_cpu_test_resource_lifecycle_adapter_v1",
     "build_production_driver_v1",
+    "build_production_pilot_switch_authority_v1",
     "build_production_case_authority_broker_provider_v1",
     "build_production_resource_lifecycle_adapter_v1",
     "pilot_stage_evidence_projection",
@@ -10356,6 +12963,10 @@ __all__ = [
     "production_model_handoff_evidence_sha256",
     "production_model_stop_evidence_projection",
     "production_model_stop_evidence_sha256",
+    "production_pilot_model_switch_evidence_projection",
+    "production_pilot_model_switch_evidence_sha256",
+    "production_pilot_switch_authority_projection",
+    "production_pilot_switch_authority_sha256",
     "production_resource_stage_evidence_projection",
     "production_resource_stage_evidence_sha256",
     "parse_production_runtime_config",

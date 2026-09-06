@@ -18,6 +18,7 @@ import os
 import re
 import stat
 import subprocess
+import time
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -26,8 +27,10 @@ from typing import Protocol, cast, runtime_checkable
 from urllib.parse import urlsplit
 
 from mobile_world.offline.causal_replay.contracts import JsonValue
-from mobile_world.runtime.sentinel.r2_4.contracts import canonical_sha256
+from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes, canonical_sha256
 from mobile_world.runtime.sentinel.r2_5.pilot import (
+    FROZEN_PILOT_SCHEMA_VERSION_V1,
+    FROZEN_PILOT_SCHEMA_VERSION_V2,
     FrozenPilotManifestV1,
     PilotHostV1,
     R25PilotContractError,
@@ -37,7 +40,11 @@ from mobile_world.runtime.sentinel.r2_5.pilot import (
     resolve_pilot_task_inputs_v1,
 )
 
-R24_R25_RUN_AUTHORITY_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-r2.5-run-authority/v1"
+R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V1 = "mobileworld.runtime.sentinel-r2.4-r2.5-run-authority/v1"
+R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2 = "mobileworld.runtime.sentinel-r2.4-r2.5-run-authority/v2"
+# New builders issue only the hardened v2 authority.  The parser retains exact
+# v1 support for the never-shared, two-GPU concurrent preparation path.
+R24_R25_RUN_AUTHORITY_SCHEMA_VERSION = R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2
 R24_R25_PREFLIGHT_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-r2.5-preflight/v1"
 R24_R25_SEQUENCE_RESULT_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-r2.5-sequence-result/v1"
 SNAPSHOT_TREE_ALGORITHM_V1 = "SHA256_LOGICAL_TREE_V1"
@@ -481,9 +488,22 @@ class R24R25RunAuthorityManifestV1:
     max_sequence_openai_calls: int
     max_sequence_actor_calls: int
     max_sequence_cost_usd_micros: int
+    resource_topology: str | None = None
+    runtime_config_sha256: str | None = None
+    pricing_sha256: str | None = None
+    sentinel_config_sha256: str | None = None
+    max_resource_cleanup_wall_time_seconds: int | None = None
+    resource_cleanup_upper_bound_sha256: str | None = None
+    max_model_switches: int | None = None
+    max_model_switch_wall_time_seconds: int | None = None
+    max_total_model_switch_wall_time_seconds: int | None = None
+    max_post_run_integrity_wall_time_seconds: int | None = None
 
     def __post_init__(self) -> None:
-        if self.schema_version != R24_R25_RUN_AUTHORITY_SCHEMA_VERSION:
+        if self.schema_version not in {
+            R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V1,
+            R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2,
+        }:
             raise LiveRunContractError("UNKNOWN_SCHEMA", "unknown R2.4/R2.5 authority schema")
         _require_id(self.run_id, "run_id")
         if type(self.source_commit) is not str or _GIT_SHA1.fullmatch(self.source_commit) is None:
@@ -520,6 +540,16 @@ class R24R25RunAuthorityManifestV1:
             raise LiveRunContractError("UNTRUSTED_TYPE", "smoke plan is untrusted")
         if type(self.pilot) is not FrozenPilotManifestV1:
             raise LiveRunContractError("UNTRUSTED_TYPE", "pilot is untrusted")
+        expected_pilot_schema = (
+            FROZEN_PILOT_SCHEMA_VERSION_V2
+            if self.schema_version == R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2
+            else FROZEN_PILOT_SCHEMA_VERSION_V1
+        )
+        if self.pilot.schema_version != expected_pilot_schema:
+            raise LiveRunContractError(
+                "PILOT_SCHEMA_VERSION_MISMATCH",
+                "run-authority and frozen-pilot schema generations must match",
+            )
         _require_sha256(
             self.topology_comparison_artifact_sha256,
             "topology_comparison_artifact_sha256",
@@ -532,6 +562,78 @@ class R24R25RunAuthorityManifestV1:
                 "TOPOLOGY_BINDING_MISMATCH",
                 "run authority and frozen pilot bind different topology evidence",
             )
+        v2 = self.schema_version == R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2
+        if not v2:
+            if any(
+                value is not None
+                for value in (
+                    self.resource_topology,
+                    self.runtime_config_sha256,
+                    self.pricing_sha256,
+                    self.sentinel_config_sha256,
+                    self.max_resource_cleanup_wall_time_seconds,
+                    self.resource_cleanup_upper_bound_sha256,
+                    self.max_model_switches,
+                    self.max_model_switch_wall_time_seconds,
+                    self.max_total_model_switch_wall_time_seconds,
+                    self.max_post_run_integrity_wall_time_seconds,
+                )
+            ):
+                raise LiveRunContractError(
+                    "V1_AUTHORITY_EXTENSION_FORBIDDEN",
+                    "legacy v1 cannot acquire v2 runtime or resource authority",
+                )
+            expected_v1_time = (
+                self.max_resource_preflight_wall_time_seconds
+                + sum(
+                    case.max_wall_time_seconds for plan in self.smoke_plans for case in plan.cases
+                )
+                + self.pilot.max_total_wall_time_seconds
+            )
+            if self.max_sequence_wall_time_seconds != expected_v1_time:
+                raise LiveRunContractError(
+                    "BUDGET_BINDING_MISMATCH", "legacy sequence time budget is not additive"
+                )
+            smoke_actor_v1 = sum(
+                case.max_actor_calls for plan in self.smoke_plans for case in plan.cases
+            )
+            smoke_openai_v1 = sum(
+                case.max_openai_calls for plan in self.smoke_plans for case in plan.cases
+            )
+            smoke_cost_v1 = sum(
+                case.max_cost_usd_micros for plan in self.smoke_plans for case in plan.cases
+            )
+            if (
+                self.max_sequence_actor_calls != smoke_actor_v1 + self.pilot.max_total_actor_calls
+                or self.max_sequence_openai_calls
+                != smoke_openai_v1 + self.pilot.max_total_openai_calls
+                or self.max_sequence_cost_usd_micros
+                != smoke_cost_v1 + self.pilot.max_total_cost_usd_micros
+            ):
+                raise LiveRunContractError(
+                    "BUDGET_BINDING_MISMATCH", "legacy sequence census is not additive"
+                )
+            return
+        if self.resource_topology not in {
+            "INDEPENDENT_GPU_CONCURRENT",
+            "SINGLE_GPU_SEQUENTIAL_SHARED",
+        }:
+            raise LiveRunContractError(
+                "INVALID_RESOURCE_TOPOLOGY", "resource topology is outside the closed set"
+            )
+        assert type(self.resource_topology) is str
+        assert type(self.runtime_config_sha256) is str
+        assert type(self.pricing_sha256) is str
+        assert type(self.sentinel_config_sha256) is str
+        assert type(self.max_resource_cleanup_wall_time_seconds) is int
+        assert type(self.resource_cleanup_upper_bound_sha256) is str
+        assert type(self.max_model_switches) is int
+        assert type(self.max_model_switch_wall_time_seconds) is int
+        assert type(self.max_total_model_switch_wall_time_seconds) is int
+        assert type(self.max_post_run_integrity_wall_time_seconds) is int
+        _require_sha256(self.runtime_config_sha256, "runtime_config_sha256")
+        _require_sha256(self.pricing_sha256, "pricing_sha256")
+        _require_sha256(self.sentinel_config_sha256, "sentinel_config_sha256")
         _require_path(self.output_root, "output_root")
         _require_int(
             self.max_resource_preflight_wall_time_seconds,
@@ -539,6 +641,67 @@ class R24R25RunAuthorityManifestV1:
             1,
             86_400,
         )
+        _require_int(
+            self.max_resource_cleanup_wall_time_seconds,
+            "max_resource_cleanup_wall_time_seconds",
+            1,
+            86_400,
+        )
+        _require_sha256(
+            self.resource_cleanup_upper_bound_sha256,
+            "resource_cleanup_upper_bound_sha256",
+        )
+        _require_int(
+            self.max_post_run_integrity_wall_time_seconds,
+            "max_post_run_integrity_wall_time_seconds",
+            1,
+            86_400,
+        )
+        exact_pilot_call_cap = 4 * len(self.pilot.tasks) * self.pilot.max_steps_per_cell
+        if (
+            self.pilot.max_total_actor_calls != exact_pilot_call_cap
+            or self.pilot.max_total_openai_calls != exact_pilot_call_cap
+        ):
+            raise LiveRunContractError(
+                "PILOT_EXACT_CALL_BUDGET_MISMATCH",
+                "v2 pilot actor/OpenAI caps must equal 4 * task_count * max_steps",
+            )
+        _require_int(self.max_model_switches, "max_model_switches", 0, 61)
+        _require_int(
+            self.max_model_switch_wall_time_seconds,
+            "max_model_switch_wall_time_seconds",
+            0,
+            3_600,
+        )
+        _require_int(
+            self.max_total_model_switch_wall_time_seconds,
+            "max_total_model_switch_wall_time_seconds",
+            0,
+            219_600,
+        )
+        pilot_host_blocks = tuple(
+            host for _ in self.pilot.tasks for host in (PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)
+        )
+        if self.resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED":
+            if (
+                self.max_model_switches != len(pilot_host_blocks) + 1
+                or not 1 <= self.max_model_switch_wall_time_seconds <= 3_600
+                or self.max_total_model_switch_wall_time_seconds
+                != self.max_model_switches * self.max_model_switch_wall_time_seconds
+            ):
+                raise LiveRunContractError(
+                    "MODEL_SWITCH_BUDGET_MISMATCH",
+                    "shared topology must bind the smoke handoff and every pilot host block",
+                )
+        elif (
+            self.max_model_switches != 0
+            or self.max_model_switch_wall_time_seconds != 0
+            or self.max_total_model_switch_wall_time_seconds != 0
+        ):
+            raise LiveRunContractError(
+                "MODEL_SWITCH_BUDGET_MISMATCH",
+                "concurrent topology cannot claim sequential model switches",
+            )
         _require_int(
             self.max_sequence_wall_time_seconds,
             "max_sequence_wall_time_seconds",
@@ -571,10 +734,21 @@ class R24R25RunAuthorityManifestV1:
             self.max_resource_preflight_wall_time_seconds
             + sum(case.max_wall_time_seconds for plan in self.smoke_plans for case in plan.cases)
             + self.pilot.max_total_wall_time_seconds
+            + self.max_total_model_switch_wall_time_seconds
+            + self.max_resource_cleanup_wall_time_seconds
+            + self.max_post_run_integrity_wall_time_seconds
         )
         if self.max_sequence_wall_time_seconds != expected_time:
             raise LiveRunContractError(
                 "BUDGET_BINDING_MISMATCH", "sequence time budget is not additive"
+            )
+        if (
+            _timestamp(self.authorization.expires_at_utc)
+            - _timestamp(self.authorization.issued_at_utc)
+        ).total_seconds() < self.max_sequence_wall_time_seconds:
+            raise LiveRunContractError(
+                "AUTHORITY_WINDOW_TOO_SHORT",
+                "owner authority window does not cover the complete sequence bound",
             )
 
 
@@ -584,7 +758,7 @@ def _authorization_projection(value: OwnerAuthorizationV1) -> dict[str, JsonValu
     value = OwnerAuthorizationV1(
         **{field.name: getattr(value, field.name) for field in fields(OwnerAuthorizationV1)}
     )
-    return {
+    projection: dict[str, JsonValue] = {
         "actor_model_calls_allowed": value.actor_model_calls_allowed,
         "authorization_id": value.authorization_id,
         "authorized_by": value.authorized_by,
@@ -603,6 +777,7 @@ def _authorization_projection(value: OwnerAuthorizationV1) -> dict[str, JsonValu
         "smoke_gui_actions_allowed": value.smoke_gui_actions_allowed,
         "status": value.status.value,
     }
+    return projection
 
 
 def _secret_projection(value: SecretFileReferenceV1) -> dict[str, JsonValue]:
@@ -722,7 +897,8 @@ def authority_manifest_projection(value: R24R25RunAuthorityManifestV1) -> dict[s
     trusted = R24R25RunAuthorityManifestV1(
         **{field.name: getattr(value, field.name) for field in fields(R24R25RunAuthorityManifestV1)}
     )
-    return {
+    pilot_projection = frozen_pilot_manifest_projection(trusted.pilot)
+    projection: dict[str, JsonValue] = {
         "actor_resources": [
             cast(JsonValue, _resource_projection(resource)) for resource in trusted.actor_resources
         ],
@@ -738,7 +914,7 @@ def authority_manifest_projection(value: R24R25RunAuthorityManifestV1) -> dict[s
             cast(JsonValue, _openai_projection(stage)) for stage in trusted.openai_stages
         ],
         "output_root": trusted.output_root,
-        "pilot": cast(JsonValue, frozen_pilot_manifest_projection(trusted.pilot)),
+        "pilot": cast(JsonValue, pilot_projection),
         "run_id": trusted.run_id,
         "safety": cast(JsonValue, _safety_projection(trusted.safety)),
         "schema_version": trusted.schema_version,
@@ -749,10 +925,86 @@ def authority_manifest_projection(value: R24R25RunAuthorityManifestV1) -> dict[s
         "source_commit": trusted.source_commit,
         "topology_comparison_artifact_sha256": (trusted.topology_comparison_artifact_sha256),
     }
+    if trusted.schema_version == R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2:
+        projection.update(
+            {
+                "max_model_switch_wall_time_seconds": cast(
+                    JsonValue, trusted.max_model_switch_wall_time_seconds
+                ),
+                "max_model_switches": cast(JsonValue, trusted.max_model_switches),
+                "max_post_run_integrity_wall_time_seconds": cast(
+                    JsonValue, trusted.max_post_run_integrity_wall_time_seconds
+                ),
+                "max_resource_cleanup_wall_time_seconds": cast(
+                    JsonValue, trusted.max_resource_cleanup_wall_time_seconds
+                ),
+                "max_total_model_switch_wall_time_seconds": cast(
+                    JsonValue, trusted.max_total_model_switch_wall_time_seconds
+                ),
+                "pricing_sha256": cast(JsonValue, trusted.pricing_sha256),
+                "resource_cleanup_upper_bound_sha256": cast(
+                    JsonValue, trusted.resource_cleanup_upper_bound_sha256
+                ),
+                "resource_topology": cast(JsonValue, trusted.resource_topology),
+                "runtime_config_sha256": cast(JsonValue, trusted.runtime_config_sha256),
+                "sentinel_config_sha256": cast(JsonValue, trusted.sentinel_config_sha256),
+            }
+        )
+    return projection
 
 
 def authority_manifest_sha256(value: R24R25RunAuthorityManifestV1) -> str:
     return canonical_sha256(cast(JsonValue, authority_manifest_projection(value)))
+
+
+def production_sentinel_config_projection_v1() -> dict[str, JsonValue]:
+    """Recompute the fixed live rubric/history prompt and schema root on CPU."""
+
+    from mobile_world.runtime.sentinel.r2_2.gpt56_policy import GPT56_POLICY_INSTRUCTIONS
+    from mobile_world.runtime.sentinel.r2_4.rubric_live import (
+        LiveRubricOperationV1,
+        live_rubric_generate_schema,
+        live_rubric_operation_prompt_sha256,
+        live_rubric_prompt_bundle_sha256,
+        live_rubric_track_schema,
+    )
+
+    repository_root = Path(__file__).resolve().parents[6]
+    schema_files = (
+        "r2_2/evidence_packet.v1.schema.json",
+        "r2_2/policy_proposal.v1.schema.json",
+        "r2_3/rubric.v1.schema.json",
+        "r2_3/tracking_packet.v1.schema.json",
+        "r2_3/tracker_output.v1.schema.json",
+        "r2_4/history_policy_request_proof.v1.schema.json",
+        "r2_4/rubric_request_proof.v1.schema.json",
+    )
+    schema_sha256s: dict[str, JsonValue] = {}
+    for relative in schema_files:
+        raw = (repository_root / "mobileworld_audit_handoff" / "schemas" / relative).read_bytes()
+        schema_sha256s[relative] = hashlib.sha256(raw).hexdigest()
+    generate_schema = live_rubric_generate_schema()
+    track_schema = live_rubric_track_schema()
+    return {
+        "history_policy_prompt_sha256": hashlib.sha256(
+            GPT56_POLICY_INSTRUCTIONS.encode("utf-8")
+        ).hexdigest(),
+        "rubric_generate_output_schema_sha256": generate_schema.sha256,
+        "rubric_generate_prompt_sha256": live_rubric_operation_prompt_sha256(
+            LiveRubricOperationV1.GENERATE
+        ),
+        "rubric_prompt_bundle_sha256": live_rubric_prompt_bundle_sha256(),
+        "rubric_track_output_schema_sha256": track_schema.sha256,
+        "rubric_track_prompt_sha256": live_rubric_operation_prompt_sha256(
+            LiveRubricOperationV1.TRACK
+        ),
+        "schema_sha256s": schema_sha256s,
+        "schema_version": "mobileworld.runtime.sentinel-r2.5-production-config/v1",
+    }
+
+
+def production_sentinel_config_sha256_v1() -> str:
+    return canonical_sha256(cast(JsonValue, production_sentinel_config_projection_v1()))
 
 
 _AUTHORIZATION_FIELDS = frozenset(
@@ -846,7 +1098,7 @@ _SAFETY_FIELDS = frozenset(
         "stop_on_failure",
     }
 )
-_MANIFEST_FIELDS = frozenset(
+_MANIFEST_FIELDS_V1 = frozenset(
     {
         "actor_resources",
         "authorization",
@@ -867,6 +1119,18 @@ _MANIFEST_FIELDS = frozenset(
         "topology_comparison_artifact_sha256",
     }
 )
+_MANIFEST_FIELDS_V2 = _MANIFEST_FIELDS_V1 | {
+    "max_model_switch_wall_time_seconds",
+    "max_model_switches",
+    "max_post_run_integrity_wall_time_seconds",
+    "max_resource_cleanup_wall_time_seconds",
+    "max_total_model_switch_wall_time_seconds",
+    "pricing_sha256",
+    "resource_cleanup_upper_bound_sha256",
+    "resource_topology",
+    "runtime_config_sha256",
+    "sentinel_config_sha256",
+}
 
 
 def _parse_authorization(value: object) -> OwnerAuthorizationV1:
@@ -993,7 +1257,19 @@ def _parse_safety(value: object) -> SequenceSafetyV1:
 
 
 def parse_authority_manifest(value: object) -> R24R25RunAuthorityManifestV1:
-    item = _exact_object(value, _MANIFEST_FIELDS, "authority manifest")
+    if type(value) is not dict:
+        raise LiveRunContractError("UNTRUSTED_TYPE", "authority manifest must be an object")
+    schema_version = value.get("schema_version")
+    manifest_fields = (
+        _MANIFEST_FIELDS_V1
+        if schema_version == R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V1
+        else _MANIFEST_FIELDS_V2
+        if schema_version == R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2
+        else frozenset()
+    )
+    if not manifest_fields:
+        raise LiveRunContractError("UNKNOWN_SCHEMA", "unknown R2.4/R2.5 authority schema")
+    item = _exact_object(value, manifest_fields, "authority manifest")
     raw_openai = item["openai_stages"]
     raw_resources = item["actor_resources"]
     raw_smokes = item["smoke_plans"]
@@ -1025,6 +1301,26 @@ def parse_authority_manifest(value: object) -> R24R25RunAuthorityManifestV1:
         max_sequence_openai_calls=cast(int, item["max_sequence_openai_calls"]),
         max_sequence_actor_calls=cast(int, item["max_sequence_actor_calls"]),
         max_sequence_cost_usd_micros=cast(int, item["max_sequence_cost_usd_micros"]),
+        resource_topology=cast(str | None, item.get("resource_topology")),
+        runtime_config_sha256=cast(str | None, item.get("runtime_config_sha256")),
+        pricing_sha256=cast(str | None, item.get("pricing_sha256")),
+        sentinel_config_sha256=cast(str | None, item.get("sentinel_config_sha256")),
+        max_resource_cleanup_wall_time_seconds=cast(
+            int | None, item.get("max_resource_cleanup_wall_time_seconds")
+        ),
+        resource_cleanup_upper_bound_sha256=cast(
+            str | None, item.get("resource_cleanup_upper_bound_sha256")
+        ),
+        max_model_switches=cast(int | None, item.get("max_model_switches")),
+        max_model_switch_wall_time_seconds=cast(
+            int | None, item.get("max_model_switch_wall_time_seconds")
+        ),
+        max_total_model_switch_wall_time_seconds=cast(
+            int | None, item.get("max_total_model_switch_wall_time_seconds")
+        ),
+        max_post_run_integrity_wall_time_seconds=cast(
+            int | None, item.get("max_post_run_integrity_wall_time_seconds")
+        ),
     )
 
 
@@ -1067,6 +1363,185 @@ def load_authority_manifest(path: Path) -> R24R25RunAuthorityManifestV1:
     return parse_authority_manifest(decoded)
 
 
+def load_owner_authorized_authority_manifest_v2(
+    path: Path,
+    *,
+    confirmed_manifest_sha256: str,
+) -> R24R25RunAuthorityManifestV1:
+    """Open one production authority through stable parent/leaf file descriptors.
+
+    This establishes local owner/mode/link/path/canonical-byte provenance.  It
+    intentionally does not claim that two processes running as the same OS UID
+    are cryptographically distinguishable; external owner promotion remains an
+    operational trust boundary.
+    """
+
+    _require_sha256(confirmed_manifest_sha256, "confirmed manifest sha256")
+    candidate_path: object = path
+    if (
+        not isinstance(candidate_path, Path)
+        or not candidate_path.is_absolute()
+        or candidate_path.name in {"", ".", ".."}
+        or ".." in candidate_path.parts
+    ):
+        raise LiveRunContractError(
+            "INVALID_MANIFEST_FILE", "production manifest path must be canonical and absolute"
+        )
+    path = candidate_path
+    directory_descriptors: list[tuple[int, str | None, int, int]] = []
+    descriptor = -1
+    raw = b""
+    try:
+        directory_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        current_descriptor = os.open("/", directory_flags)
+        root_metadata = os.fstat(current_descriptor)
+        directory_descriptors.append(
+            (current_descriptor, None, root_metadata.st_dev, root_metadata.st_ino)
+        )
+        for component in path.parent.parts[1:]:
+            current_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=directory_descriptors[-1][0],
+            )
+            opened_directory = os.fstat(current_descriptor)
+            named_directory = os.stat(
+                component,
+                dir_fd=directory_descriptors[-1][0],
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(opened_directory.st_mode)
+                or not stat.S_ISDIR(named_directory.st_mode)
+                or (opened_directory.st_dev, opened_directory.st_ino)
+                != (named_directory.st_dev, named_directory.st_ino)
+            ):
+                os.close(current_descriptor)
+                raise LiveRunContractError(
+                    "MANIFEST_PATH_IDENTITY_DRIFT", "manifest parent identity differs"
+                )
+            directory_descriptors.append(
+                (
+                    current_descriptor,
+                    component,
+                    opened_directory.st_dev,
+                    opened_directory.st_ino,
+                )
+            )
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_descriptors[-1][0],
+        )
+        opened = os.fstat(descriptor)
+        named = os.stat(
+            path.name,
+            dir_fd=directory_descriptors[-1][0],
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(named.st_mode)
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+            or opened.st_nlink != 1
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or opened.st_uid != os.geteuid()
+            or opened.st_gid != os.getegid()
+            or not 1 <= opened.st_size <= _MAX_MANIFEST_BYTES
+        ):
+            raise LiveRunContractError(
+                "INVALID_MANIFEST_FILE",
+                "production manifest must be one owner-only unaliased regular file",
+            )
+        chunks: list[bytes] = []
+        remaining = _MAX_MANIFEST_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(1_048_576, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        if len(raw) != opened.st_size:
+            raise LiveRunContractError(
+                "MANIFEST_PATH_IDENTITY_DRIFT", "manifest size changed while reading"
+            )
+        for index, (opened_descriptor, directory_component, device, inode) in enumerate(
+            directory_descriptors
+        ):
+            current = os.fstat(opened_descriptor)
+            if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (
+                device,
+                inode,
+            ):
+                raise LiveRunContractError(
+                    "MANIFEST_PATH_IDENTITY_DRIFT", "manifest parent descriptor changed"
+                )
+            if index:
+                assert directory_component is not None
+                rebound = os.stat(
+                    directory_component,
+                    dir_fd=directory_descriptors[index - 1][0],
+                    follow_symlinks=False,
+                )
+                if (rebound.st_dev, rebound.st_ino) != (device, inode):
+                    raise LiveRunContractError(
+                        "MANIFEST_PATH_IDENTITY_DRIFT", "manifest parent path changed"
+                    )
+        rebound = os.stat(
+            path.name,
+            dir_fd=directory_descriptors[-1][0],
+            follow_symlinks=False,
+        )
+        if (rebound.st_dev, rebound.st_ino) != (opened.st_dev, opened.st_ino):
+            raise LiveRunContractError(
+                "MANIFEST_PATH_IDENTITY_DRIFT", "manifest path changed while reading"
+            )
+    except LiveRunContractError:
+        raise
+    except OSError as exc:
+        raise LiveRunContractError(
+            "INVALID_MANIFEST_FILE", "production manifest cannot be opened safely"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        for opened_descriptor, _, _, _ in reversed(directory_descriptors):
+            os.close(opened_descriptor)
+    try:
+        decoded = json.loads(
+            raw,
+            object_pairs_hook=_reject_duplicate_object_pairs,
+            parse_constant=_reject_json_constant,
+        )
+    except LiveRunContractError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise LiveRunContractError(
+            "INVALID_MANIFEST_FILE", "production manifest is not strict JSON"
+        ) from exc
+    manifest = parse_authority_manifest(decoded)
+    if (
+        manifest.schema_version != R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2
+        or manifest.authorization.status is not RunAuthorizationStatusV1.OWNER_AUTHORIZED
+        or raw != canonical_json_bytes(cast(JsonValue, authority_manifest_projection(manifest)))
+    ):
+        raise LiveRunContractError(
+            "OWNER_AUTHORITY_FILE_INVALID",
+            "production authority must be canonical owner-authorized v2 bytes",
+        )
+    if authority_manifest_sha256(manifest) != confirmed_manifest_sha256:
+        raise LiveRunContractError(
+            "MANIFEST_CONFIRMATION_MISMATCH", "production authority confirmation differs"
+        )
+    return manifest
+
+
 @dataclass(frozen=True, slots=True)
 class SnapshotTreeDigestV1:
     sha256: str
@@ -1079,18 +1554,39 @@ class SnapshotTreeDigestV1:
         _require_int(self.file_count, "snapshot digest files", 1, 1_000_000)
 
 
-def compute_snapshot_tree_digest(resource: SnapshotResourceV1) -> SnapshotTreeDigestV1:
+def compute_snapshot_tree_digest(
+    resource: SnapshotResourceV1,
+    *,
+    deadline_monotonic_ns: int | None = None,
+) -> SnapshotTreeDigestV1:
     """Hash declared model files without loading a model or touching accelerators."""
 
     if type(resource) is not SnapshotResourceV1:
         raise LiveRunContractError("UNTRUSTED_TYPE", "snapshot resource is untrusted")
+    if deadline_monotonic_ns is not None and (
+        type(deadline_monotonic_ns) is not int or deadline_monotonic_ns <= time.monotonic_ns()
+    ):
+        raise LiveRunContractError(
+            "SNAPSHOT_ATTESTATION_DEADLINE_EXCEEDED",
+            "snapshot attestation deadline is absent or elapsed",
+        )
+
+    def require_deadline() -> None:
+        if deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns:
+            raise LiveRunContractError(
+                "SNAPSHOT_ATTESTATION_DEADLINE_EXCEEDED",
+                "snapshot attestation exceeded its bounded deadline",
+            )
+
     logical_root = Path(resource.snapshot_path)
     storage_root = Path(resource.snapshot_storage_root).resolve(strict=True)
     root = logical_root.resolve(strict=True)
+    require_deadline()
     if not root.is_dir() or not storage_root.is_dir() or not _is_within(root, storage_root):
         raise LiveRunContractError("INVALID_SNAPSHOT_ROOT", "snapshot is outside its storage root")
     files: list[tuple[str, Path]] = []
     for current, directory_names, file_names in os.walk(root, followlinks=False):
+        require_deadline()
         current_path = Path(current)
         for directory_name in directory_names:
             if (current_path / directory_name).is_symlink():
@@ -1098,6 +1594,7 @@ def compute_snapshot_tree_digest(resource: SnapshotResourceV1) -> SnapshotTreeDi
                     "INVALID_SNAPSHOT_TREE", "snapshot has a symlink directory"
                 )
         for file_name in file_names:
+            require_deadline()
             logical_path = current_path / file_name
             target = logical_path.resolve(strict=True)
             if not target.is_file() or not _is_within(target, storage_root):
@@ -1115,11 +1612,13 @@ def compute_snapshot_tree_digest(resource: SnapshotResourceV1) -> SnapshotTreeDi
     aggregate.update(b"mobileworld.snapshot.logical-tree/v1\0")
     total_bytes = 0
     for relative, target in files:
+        require_deadline()
         file_hash = hashlib.sha256()
         byte_count = 0
         try:
             with target.open("rb") as stream:
                 while chunk := stream.read(1024 * 1024):
+                    require_deadline()
                     file_hash.update(chunk)
                     byte_count += len(chunk)
         except OSError as exc:
@@ -1132,6 +1631,7 @@ def compute_snapshot_tree_digest(resource: SnapshotResourceV1) -> SnapshotTreeDi
         aggregate.update(byte_count.to_bytes(16, "big"))
         aggregate.update(file_hash.digest())
         total_bytes += byte_count
+        require_deadline()
     return SnapshotTreeDigestV1(aggregate.hexdigest(), total_bytes, len(files))
 
 
@@ -1563,6 +2063,15 @@ def _receipt_within_stage_bounds(
             else PilotHostV1.MAI_UI
         )
         plan = next(plan for plan in manifest.smoke_plans if plan.host is host)
+        model_switch_wall_time_seconds = manifest.max_model_switch_wall_time_seconds or 0
+        handoff_seconds = (
+            model_switch_wall_time_seconds
+            if (
+                host is PilotHostV1.MAI_UI
+                and manifest.resource_topology == "SINGLE_GPU_SEQUENTIAL_SHARED"
+            )
+            else 0
+        )
         minimum_openai_calls = sum(0 if case.mode is SmokeModeV1.OFF else 2 for case in plan.cases)
         maximum_openai_calls = sum(case.max_openai_calls for case in plan.cases)
         return (
@@ -1570,15 +2079,22 @@ def _receipt_within_stage_bounds(
             and minimum_openai_calls <= receipt.openai_calls <= maximum_openai_calls
             and receipt.cost_usd_micros <= sum(case.max_cost_usd_micros for case in plan.cases)
             and receipt.wall_time_ms
-            <= sum(case.max_wall_time_seconds for case in plan.cases) * 1000
+            <= (sum(case.max_wall_time_seconds for case in plan.cases) + handoff_seconds) * 1000
             and receipt.actor_actions == 0
             and receipt.provider_final_request_proven
         )
+    max_model_switches = manifest.max_model_switches or 0
+    model_switch_wall_time_seconds = manifest.max_model_switch_wall_time_seconds or 0
     return (
         len(manifest.pilot.cells) <= receipt.actor_calls <= manifest.pilot.max_total_actor_calls
         and receipt.openai_calls <= manifest.pilot.max_total_openai_calls
         and receipt.cost_usd_micros <= manifest.pilot.max_total_cost_usd_micros
-        and receipt.wall_time_ms <= manifest.pilot.max_total_wall_time_seconds * 1000
+        and receipt.wall_time_ms
+        <= (
+            manifest.pilot.max_total_wall_time_seconds
+            + max(0, max_model_switches - 1) * model_switch_wall_time_seconds
+        )
+        * 1000
         and receipt.actor_actions <= receipt.actor_calls
         and receipt.provider_final_request_proven
     )
@@ -1687,6 +2203,8 @@ def require_production_executor() -> None:
 __all__ = [
     "R24_R25_PREFLIGHT_SCHEMA_VERSION",
     "R24_R25_RUN_AUTHORITY_SCHEMA_VERSION",
+    "R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V1",
+    "R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2",
     "R24_R25_SEQUENCE_RESULT_SCHEMA_VERSION",
     "SNAPSHOT_TREE_ALGORITHM_V1",
     "HostLiveSmokePlanV1",
@@ -1715,8 +2233,11 @@ __all__ = [
     "frozen_pilot_manifest_sha256",
     "inspect_local_resources",
     "load_authority_manifest",
+    "load_owner_authorized_authority_manifest_v2",
     "parse_authority_manifest",
     "preflight_report_projection",
+    "production_sentinel_config_projection_v1",
+    "production_sentinel_config_sha256_v1",
     "require_production_executor",
     "run_authorized_sequence_with_executor",
 ]

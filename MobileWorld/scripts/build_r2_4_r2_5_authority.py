@@ -40,11 +40,17 @@ def _snapshot_arguments(parser: argparse.ArgumentParser, prefix: str) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Select 20 local GUI-only tasks and build a DRAFT R2.4/R2.5 authority bundle. "
+            "Select 20--30 local GUI-only tasks and build a DRAFT R2.4/R2.5 authority bundle. "
             "This command never reads the secret or uses network, GPU, Docker, or MobileWorld."
         )
     )
     parser.add_argument("--source-task-jsonl", required=True, type=Path)
+    parser.add_argument(
+        "--source-freeze-receipt",
+        required=True,
+        type=Path,
+        help="Canonical owner-only receipt binding the source to the exact GUI-117 manifest.",
+    )
     parser.add_argument("--repository-root", type=Path, default=REPOSITORY_ROOT)
     parser.add_argument(
         "--bundle-dir",
@@ -69,11 +75,6 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--source-commit", required=True)
-    parser.add_argument(
-        "--verify-current-source-commit",
-        action="store_true",
-        help="Require source_commit == local HEAD and a clean worktree (CPU/read-only).",
-    )
     parser.add_argument("--cohort-id", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--frozen-at-utc", required=True)
@@ -81,12 +82,24 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--authorized-by", required=True)
     parser.add_argument("--issued-at-utc", required=True)
     parser.add_argument("--expires-at-utc", required=True)
+    parser.add_argument(
+        "--resource-topology",
+        required=True,
+        choices=("INDEPENDENT_GPU_CONCURRENT", "SINGLE_GPU_SEQUENTIAL_SHARED"),
+    )
+    parser.add_argument("--runtime-config-sha256", required=True)
+    parser.add_argument("--pricing-sha256", required=True)
+    parser.add_argument("--resource-cleanup-upper-bound-seconds", required=True, type=int)
+    parser.add_argument("--resource-cleanup-upper-bound-sha256", required=True)
+    parser.add_argument("--model-switch-wall-time-seconds", required=True, type=int)
+    parser.add_argument("--post-run-integrity-wall-time-seconds", required=True, type=int)
     parser.add_argument("--qwen-smoke-fixture", required=True, type=Path)
     parser.add_argument("--mai-smoke-fixture", required=True, type=Path)
     parser.add_argument("--qwen-smoke-task-id", required=True)
     parser.add_argument("--mai-smoke-task-id", required=True)
     _snapshot_arguments(parser, "qwen")
     _snapshot_arguments(parser, "mai")
+    parser.add_argument("--cohort-size", type=int, default=20)
     parser.add_argument("--max-steps-per-cell", type=int, default=8)
     parser.add_argument("--per-cell-timeout-seconds", type=int, default=900)
     parser.add_argument("--max-total-wall-time-seconds", type=int, default=72_000)
@@ -100,7 +113,8 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Create bundle-dir once and write six canonical JSON artifacts plus the exact "
-            "bound GUI-only JSONL source, all with mode 0600."
+            "bound GUI-only JSONL source, fsync them, and independently reopen/validate all "
+            "seven owner-only artifacts."
         ),
     )
     return parser
@@ -121,11 +135,15 @@ def _snapshot(arguments: argparse.Namespace, prefix: str) -> SnapshotDeclaration
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
-        if arguments.verify_current_source_commit:
+        if arguments.write:
+            verify_current_source_commit(arguments.repository_root, arguments.source_commit)
+        registry_records = current_registry_metadata()
+        if arguments.write:
             verify_current_source_commit(arguments.repository_root, arguments.source_commit)
         bundle = build_authority_artifact_bundle(
             AuthorityArtifactInputsV1(
                 source_task_jsonl=arguments.source_task_jsonl,
+                source_freeze_receipt=arguments.source_freeze_receipt,
                 repository_root=arguments.repository_root,
                 bundle_directory=arguments.bundle_dir,
                 runtime_output_root=arguments.runtime_output_root,
@@ -145,6 +163,18 @@ def main(argv: list[str] | None = None) -> int:
                 authorized_by=arguments.authorized_by,
                 issued_at_utc=arguments.issued_at_utc,
                 expires_at_utc=arguments.expires_at_utc,
+                resource_topology=arguments.resource_topology,
+                runtime_config_sha256=arguments.runtime_config_sha256,
+                pricing_sha256=arguments.pricing_sha256,
+                max_resource_cleanup_wall_time_seconds=(
+                    arguments.resource_cleanup_upper_bound_seconds
+                ),
+                resource_cleanup_upper_bound_sha256=(arguments.resource_cleanup_upper_bound_sha256),
+                max_model_switch_wall_time_seconds=(arguments.model_switch_wall_time_seconds),
+                max_post_run_integrity_wall_time_seconds=(
+                    arguments.post_run_integrity_wall_time_seconds
+                ),
+                cohort_size=arguments.cohort_size,
                 max_steps_per_cell=arguments.max_steps_per_cell,
                 per_cell_timeout_seconds=arguments.per_cell_timeout_seconds,
                 max_total_wall_time_seconds=arguments.max_total_wall_time_seconds,
@@ -156,10 +186,16 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 openai_timeout_ms=arguments.openai_timeout_ms,
             ),
-            current_registry_metadata(),
+            registry_records,
         )
         if arguments.write:
-            write_artifact_bundle(bundle, repository_root=arguments.repository_root)
+            verify_current_source_commit(arguments.repository_root, arguments.source_commit)
+            write_artifact_bundle(
+                bundle,
+                repository_root=arguments.repository_root,
+                expected_source_commit=arguments.source_commit,
+            )
+            verify_current_source_commit(arguments.repository_root, arguments.source_commit)
         output = artifact_bundle_output(bundle)
     except (R25ArtifactBuildError, R25PilotContractError, LiveRunContractError) as exc:
         error_code = getattr(exc, "code", "ARTIFACT_BUILD_FAILED")

@@ -4374,6 +4374,77 @@ def _no_history_request(runtime: _RuntimeCase) -> dict[str, JsonValue]:
     return request
 
 
+def test_first_pilot_history_path_fails_before_any_semantic_dispatch(tmp_path: Path) -> None:
+    runtime = _runtime_case(tmp_path)
+    try:
+        policy = object.__new__(OwnerAuthorizedLivePerCallPolicyV1)
+        policy._case = SimpleNamespace(
+            host=live_policy_module.PilotHostV1.QWEN3_VL,
+            max_actor_calls=8,
+            stage=live_policy_module.RunStageV1.R25_PILOT,
+        )
+        policy._call_inputs = {}
+        policy._call_indices = {}
+        policy._outputs = {}
+        policy._failures = {}
+        policy._lock = live_policy_module.Lock()
+
+        with pytest.raises(R24ContractError) as raised:
+            policy.evaluate_with_control(
+                request=cast(JsonValue, runtime.request),
+                context=runtime.context,
+                history_ir=runtime.history_ir,
+                execution_control=_ReceiptDeadlineExecutionControl(),
+            )
+
+        assert raised.value.code == "PILOT_FIRST_CALL_HISTORY_FORBIDDEN"
+        assert policy._call_indices == {runtime.context.logical_call_id: 1}
+        assert policy._failures == {
+            runtime.context.logical_call_id: "PILOT_FIRST_CALL_HISTORY_FORBIDDEN"
+        }
+        assert not hasattr(policy, "_budget_ledger")
+        assert not hasattr(policy, "_factory")
+        assert not hasattr(policy, "_attempt_sink")
+    finally:
+        runtime.run.close()
+
+
+def test_later_pilot_no_history_path_fails_before_any_semantic_dispatch(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime_case(tmp_path)
+    try:
+        policy = object.__new__(OwnerAuthorizedLivePerCallPolicyV1)
+        policy._case = SimpleNamespace(
+            host=live_policy_module.PilotHostV1.QWEN3_VL,
+            max_actor_calls=8,
+            stage=live_policy_module.RunStageV1.R25_PILOT,
+        )
+        policy._call_inputs = {"already-completed-pilot-call": _sha("prior-pilot-input")}
+        policy._call_indices = {}
+        policy._outputs = {}
+        policy._bindings = {}
+        policy._failures = {}
+        policy._lock = live_policy_module.Lock()
+
+        with pytest.raises(R24ContractError) as raised:
+            policy.prepare_no_history_with_control(
+                request=cast(JsonValue, _no_history_request(runtime)),
+                context=runtime.context,
+                execution_control=_ReceiptDeadlineExecutionControl(),
+            )
+
+        assert raised.value.code == "PILOT_LATER_CALL_HISTORY_REQUIRED"
+        assert set(policy._call_inputs) == {"already-completed-pilot-call"}
+        assert policy._call_indices == {}
+        assert policy._failures == {}
+        assert not hasattr(policy, "_budget_ledger")
+        assert not hasattr(policy, "_factory")
+        assert not hasattr(policy, "_attempt_sink")
+    finally:
+        runtime.run.close()
+
+
 def _descriptor() -> RubricBackendDescriptorV1:
     return RubricBackendDescriptorV1(
         backend_id="r24-fake-rubric",
