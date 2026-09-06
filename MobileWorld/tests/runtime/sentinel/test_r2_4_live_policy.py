@@ -30,6 +30,7 @@ from mobile_world.runtime.sentinel.r2_2.sidecar import MemoryR22PolicyReceiptSin
 from mobile_world.runtime.sentinel.r2_4.contracts import R24ContractError
 from mobile_world.runtime.sentinel.r2_4.live_policy import (
     R22OwnerAuthorizedLivePolicyAdapter,
+    _production_history_timeouts_seconds,
     issue_owner_authorized_live_policy_authority,
 )
 from mobile_world.runtime.sentinel.r2_4.live_run import (
@@ -74,6 +75,14 @@ def _sha(value: str) -> str:
 
 def _utc(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_production_history_timeout_uses_one_ns_below_owner_stage() -> None:
+    client_seconds, seam_seconds = _production_history_timeouts_seconds(240_000)
+
+    assert round(client_seconds * 1_000_000_000) == 239_999_999_999
+    assert round(seam_seconds * 1_000_000_000) == 240_000_000_000
+    assert client_seconds < seam_seconds
 
 
 def _pilot() -> FrozenPilotManifestV1:

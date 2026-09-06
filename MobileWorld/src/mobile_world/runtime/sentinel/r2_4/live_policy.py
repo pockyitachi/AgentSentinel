@@ -201,6 +201,14 @@ from mobile_world.runtime.sentinel.r2_4.smoke_run import (
 )
 from mobile_world.runtime.sentinel.r2_5.pilot import PilotArmV1, PilotHostV1
 
+
+def _production_history_timeouts_seconds(stage_timeout_ms: int) -> tuple[float, float]:
+    """Use the owner timeout minus the strict seam's required one-nanosecond margin."""
+
+    stage_timeout_ns = stage_timeout_ms * 1_000_000
+    return (stage_timeout_ns - 1) / 1_000_000_000, stage_timeout_ns / 1_000_000_000
+
+
 OWNER_AUTHORIZED_LIVE_POLICY_AUTHORITY_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-r2.4-owner-authorized-live-policy-authority/v1"
 )
@@ -4714,8 +4722,9 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     constraint_binding=constraint_binding,
                     execution_control=execution_control,
                 )
-                timeout_seconds = self._history_stage.timeout_ms / 1_000
-                client_timeout_seconds = timeout_seconds / 2
+                client_timeout_seconds, seam_policy_deadline_seconds = (
+                    _production_history_timeouts_seconds(self._history_stage.timeout_ms)
+                )
                 attempt_id = (
                     "r24-history-"
                     + hashlib.sha256(
@@ -4751,7 +4760,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                         attempt_id=attempt_id,
                         logical_call_id=context.logical_call_id,
                         max_cost_usd_micros=(constraint_binding.attempt_max_cost_usd_micros),
-                        seam_policy_deadline_seconds=timeout_seconds,
+                        seam_policy_deadline_seconds=seam_policy_deadline_seconds,
                         client_timeout_seconds=client_timeout_seconds,
                     )
                     source = GPT56SentinelPolicy(
@@ -4764,7 +4773,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                         metrics=self._metrics,
                         output_schema=ProposalSchemaSnapshotV1.from_checked_in(),
                         timeout_seconds=client_timeout_seconds,
-                        seam_policy_deadline_seconds=timeout_seconds,
+                        seam_policy_deadline_seconds=seam_policy_deadline_seconds,
                         policy_id=f"{self._policy_id}.r22",
                     )
                     history_transport_binding = source.assert_live_transport_binding()
