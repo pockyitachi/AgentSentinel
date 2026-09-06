@@ -86,12 +86,12 @@
     },
     "requested_model": {
       "type": "string",
-      "const": "gpt-5.6-sol"
+      "const": "gpt-5.6-luna"
     },
     "returned_model": {
       "oneOf": [
         {"type": "null"},
-        {"type": "string", "const": "gpt-5.6-sol"}
+        {"type": "string", "const": "gpt-5.6-luna"}
       ]
     },
     "api_method": {
@@ -298,7 +298,7 @@
       },
       "else": {
         "properties": {
-          "returned_model": {"type": "string", "const": "gpt-5.6-sol"},
+          "returned_model": {"type": "string", "const": "gpt-5.6-luna"},
           "response_id": {"$ref": "#/$defs/semanticId"},
           "response_status": {"type": "string", "const": "completed"},
           "provider_output_sha256": {"$ref": "#/$defs/sha256"},
@@ -332,7 +332,7 @@
           "packet_id": {"$ref": "#/$defs/runtimeId"},
           "evidence_packet_sha256": {"$ref": "#/$defs/sha256"},
           "current_image_sha256": {"$ref": "#/$defs/sha256"},
-          "returned_model": {"type": "string", "const": "gpt-5.6-sol"},
+          "returned_model": {"type": "string", "const": "gpt-5.6-luna"},
           "response_id": {"$ref": "#/$defs/semanticId"},
           "response_status": {"type": "string", "const": "completed"},
           "response_envelope_sha256": {"$ref": "#/$defs/sha256"},

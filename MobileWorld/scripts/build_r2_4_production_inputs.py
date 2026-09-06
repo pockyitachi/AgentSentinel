@@ -89,7 +89,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--shutdown-grace-seconds", type=int, default=10)
     parser.add_argument("--health-poll-interval-ms", type=int, default=250)
     parser.add_argument("--pricing-id", required=True)
-    parser.add_argument("--pricing-model", default="gpt-5.6-sol")
+    parser.add_argument("--pricing-model", default="gpt-5.6-luna")
     parser.add_argument("--input-price-usd-micros-per-million", required=True, type=int)
     parser.add_argument("--cached-input-price-usd-micros-per-million", required=True, type=int)
     parser.add_argument("--output-price-usd-micros-per-million", required=True, type=int)

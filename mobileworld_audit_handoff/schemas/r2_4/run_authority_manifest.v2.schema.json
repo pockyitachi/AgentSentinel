@@ -232,7 +232,7 @@
         "external_network_on_call": {"const": true},
         "max_attempts": {"const": 1},
         "max_output_tokens": {"type": "integer"},
-        "model": {"const": "gpt-5.6-sol"},
+        "model": {"const": "gpt-5.6-luna"},
         "model_on_call": {"const": true},
         "openai_sdk_version": {"const": "1.106.1"},
         "role": {"type": "string"},

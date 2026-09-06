@@ -1631,7 +1631,10 @@ class LiveAttemptReceiptV1:
                     "INVALID_MODEL_PROVENANCE", "CPU attempts cannot claim provider model IDs"
                 )
         elif self.status is LiveAttemptStatusV1.COMPLETED:
-            if self.requested_model != "gpt-5.6-sol" or self.returned_model != self.requested_model:
+            if (
+                self.requested_model != "gpt-5.6-luna"
+                or self.returned_model != self.requested_model
+            ):
                 raise LiveAttemptError(
                     "INVALID_COMPLETED_RECEIPT",
                     "completed production attempt model provenance differs",
@@ -1641,7 +1644,7 @@ class LiveAttemptReceiptV1:
             and self.failure_code == "PROVIDER_RETURNED_MODEL_MISMATCH"
         ):
             if (
-                self.requested_model != "gpt-5.6-sol"
+                self.requested_model != "gpt-5.6-luna"
                 or self.returned_model is None
                 or self.returned_model == self.requested_model
                 or self.dispatch_count != 1
@@ -1663,7 +1666,7 @@ class LiveAttemptReceiptV1:
             and self.failure_code == "PROVIDER_RETURNED_MODEL_INVALID"
         ):
             if (
-                self.requested_model != "gpt-5.6-sol"
+                self.requested_model != "gpt-5.6-luna"
                 or self.returned_model is not None
                 or self.dispatch_count != 1
                 or self.cost_status is not LiveAttemptCostStatusV1.UNKNOWN
@@ -1681,7 +1684,7 @@ class LiveAttemptReceiptV1:
                 )
         elif self.response_envelope_sha256 is not None:
             if (
-                self.requested_model != "gpt-5.6-sol"
+                self.requested_model != "gpt-5.6-luna"
                 or self.returned_model != self.requested_model
                 or self.dispatch_count != 1
             ):

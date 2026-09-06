@@ -1,4 +1,4 @@
-"""GPT-5.6 Sol semantic-policy boundary for R2.2.
+"""GPT-5.6 Luna semantic-policy boundary for R2.2.
 
 The module defines a production-shaped OpenAI Responses adapter, but it never
 constructs a client or performs a call on import.  Tests inject a fake
@@ -81,7 +81,7 @@ from mobile_world.runtime.sentinel.r2_4.production_preflight import (
 GPT56_POLICY_ID = "mobileworld.runtime.sentinel-policy.gpt56/v1"
 GPT56_REQUEST_SCHEMA_VERSION = "mobileworld.runtime.sentinel-gpt56-request/v1"
 GPT56_RESPONSE_ENVELOPE_SCHEMA_VERSION = "mobileworld.runtime.sentinel-gpt56-response-envelope/v1"
-GPT56_REQUESTED_MODEL = "gpt-5.6-sol"
+GPT56_REQUESTED_MODEL = "gpt-5.6-luna"
 GPT56_REASONING_EFFORT = "medium"
 GPT56_OUTPUT_SCHEMA_NAME = "sentinel_policy_proposal_v1"
 GPT56_MAX_OUTPUT_TOKENS = 4096

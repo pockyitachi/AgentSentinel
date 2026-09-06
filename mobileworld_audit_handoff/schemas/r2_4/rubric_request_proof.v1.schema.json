@@ -302,7 +302,7 @@
         "external_network_on_call": {"const": true},
         "max_attempts": {"const": 1},
         "max_output_tokens": {"enum": [4096, 8192]},
-        "model": {"const": "gpt-5.6-sol"},
+        "model": {"const": "gpt-5.6-luna"},
         "model_on_call": {"const": true},
         "openai_sdk_version": {"const": "1.106.1"},
         "role": {"const": "HISTORY_POLICY"},
@@ -326,7 +326,7 @@
         "external_network_on_call": {"const": true},
         "max_attempts": {"const": 1},
         "max_output_tokens": {"const": 8192},
-        "model": {"const": "gpt-5.6-sol"},
+        "model": {"const": "gpt-5.6-luna"},
         "model_on_call": {"const": true},
         "openai_sdk_version": {"const": "1.106.1"},
         "role": {"const": "RUBRIC"},
@@ -350,7 +350,7 @@
         "cached_input_usd_micros_per_million_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000000000},
         "effective_at_utc": {"type": "string", "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
         "input_usd_micros_per_million_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000000000},
-        "model": {"const": "gpt-5.6-sol"},
+        "model": {"const": "gpt-5.6-luna"},
         "output_usd_micros_per_million_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000000000},
         "pricing_id": {"$ref": "#/$defs/runtimeId"},
         "rounding_policy": {"const": "CEIL_PER_ATTEMPT_USD_MICRO"},
@@ -373,7 +373,7 @@
         "factory_binding_sha256": {"$ref": "#/$defs/sha256"},
         "input_schema_version": {"enum": ["mobileworld.runtime.sentinel-r2.4-live-rubric-generate-input/v1", "mobileworld.runtime.sentinel-r2.4-live-rubric-track-input/v1"]},
         "manifest_sha256": {"$ref": "#/$defs/sha256"},
-        "model": {"const": "gpt-5.6-sol"},
+        "model": {"const": "gpt-5.6-luna"},
         "operation": {"enum": ["GENERATE", "TRACK"]},
         "output_schema_sha256": {"$ref": "#/$defs/sha256"},
         "preflight_sha256": {"$ref": "#/$defs/sha256"},
@@ -777,7 +777,7 @@
         "max_output_tokens"
       ],
       "properties": {
-        "model": {"const": "gpt-5.6-sol"},
+        "model": {"const": "gpt-5.6-luna"},
         "instructions": {
           "enum": [
             "You are the isolated MobileWorld task-rubric generator. Convert only the exact task instruction into a complete multi-path AND/OR milestone graph. For each instruction span, copy exact_text byte-for-byte and give only its zero-based Unicode char_start; the runtime derives all end and UTF-8 offsets. Every instruction span must be cited by exactly one instruction-bound milestone whose kind matches the span role, whose predicate_kind is INSTRUCTION_REQUIREMENT, and whose state_description exactly equals the span exact_text. Include every hard requirement, constraint, and terminal requirement without adding requirements. Every graph reference must resolve, every milestone and gate must be reachable, gates must be acyclic with at least two distinct children, and IDs must be unique. Include at least one LEGAL_ALTERNATIVE path with a non-null root and exactly one OTHER_UNKNOWN path with a null root. Use common_root only for requirements shared by every legal alternative. Do not infer factual truth, inspect history, recommend actions, or emit GUI action coordinates/tool calls. Return only JSON matching the supplied schema.",

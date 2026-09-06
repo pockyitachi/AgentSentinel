@@ -2480,7 +2480,7 @@ def build_authority_artifact_bundle(
         openai_stages=(
             OpenAIResponsesStageV1(
                 role=OpenAIRoleV1.RUBRIC,
-                model="gpt-5.6-sol",
+                model="gpt-5.6-luna",
                 endpoint="https://api.openai.com/v1/responses",
                 transport_kind="OPENAI_RESPONSES",
                 transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
@@ -2495,7 +2495,7 @@ def build_authority_artifact_bundle(
             ),
             OpenAIResponsesStageV1(
                 role=OpenAIRoleV1.HISTORY_POLICY,
-                model="gpt-5.6-sol",
+                model="gpt-5.6-luna",
                 endpoint="https://api.openai.com/v1/responses",
                 transport_kind="OPENAI_RESPONSES",
                 transport_authority="EXPLICIT_OWNER_AUTHORIZATION",

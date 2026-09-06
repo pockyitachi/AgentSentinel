@@ -121,7 +121,7 @@ class R22PolicyReceiptV1:
             raise ValueError("the R2.2 v1 semantic policy is SHADOW_ONLY")
         if self.mode != "SHADOW":
             raise ValueError("the R2.2 v1 policy receipt mode must be SHADOW")
-        if self.requested_model != "gpt-5.6-sol":
+        if self.requested_model != "gpt-5.6-luna":
             raise ValueError("the R2.2 v1 receipt must bind the pinned requested model")
         if self.returned_model is not None and (
             type(self.returned_model) is not str

@@ -259,7 +259,7 @@ class OpenAIResponsesStageV1:
             raise LiveRunContractError("UNTRUSTED_TYPE", "OpenAI role is untrusted")
         if type(self.model) is not str or _MODEL_ID.fullmatch(self.model) is None:
             raise LiveRunContractError("INVALID_MODEL", "OpenAI model ID is invalid")
-        if self.model != "gpt-5.6-sol":
+        if self.model != "gpt-5.6-luna":
             raise LiveRunContractError("INVALID_MODEL", "OpenAI stage model differs")
         if type(self.endpoint) is not str:
             raise LiveRunContractError("INVALID_OPENAI_ENDPOINT", "Responses endpoint is not text")
