@@ -3145,7 +3145,7 @@ class ProductionLiveBudgetLedgerV1:
     may be dispatched.  Per-cell accounting remains available for evidence,
     but does not mechanically divide the run budget across cells.  R2.4 smoke
     keeps its accepted fixed per-attempt grant.
-    Failed/unknown calls retain reservations and close the ledger fail-closed.
+    Unknown or incomplete calls retain reservations and close the ledger fail-closed.
     """
 
     __slots__ = (
@@ -4239,6 +4239,43 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 )
             return self._failures.get(logical_call_id)
 
+    def _settle_completed_proposal_rejection(
+        self,
+        reservation: _LiveBudgetReservationV1,
+        *,
+        actor_call_index: int,
+        failure: Exception,
+        attempts: tuple[LiveAttemptReceiptV1, ...],
+    ) -> bool:
+        """Settle the one measured semantic fallback accepted by the pilot driver."""
+
+        trusted_attempts = tuple(snapshot_live_attempt_receipt(value) for value in attempts)
+        if (
+            self._case.stage is not RunStageV1.R25_PILOT
+            or actor_call_index <= 1
+            or not isinstance(failure, GPT56PolicyError)
+            or failure.code != "POLICY_PROPOSAL_NOT_ADMITTED"
+            or tuple(value.role for value in trusted_attempts)
+            != (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.HISTORY_POLICY)
+            or any(
+                value.logical_call_id != reservation.logical_call_id
+                or value.status is not LiveAttemptStatusV1.COMPLETED
+                or value.dispatch_count != 1
+                or not value.worker_reaped
+                or value.cost_status is not LiveAttemptCostStatusV1.EXACT
+                or value.cost_usd_micros is None
+                for value in trusted_attempts
+            )
+        ):
+            return False
+        self._budget_ledger.settle_call(
+            reservation,
+            exact_cost_usd_micros=sum(
+                cast(int, value.cost_usd_micros) for value in trusted_attempts
+            ),
+        )
+        return True
+
     def coordinated_record_for_call(self, logical_call_id: str) -> R24CoordinatedCallRecordV1:
         """Return the coordinator's detached R2.3/R2.2 record for one completed call."""
 
@@ -4498,6 +4535,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     "the first pilot decision must use the typed no-history path",
                 )
             reservation: _LiveBudgetReservationV1 | None = None
+            receipt_start_index: int | None = None
             try:
                 task_run_id = self._require_case_context(
                     context,
@@ -4538,7 +4576,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                         "factory lease differs from the exact actor task/call binding",
                     )
                 case_lease_hash = case_execution_lease_sha256(case_lease)
-                before_receipts = len(self._attempt_sink.receipts)
+                receipt_start_index = len(self._attempt_sink.receipts)
                 self._rubric_backend.bind_case_authority(
                     case_lease=case_lease,
                     logical_call_id=context.logical_call_id,
@@ -4635,7 +4673,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                             r22_receipt_start_index=r22_receipt_start_index,
                             r22_receipt_failure_code=r22_receipt_failure_code,
                         )
-                receipts = self._attempt_sink.receipts[before_receipts:]
+                receipts = self._attempt_sink.receipts[receipt_start_index:]
                 coordinated_record = self._coordinator.record_for(context.logical_call_id)
                 if coordinated_record is None or coordinated_record.task_run_id != task_run_id:
                     raise R24ContractError(
@@ -4750,14 +4788,30 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 self._outputs[context.logical_call_id] = trusted_output
                 return snapshot_vertical_output(trusted_output)
             except Exception as exc:
-                if reservation is not None:
-                    try:
-                        self._budget_ledger.freeze_failed_call(reservation)
-                    except Exception:
-                        pass
                 code = getattr(exc, "code", "PER_CALL_LIVE_EVALUATION_FAILED")
                 if type(code) is not str or not code:
                     code = "PER_CALL_LIVE_EVALUATION_FAILED"
+                if reservation is not None:
+                    settled_rejection = False
+                    try:
+                        attempts = (
+                            ()
+                            if receipt_start_index is None
+                            else self._attempt_sink.receipts[receipt_start_index:]
+                        )
+                        settled_rejection = self._settle_completed_proposal_rejection(
+                            reservation,
+                            actor_call_index=actor_call_index,
+                            failure=exc,
+                            attempts=attempts,
+                        )
+                    except Exception:
+                        pass
+                    if not settled_rejection:
+                        try:
+                            self._budget_ledger.freeze_failed_call(reservation)
+                        except Exception:
+                            pass
                 self._failures[context.logical_call_id] = code
                 if isinstance(exc, R24ContractError):
                     raise

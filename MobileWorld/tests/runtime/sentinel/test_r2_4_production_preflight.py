@@ -14,6 +14,7 @@ from typing import cast
 import pytest
 from _r2_4_topology_fixture import write_cpu_topology_artifact
 
+from mobile_world.runtime.sentinel.r2_2.gpt56_policy import GPT56PolicyError
 from mobile_world.runtime.sentinel.r2_4.contracts import R24ContractError
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptCostStatusV1,
@@ -21,6 +22,7 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptPricingV1,
     LiveAttemptRoleV1,
     LiveAttemptStatusV1,
+    LiveAttemptTerminationV1,
     MemoryLiveAttemptReceiptSinkV1,
     ProductionOpenAIAttemptRunnerV1,
     _bind_live_attempt_request_cost_budget_v1,
@@ -31,6 +33,7 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
 )
 from mobile_world.runtime.sentinel.r2_4.live_policy import (
     OwnerAuthorizedLiveCaseDescriptorV1,
+    OwnerAuthorizedLivePerCallPolicyV1,
     ProductionLiveBudgetLedgerV1,
     _manifest_case_descriptor,
     build_production_live_budget_ledger_v1,
@@ -681,7 +684,7 @@ def _pilot_budget_lease(
     )
 
 
-def test_r25_request_cost_budget_admits_representative_request_under_25_dollars(
+def test_r25_request_cost_budget_settles_exact_semantic_rejection(
     tmp_path: Path,
 ) -> None:
     manifest, factory, pricing = _budget_factory(tmp_path, pilot_cost_usd_micros=25_000_000)
@@ -706,7 +709,7 @@ def test_r25_request_cost_budget_admits_representative_request_under_25_dollars(
     reservation = ledger.reserve_call(
         descriptor,
         logical_call_id="r25-budget-positive",
-        actor_call_index=1,
+        actor_call_index=2,
         attempt_count=2,
     )
     lease = _pilot_budget_lease(factory, descriptor, b"r25-budget-positive-actor-request")
@@ -721,7 +724,8 @@ def test_r25_request_cost_budget_admits_representative_request_under_25_dollars(
         max_cost_usd_micros=descriptor.max_cost_usd_micros,
     )
     assert call.authority.max_cost_usd_micros == worst_case
-    assert call.cancel_and_join().cost_usd_micros == 0
+    rubric_terminal = call.cancel_and_join()
+    assert rubric_terminal.cost_usd_micros == 0
     released_headroom = descriptor.max_cost_usd_micros - 1
     assert (
         ledger.reserve_request_cost(
@@ -741,7 +745,51 @@ def test_r25_request_cost_budget_admits_representative_request_under_25_dollars(
         attempt_id="r25-budget-positive-history",
         exact_cost_usd_micros=1,
     )
-    ledger.settle_call(reservation, exact_cost_usd_micros=1)
+    completed_rubric = replace(
+        rubric_terminal,
+        status=LiveAttemptStatusV1.COMPLETED,
+        dispatch_count=1,
+        response_envelope_sha256=_sha(b"r25-budget-positive-rubric-response"),
+        input_tokens=0,
+        cached_input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        cancellation_requested=False,
+        termination=LiveAttemptTerminationV1.NONE,
+        worker_pid=12_001,
+        worker_exit_code=0,
+        worker_reaped=True,
+        requested_model="gpt-5.6-sol",
+        returned_model="gpt-5.6-sol",
+    )
+    completed_history = replace(
+        completed_rubric,
+        attempt_id="r25-budget-positive-history",
+        role=LiveAttemptRoleV1.HISTORY_POLICY,
+        request_sha256=_sha(b"r25-budget-positive-history-request"),
+        response_envelope_sha256=_sha(b"r25-budget-positive-history-response"),
+        cost_usd_micros=1,
+        worker_pid=12_002,
+    )
+    policy = object.__new__(OwnerAuthorizedLivePerCallPolicyV1)
+    policy._case = descriptor
+    policy._budget_ledger = ledger
+
+    assert policy._settle_completed_proposal_rejection(
+        reservation,
+        actor_call_index=2,
+        failure=GPT56PolicyError("POLICY_PROPOSAL_NOT_ADMITTED"),
+        attempts=(completed_rubric, completed_history),
+    )
+    assert (
+        ledger.reserve_call(
+            descriptor,
+            logical_call_id="r25-budget-after-rejection",
+            actor_call_index=3,
+            attempt_count=2,
+        ).logical_call_id
+        == "r25-budget-after-rejection"
+    )
 
 
 def test_r25_request_cost_budget_freezes_unknown_and_rejects_global_exhaustion(
