@@ -4530,12 +4530,46 @@ def _parse_milestone_state(
     item = _mapping(value, "milestone state")
     milestone_id = cast(str, item["milestone_id"])
     state = MilestoneState(cast(str, item["state"]))
-    evidence_refs = tuple(
-        _parse_milestone_evidence_ref(raw, evidence_hashes=evidence_hashes)
-        for raw in _sequence(item["evidence_refs"], "evidence_refs")
-    )
+    raw_evidence_refs = _sequence(item["evidence_refs"], "evidence_refs")
     reason_code = MilestoneReasonCode(cast(str, item["reason_code"]))
     prior = prior_states.get(milestone_id)
+    if prior is not None and prior.state is not MilestoneState.PENDING:
+        raw_ref_keys = tuple(
+            (
+                cast(str, _mapping(raw, "evidence reference")["evidence_id"]),
+                cast(str, _mapping(raw, "evidence reference")["relation"]),
+            )
+            for raw in raw_evidence_refs
+        )
+        prior_ref_keys = tuple(
+            (reference.evidence_id, reference.relation.value) for reference in prior.evidence_refs
+        )
+        if (
+            state is prior.state
+            and reason_code is prior.reason_code
+            and raw_ref_keys == prior_ref_keys
+        ):
+            # Some structured-output responses repeat the already admitted
+            # prior state verbatim, including evidence that is intentionally
+            # absent from the next causal packet.  This is exactly a state
+            # preservation, not a new evidence claim.
+            return MilestoneStateRecordV1(
+                milestone_id=milestone_id,
+                state=prior.state,
+                evidence_refs=tuple(
+                    MilestoneEvidenceRefV1(
+                        evidence_id=reference.evidence_id,
+                        payload_sha256=reference.payload_sha256,
+                        relation=reference.relation,
+                    )
+                    for reference in prior.evidence_refs
+                ),
+                reason_code=MilestoneReasonCode.PRESERVE_PRIOR_STATE,
+            )
+    evidence_refs = tuple(
+        _parse_milestone_evidence_ref(raw, evidence_hashes=evidence_hashes)
+        for raw in raw_evidence_refs
+    )
     if (
         state is MilestoneState.PENDING
         and not evidence_refs

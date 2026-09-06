@@ -21,7 +21,11 @@ from mobile_world.runtime.audit.runner_capture import RunnerTaskCapture
 from mobile_world.runtime.audit.schemas import Producer
 from mobile_world.runtime.sentinel.contracts import SentinelContext
 from mobile_world.runtime.sentinel.r2_3.contracts import (
+    MilestoneEvidenceRefV1,
+    MilestoneEvidenceRelation,
+    MilestoneReasonCode,
     MilestoneState,
+    MilestoneStateRecordV1,
     R23ContractError,
     RubricBackendDescriptorV1,
     RubricBackendKind,
@@ -56,6 +60,7 @@ from mobile_world.runtime.sentinel.r2_4.rubric_live import (
     LiveRubricTransportAuthorityV1,
     LiveRubricTransportKindV1,
     ProductionRubricProviderPortV1,
+    _parse_milestone_state,
     bind_current_collector_image,
     live_rubric_call_receipt_projection,
     live_rubric_generate_schema,
@@ -686,6 +691,39 @@ def test_track_does_not_normalize_pending_preserve_from_nonpending_prior(
     assert second.status is RubricSessionStatus.FALLBACK
     assert second.state == second_packet.prior_state
     assert second.proposal is None
+
+
+def test_track_normalizes_exact_repeated_nonpending_prior_state() -> None:
+    prior = MilestoneStateRecordV1(
+        milestone_id="task-goal-state",
+        state=MilestoneState.IN_PROGRESS,
+        evidence_refs=(
+            MilestoneEvidenceRefV1(
+                evidence_id="prior-screen",
+                payload_sha256=_sha("prior-screen"),
+                relation=MilestoneEvidenceRelation.OBSERVES_PROGRESS,
+            ),
+        ),
+        reason_code=MilestoneReasonCode.PROGRESS_OBSERVED,
+    )
+
+    parsed = _parse_milestone_state(
+        {
+            "milestone_id": prior.milestone_id,
+            "state": prior.state.value,
+            "evidence_refs": [
+                {
+                    "evidence_id": prior.evidence_refs[0].evidence_id,
+                    "relation": prior.evidence_refs[0].relation.value,
+                }
+            ],
+            "reason_code": prior.reason_code.value,
+        },
+        evidence_hashes={},
+        prior_states={prior.milestone_id: prior},
+    )
+
+    assert parsed == replace(prior, reason_code=MilestoneReasonCode.PRESERVE_PRIOR_STATE)
 
 
 def test_generate_derives_multispan_unicode_and_utf8_coordinates(tmp_path: Path) -> None:
