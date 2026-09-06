@@ -961,12 +961,23 @@ def test_sealed_history_request_rejects_transport_wrapper_or_prompt_drift(drift:
     assert raised.value.code == "PROVIDER_REQUEST_STAGE_MISMATCH"
 
 
-def test_history_transport_suffix_states_every_mechanical_output_rule() -> None:
+def test_history_transport_suffix_states_semantic_mappings_and_mechanical_rules() -> None:
     suffix = HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1
     for rule in (
         "Copy packet_id and",
         "evidence_packet_sha256 from required_output_bindings exactly",
         "never use raw_request_sha256",
+        "mutually exclusive semantic mappings",
+        "factual_verdict=REFUTED",
+        "relation=REFUTES",
+        "reason_code=DIRECT_EVIDENCE_REFUTATION",
+        "factual_verdict=SUPPORTED, temporal_validity=INVALIDATED",
+        "prior evidence\nref with relation=SUPPORTS",
+        "strictly later evidence ref with\nrelation=INVALIDATES",
+        "reason_code=LATER_EVIDENCE_INVALIDATES",
+        "INVALIDATES-only\nreference is not direct refutation",
+        "factual_verdict=UNVERIFIABLE and/or\ntemporal_validity=UNKNOWN",
+        "proposed_operation=KEEP_UNCERTAIN; do not guess DROP",
         "exactly one decision for every evidence_packet target",
         "no extra or duplicate target, decision_id, evidence-ref, or uncertainty-code item",
         "fallback_status to ABSTAIN_TO_ORIGINAL exactly when proposed_operation is",

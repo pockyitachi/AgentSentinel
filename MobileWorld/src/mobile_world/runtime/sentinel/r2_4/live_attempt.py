@@ -127,6 +127,16 @@ evidence_packet_sha256 from required_output_bindings exactly into the response; 
 compute, infer, or substitute either value, and never use raw_request_sha256 for the
 evidence-packet hash.
 
+Use these mutually exclusive semantic mappings. Direct refutation requires
+factual_verdict=REFUTED, at least one evidence ref with relation=REFUTES, and
+reason_code=DIRECT_EVIDENCE_REFUTATION. Later invalidation requires
+factual_verdict=SUPPORTED, temporal_validity=INVALIDATED, at least one prior evidence
+ref with relation=SUPPORTS, at least one strictly later evidence ref with
+relation=INVALIDATES, and reason_code=LATER_EVIDENCE_INVALIDATES. An INVALIDATES-only
+reference is not direct refutation and is not sufficient for later invalidation. If
+neither complete basis is available, use factual_verdict=UNVERIFIABLE and/or
+temporal_validity=UNKNOWN with proposed_operation=KEEP_UNCERTAIN; do not guess DROP.
+
 Emit exactly one decision for every evidence_packet target, copying each target_id;
 emit no extra or duplicate target, decision_id, evidence-ref, or uncertainty-code item.
 The following response fields are mechanical consequences of the decisions. Set a
