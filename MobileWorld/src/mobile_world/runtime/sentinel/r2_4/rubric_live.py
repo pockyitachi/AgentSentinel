@@ -4546,7 +4546,7 @@ def _parse_milestone_state(
         )
         if (
             state is prior.state
-            and reason_code is prior.reason_code
+            and reason_code in {prior.reason_code, MilestoneReasonCode.PRESERVE_PRIOR_STATE}
             and raw_ref_keys == prior_ref_keys
         ):
             # Some structured-output responses repeat the already admitted

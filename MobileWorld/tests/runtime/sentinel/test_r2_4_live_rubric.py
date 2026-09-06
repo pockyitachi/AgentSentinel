@@ -717,7 +717,7 @@ def test_track_normalizes_exact_repeated_nonpending_prior_state() -> None:
                     "relation": prior.evidence_refs[0].relation.value,
                 }
             ],
-            "reason_code": prior.reason_code.value,
+            "reason_code": MilestoneReasonCode.PRESERVE_PRIOR_STATE.value,
         },
         evidence_hashes={},
         prior_states={prior.milestone_id: prior},
