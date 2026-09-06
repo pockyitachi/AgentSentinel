@@ -1602,20 +1602,21 @@ def _validate_shared_gpu_tenants(
     *,
     baseline: ProductionSharedGpuAttestationV1,
     owned_identity: OwnedProcessIdentityV1 | None,
-) -> None:
+    allow_dynamic_foreign_tenants: bool = False,
+) -> str | None:
     if value.gpu_index != baseline.gpu_index or value.gpu_uuid != baseline.gpu_uuid:
         raise ProductionDriverError("GPU_IDENTITY_MISMATCH", "shared physical GPU drifted")
     baseline_identities = {_shared_gpu_process_identity(item) for item in baseline.processes}
     baseline_pids = {item.pid for item in baseline.processes}
     owned_process_seen = False
+    tenant_drift_message: str | None = None
     for item in value.processes:
         identity = _shared_gpu_process_identity(item)
         if identity in baseline_identities:
             continue
         if item.pid in baseline_pids:
-            raise ProductionDriverError(
-                "GPU_SHARED_TENANT_DRIFT",
-                "a pre-existing shared GPU compute process identity drifted",
+            tenant_drift_message = (
+                tenant_drift_message or "a pre-existing shared GPU compute process identity drifted"
             )
         if (
             owned_identity is not None
@@ -1624,15 +1625,19 @@ def _validate_shared_gpu_tenants(
         ):
             owned_process_seen = True
             continue
-        raise ProductionDriverError(
-            "GPU_SHARED_TENANT_DRIFT",
-            "a new non-owned compute process appeared on the shared GPU",
+        tenant_drift_message = (
+            tenant_drift_message or "a new non-owned compute process appeared on the shared GPU"
         )
     if owned_identity is not None and not owned_process_seen:
         raise ProductionDriverError(
             "GPU_OWNED_PROCESS_ABSENT",
             "the owned model session has no bound compute process on the shared GPU",
         )
+    if tenant_drift_message is not None:
+        if not allow_dynamic_foreign_tenants:
+            raise ProductionDriverError("GPU_SHARED_TENANT_DRIFT", tenant_drift_message)
+        return "GPU_SHARED_TENANT_DRIFT"
+    return None
 
 
 def _validate_shared_gpu_cleanup(
@@ -4944,6 +4949,7 @@ class ProductionResourceLifecycleAdapterV1:
         "_models",
         "_resources",
         "_shared_gpu_baseline",
+        "_with_tool_batch_host",
         "_cleanup_success_evidence",
         "_cleanup_failure_evidence",
         "_execution_factory_binding_sha256",
@@ -4997,6 +5003,7 @@ class ProductionResourceLifecycleAdapterV1:
             tuple[ProductionSharedGpuAttestationV1 | None, tuple[str, ...], str | None] | None
         ) = None
         self._shared_gpu_baseline: ProductionSharedGpuAttestationV1 | None = None
+        self._with_tool_batch_host: PilotHostV1 | None = None
         self._stop_evidence: list[ProductionModelStopEvidenceV1] = []
         self._lock = threading.RLock()
 
@@ -5143,6 +5150,7 @@ class ProductionResourceLifecycleAdapterV1:
                 "WITH_TOOL_BATCH_RESOURCE_SCOPE_MISMATCH",
                 "with-tool batch startup requires one full-scope shared-GPU host",
             )
+        self._with_tool_batch_host = with_tool_initial_host
         if self._config.resource_topology is (
             ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
         ):
@@ -6321,7 +6329,10 @@ class ProductionResourceLifecycleAdapterV1:
             )
         )
         self._pending_model_switch_evidence.clear()
-        if self._last_shared_cleanup_tenant_anomaly is not None:
+        if (
+            self._last_shared_cleanup_tenant_anomaly is not None
+            and self._with_tool_batch_host is None
+        ):
             failed_projection = dict(projection)
             failed_projection.update(
                 {
@@ -6543,11 +6554,16 @@ class ProductionResourceLifecycleAdapterV1:
                     dispatch_projection["shared_gpu_attestation_sha256"] = (
                         production_shared_gpu_attestation_sha256(shared_gpu_attestation)
                     )
-                    _validate_shared_gpu_tenants(
+                    tenant_continuity_status = _validate_shared_gpu_tenants(
                         shared_gpu_attestation,
                         baseline=self._shared_gpu_baseline,
                         owned_identity=model.identity,
+                        allow_dynamic_foreign_tenants=(self._with_tool_batch_host is host),
                     )
+                    if self._with_tool_batch_host is host:
+                        dispatch_projection["shared_gpu_tenant_continuity_status"] = (
+                            tenant_continuity_status or "UNCHANGED_OR_EXITED"
+                        )
                     require_dispatch_deadline("shared-GPU dispatch validation crossed its deadline")
             except Exception as exc:
                 if (

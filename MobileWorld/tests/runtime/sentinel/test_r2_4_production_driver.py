@@ -3313,6 +3313,47 @@ def test_shared_cleanup_records_persistent_foreign_tenant_without_signaling_it(
     replacement.cleanup(context)
 
 
+def test_with_tool_batch_records_dynamic_foreign_tenant_and_still_cleans_owned_resources(
+    tmp_path: Path,
+) -> None:
+    config = _shared_runtime_config(tmp_path)
+    context = _context()
+    pilot = _pilot(tmp_path)
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(
+        config,
+        CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT_PERSISTS,
+    )
+    switch_authority = _cpu_pilot_switch_authority(adapter, pilot, context)
+    adapter.prepare(
+        _resources(tmp_path),
+        context,
+        pilot_switch_authority=switch_authority,
+        with_tool_initial_host=PilotHostV1.QWEN3_VL,
+    )
+
+    dispatch_sha256 = adapter.require_dispatch(
+        PilotHostV1.QWEN3_VL,
+        ProductionDispatchKindV1.ACTOR,
+        authority_deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
+    )
+    dispatch = adapter.last_dispatch_evidence_preimage()
+    assert dispatch is not None
+    assert hashlib.sha256(dispatch).hexdigest() == dispatch_sha256
+    dispatch_value = json.loads(dispatch)["value"]
+    assert dispatch_value["status"] == "PASSED"
+    assert dispatch_value["shared_gpu_tenant_continuity_status"] == ("GPU_SHARED_TENANT_DRIFT")
+    assert dispatch_value["shared_gpu_attestation"]["processes"][-1]["pid"] == 42_999
+
+    adapter.cleanup(context)
+    cleanup = adapter.cleanup_success_evidence_preimage()
+    assert cleanup is not None
+    cleanup_value = json.loads(cleanup)["value"]
+    assert cleanup_value["status"] == "CLEANED"
+    assert cleanup_value["shared_gpu_tenant_continuity_status"] == ("GPU_SHARED_TENANT_DRIFT")
+    assert cleanup_value["final_shared_gpu_attestation"]["processes"][-1]["pid"] == 42_999
+    assert all(not item.startswith("pid:42") for item in adapter.cpu_trace.cleanup_targets)
+
+
 def test_shared_scope_tamper_blocks_prepare_handoff_and_cleanup(tmp_path: Path) -> None:
     config = _shared_runtime_config(tmp_path)
     context = _shared_context()
