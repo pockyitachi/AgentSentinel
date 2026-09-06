@@ -465,7 +465,7 @@ def _generic_fallback_terminal_receipt(
         final_request_sha256=request_sha256,
         provider_request_sha256=request_sha256,
         provider_response_sha256="9" * 64,
-        exact_diff_sha256="a" * 64,
+        exact_diff_sha256=canonical_sha256({"diffs": [], "list_insertions": []}),
         pre_provider_sha256="b" * 64,
         pre_provider_status=production_audit_module.ProductionRuntimeAuditPreProviderStatusV1.FALLBACK_ORIGINAL,
         pre_provider_outcome=production_audit_module.ProductionRuntimeAuditPreProviderOutcomeV1.GENERIC_FALLBACK_ORIGINAL,
@@ -3830,7 +3830,9 @@ def test_unit_deadlines_reserve_hash_bound_cleanup_grace_before_dispatch() -> No
     assert raised.value.code == "INSUFFICIENT_CLEANUP_WINDOW"
 
 
-def test_rejected_policy_proposal_falls_back_to_original_and_continues() -> None:
+def test_rejected_policy_proposal_falls_back_to_original_and_continues(
+    tmp_path: Path,
+) -> None:
     roles = (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.HISTORY_POLICY)
     fallback_reason = production_driver_module.SentinelFallbackReason.POLICY_EXCEPTION
     fallback_check = "policy_exception"
@@ -3921,6 +3923,86 @@ def test_rejected_policy_proposal_falls_back_to_original_and_continues() -> None
     assert projected["pre_provider_outcome"] == "GENERIC_FALLBACK_ORIGINAL"
     assert projected["fallback_reason"] == fallback_reason.value
     assert projected["fallback_check"] == fallback_check
+
+    prefix_logical_call_id = "generic-fallback-prefix"
+    prefix_attempts = (
+        _completed_semantic_attempt(
+            LiveAttemptRoleV1.RUBRIC,
+            logical_call_id=prefix_logical_call_id,
+            request_sha256=request_sha256,
+            attempt_index=1,
+        ),
+    )
+
+    class _WithToolPolicy(_Policy):
+        @staticmethod
+        def attempt_receipts_for_call(_: str) -> tuple[LiveAttemptReceiptV1, ...]:
+            return prefix_attempts
+
+        @staticmethod
+        def failure_for_call(_: str) -> str:
+            return "EVIDENCE_PACKET_REJECTED"
+
+        @staticmethod
+        def known_cost_original_fallback_settled_for_call(_: str) -> bool:
+            return True
+
+    prefix_receipt = _generic_fallback_terminal_receipt(
+        logical_call_id=prefix_logical_call_id,
+        attempts=prefix_attempts,
+        fallback_reason=fallback_reason,
+        fallback_check=fallback_check,
+        action_executed=True,
+    )
+    prefix_state = production_driver_module._ProductionUnitStateV1(
+        unit_id="fallback:prefix",
+        host=PilotHostV1.QWEN3_VL,
+        task_name="generic-fallback-task",
+        deadline_monotonic_ns=deadline_ns,
+        cleanup_deadline_monotonic_ns=deadline_ns,
+        authority_deadline_monotonic_ns=deadline_ns,
+        attempt_termination_upper_bound_ns=0,
+        environment=None,
+        observation=None,
+        allow_safe_original_fallback=True,
+        policy=cast(Any, _WithToolPolicy()),
+    )
+    prefix_port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(prefix_port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
+    object.__setattr__(
+        prefix_port,
+        "_factory",
+        SimpleNamespace(preflight_report_sha256="2" * 64, factory_binding_sha256="3" * 64),
+    )
+    batch_decision = prefix_port._decision_from_receipt(
+        prefix_state,
+        prefix_receipt,
+        actor_call_index=2,
+    )
+    assert not production_driver_module._semantic_pre_provider_outcome_admitted(
+        batch_decision,
+        attempts=prefix_attempts,
+        policy_failure_code="EVIDENCE_PACKET_REJECTED",
+    )
+    pilot = _pilot(tmp_path)
+    joint_cell = next(item for item in pilot.cells if item.arm is PilotArmV1.JOINT_SENTINEL)
+    first_decision = _semantic_decision(
+        actor_call_index=1,
+        rubric_calls=2,
+        history_policy_calls=0,
+    )
+    with pytest.raises(ProductionDriverError, match="PILOT_OPENAI_ROLE_CENSUS_MISMATCH"):
+        production_driver_module._validate_pilot_decisions(
+            pilot,
+            joint_cell,
+            (first_decision, batch_decision),
+        )
+    production_driver_module._validate_pilot_decisions(
+        pilot,
+        joint_cell,
+        (first_decision, batch_decision),
+        allow_safe_original_fallback=True,
+    )
 
 
 def test_production_port_exports_append_only_terminal_and_decision_journals(
@@ -5306,6 +5388,7 @@ def test_production_factory_requires_exact_explicit_dependencies() -> None:
         "confirmed_pricing_sha256",
         "production_audit_sink",
         "resource_lifecycle",
+        "shared_budget_ledger",
     )
     with pytest.raises(TypeError):
         cast(Any, build_production_driver_v1)()
@@ -5638,6 +5721,81 @@ def test_fixed_pilot_adapter_runs_matched_20_task_80_cell_reset_action_result_ma
         "RUN:pilot:001",
         "CLEANUP:pilot:001",
     )
+
+
+def test_with_tool_joint_batches_use_fresh_selected_host_and_only_20_active_cells(
+    tmp_path: Path,
+) -> None:
+    pilot = replace(
+        _pilot(tmp_path),
+        max_steps_per_cell=50,
+        per_cell_timeout_seconds=3_600,
+        max_total_wall_time_seconds=144_000,
+        max_total_actor_calls=4_000,
+        max_total_openai_calls=4_000,
+    )
+    resources = _resources(tmp_path)
+    context = _context(
+        actor_calls=1_000,
+        openai_calls=2_000,
+        wall_time_ms=72_000_000,
+    )
+
+    for host, first_index in (
+        (PilotHostV1.QWEN3_VL, 1),
+        (PilotHostV1.MAI_UI, 3),
+    ):
+        lifecycle = build_cpu_test_resource_lifecycle_adapter_v1(_shared_runtime_config(tmp_path))
+        switch_authority = _cpu_pilot_switch_authority(lifecycle, pilot, context)
+        try:
+            lifecycle.prepare(
+                resources,
+                context,
+                pilot_switch_authority=switch_authority,
+                with_tool_initial_host=host,
+            )
+            resource_evidence = lifecycle.evidence
+            assert resource_evidence is not None
+            assert resource_evidence.active_hosts == (host,)
+
+            adapters = build_cpu_test_production_driver_v1()
+            result = adapters.pilot.run_with_tool_joint_batch(
+                pilot,
+                resources,
+                _live_stages(),
+                context,
+                _Lease(context.manifest_sha256),
+                host=host,
+            )
+            evidence = adapters.pilot.evidence
+            assert isinstance(
+                evidence,
+                production_driver_module.WithToolJointBatchEvidenceV1,
+            )
+            assert (result.actor_calls, result.openai_calls, result.actor_actions) == (20, 40, 20)
+            assert len(evidence.cells) == len(result.completed_units) == 20
+            assert tuple(item.sequence_index for item in evidence.cells) == tuple(
+                range(first_index, len(pilot.cells), 4)
+            )
+            assert all(
+                item.host is host
+                and item.arm is PilotArmV1.JOINT_SENTINEL
+                and item.sentinel_mode == "ACTIVE"
+                for item in evidence.cells
+            )
+            projection = production_driver_module.with_tool_joint_batch_evidence_projection(
+                evidence
+            )
+            assert projection["comparison_baseline"] == "HISTORICAL_NONPAIRED"
+            assert projection["fresh_baseline_cell_count"] == 0
+            assert projection["strict_matched_pilot_compatible"] is False
+            assert result.evidence_sha256 == (
+                production_driver_module.with_tool_joint_batch_evidence_sha256(evidence)
+            )
+            assert adapters.cpu_trace.pilot_dispatches == 20
+            assert not adapters.cpu_trace.smoke_dispatches
+        finally:
+            lifecycle.cleanup(context)
 
 
 def test_pilot_cell_evidence_projection_crossing_cell_deadline_is_not_admitted(

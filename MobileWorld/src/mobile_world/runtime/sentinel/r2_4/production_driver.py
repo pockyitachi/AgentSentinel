@@ -103,6 +103,7 @@ from mobile_world.runtime.sentinel.r2_4.live_executor import (
 from mobile_world.runtime.sentinel.r2_4.live_policy import (
     OwnerAuthorizedLivePerCallPolicyV1,
     ProductionLiveBudgetLedgerV1,
+    ResolvedLivePolicyCallBindingV1,
     build_owner_authorized_live_per_call_policy_v1,
     build_production_live_budget_ledger_v1,
 )
@@ -204,6 +205,9 @@ PRODUCTION_FULL_SMOKE_EVIDENCE_SCHEMA_VERSION_V3: Final[str] = (
 )
 PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2: Final[str] = (
     "mobileworld.runtime.sentinel-r2.5-production-pilot-evidence/v2"
+)
+PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.5-with-tool-joint-batch-evidence/v1"
 )
 PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
     "mobileworld.runtime.sentinel-r2.4-model-handoff-evidence/v1"
@@ -1772,7 +1776,15 @@ class ProductionResourceStageEvidenceV1:
             )
         if self.resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED:
             if (
-                self.active_hosts != (PilotHostV1.QWEN3_VL,)
+                self.active_hosts
+                not in (
+                    (PilotHostV1.QWEN3_VL,),
+                    (PilotHostV1.MAI_UI,),
+                )
+                or (
+                    self.active_hosts == (PilotHostV1.MAI_UI,)
+                    and self.sequence_execution_scope != "R24_R25_FULL"
+                )
                 or len(self.shared_gpu_attestations) != 2
                 or any(
                     type(item) is not ProductionSharedGpuAttestationV1
@@ -5118,8 +5130,19 @@ class ProductionResourceLifecycleAdapterV1:
         context: StageAdapterContextV1,
         *,
         pilot_switch_authority: ProductionPilotSwitchAuthorityV1 | None = None,
+        with_tool_initial_host: PilotHostV1 | None = None,
     ) -> AdapterStageResultV1:
         trusted_context = _snapshot_context(context)
+        if with_tool_initial_host is not None and (
+            type(with_tool_initial_host) is not PilotHostV1
+            or trusted_context.sequence_execution_scope != "R24_R25_FULL"
+            or self._config.resource_topology
+            is not ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
+        ):
+            raise ProductionDriverError(
+                "WITH_TOOL_BATCH_RESOURCE_SCOPE_MISMATCH",
+                "with-tool batch startup requires one full-scope shared-GPU host",
+            )
         if self._config.resource_topology is (
             ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
         ):
@@ -5245,7 +5268,11 @@ class ProductionResourceLifecycleAdapterV1:
             raise
         try:
             lease_hosts = (
-                (PilotHostV1.QWEN3_VL,)
+                (
+                    PilotHostV1.QWEN3_VL
+                    if with_tool_initial_host is None
+                    else with_tool_initial_host,
+                )
                 if self._config.resource_topology
                 is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
                 else (PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)
@@ -5344,7 +5371,14 @@ class ProductionResourceLifecycleAdapterV1:
                 self._config.resource_topology
                 is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
             ):
-                startup_pairs = startup_pairs[:1]
+                initial_host = (
+                    PilotHostV1.QWEN3_VL
+                    if with_tool_initial_host is None
+                    else with_tool_initial_host
+                )
+                startup_pairs = tuple(
+                    pair for pair in startup_pairs if pair[0].host is initial_host
+                )
             for resource, spec in startup_pairs:
                 require_dispatch_authority()
                 gpu_index = (
@@ -6988,6 +7022,82 @@ def _semantic_pre_provider_outcome_admitted(
     )
 
 
+def _with_tool_safe_original_fallback_admitted(
+    value: ActorDecisionEvidenceV1,
+    *,
+    attempts: tuple[LiveAttemptReceiptV1, ...],
+    policy_failure_code: str | None,
+    policy_failure_budget_settled: bool,
+    has_live_binding: bool,
+    run_fatal_clear: bool,
+) -> bool:
+    """Admit only a fully accounted Original fallback in the 40-cell path."""
+
+    if (
+        value.pre_provider_status is not ProductionRuntimeAuditPreProviderStatusV1.FALLBACK_ORIGINAL
+        or value.pre_provider_outcome
+        is not ProductionRuntimeAuditPreProviderOutcomeV1.GENERIC_FALLBACK_ORIGINAL
+        or value.fallback_reason
+        not in {
+            SentinelFallbackReason.POLICY_TIMEOUT,
+            SentinelFallbackReason.POLICY_EXCEPTION,
+            SentinelFallbackReason.INVALID_POLICY_OUTPUT,
+            SentinelFallbackReason.INVALID_REQUEST_SCHEMA,
+            SentinelFallbackReason.UNSUPPORTED_HISTORY_FAMILY,
+            SentinelFallbackReason.AMBIGUOUS_HISTORY_SPAN,
+            SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE,
+            SentinelFallbackReason.RENDERER_FAILURE,
+            SentinelFallbackReason.INVARIANT_FAILURE,
+        }
+        or value.fallback_check is None
+        or value.raw_request_sha256 != value.final_request_sha256
+        or value.raw_request_sha256 != value.provider_request_sha256
+        or value.exact_diff_sha256 != canonical_sha256({"diffs": [], "list_insertions": []})
+        or not run_fatal_clear
+    ):
+        return False
+    if policy_failure_code is not None:
+        if not policy_failure_budget_settled:
+            return False
+    elif attempts and not has_live_binding:
+        return False
+    expected_roles = (
+        (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.RUBRIC)
+        if value.actor_call_index == 1
+        else (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.HISTORY_POLICY)
+    )
+    if (
+        len(attempts) > len(expected_roles)
+        or tuple(item.role for item in attempts) != expected_roles[: len(attempts)]
+        or any(
+            item.status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+            or item.dispatch_count not in {0, 1}
+            or not item.worker_reaped
+            or item.cost_status is not LiveAttemptCostStatusV1.EXACT
+            or item.cost_usd_micros is None
+            for item in attempts
+        )
+    ):
+        return False
+    rubric_attempts = tuple(item for item in attempts if item.role is LiveAttemptRoleV1.RUBRIC)
+    history_attempts = tuple(
+        item for item in attempts if item.role is LiveAttemptRoleV1.HISTORY_POLICY
+    )
+    return (
+        tuple(live_attempt_receipt_sha256(item) for item in rubric_attempts)
+        == value.rubric_attempt_receipt_sha256s
+        and (None if not history_attempts else live_attempt_receipt_sha256(history_attempts[0]))
+        == value.history_policy_attempt_receipt_sha256
+        and value.census.rubric_openai_calls == sum(item.dispatch_count for item in rubric_attempts)
+        and value.census.history_policy_openai_calls
+        == sum(item.dispatch_count for item in history_attempts)
+        and value.census.openai_calls
+        == value.census.rubric_openai_calls + value.census.history_policy_openai_calls
+        and value.census.cost_usd_micros
+        == sum(cast(int, item.cost_usd_micros) for item in attempts)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DriverStageCensusV1:
     actor_calls: int
@@ -7786,6 +7896,68 @@ class PilotStageEvidenceV1:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class WithToolJointBatchEvidenceV1:
+    """One ACTIVE-only host batch for descriptive comparison to historical controls.
+
+    This is deliberately not ``PilotStageEvidenceV1``: it has no fresh baseline
+    cells and therefore cannot satisfy the strict matched 80--120-cell pilot or
+    feed its integrity/analysis path.
+    """
+
+    manifest_sha256: str
+    run_id: str
+    pilot_manifest_sha256: str
+    actor_resources_sha256: str
+    history_policy_stage_sha256: str
+    host: PilotHostV1
+    cells: tuple[PilotCellEvidenceV1, ...]
+    census: DriverStageCensusV1
+    schema_version: str = PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1
+
+    def __post_init__(self) -> None:
+        if self.schema_version != PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1:
+            raise ProductionDriverError("UNKNOWN_SCHEMA", "joint-batch evidence schema differs")
+        _require_sha256(self.manifest_sha256, "manifest_sha256")
+        _require_safe_id(self.run_id, "run_id")
+        for name in (
+            "pilot_manifest_sha256",
+            "actor_resources_sha256",
+            "history_policy_stage_sha256",
+        ):
+            _require_sha256(getattr(self, name), name)
+        if type(self.host) is not PilotHostV1:
+            raise ProductionDriverError("INVALID_EVIDENCE", "joint-batch host differs")
+        if (
+            type(self.cells) is not tuple
+            or not 20 <= len(self.cells) <= 30
+            or any(type(item) is not PilotCellEvidenceV1 for item in self.cells)
+            or any(
+                item.manifest_sha256 != self.manifest_sha256
+                or item.run_id != self.run_id
+                or item.host is not self.host
+                or item.arm is not PilotArmV1.JOINT_SENTINEL
+                or item.sentinel_mode != "ACTIVE"
+                for item in self.cells
+            )
+            or len({item.task_id for item in self.cells}) != len(self.cells)
+            or len({item.sequence_index for item in self.cells}) != len(self.cells)
+        ):
+            raise ProductionDriverError(
+                "INVALID_EVIDENCE",
+                "with-tool batch needs one ACTIVE joint cell per task",
+            )
+        if type(self.census) is not DriverStageCensusV1:
+            raise ProductionDriverError("INVALID_CENSUS", "joint-batch census type differs")
+        if not all(item.unit_journal_preimage is not None for item in self.cells):
+            # CPU doubles intentionally have no durable journals; production
+            # batches must never silently mix the two evidence variants.
+            if any(item.unit_journal_preimage is not None for item in self.cells):
+                raise ProductionDriverError(
+                    "INVALID_UNIT_JOURNAL", "joint-batch journal variants are mixed"
+                )
+
+
 def _census_projection(value: DriverStageCensusV1 | DriverCallCensusV1) -> dict[str, JsonValue]:
     return {
         "actor_actions": value.actor_actions,
@@ -7973,12 +8145,39 @@ def pilot_stage_evidence_projection(value: PilotStageEvidenceV1) -> dict[str, Js
     }
 
 
+def with_tool_joint_batch_evidence_projection(
+    value: WithToolJointBatchEvidenceV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not WithToolJointBatchEvidenceV1:
+        raise ProductionDriverError("UNTRUSTED_TYPE", "joint-batch evidence must use exact type")
+    return {
+        "actor_resources_sha256": value.actor_resources_sha256,
+        "cells": [cast(JsonValue, _pilot_cell_evidence_projection(item)) for item in value.cells],
+        "census": cast(JsonValue, _census_projection(value.census)),
+        "comparison_baseline": "HISTORICAL_NONPAIRED",
+        "fresh_baseline_cell_count": 0,
+        "history_policy_stage_sha256": value.history_policy_stage_sha256,
+        "host": value.host.value,
+        "manifest_sha256": value.manifest_sha256,
+        "pilot_manifest_sha256": value.pilot_manifest_sha256,
+        "run_id": value.run_id,
+        "schema_version": value.schema_version,
+        "strict_matched_pilot_compatible": False,
+    }
+
+
 def smoke_stage_evidence_sha256(value: SmokeStageEvidenceV1) -> str:
     return canonical_sha256(cast(JsonValue, smoke_stage_evidence_projection(value)))
 
 
 def pilot_stage_evidence_sha256(value: PilotStageEvidenceV1) -> str:
     return canonical_sha256(cast(JsonValue, pilot_stage_evidence_projection(value)))
+
+
+def with_tool_joint_batch_evidence_sha256(
+    value: WithToolJointBatchEvidenceV1,
+) -> str:
+    return canonical_sha256(cast(JsonValue, with_tool_joint_batch_evidence_projection(value)))
 
 
 def _sum_census(
@@ -8376,6 +8575,28 @@ def _validate_pilot_reservation(
         )
 
 
+def _validate_with_tool_joint_batch_reservation(
+    pilot: FrozenPilotManifestV1,
+    context: StageAdapterContextV1,
+    *,
+    cell_count: int,
+) -> None:
+    actor = cell_count * pilot.max_steps_per_cell
+    openai = cell_count * pilot.max_steps_per_cell * 2
+    wall = cell_count * pilot.per_cell_timeout_seconds * 1_000
+    if (
+        cell_count != len(pilot.tasks)
+        or actor > context.remaining_actor_calls
+        or openai > context.remaining_openai_calls
+        or wall > context.remaining_wall_time_ms
+        or context.remaining_cost_usd_micros <= 0
+    ):
+        raise ProductionDriverError(
+            "STAGE_RESERVATION_EXCEEDS_CONTEXT",
+            "joint-only batch declared budget exceeds remaining authority",
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class _SmokeInvocationV1:
     manifest_sha256: str
@@ -8406,6 +8627,7 @@ class _PilotInvocationV1:
     authority_deadline_monotonic_ns: int
     attempt_termination_upper_bound_ns: int
     resource_switch_evidence_sha256: str | None = None
+    allow_safe_original_fallback: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -9206,6 +9428,7 @@ class _ProductionUnitStateV1:
     attempt_termination_upper_bound_ns: int
     environment: AndroidEnvClient | None
     observation: Observation | None
+    allow_safe_original_fallback: bool = False
     task_input: PilotResetTaskInitInputV1 | None = None
     task_goal: str | None = None
     lifecycle: AuditLifecycle | None = None
@@ -9600,6 +9823,7 @@ class _ProductionFixedExecutionPortV1:
         mode: SmokeModeV1,
         case_id: str,
         deadline_ns: int,
+        allow_safe_original_fallback: bool = False,
     ) -> tuple[PromptSentinel, OwnerAuthorizedLivePerCallPolicyV1 | None, ProductionRuntimeAuditV1]:
         # Re-attest the installed distribution on every actor call boundary;
         # stage declarations alone are not evidence of the imported SDK.
@@ -9617,6 +9841,7 @@ class _ProductionFixedExecutionPortV1:
                 mode=mode,
                 case_id=case_id,
                 case_deadline_monotonic_ns=deadline_ns,
+                allow_known_cost_original_fallback=allow_safe_original_fallback,
             )
             policy = live_policy
         audit = ProductionRuntimeAuditV1(
@@ -9675,6 +9900,7 @@ class _ProductionFixedExecutionPortV1:
             mode=mode,
             case_id=case_id,
             deadline_ns=invocation.deadline_monotonic_ns,
+            allow_safe_original_fallback=state.allow_safe_original_fallback,
         )
         agent = self._new_agent(
             host=host, sentinel=sentinel, deadline_ns=invocation.deadline_monotonic_ns
@@ -10562,6 +10788,7 @@ class _ProductionFixedExecutionPortV1:
         policy = state.policy
         attempts: tuple[LiveAttemptReceiptV1, ...] = ()
         policy_failure_code: str | None = None
+        binding: ResolvedLivePolicyCallBindingV1 | None = None
         if policy is None:
             rubric_hashes: tuple[str, ...] = ()
             history_hash = None
@@ -10671,14 +10898,32 @@ class _ProductionFixedExecutionPortV1:
         )
         if type(state) is _ProductionUnitStateV1:
             state.decision_journal.append(decision)
-        if (
-            type(state) is _ProductionUnitStateV1
-            and policy is not None
-            and not _semantic_pre_provider_outcome_admitted(
+        semantic_outcome_admitted = _semantic_pre_provider_outcome_admitted(
+            decision,
+            attempts=attempts,
+            policy_failure_code=policy_failure_code,
+        )
+        batch_fallback_admitted = False
+        if state.allow_safe_original_fallback and policy is not None:
+            try:
+                policy_failure_budget_settled = (
+                    policy.known_cost_original_fallback_settled_for_call(receipt.logical_call_id)
+                )
+            except Exception:
+                policy_failure_budget_settled = False
+            batch_fallback_admitted = _with_tool_safe_original_fallback_admitted(
                 decision,
                 attempts=attempts,
                 policy_failure_code=policy_failure_code,
+                policy_failure_budget_settled=policy_failure_budget_settled,
+                has_live_binding=binding is not None,
+                run_fatal_clear=self._run_fatal_latch.state is None,
             )
+        if (
+            type(state) is _ProductionUnitStateV1
+            and policy is not None
+            and not semantic_outcome_admitted
+            and not batch_fallback_admitted
         ):
             raise ProductionDriverError(
                 "SENTINEL_PRE_PROVIDER_OUTCOME_REJECTED",
@@ -10908,6 +11153,7 @@ class _ProductionFixedExecutionPortV1:
                 attempt_termination_upper_bound_ns=(invocation.attempt_termination_upper_bound_ns),
                 environment=environment,
                 observation=None,
+                allow_safe_original_fallback=invocation.allow_safe_original_fallback,
                 task_input=task_input,
             )
             self._units[unit_id] = state
@@ -11919,6 +12165,8 @@ def _validate_pilot_decisions(
     pilot: FrozenPilotManifestV1,
     cell: PilotCellV1,
     values: tuple[ActorDecisionEvidenceV1, ...],
+    *,
+    allow_safe_original_fallback: bool = False,
 ) -> DriverStageCensusV1:
     if type(values) is not tuple or not values or len(values) > pilot.max_steps_per_cell:
         raise ProductionDriverError("INVALID_PORT_RESULT", "pilot decision count differs")
@@ -11937,6 +12185,12 @@ def _validate_pilot_decisions(
             )
         expected_rubric_calls = 2 if value.actor_call_index == 1 else 1
         if cell.arm is PilotArmV1.JOINT_SENTINEL:
+            if (
+                allow_safe_original_fallback
+                and value.pre_provider_outcome
+                is ProductionRuntimeAuditPreProviderOutcomeV1.GENERIC_FALLBACK_ORIGINAL
+            ):
+                continue
             expected_history_calls = 0 if value.actor_call_index == 1 else 1
             if (
                 value.census.offline_rubric_evaluations != 0
@@ -12294,7 +12548,7 @@ class FixedPilotAdapterV1:
         if seal is not _MODULE_SEAL:
             raise ValueError("pilot adapter is module-owned")
         self._port = _require_module_port(port)
-        self._evidence: PilotStageEvidenceV1 | None = None
+        self._evidence: PilotStageEvidenceV1 | WithToolJointBatchEvidenceV1 | None = None
         self._failure_evidence: bytes | None = None
         self._lock = threading.Lock()
 
@@ -12306,6 +12560,52 @@ class FixedPilotAdapterV1:
         context: StageAdapterContextV1,
         lease: CaseAuthorityBrokerV1,
     ) -> AdapterStageResultV1:
+        return self._run(
+            pilot,
+            actor_resources,
+            openai_stages,
+            context,
+            lease,
+            with_tool_batch_host=None,
+        )
+
+    def run_with_tool_joint_batch(
+        self,
+        pilot: FrozenPilotManifestV1,
+        actor_resources: tuple[SnapshotResourceV1, ...],
+        openai_stages: tuple[OpenAIResponsesStageV1, ...],
+        context: StageAdapterContextV1,
+        lease: CaseAuthorityBrokerV1,
+        *,
+        host: PilotHostV1,
+    ) -> AdapterStageResultV1:
+        """Run only the frozen ACTIVE cell for ``host`` and no fresh baseline.
+
+        The returned evidence is explicitly incompatible with the strict
+        matched-pilot integrity and analysis artifacts.
+        """
+
+        if type(host) is not PilotHostV1:
+            raise ProductionDriverError("UNTRUSTED_TYPE", "joint-batch host differs")
+        return self._run(
+            pilot,
+            actor_resources,
+            openai_stages,
+            context,
+            lease,
+            with_tool_batch_host=host,
+        )
+
+    def _run(
+        self,
+        pilot: FrozenPilotManifestV1,
+        actor_resources: tuple[SnapshotResourceV1, ...],
+        openai_stages: tuple[OpenAIResponsesStageV1, ...],
+        context: StageAdapterContextV1,
+        lease: CaseAuthorityBrokerV1,
+        *,
+        with_tool_batch_host: PilotHostV1 | None,
+    ) -> AdapterStageResultV1:
         with self._lock:
             if self._evidence is not None:
                 raise ProductionDriverError("STAGE_ALREADY_RUN", "pilot already completed")
@@ -12316,6 +12616,24 @@ class FixedPilotAdapterV1:
                     "smoke-only authority cannot enter pilot execution",
                 )
             trusted_pilot = _snapshot_pilot(pilot)
+            if with_tool_batch_host is None:
+                selected_cells = tuple(enumerate(trusted_pilot.cells))
+            else:
+                selected_cells = tuple(
+                    (index, cell)
+                    for index, cell in enumerate(trusted_pilot.cells)
+                    if cell.host is with_tool_batch_host and cell.arm is PilotArmV1.JOINT_SENTINEL
+                )
+                if (
+                    len(selected_cells) != len(trusted_pilot.tasks)
+                    or tuple(cell.task_id for _, cell in selected_cells)
+                    != tuple(task.task_id for task in trusted_pilot.tasks)
+                    or any(cell.sentinel_mode != "ACTIVE" for _, cell in selected_cells)
+                ):
+                    raise ProductionDriverError(
+                        "WITH_TOOL_BATCH_MATRIX_MISMATCH",
+                        "batch must contain one frozen ACTIVE joint cell per task",
+                    )
             self._failure_evidence = canonical_json_bytes(
                 cast(
                     JsonValue,
@@ -12326,6 +12644,12 @@ class FixedPilotAdapterV1:
                             "pilot-completed-unit-journal", cast(JsonValue, [])
                         ),
                         "failure_code": "PILOT_CELL_EXECUTION_FAILED",
+                        "comparison_baseline": (
+                            None if with_tool_batch_host is None else "HISTORICAL_NONPAIRED"
+                        ),
+                        "batch_host": (
+                            None if with_tool_batch_host is None else with_tool_batch_host.value
+                        ),
                         "manifest_sha256": trusted_context.manifest_sha256,
                         "run_id": trusted_context.run_id,
                         "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
@@ -12346,7 +12670,14 @@ class FixedPilotAdapterV1:
                 )
             _, policy_sha = _history_policy_stage(openai_stages)
             _validate_lease(lease, trusted_context.manifest_sha256)
-            _validate_pilot_reservation(trusted_pilot, trusted_context)
+            if with_tool_batch_host is None:
+                _validate_pilot_reservation(trusted_pilot, trusted_context)
+            else:
+                _validate_with_tool_joint_batch_reservation(
+                    trusted_pilot,
+                    trusted_context,
+                    cell_count=len(selected_cells),
+                )
             resource_hashes = {value.host: _resource_sha256(value) for value in resources}
             resources_sha = _hash_projection(
                 "actor-resource-matrix",
@@ -12384,7 +12715,7 @@ class FixedPilotAdapterV1:
                     "PILOT_SWITCH_AUTHORITY_MISMATCH",
                     "pilot manifest and shared switch authority differ",
                 )
-            if shared_sequential:
+            if shared_sequential and with_tool_batch_host is None:
                 assert switch_authority is not None
                 required_pilot_wall_time_ms = (
                     trusted_pilot.max_total_wall_time_seconds
@@ -12396,12 +12727,26 @@ class FixedPilotAdapterV1:
                         "PILOT_WALL_RESERVATION_UNAVAILABLE",
                         "full pilot plus every model switch lacks a complete reservation",
                     )
+            elif shared_sequential:
+                assert resource_lifecycle is not None
+                resource_evidence = resource_lifecycle.evidence
+                if resource_evidence is None or resource_evidence.active_hosts != (
+                    with_tool_batch_host,
+                ):
+                    raise ProductionDriverError(
+                        "WITH_TOOL_BATCH_HOST_UNAVAILABLE",
+                        "fresh batch lifecycle did not start the selected host",
+                    )
             self._port.prepare_pilot(trusted_pilot)
             switch_index = 0
             previous_host: PilotHostV1 | None = None
-            for index, cell in enumerate(trusted_pilot.cells):
+            for index, cell in selected_cells:
                 switch_evidence_sha256: str | None = None
-                if shared_sequential and (previous_host is None or previous_host is not cell.host):
+                if (
+                    with_tool_batch_host is None
+                    and shared_sequential
+                    and (previous_host is None or previous_host is not cell.host)
+                ):
                     assert resource_lifecycle is not None
                     assert switch_authority is not None
                     switch_deadline_ns = min(
@@ -12514,6 +12859,7 @@ class FixedPilotAdapterV1:
                         self._port.attempt_termination_upper_bound_ns
                     ),
                     resource_switch_evidence_sha256=switch_evidence_sha256,
+                    allow_safe_original_fallback=with_tool_batch_host is not None,
                 )
                 reset: _PilotResetResultV1 | None = None
                 port_result: _PilotPortResultV1 | None = None
@@ -12632,7 +12978,10 @@ class FixedPilotAdapterV1:
                         )
                     _require_sha256(cleanup.cleanup_receipt_sha256, "cleanup_receipt_sha256")
                     cell_census = _validate_pilot_decisions(
-                        trusted_pilot, cell, port_result.decisions
+                        trusted_pilot,
+                        cell,
+                        port_result.decisions,
+                        allow_safe_original_fallback=(with_tool_batch_host is not None),
                     )
                     measured_wall_ms = max(
                         cell_census.wall_time_ms,
@@ -12813,31 +13162,48 @@ class FixedPilotAdapterV1:
                     ) from exc
                 records.append(record)
                 self._failure_evidence = next_failure_evidence
-            if shared_sequential and (
-                switch_authority is None or switch_index != len(switch_authority.host_blocks)
+            if (
+                with_tool_batch_host is None
+                and shared_sequential
+                and (switch_authority is None or switch_index != len(switch_authority.host_blocks))
             ):
                 raise ProductionDriverError(
                     "PILOT_SWITCH_CENSUS_MISMATCH", "pilot switch census differs"
                 )
             census = _sum_census(tuple(record.census for record in records))
-            evidence = PilotStageEvidenceV1(
-                manifest_sha256=trusted_context.manifest_sha256,
-                run_id=trusted_context.run_id,
-                pilot_manifest_sha256=frozen_pilot_manifest_sha256(trusted_pilot),
-                actor_resources_sha256=resources_sha,
-                history_policy_stage_sha256=policy_sha,
-                cells=tuple(records),
-                census=census,
-                schema_version=(
-                    PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2
-                    if all(item.unit_journal_preimage is not None for item in records)
-                    else PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
-                ),
-            )
+            if with_tool_batch_host is None:
+                pilot_evidence = PilotStageEvidenceV1(
+                    manifest_sha256=trusted_context.manifest_sha256,
+                    run_id=trusted_context.run_id,
+                    pilot_manifest_sha256=frozen_pilot_manifest_sha256(trusted_pilot),
+                    actor_resources_sha256=resources_sha,
+                    history_policy_stage_sha256=policy_sha,
+                    cells=tuple(records),
+                    census=census,
+                    schema_version=(
+                        PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2
+                        if all(item.unit_journal_preimage is not None for item in records)
+                        else PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+                    ),
+                )
+                evidence: PilotStageEvidenceV1 | WithToolJointBatchEvidenceV1 = pilot_evidence
+                evidence_projection = pilot_stage_evidence_projection(pilot_evidence)
+                evidence_sha256 = pilot_stage_evidence_sha256(pilot_evidence)
+            else:
+                evidence = WithToolJointBatchEvidenceV1(
+                    manifest_sha256=trusted_context.manifest_sha256,
+                    run_id=trusted_context.run_id,
+                    pilot_manifest_sha256=frozen_pilot_manifest_sha256(trusted_pilot),
+                    actor_resources_sha256=resources_sha,
+                    history_policy_stage_sha256=policy_sha,
+                    host=with_tool_batch_host,
+                    cells=tuple(records),
+                    census=census,
+                )
+                evidence_projection = with_tool_joint_batch_evidence_projection(evidence)
+                evidence_sha256 = with_tool_joint_batch_evidence_sha256(evidence)
             self._evidence = evidence
-            evidence_preimage = canonical_json_bytes(
-                cast(JsonValue, pilot_stage_evidence_projection(evidence))
-            )
+            evidence_preimage = canonical_json_bytes(cast(JsonValue, evidence_projection))
             if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
                 raise ProductionDriverError(
                     "PILOT_STAGE_DEADLINE_EXCEEDED",
@@ -12846,20 +13212,18 @@ class FixedPilotAdapterV1:
             return AdapterStageResultV1(
                 stage=RunStageV1.R25_PILOT,
                 manifest_sha256=trusted_context.manifest_sha256,
-                evidence_sha256=pilot_stage_evidence_sha256(evidence),
+                evidence_sha256=evidence_sha256,
                 evidence_preimage=evidence_preimage,
                 actor_calls=census.actor_calls,
                 openai_calls=census.openai_calls,
                 actor_actions=census.actor_actions,
                 cost_usd_micros=census.cost_usd_micros,
-                completed_units=tuple(
-                    f"pilot-cell-{index:03d}" for index in range(len(trusted_pilot.cells))
-                ),
+                completed_units=tuple(f"pilot-cell-{index:03d}" for index, _ in selected_cells),
                 provider_final_request_proven=True,
             )
 
     @property
-    def evidence(self) -> PilotStageEvidenceV1 | None:
+    def evidence(self) -> PilotStageEvidenceV1 | WithToolJointBatchEvidenceV1 | None:
         with self._lock:
             return self._evidence
 
@@ -12934,6 +13298,7 @@ def build_production_driver_v1(
     confirmed_pricing_sha256: str,
     production_audit_sink: ExternalProductionRuntimeAuditSinkV1,
     resource_lifecycle: ProductionResourceLifecycleAdapterV1,
+    shared_budget_ledger: ProductionLiveBudgetLedgerV1 | None = None,
 ) -> ProductionDriverAdaptersV1:
     """Construct the exact production host port without starting any resource."""
 
@@ -12980,12 +13345,21 @@ def build_production_driver_v1(
         raise ProductionDriverError(
             "PRODUCTION_AUDIT_SINK_REQUIRED", "exact external production audit sink is required"
         )
+    budget_ledger = (
+        build_production_live_budget_ledger_v1(factory)
+        if shared_budget_ledger is None
+        else shared_budget_ledger
+    )
+    if type(budget_ledger) is not ProductionLiveBudgetLedgerV1:
+        raise ProductionDriverError(
+            "LIVE_BUDGET_AUTHORITY_MISMATCH", "shared live budget ledger type differs"
+        )
     port = _ProductionFixedExecutionPortV1(
         factory=factory,
         config=runtime_config,
         pricing=pricing,
         audit_sink=production_audit_sink,
-        budget_ledger=build_production_live_budget_ledger_v1(factory),
+        budget_ledger=budget_ledger,
         resource_lifecycle=resource_lifecycle,
         seal=_PRODUCTION_INSTALLATION_SEAL,
     )
@@ -13009,6 +13383,7 @@ def _pilot_protocol_assertion(value: FixedPilotAdapterV1) -> PilotAdapterPortV1:
 __all__ = [
     "OFFICIAL_RESULT_EVALUATOR_ID_V1",
     "PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION",
+    "PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_PILOT_MODEL_SWITCH_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1",
@@ -13027,6 +13402,7 @@ __all__ = [
     "DriverStageCensusV1",
     "FixedLiveSmokeAdapterV1",
     "FixedPilotAdapterV1",
+    "WithToolJointBatchEvidenceV1",
     "OfficialTaskResultEvidenceV1",
     "PilotCellEvidenceV1",
     "PilotStageEvidenceV1",
@@ -13055,6 +13431,8 @@ __all__ = [
     "build_production_pilot_switch_authority_v1",
     "build_production_case_authority_broker_provider_v1",
     "build_production_resource_lifecycle_adapter_v1",
+    "with_tool_joint_batch_evidence_projection",
+    "with_tool_joint_batch_evidence_sha256",
     "pilot_stage_evidence_projection",
     "pilot_stage_evidence_sha256",
     "production_command_spec_projection",

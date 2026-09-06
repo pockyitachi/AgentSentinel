@@ -238,6 +238,18 @@ _R22_RECEIPT_PUBLICATION_FAILURE_CODES = frozenset(
         "POLICY_DEADLINE_EXCEEDED",
     }
 )
+_WITH_TOOL_SAFE_SEMANTIC_FAILURE_CODES = frozenset(
+    {
+        "EVIDENCE_PACKET_REJECTED",
+        "POLICY_DEADLINE_EXCEEDED",
+        "POLICY_PROPOSAL_NOT_ADMITTED",
+        "POLICY_RESPONSE_INVALID",
+        "POLICY_TRANSPORT_ERROR",
+        "RUBRIC_RELEVANCE_FALLBACK",
+        "RUBRIC_TASK_START_FALLBACK",
+        "RUBRIC_TRACK_FALLBACK",
+    }
+)
 
 
 class LiveHistoryPolicyReceiptStateV1(StrEnum):
@@ -3483,6 +3495,66 @@ class ProductionLiveBudgetLedgerV1:
                 self._case_reserved[reservation.case_key] -= reserved_cost
                 self._case_spent[reservation.case_key] += exact_cost_usd_micros
 
+    def settle_failed_call_known_cost(
+        self,
+        reservation: _LiveBudgetReservationV1,
+        *,
+        attempts: tuple[LiveAttemptReceiptV1, ...],
+    ) -> None:
+        """Close a pilot fallback after every formed request settled exactly.
+
+        A failed semantic call may stop before forming all planned requests.
+        This path releases no active reserve and accepts no unknown or
+        un-reaped attempt; it only closes the zero-reserve call envelope so a
+        safe Original fallback can continue the with-tool batch.
+        """
+
+        if type(reservation) is not _LiveBudgetReservationV1 or type(attempts) is not tuple:
+            raise R24ContractError("INVALID_LIVE_BUDGET", "failed-call settlement differs")
+        trusted_attempts = tuple(snapshot_live_attempt_receipt(value) for value in attempts)
+        with self._lock:
+            current = self._reservations.get(reservation.reservation_id)
+            reserved_cost = self._reservation_costs.get(reservation.reservation_id)
+            settled_cost = self._reservation_settled_costs.get(reservation.reservation_id)
+            formed_attempt_ids = self._reservation_attempt_ids.get(reservation.reservation_id)
+            receipt_ids = {item.attempt_id for item in trusted_attempts}
+            if (
+                self._failed
+                or current != reservation
+                or reservation.case_key not in self._pilot_case_keys
+                or reserved_cost != 0
+                or settled_cost is None
+                or formed_attempt_ids is None
+                or len(trusted_attempts) > reservation.expected_attempt_count
+                or len(receipt_ids) != len(trusted_attempts)
+                or receipt_ids != formed_attempt_ids
+                or any(
+                    item.logical_call_id != reservation.logical_call_id
+                    or f"{RunStageV1.R25_PILOT.value}:{item.case_id}" != reservation.case_key
+                    or item.status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+                    or item.dispatch_count not in {0, 1}
+                    or not item.worker_reaped
+                    or item.cost_status is not LiveAttemptCostStatusV1.EXACT
+                    or item.cost_usd_micros is None
+                    for item in trusted_attempts
+                )
+                or sum(cast(int, item.cost_usd_micros) for item in trusted_attempts) != settled_cost
+                or any(
+                    owner_reservation_id == reservation.reservation_id
+                    for owner_reservation_id, _ in self._attempt_reservations.values()
+                )
+            ):
+                self._failed = True
+                raise R24ContractError(
+                    "LIVE_COST_RESERVATION_EXCEEDED",
+                    "failed call retains unknown, active, or mismatched cost authority",
+                )
+            del self._reservations[reservation.reservation_id]
+            del self._reservation_attempt_ids[reservation.reservation_id]
+            del self._reservation_costs[reservation.reservation_id]
+            del self._reservation_settled_costs[reservation.reservation_id]
+            del self._reservation_id_by_logical_call[reservation.logical_call_id]
+
     def freeze_failed_call(self, reservation: _LiveBudgetReservationV1) -> None:
         if type(reservation) is not _LiveBudgetReservationV1:
             raise R24ContractError("INVALID_LIVE_BUDGET", "failed reservation differs")
@@ -3522,6 +3594,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
         mode: SmokeModeV1,
         case_id: str,
         case_deadline_monotonic_ns: int,
+        allow_known_cost_original_fallback: bool,
         seal: object,
     ) -> None:
         if seal is not _PER_CALL_POLICY_SEAL:
@@ -3534,6 +3607,8 @@ class OwnerAuthorizedLivePerCallPolicyV1:
             raise R24ContractError("PRICING_REQUIRED", "exact live pricing is required")
         if type(budget_ledger) is not ProductionLiveBudgetLedgerV1:
             raise R24ContractError("LIVE_BUDGET_REQUIRED", "exact shared budget ledger is required")
+        if type(allow_known_cost_original_fallback) is not bool:
+            raise R24ContractError("UNTRUSTED_TYPE", "fallback settlement mode differs")
         pricing_sha256 = live_attempt_pricing_sha256(pricing)
         if pricing_sha256 != factory.pricing_binding_sha256:
             raise R24ContractError("PRICING_AUTHORITY_MISMATCH", "pricing pin differs")
@@ -3633,11 +3708,13 @@ class OwnerAuthorizedLivePerCallPolicyV1:
         self._call_indices: dict[str, int] = {}
         self._outputs: dict[str, RuntimeVerticalPolicyOutputV1] = {}
         self._bindings: dict[str, ResolvedLivePolicyCallBindingV1] = {}
+        self._known_cost_original_fallbacks: set[str] = set()
         self._history_attempt_request_anchors: dict[
             str, LiveHistoryPolicyAttemptRequestAnchorV1
         ] = {}
         self._failures: dict[str, str] = {}
         self._case_deadline_ns = case_deadline_monotonic_ns
+        self._allow_known_cost_original_fallback = allow_known_cost_original_fallback
         self._lock = Lock()
 
     def _new_rubric_session(self, task_run_id: str, task: TaskInstructionV1) -> RubricTaskSession:
@@ -4239,6 +4316,17 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 )
             return self._failures.get(logical_call_id)
 
+    def known_cost_original_fallback_settled_for_call(self, logical_call_id: str) -> bool:
+        """Report whether the batch-only exact-cost fallback closed its reservation."""
+
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            if logical_call_id not in self._call_inputs:
+                raise R24ContractError(
+                    "PER_CALL_ATTEMPTS_UNAVAILABLE", "logical call was never registered"
+                )
+            return logical_call_id in self._known_cost_original_fallbacks
+
     def _settle_completed_proposal_rejection(
         self,
         reservation: _LiveBudgetReservationV1,
@@ -4274,6 +4362,28 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 cast(int, value.cost_usd_micros) for value in trusted_attempts
             ),
         )
+        return True
+
+    def _settle_known_cost_original_fallback(
+        self,
+        reservation: _LiveBudgetReservationV1,
+        *,
+        failure: Exception,
+        attempts: tuple[LiveAttemptReceiptV1, ...],
+    ) -> bool:
+        failure_code = getattr(failure, "code", None)
+        if (
+            not self._allow_known_cost_original_fallback
+            or self._case.stage is not RunStageV1.R25_PILOT
+            or type(failure_code) is not str
+            or failure_code not in _WITH_TOOL_SAFE_SEMANTIC_FAILURE_CODES
+        ):
+            return False
+        self._budget_ledger.settle_failed_call_known_cost(
+            reservation,
+            attempts=attempts,
+        )
+        self._known_cost_original_fallbacks.add(reservation.logical_call_id)
         return True
 
     def coordinated_record_for_call(self, logical_call_id: str) -> R24CoordinatedCallRecordV1:
@@ -4359,6 +4469,8 @@ class OwnerAuthorizedLivePerCallPolicyV1:
             self._call_inputs[context.logical_call_id] = input_sha256
             self._call_indices[context.logical_call_id] = actor_call_index
             reservation: _LiveBudgetReservationV1 | None = None
+            receipt_start_index: int | None = None
+            semantic_failure: Exception | None = None
             try:
                 task_run_id = self._require_case_context(
                     context,
@@ -4399,7 +4511,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                         "factory lease differs from the exact actor task/call binding",
                     )
                 case_lease_hash = case_execution_lease_sha256(case_lease)
-                before_receipts = len(self._attempt_sink.receipts)
+                receipt_start_index = len(self._attempt_sink.receipts)
                 self._rubric_backend.bind_case_authority(
                     case_lease=case_lease,
                     logical_call_id=context.logical_call_id,
@@ -4409,8 +4521,12 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                     constraint_binding=constraint_binding,
                     execution_control=execution_control,
                 )
-                record = self._coordinator.prepare_no_history(request, context)
-                receipts = self._attempt_sink.receipts[before_receipts:]
+                try:
+                    record = self._coordinator.prepare_no_history(request, context)
+                except Exception as exc:
+                    semantic_failure = exc
+                    raise
+                receipts = self._attempt_sink.receipts[receipt_start_index:]
                 if record.task_run_id != task_run_id:
                     raise R24ContractError(
                         "COLLECTOR_TASK_AUTHORITY_MISMATCH",
@@ -4483,10 +4599,21 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 return record
             except Exception as exc:
                 if reservation is not None:
+                    settled_fallback = False
                     try:
-                        self._budget_ledger.freeze_failed_call(reservation)
+                        if semantic_failure is exc and receipt_start_index is not None:
+                            settled_fallback = self._settle_known_cost_original_fallback(
+                                reservation,
+                                failure=exc,
+                                attempts=self._attempt_sink.receipts[receipt_start_index:],
+                            )
                     except Exception:
                         pass
+                    if not settled_fallback:
+                        try:
+                            self._budget_ledger.freeze_failed_call(reservation)
+                        except Exception:
+                            pass
                 code = getattr(exc, "code", "PER_CALL_LIVE_EVALUATION_FAILED")
                 if type(code) is not str or not code:
                     code = "PER_CALL_LIVE_EVALUATION_FAILED"
@@ -4536,6 +4663,7 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 )
             reservation: _LiveBudgetReservationV1 | None = None
             receipt_start_index: int | None = None
+            semantic_failure: Exception | None = None
             try:
                 task_run_id = self._require_case_context(
                     context,
@@ -4654,8 +4782,12 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                             execution_control=execution_control,
                         )
                     except GPT56PolicyError as exc:
+                        semantic_failure = exc
                         if exc.code in _R22_RECEIPT_PUBLICATION_FAILURE_CODES:
                             r22_receipt_failure_code = exc.code
+                        raise
+                    except Exception as exc:
+                        semantic_failure = exc
                         raise
                 finally:
                     try:
@@ -4799,12 +4931,19 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                             if receipt_start_index is None
                             else self._attempt_sink.receipts[receipt_start_index:]
                         )
-                        settled_rejection = self._settle_completed_proposal_rejection(
-                            reservation,
-                            actor_call_index=actor_call_index,
-                            failure=exc,
-                            attempts=attempts,
-                        )
+                        if semantic_failure is exc:
+                            settled_rejection = self._settle_known_cost_original_fallback(
+                                reservation,
+                                failure=exc,
+                                attempts=attempts,
+                            )
+                        if not settled_rejection:
+                            settled_rejection = self._settle_completed_proposal_rejection(
+                                reservation,
+                                actor_call_index=actor_call_index,
+                                failure=exc,
+                                attempts=attempts,
+                            )
                     except Exception:
                         pass
                     if not settled_rejection:
@@ -4828,6 +4967,7 @@ def build_owner_authorized_live_per_call_policy_v1(
     mode: SmokeModeV1,
     case_id: str,
     case_deadline_monotonic_ns: int,
+    allow_known_cost_original_fallback: bool = False,
 ) -> OwnerAuthorizedLivePerCallPolicyV1:
     """Build one exact case resolver without accepting executable dependencies."""
 
@@ -4840,6 +4980,7 @@ def build_owner_authorized_live_per_call_policy_v1(
         mode=mode,
         case_id=case_id,
         case_deadline_monotonic_ns=case_deadline_monotonic_ns,
+        allow_known_cost_original_fallback=allow_known_cost_original_fallback,
         seal=_PER_CALL_POLICY_SEAL,
     )
 

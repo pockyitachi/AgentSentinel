@@ -74,7 +74,7 @@
     "joint_mode": {"const": "ACTIVE"},
     "matched_task_ids": {"const": true},
     "matched_task_parameters": {"const": true},
-    "max_steps_per_cell": {"type": "integer", "minimum": 1, "maximum": 8},
+    "max_steps_per_cell": {"type": "integer", "minimum": 1, "maximum": 50},
     "max_total_actor_calls": {
       "type": "integer",
       "minimum": 1,

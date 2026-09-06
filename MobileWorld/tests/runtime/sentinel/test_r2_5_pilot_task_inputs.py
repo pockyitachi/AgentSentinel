@@ -390,7 +390,16 @@ def test_openai_budget_covers_isolated_rubric_and_history_policy(tmp_path: Path)
         replace(manifest, max_total_openai_calls=241)
 
 
-def test_durable_pilot_shape_rejects_more_than_eight_steps(tmp_path: Path) -> None:
+def test_durable_pilot_shape_admits_fifty_steps_but_no_more(tmp_path: Path) -> None:
     manifest, _, _, _ = _manifest(tmp_path)
+    assert (
+        replace(
+            manifest,
+            max_steps_per_cell=50,
+            max_total_actor_calls=4_000,
+            max_total_openai_calls=4_000,
+        ).max_steps_per_cell
+        == 50
+    )
     with pytest.raises(R25PilotContractError, match="max_steps_per_cell"):
-        replace(manifest, max_steps_per_cell=9)
+        replace(manifest, max_steps_per_cell=51)

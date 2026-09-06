@@ -440,15 +440,13 @@ class FrozenPilotManifestV1:
                 "official success must bind the exact raw-score > 0.99 evaluator",
             )
         cell_count = len(self.tasks) * len(self.hosts) * len(self.arms)
-        # The v1 durable cell/stage envelopes are admitted under a 64 MiB
-        # adapter-evidence ceiling and the shared canonical graph walker.  Eight
-        # decisions per cell is the largest reviewed production shape; accepting
-        # the historical schema ceiling of 200 creates manifests that cannot be
-        # serialized or independently reopened at the 80--120-cell cohort size.
+        # The current with-tool treatment permits up to fifty actor decisions
+        # per task.  Keep the broader historical v1 ceiling separate; v2 still
+        # has a finite production bound for durable evidence and budgeting.
         _require_positive_int(
             self.max_steps_per_cell,
             "max_steps_per_cell",
-            8 if self.schema_version == FROZEN_PILOT_SCHEMA_VERSION_V2 else 200,
+            50 if self.schema_version == FROZEN_PILOT_SCHEMA_VERSION_V2 else 200,
         )
         _require_positive_int(self.per_cell_timeout_seconds, "per_cell_timeout_seconds", 14_400)
         _require_positive_int(

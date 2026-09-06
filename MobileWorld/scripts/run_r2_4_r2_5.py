@@ -11,16 +11,19 @@ production adapters; the CLI exposes no callback, command, or client injection.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import stat
 import sys
 import time
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 from mobile_world.offline.causal_replay.contracts import JsonValue
+from mobile_world.runtime.audit.integrity import check_run_integrity
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LIVE_ATTEMPT_PRICING_SCHEMA_VERSION,
@@ -29,7 +32,11 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
 )
 from mobile_world.runtime.sentinel.r2_4.live_executor import (
     ProductionR24R25ExecutorV1,
+    StageAdapterContextV1,
     build_production_executor_v1,
+)
+from mobile_world.runtime.sentinel.r2_4.live_policy import (
+    build_production_live_budget_ledger_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.live_run import (
     LiveRunContractError,
@@ -47,16 +54,21 @@ from mobile_world.runtime.sentinel.r2_4.production_audit import (
     ExternalProductionRuntimeAuditSinkV1,
 )
 from mobile_world.runtime.sentinel.r2_4.production_driver import (
+    ProductionCaseAuthorityBrokerProviderV1,
     ProductionDriverError,
     ProductionResourceLifecycleAdapterV1,
     ProductionRuntimeConfigV1,
+    WithToolJointBatchEvidenceV1,
     build_production_case_authority_broker_provider_v1,
     build_production_driver_v1,
+    build_production_pilot_switch_authority_v1,
     build_production_resource_lifecycle_adapter_v1,
     parse_production_runtime_config,
     production_runtime_config_sha256,
+    with_tool_joint_batch_evidence_projection,
 )
 from mobile_world.runtime.sentinel.r2_4.production_preflight import (
+    ProductionPostPreflightFactoryV1,
     production_preflight_report_projection,
     production_preflight_report_sha256,
     require_production_post_preflight_factory_v1,
@@ -69,6 +81,7 @@ from mobile_world.runtime.sentinel.r2_5.integrity_gate import (
     run_post_run_integrity_gate_v1,
 )
 from mobile_world.runtime.sentinel.r2_5.pilot import (
+    PilotHostV1,
     frozen_pilot_manifest_sha256,
     resolve_pilot_task_inputs_v1,
     resolved_pilot_task_inputs_sha256,
@@ -77,12 +90,29 @@ from mobile_world.runtime.sentinel.r2_5.pilot import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _MAX_CONFIG_BYTES = 1_048_576
 _MAX_PREFLIGHT_AGE_SECONDS = 300
+_WITH_TOOL_MAX_STEPS = 50
 
 
 class _CliContractError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+@dataclass(frozen=True, slots=True)
+class _WithToolExecutionSetup:
+    factory: ProductionPostPreflightFactoryV1
+    production_preflight: dict[str, JsonValue]
+    runtime_config: ProductionRuntimeConfigV1
+    runtime_config_sha256: str
+    pricing: LiveAttemptPricingV1
+    pricing_sha256: str
+    audit_sink: ExternalProductionRuntimeAuditSinkV1
+    audit_root: Path
+    broker_provider: ProductionCaseAuthorityBrokerProviderV1
+    first_resource_adapter: ProductionResourceLifecycleAdapterV1
+    cleanup_seconds: int
+    cleanup_sha256: str
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -108,6 +138,17 @@ def _parser() -> argparse.ArgumentParser:
         "--execute",
         action="store_true",
         help="Run only through the exact sealed production executor and all owner pins.",
+    )
+    mode.add_argument(
+        "--execute-with-tool-batches",
+        "--execute-joint-batches",
+        dest="execute_with_tool_batches",
+        action="store_true",
+        help=(
+            "Run the experimental historical-control path: fresh Qwen backend/model for "
+            "20 ACTIVE 50-step cells, cleanup, then fresh MAI backend/model for 20 cells. "
+            "No smoke or fresh baseline is run."
+        ),
     )
     parser.add_argument("--confirm-manifest-sha256")
     parser.add_argument(
@@ -399,6 +440,46 @@ def _build_production_executor(
     ProductionRuntimeConfigV1,
     Path,
 ]:
+    setup = _build_execution_setup(
+        arguments,
+        manifest,
+        manifest_sha256=manifest_sha256,
+        preflight_now=preflight_now,
+    )
+    driver_adapters = build_production_driver_v1(
+        factory=setup.factory,
+        runtime_config=setup.runtime_config,
+        confirmed_runtime_config_sha256=setup.runtime_config_sha256,
+        pricing=setup.pricing,
+        confirmed_pricing_sha256=setup.pricing_sha256,
+        production_audit_sink=setup.audit_sink,
+        resource_lifecycle=setup.first_resource_adapter,
+    )
+    executor = build_production_executor_v1(
+        manifest,
+        confirmed_manifest_sha256=manifest_sha256,
+        factory=setup.factory,
+        confirmed_runtime_config_sha256=setup.runtime_config_sha256,
+        repository_root=REPOSITORY_ROOT,
+        resource_adapter=setup.first_resource_adapter,
+        driver_adapters=driver_adapters,
+        case_authority_broker_provider=setup.broker_provider,
+    )
+    return (
+        executor,
+        setup.production_preflight,
+        setup.runtime_config,
+        setup.audit_root,
+    )
+
+
+def _build_execution_setup(
+    arguments: argparse.Namespace,
+    manifest: R24R25RunAuthorityManifestV1,
+    *,
+    manifest_sha256: str,
+    preflight_now: datetime,
+) -> _WithToolExecutionSetup:
     (
         runtime_config,
         runtime_sha256,
@@ -425,7 +506,6 @@ def _build_production_executor(
     report_sha256 = production_preflight_report_sha256(report)
     if arguments.confirm_preflight_report_sha256 != report_sha256:
         raise _CliContractError("PREFLIGHT_REPORT_CONFIRMATION_MISMATCH")
-
     factory = require_production_post_preflight_factory_v1(
         manifest,
         report,
@@ -433,39 +513,280 @@ def _build_production_executor(
         confirmed_preflight_report_sha256=report_sha256,
         confirmed_pricing_sha256=pricing_sha256,
     )
-    production_audit_root = cast(Path, arguments.production_audit_root)
+    audit_root = cast(Path, arguments.production_audit_root)
     expected_audit_root = Path(runtime_config.process_log_root).parent / "audit"
-    if not production_audit_root.is_absolute() or production_audit_root != expected_audit_root:
+    if not audit_root.is_absolute() or audit_root != expected_audit_root:
         raise _CliContractError("PRODUCTION_AUDIT_ROOT_BINDING_MISMATCH")
     audit_sink = ExternalProductionRuntimeAuditSinkV1(
-        production_audit_root, repository_root=REPOSITORY_ROOT
-    )
-    driver_adapters = build_production_driver_v1(
-        factory=factory,
-        runtime_config=runtime_config,
-        confirmed_runtime_config_sha256=runtime_sha256,
-        pricing=pricing,
-        confirmed_pricing_sha256=pricing_sha256,
-        production_audit_sink=audit_sink,
-        resource_lifecycle=resource_adapter,
-    )
-    broker_provider = build_production_case_authority_broker_provider_v1(factory)
-    executor = build_production_executor_v1(
-        manifest,
-        confirmed_manifest_sha256=manifest_sha256,
-        factory=factory,
-        confirmed_runtime_config_sha256=runtime_sha256,
+        audit_root,
         repository_root=REPOSITORY_ROOT,
-        resource_adapter=resource_adapter,
-        driver_adapters=driver_adapters,
-        case_authority_broker_provider=broker_provider,
     )
-    return (
-        executor,
-        production_preflight_report_projection(report),
-        runtime_config,
-        production_audit_root,
+    return _WithToolExecutionSetup(
+        factory=factory,
+        production_preflight=production_preflight_report_projection(report),
+        runtime_config=runtime_config,
+        runtime_config_sha256=runtime_sha256,
+        pricing=pricing,
+        pricing_sha256=pricing_sha256,
+        audit_sink=audit_sink,
+        audit_root=audit_root,
+        broker_provider=build_production_case_authority_broker_provider_v1(factory),
+        first_resource_adapter=resource_adapter,
+        cleanup_seconds=cleanup_seconds,
+        cleanup_sha256=cleanup_sha256,
     )
+
+
+def _with_tool_collector_integrity_checks(
+    projection: dict[str, JsonValue],
+) -> list[dict[str, JsonValue]]:
+    raw_cells = cast(list[JsonValue], projection["cells"])
+    checks: list[dict[str, JsonValue]] = []
+    for raw_cell in raw_cells:
+        cell = cast(dict[str, JsonValue], raw_cell)
+        locator = cast(dict[str, JsonValue], cell["collector_run_locator"])
+        collector_root = cast(str, locator["collector_run_root"])
+        report = check_run_integrity(Path(collector_root), write_report=False)
+        if (
+            report.get("valid") is not True
+            or report.get("errors") != []
+            or report.get("warnings") != []
+        ):
+            raise _CliContractError("WITH_TOOL_COLLECTOR_INTEGRITY_FAILED")
+        checks.append(
+            {
+                "collector_run_id": locator["collector_run_id"],
+                "collector_run_root": collector_root,
+                "report": cast(JsonValue, report),
+                "sequence_index": cell["sequence_index"],
+                "task_id": cell["task_id"],
+            }
+        )
+    return checks
+
+
+def _execute_with_tool_batches(
+    manifest: R24R25RunAuthorityManifestV1,
+    *,
+    manifest_sha256: str,
+    setup: _WithToolExecutionSetup,
+) -> dict[str, JsonValue]:
+    task_count = len(manifest.pilot.tasks)
+    if task_count != 20 or manifest.pilot.max_steps_per_cell != _WITH_TOOL_MAX_STEPS:
+        raise _CliContractError("WITH_TOOL_BATCH_SHAPE_MISMATCH")
+    resolved_pilot_inputs_sha256 = resolved_pilot_task_inputs_sha256(
+        resolve_pilot_task_inputs_v1(
+            manifest.pilot,
+            authorized_input_root=setup.runtime_config.authorized_pilot_input_root,
+            repository_root=REPOSITORY_ROOT,
+        )
+    )
+    treatment_actor_cap = 2 * task_count * _WITH_TOOL_MAX_STEPS
+    treatment_openai_cap = 2 * treatment_actor_cap
+    treatment_wall_time_cap_ms = 2 * task_count * manifest.pilot.per_cell_timeout_seconds * 1_000
+
+    started_ns = time.monotonic_ns()
+    integrity_seconds = manifest.max_post_run_integrity_wall_time_seconds
+    if type(integrity_seconds) is not int:
+        raise _CliContractError("V2_WITH_TOOL_AUTHORITY_BINDING_MISSING")
+    batch_work_seconds = (
+        manifest.max_resource_preflight_wall_time_seconds
+        + task_count * manifest.pilot.per_cell_timeout_seconds
+    )
+    required_seconds = 2 * (batch_work_seconds + setup.cleanup_seconds) + integrity_seconds
+    expires_at = datetime.strptime(
+        manifest.authorization.expires_at_utc, "%Y-%m-%dT%H:%M:%SZ"
+    ).replace(tzinfo=UTC)
+    if required_seconds > min(
+        manifest.max_sequence_wall_time_seconds,
+        int((expires_at - datetime.now(UTC)).total_seconds()),
+    ):
+        raise _CliContractError("WITH_TOOL_SEQUENCE_BUDGET_EXCEEDED")
+    cursor_ns = started_ns
+    deadlines: list[tuple[int, int, int]] = []
+    for index in range(2):
+        work_deadline_ns = cursor_ns + batch_work_seconds * 1_000_000_000
+        cleanup_deadline_ns = work_deadline_ns + setup.cleanup_seconds * 1_000_000_000
+        integrity_share = integrity_seconds // 2 + (integrity_seconds % 2 if index else 0)
+        integrity_deadline_ns = cleanup_deadline_ns + integrity_share * 1_000_000_000
+        deadlines.append((work_deadline_ns, cleanup_deadline_ns, integrity_deadline_ns))
+        cursor_ns = integrity_deadline_ns
+    shared_budget_ledger = build_production_live_budget_ledger_v1(setup.factory)
+    batches: list[dict[str, JsonValue]] = []
+    batch_evidences: list[WithToolJointBatchEvidenceV1] = []
+    backend_container_ids: list[str] = []
+
+    for batch_index, host in enumerate((PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)):
+        work_deadline_ns, cleanup_deadline_ns, integrity_deadline_ns = deadlines[batch_index]
+        lifecycle = (
+            setup.first_resource_adapter
+            if batch_index == 0
+            else build_production_resource_lifecycle_adapter_v1(
+                setup.runtime_config,
+                confirmed_config_sha256=setup.runtime_config_sha256,
+            )
+        )
+        driver = build_production_driver_v1(
+            factory=setup.factory,
+            runtime_config=setup.runtime_config,
+            confirmed_runtime_config_sha256=setup.runtime_config_sha256,
+            pricing=setup.pricing,
+            confirmed_pricing_sha256=setup.pricing_sha256,
+            production_audit_sink=setup.audit_sink,
+            resource_lifecycle=lifecycle,
+            shared_budget_ledger=shared_budget_ledger,
+        )
+        switch_authority = build_production_pilot_switch_authority_v1(
+            factory=setup.factory,
+            resource_lifecycle=lifecycle,
+            confirmed_runtime_config_sha256=setup.runtime_config_sha256,
+            confirmed_cleanup_upper_bound_sha256=setup.cleanup_sha256,
+        )
+        batch_started_ns = time.monotonic_ns()
+        context = StageAdapterContextV1(
+            manifest_sha256=manifest_sha256,
+            sequence_execution_scope="R24_R25_FULL",
+            sequence_scope_authority_sha256=manifest_sha256,
+            run_id=manifest.run_id,
+            source_commit=manifest.source_commit,
+            remaining_actor_calls=treatment_actor_cap // 2,
+            remaining_openai_calls=treatment_openai_cap // 2,
+            remaining_cost_usd_micros=manifest.pilot.max_total_cost_usd_micros,
+            remaining_wall_time_ms=(work_deadline_ns - batch_started_ns) // 1_000_000,
+            authority_deadline_monotonic_ns=work_deadline_ns,
+        )
+        prepare_invoked = False
+        try:
+            prepare_invoked = True
+            resource_result = lifecycle.prepare(
+                manifest.actor_resources,
+                context,
+                pilot_switch_authority=switch_authority,
+                with_tool_initial_host=host,
+            )
+            broker = setup.broker_provider.acquire(
+                manifest.secret,
+                manifest_sha256=manifest_sha256,
+            )
+            try:
+                batch_result = driver.pilot.run_with_tool_joint_batch(
+                    manifest.pilot,
+                    manifest.actor_resources,
+                    manifest.openai_stages,
+                    context,
+                    broker,
+                    host=host,
+                )
+            finally:
+                broker.close()
+            batch_evidence = driver.pilot.evidence
+            resource_evidence = lifecycle.evidence
+            if (
+                type(batch_evidence) is not WithToolJointBatchEvidenceV1
+                or resource_evidence is None
+            ):
+                raise _CliContractError("WITH_TOOL_BATCH_EVIDENCE_MISSING")
+        finally:
+            if prepare_invoked:
+                lifecycle.cleanup(
+                    replace(
+                        context,
+                        remaining_actor_calls=0,
+                        remaining_openai_calls=0,
+                        remaining_cost_usd_micros=0,
+                        remaining_wall_time_ms=max(
+                            0, (cleanup_deadline_ns - time.monotonic_ns()) // 1_000_000
+                        ),
+                        authority_deadline_monotonic_ns=cleanup_deadline_ns,
+                    ),
+                )
+                cleanup_evidence = lifecycle.cleanup_success_evidence_preimage()
+                if type(cleanup_evidence) is not bytes:
+                    raise _CliContractError("WITH_TOOL_BATCH_CLEANUP_PROOF_MISSING")
+                cleanup_sha256 = hashlib.sha256(cleanup_evidence).hexdigest()
+        evidence_projection = with_tool_joint_batch_evidence_projection(batch_evidence)
+        integrity_checks = _with_tool_collector_integrity_checks(evidence_projection)
+        if time.monotonic_ns() >= integrity_deadline_ns:
+            raise _CliContractError("WITH_TOOL_COLLECTOR_INTEGRITY_TIMEOUT")
+        batch_evidences.append(batch_evidence)
+        backend_container_ids.append(resource_evidence.backend_container_id)
+        batches.append(
+            {
+                "census": evidence_projection["census"],
+                "cleanup_evidence_sha256": cleanup_sha256,
+                "collector_integrity_checks": cast(JsonValue, integrity_checks),
+                "evidence_sha256": batch_result.evidence_sha256,
+                "evidence_projection": cast(JsonValue, evidence_projection),
+                "host": host.value,
+                "resource_evidence_sha256": resource_result.evidence_sha256,
+                "wall_time_ms": (time.monotonic_ns() - batch_started_ns + 999_999) // 1_000_000,
+            }
+        )
+
+    actor_calls = sum(item.census.actor_calls for item in batch_evidences)
+    openai_calls = sum(item.census.openai_calls for item in batch_evidences)
+    actor_actions = sum(item.census.actor_actions for item in batch_evidences)
+    offline_rubric_evaluations = sum(
+        item.census.offline_rubric_evaluations for item in batch_evidences
+    )
+    rubric_openai_calls = sum(item.census.rubric_openai_calls for item in batch_evidences)
+    history_policy_openai_calls = sum(
+        item.census.history_policy_openai_calls for item in batch_evidences
+    )
+    cost_usd_micros = sum(item.census.cost_usd_micros for item in batch_evidences)
+    census_wall_time_ms = sum(item.census.wall_time_ms for item in batch_evidences)
+    integrity_count = sum(
+        len(cast(list[JsonValue], batch["collector_integrity_checks"])) for batch in batches
+    )
+    if (
+        len(set(backend_container_ids)) != 2
+        or integrity_count != 2 * task_count
+        or actor_calls > treatment_actor_cap
+        or actor_calls > manifest.pilot.max_total_actor_calls
+        or openai_calls > treatment_openai_cap
+        or openai_calls > manifest.pilot.max_total_openai_calls
+        or cost_usd_micros > manifest.pilot.max_total_cost_usd_micros
+        or census_wall_time_ms > treatment_wall_time_cap_ms
+        or census_wall_time_ms > manifest.pilot.max_total_wall_time_seconds * 1_000
+    ):
+        raise _CliContractError("WITH_TOOL_FRESH_BATCH_EVIDENCE_MISMATCH")
+    total_wall_time_ms = (time.monotonic_ns() - started_ns + 999_999) // 1_000_000
+    if total_wall_time_ms > manifest.max_sequence_wall_time_seconds * 1_000:
+        raise _CliContractError("WITH_TOOL_SEQUENCE_BUDGET_EXCEEDED")
+    return {
+        "audit_root": str(setup.audit_root),
+        "batches": cast(JsonValue, batches),
+        "census": {
+            "actor_actions": actor_actions,
+            "actor_calls": actor_calls,
+            "cost_usd_micros": cost_usd_micros,
+            "history_policy_openai_calls": history_policy_openai_calls,
+            "offline_rubric_evaluations": offline_rubric_evaluations,
+            "openai_calls": openai_calls,
+            "rubric_openai_calls": rubric_openai_calls,
+            "wall_time_ms": census_wall_time_ms,
+        },
+        "collector_integrity": {
+            "all_valid": True,
+            "run_count": integrity_count,
+        },
+        "comparison_design": "WITH_TOOL_VS_HISTORICAL_NONPAIRED",
+        "factory_binding_sha256": setup.factory.factory_binding_sha256,
+        "fresh_backend_container_count": len(set(backend_container_ids)),
+        "fresh_baseline_cell_count": 0,
+        "manifest_sha256": manifest_sha256,
+        "preflight": cast(JsonValue, setup.production_preflight),
+        "preflight_report_sha256": setup.factory.preflight_report_sha256,
+        "pricing_sha256": setup.pricing_sha256,
+        "resolved_pilot_inputs_sha256": resolved_pilot_inputs_sha256,
+        "run_id": manifest.run_id,
+        "runtime_config_sha256": setup.runtime_config_sha256,
+        "schema_version": "mobileworld.runtime.sentinel.r2.5-with-tool-two-batch-run/v1",
+        "sentinel_config_sha256": manifest.sentinel_config_sha256,
+        "strict_matched_pilot_compatible": False,
+        "total_wall_time_ms": total_wall_time_ms,
+        "with_tool_cell_count": 2 * task_count,
+    }
 
 
 def _sequence_projection(value: SequenceRunResultV1) -> dict[str, JsonValue]:
@@ -503,15 +824,16 @@ def _error_code(exc: BaseException) -> str:
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
+        execution_requested = arguments.execute or arguments.execute_with_tool_batches
         manifest = _load_cli_authority(
             arguments.authority_manifest,
             production_confirmation_requested=(
-                arguments.execute or arguments.preflight_checked_at_utc is not None
+                execution_requested or arguments.preflight_checked_at_utc is not None
             ),
             confirmed_manifest_sha256=arguments.confirm_manifest_sha256,
         )
         manifest_hash = authority_manifest_sha256(manifest)
-        if arguments.execute:
+        if execution_requested:
             _require_execute_arguments(arguments)
             if arguments.confirm_manifest_sha256 != manifest_hash:
                 raise _CliContractError("MANIFEST_CONFIRMATION_MISMATCH")
@@ -522,6 +844,32 @@ def main(argv: list[str] | None = None) -> int:
                 > _MAX_PREFLIGHT_AGE_SECONDS
             ):
                 raise _CliContractError("PREFLIGHT_TIMESTAMP_NOT_CURRENT")
+            if arguments.execute_with_tool_batches:
+                setup = _build_execution_setup(
+                    arguments,
+                    manifest,
+                    manifest_sha256=manifest_hash,
+                    preflight_now=preflight_now,
+                )
+                batch_output = _execute_with_tool_batches(
+                    manifest,
+                    manifest_sha256=manifest_hash,
+                    setup=setup,
+                )
+                print(
+                    json.dumps(
+                        {
+                            "dry_run": False,
+                            "execution_scope": "R25_WITH_TOOL_BATCHES",
+                            "ok": True,
+                            "result": batch_output,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
+                return 0
             (
                 executor,
                 production_preflight,

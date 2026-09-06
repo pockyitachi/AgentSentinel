@@ -781,15 +781,46 @@ def test_r25_request_cost_budget_settles_exact_semantic_rejection(
         failure=GPT56PolicyError("POLICY_PROPOSAL_NOT_ADMITTED"),
         attempts=(completed_rubric, completed_history),
     )
-    assert (
-        ledger.reserve_call(
-            descriptor,
-            logical_call_id="r25-budget-after-rejection",
-            actor_call_index=3,
-            attempt_count=2,
-        ).logical_call_id
-        == "r25-budget-after-rejection"
+    partial_logical_call_id = "r25-budget-after-rejection"
+    partial_attempt_id = "r25-budget-after-rejection-rubric"
+    partial_reservation = ledger.reserve_call(
+        descriptor,
+        logical_call_id=partial_logical_call_id,
+        actor_call_index=3,
+        attempt_count=2,
     )
+    assert (
+        ledger.reserve_request_cost(
+            stage=RunStageV1.R25_PILOT.value,
+            case_id=descriptor.case_id,
+            logical_call_id=partial_logical_call_id,
+            attempt_id=partial_attempt_id,
+            request_worst_case_cost_usd_micros=1,
+            attempt_cost_ceiling_usd_micros=descriptor.max_cost_usd_micros,
+        )
+        == 1
+    )
+    ledger.settle_request_cost(
+        stage=RunStageV1.R25_PILOT.value,
+        case_id=descriptor.case_id,
+        logical_call_id=partial_logical_call_id,
+        attempt_id=partial_attempt_id,
+        exact_cost_usd_micros=1,
+    )
+    partial_attempt = replace(
+        completed_rubric,
+        attempt_id=partial_attempt_id,
+        logical_call_id=partial_logical_call_id,
+        cost_usd_micros=1,
+    )
+    policy._allow_known_cost_original_fallback = True
+    policy._known_cost_original_fallbacks = set()
+    assert policy._settle_known_cost_original_fallback(
+        partial_reservation,
+        failure=R24ContractError("EVIDENCE_PACKET_REJECTED", "semantic packet rejected"),
+        attempts=(partial_attempt,),
+    )
+    assert partial_logical_call_id in policy._known_cost_original_fallbacks
 
 
 def test_r25_request_cost_budget_freezes_unknown_and_rejects_global_exhaustion(
