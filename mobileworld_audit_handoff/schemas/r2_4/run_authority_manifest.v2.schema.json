@@ -260,7 +260,7 @@
         {
           "properties": {
             "role": {"const": "HISTORY_POLICY"},
-            "max_output_tokens": {"const": 4096}
+            "max_output_tokens": {"enum": [4096, 8192]}
           }
         }
       ]

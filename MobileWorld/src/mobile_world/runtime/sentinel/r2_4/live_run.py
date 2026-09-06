@@ -294,9 +294,9 @@ class OpenAIResponsesStageV1:
                 "INVALID_TRANSPORT_DESCRIPTOR", "OpenAI transport declaration differs"
             )
         _require_int(self.max_output_tokens, "max_output_tokens", 1, 16_384)
-        if self.role is OpenAIRoleV1.HISTORY_POLICY and self.max_output_tokens != 4096:
+        if self.role is OpenAIRoleV1.HISTORY_POLICY and self.max_output_tokens not in {4096, 8192}:
             raise LiveRunContractError(
-                "INVALID_OPENAI_CONFIG", "history policy output bound differs from R2.2"
+                "INVALID_OPENAI_CONFIG", "history policy output bound is not an admitted bound"
             )
         if self.role is OpenAIRoleV1.RUBRIC and self.max_output_tokens != 8192:
             raise LiveRunContractError(

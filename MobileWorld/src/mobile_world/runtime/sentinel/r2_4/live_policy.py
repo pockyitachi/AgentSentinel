@@ -54,7 +54,7 @@ from mobile_world.runtime.sentinel.r2_2.contracts import (
     runtime_policy_output_sha256,
 )
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
-    GPT56_MAX_OUTPUT_TOKENS,
+    GPT56_ALLOWED_MAX_OUTPUT_TOKENS,
     GPT56_OUTPUT_SCHEMA_NAME,
     GPT56_POLICY_INSTRUCTIONS,
     GPT56_REASONING_EFFORT,
@@ -1813,7 +1813,7 @@ def _validate_history_provider_request_v1(
         "instructions": (
             GPT56_POLICY_INSTRUCTIONS + HISTORY_POLICY_TRANSPORT_INSTRUCTIONS_SUFFIX_V1
         ),
-        "max_output_tokens": GPT56_MAX_OUTPUT_TOKENS,
+        "max_output_tokens": transport_binding.max_output_tokens,
         "model": GPT56_REQUESTED_MODEL,
         "parallel_tool_calls": False,
         "reasoning": {"effort": GPT56_REASONING_EFFORT},
@@ -1853,7 +1853,7 @@ def _validate_history_provider_request_v1(
         "store": False,
         "stream": False,
         "truncation": "disabled",
-        "max_output_tokens": GPT56_MAX_OUTPUT_TOKENS,
+        "max_output_tokens": transport_binding.max_output_tokens,
         "image_detail": "high",
         "temperature_supplied": False,
         "reasoning_summary_requested": False,
@@ -1995,9 +1995,9 @@ def validate_live_history_policy_attempt_request_anchor_v1(
         != constraint.effective_deadline_monotonic_ns
         or deadline.request_timeout_ns != transport.transport_timeout_ns
         or deadline.constraint_registered_monotonic_ns < constraint.issued_monotonic_ns
-        or authority.max_output_tokens != GPT56_MAX_OUTPUT_TOKENS
-        or stage.max_output_tokens != GPT56_MAX_OUTPUT_TOKENS
-        or transport.max_output_tokens != GPT56_MAX_OUTPUT_TOKENS
+        or authority.max_output_tokens not in GPT56_ALLOWED_MAX_OUTPUT_TOKENS
+        or stage.max_output_tokens != authority.max_output_tokens
+        or transport.max_output_tokens != authority.max_output_tokens
         or stage != constraint.history_stage
         or constraint.rubric_stage_sha256 != openai_stage_sha256(rubric_stage)
         or constraint.rubric_stage_timeout_ms != rubric_stage.timeout_ms

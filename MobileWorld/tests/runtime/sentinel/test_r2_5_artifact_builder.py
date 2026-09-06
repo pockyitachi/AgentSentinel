@@ -588,6 +588,26 @@ def test_bundle_has_executable_inline_source_and_80_matched_cells(tmp_path: Path
     assert not inputs.secret_file.exists()
 
 
+def test_50_step_authority_uses_extended_history_policy_output_bound(tmp_path: Path) -> None:
+    default_inputs, default_records = _inputs(tmp_path / "default")
+    default_bundle = build_authority_artifact_bundle(default_inputs, default_records)
+    default_history_stage = default_bundle.authority_manifest.openai_stages[1]
+    assert default_history_stage.role is OpenAIRoleV1.HISTORY_POLICY
+    assert default_history_stage.max_output_tokens == 4096
+
+    long_inputs, long_records = _inputs(tmp_path / "long")
+    long_bundle = build_authority_artifact_bundle(
+        replace(long_inputs, max_steps_per_cell=50), long_records
+    )
+    long_history_stage = long_bundle.authority_manifest.openai_stages[1]
+    assert long_history_stage.role is OpenAIRoleV1.HISTORY_POLICY
+    assert long_history_stage.max_output_tokens == 8192
+    assert (
+        parse_authority_manifest(authority_manifest_projection(long_bundle.authority_manifest))
+        == long_bundle.authority_manifest
+    )
+
+
 def test_authority_build_requires_reopenable_historical_source_freeze(
     tmp_path: Path,
 ) -> None:

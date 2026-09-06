@@ -2503,7 +2503,7 @@ def build_authority_artifact_bundle(
                 sdk_max_retries=0,
                 external_network_on_call=True,
                 model_on_call=True,
-                max_output_tokens=4096,
+                max_output_tokens=8192 if inputs.max_steps_per_cell > 8 else 4096,
                 timeout_ms=inputs.openai_timeout_ms,
                 max_attempts=1,
                 store=False,

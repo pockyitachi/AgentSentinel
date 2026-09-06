@@ -85,6 +85,10 @@ GPT56_REQUESTED_MODEL = "gpt-5.6-sol"
 GPT56_REASONING_EFFORT = "medium"
 GPT56_OUTPUT_SCHEMA_NAME = "sentinel_policy_proposal_v1"
 GPT56_MAX_OUTPUT_TOKENS = 4096
+GPT56_EXTENDED_MAX_OUTPUT_TOKENS = 8192
+GPT56_ALLOWED_MAX_OUTPUT_TOKENS = frozenset(
+    {GPT56_MAX_OUTPUT_TOKENS, GPT56_EXTENDED_MAX_OUTPUT_TOKENS}
+)
 SUPPORTED_OPENAI_SDK_VERSION = "1.106.1"
 OPENAI_RESPONSES_TRANSPORT_BINDING_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-openai-responses-transport-binding/v1"
@@ -694,7 +698,7 @@ class OpenAIResponsesTransportBindingV1:
             raise ValueError("live binding requested model differs from the policy")
         if (
             type(self.max_output_tokens) is not int
-            or self.max_output_tokens != GPT56_MAX_OUTPUT_TOKENS
+            or self.max_output_tokens not in GPT56_ALLOWED_MAX_OUTPUT_TOKENS
         ):
             raise ValueError("live binding output-token bound differs from the policy")
         for duration_ns, label in (
@@ -976,6 +980,7 @@ class OpenAIResponsesTransport:
         self._last_attempt_call = None
         self._seam_policy_deadline_seconds = seam_policy_deadline_seconds
         self._client_timeout_ceiling = timeout_ceiling
+        self._max_output_tokens = GPT56_MAX_OUTPUT_TOKENS
         self._responses_endpoint = responses_endpoint
         self._production_authority_manifest_sha256 = (
             None if _production_seal is None else _production_seal.authority_manifest_sha256
@@ -1058,6 +1063,7 @@ class OpenAIResponsesTransport:
         value._last_attempt_call = None
         value._seam_policy_deadline_seconds = seam_policy_deadline_seconds
         value._client_timeout_ceiling = client_timeout_seconds
+        value._max_output_tokens = stage.max_output_tokens
         value._responses_endpoint = stage.endpoint
         value._production_authority_manifest_sha256 = seal.authority_manifest_sha256
         value._production_preflight_report_sha256 = seal.preflight_report_sha256
@@ -1116,6 +1122,7 @@ class OpenAIResponsesTransport:
                 or self._production_actor_request_sha256 != trusted_lease.request_sha256
                 or self._production_pricing_binding_sha256 != runner.pricing_binding_sha256
                 or self._responses_endpoint != OPENAI_RESPONSES_ENDPOINT
+                or self._max_output_tokens != runner.openai_stage.max_output_tokens
             ):
                 raise RuntimeError("production attempt authority binding drifted")
             return
@@ -1148,7 +1155,7 @@ class OpenAIResponsesTransport:
                 self._responses_endpoint.encode("utf-8")
             ).hexdigest(),
             requested_model=GPT56_REQUESTED_MODEL,
-            max_output_tokens=GPT56_MAX_OUTPUT_TOKENS,
+            max_output_tokens=self._max_output_tokens,
             transport_timeout_ns=round(transport_timeout_seconds * 1_000_000_000),
             seam_policy_deadline_ns=round(self._seam_policy_deadline_seconds * 1_000_000_000),
             client_timeout_ceiling_ns=round(self._client_timeout_ceiling * 1_000_000_000),
@@ -1757,6 +1764,11 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
             if type(transport) is OpenAIResponsesTransport
             else None
         )
+        self._max_output_tokens = (
+            GPT56_MAX_OUTPUT_TOKENS
+            if self._live_transport_binding is None
+            else self._live_transport_binding.max_output_tokens
+        )
         self._policy_id = policy_id
         self._evaluate_count = 0
         self._lock = Lock()
@@ -1900,6 +1912,7 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
             responses_request = ResponsesRequestV1(
                 evidence=evidence,
                 output_schema=self._output_schema,
+                max_output_tokens=self._max_output_tokens,
             )
             phase_started = perf_counter_ns()
             # Resolve the exact callable and detach every argument before the
@@ -2318,7 +2331,7 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
                 "prompt_sha256": _PROMPT_SHA256,
                 "output_schema_sha256": self._output_schema.sha256,
                 "reasoning_effort": GPT56_REASONING_EFFORT,
-                "max_output_tokens": GPT56_MAX_OUTPUT_TOKENS,
+                "max_output_tokens": self._max_output_tokens,
                 "transport_timeout_ns": round(self._timeout_seconds * 1_000_000_000),
                 "seam_policy_deadline_ns": round(
                     self._seam_policy_deadline_seconds * 1_000_000_000
@@ -2332,6 +2345,7 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
                 ResponsesRequestV1(
                     evidence=evidence,
                     output_schema=self._output_schema,
+                    max_output_tokens=self._max_output_tokens,
                 )
             )
         return R22PolicyReceiptV1(
@@ -2398,6 +2412,8 @@ __all__ = [
     "GPT56EvidenceInputV1",
     "GPT56PolicyError",
     "GPT56SentinelPolicy",
+    "GPT56_ALLOWED_MAX_OUTPUT_TOKENS",
+    "GPT56_EXTENDED_MAX_OUTPUT_TOKENS",
     "GPT56_MAX_OUTPUT_TOKENS",
     "GPT56_OUTPUT_SCHEMA_NAME",
     "GPT56_POLICY_ID",
