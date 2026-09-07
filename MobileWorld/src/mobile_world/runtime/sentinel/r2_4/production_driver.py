@@ -1046,7 +1046,7 @@ def _production_resource_cleanup_bound_v2_projection(
         else 2
     )
     final_shared_gpu_attestation_slots = (
-        1
+        4
         if config.resource_topology is ProductionResourceTopologyV1.SINGLE_GPU_SEQUENTIAL_SHARED
         else 0
     )

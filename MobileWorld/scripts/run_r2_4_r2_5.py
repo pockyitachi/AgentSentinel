@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Preflight or execute the owner-authorized R2.4/R2.5 sequence.
+"""Preflight or execute the owner-authorized treatment-only R2.5 batches.
 
 Dry-run is the default and performs no network, GPU, Docker, model, backend,
 secret-read, or actor-action operation. ``--execute`` is reachable only after
 the operator supplies four exact hash confirmations and a recent, reproducible
-deep-preflight timestamp. It then constructs only the checked-in sealed
-production adapters; the CLI exposes no callback, command, or client injection.
+deep-preflight timestamp. It is an alias for ``--execute-with-tool-batches``:
+fresh Qwen treatment cells, cleanup, then fresh MAI treatment cells.
 """
 
 from __future__ import annotations
@@ -30,25 +30,19 @@ from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     LiveAttemptPricingV1,
     live_attempt_pricing_sha256,
 )
-from mobile_world.runtime.sentinel.r2_4.live_executor import (
-    ProductionR24R25ExecutorV1,
-    StageAdapterContextV1,
-    build_production_executor_v1,
-)
+from mobile_world.runtime.sentinel.r2_4.live_executor import StageAdapterContextV1
 from mobile_world.runtime.sentinel.r2_4.live_policy import (
     build_production_live_budget_ledger_v1,
 )
 from mobile_world.runtime.sentinel.r2_4.live_run import (
     LiveRunContractError,
     R24R25RunAuthorityManifestV1,
-    SequenceRunResultV1,
     authority_manifest_sha256,
     inspect_local_resources,
     load_authority_manifest,
     load_owner_authorized_authority_manifest_v2,
     preflight_report_projection,
     production_sentinel_config_sha256_v1,
-    run_authorized_sequence_with_executor,
 )
 from mobile_world.runtime.sentinel.r2_4.production_audit import (
     ExternalProductionRuntimeAuditSinkV1,
@@ -74,15 +68,8 @@ from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     require_production_post_preflight_factory_v1,
     run_production_preflight_v1,
 )
-from mobile_world.runtime.sentinel.r2_5.integrity_gate import (
-    PostRunIntegrityAuthorityV1,
-    R25PostRunIntegrityError,
-    reopen_validate_post_run_integrity_artifact_v1,
-    run_post_run_integrity_gate_v1,
-)
 from mobile_world.runtime.sentinel.r2_5.pilot import (
     PilotHostV1,
-    frozen_pilot_manifest_sha256,
     resolve_pilot_task_inputs_v1,
     resolved_pilot_task_inputs_sha256,
 )
@@ -136,18 +123,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     mode.add_argument(
         "--execute",
-        action="store_true",
-        help="Run only through the exact sealed production executor and all owner pins.",
-    )
-    mode.add_argument(
         "--execute-with-tool-batches",
         "--execute-joint-batches",
         dest="execute_with_tool_batches",
         action="store_true",
         help=(
-            "Run the experimental historical-control path: fresh Qwen backend/model for "
+            "Run the historical-control treatment path: fresh Qwen backend/model for "
             "20 ACTIVE 50-step cells, cleanup, then fresh MAI backend/model for 20 cells. "
-            "No smoke or fresh baseline is run."
+            "No smoke or fresh baseline is run. --execute is an alias for this mode."
         ),
     )
     parser.add_argument("--confirm-manifest-sha256")
@@ -426,51 +409,6 @@ def _load_confirmed_pricing(
     ):
         raise _CliContractError("PRICING_CONFIRMATION_MISMATCH")
     return pricing, pricing_sha256
-
-
-def _build_production_executor(
-    arguments: argparse.Namespace,
-    manifest: R24R25RunAuthorityManifestV1,
-    *,
-    manifest_sha256: str,
-    preflight_now: datetime,
-) -> tuple[
-    ProductionR24R25ExecutorV1,
-    dict[str, JsonValue],
-    ProductionRuntimeConfigV1,
-    Path,
-]:
-    setup = _build_execution_setup(
-        arguments,
-        manifest,
-        manifest_sha256=manifest_sha256,
-        preflight_now=preflight_now,
-    )
-    driver_adapters = build_production_driver_v1(
-        factory=setup.factory,
-        runtime_config=setup.runtime_config,
-        confirmed_runtime_config_sha256=setup.runtime_config_sha256,
-        pricing=setup.pricing,
-        confirmed_pricing_sha256=setup.pricing_sha256,
-        production_audit_sink=setup.audit_sink,
-        resource_lifecycle=setup.first_resource_adapter,
-    )
-    executor = build_production_executor_v1(
-        manifest,
-        confirmed_manifest_sha256=manifest_sha256,
-        factory=setup.factory,
-        confirmed_runtime_config_sha256=setup.runtime_config_sha256,
-        repository_root=REPOSITORY_ROOT,
-        resource_adapter=setup.first_resource_adapter,
-        driver_adapters=driver_adapters,
-        case_authority_broker_provider=setup.broker_provider,
-    )
-    return (
-        executor,
-        setup.production_preflight,
-        setup.runtime_config,
-        setup.audit_root,
-    )
 
 
 def _build_execution_setup(
@@ -789,33 +727,6 @@ def _execute_with_tool_batches(
     }
 
 
-def _sequence_projection(value: SequenceRunResultV1) -> dict[str, JsonValue]:
-    return {
-        "failed_stage": None if value.failed_stage is None else value.failed_stage.value,
-        "failure_code": value.failure_code,
-        "manifest_sha256": value.manifest_sha256,
-        "receipts": [
-            {
-                "actor_actions": receipt.actor_actions,
-                "actor_calls": receipt.actor_calls,
-                "completed_units": list(receipt.completed_units),
-                "cost_usd_micros": receipt.cost_usd_micros,
-                "evidence_sha256": receipt.evidence_sha256,
-                "manifest_sha256": receipt.manifest_sha256,
-                "openai_calls": receipt.openai_calls,
-                "passed": receipt.passed,
-                "provider_final_request_proven": receipt.provider_final_request_proven,
-                "stage": receipt.stage.value,
-                "wall_time_ms": receipt.wall_time_ms,
-            }
-            for receipt in value.receipts
-        ],
-        "run_id": value.run_id,
-        "schema_version": value.schema_version,
-        "status": value.status.value,
-    }
-
-
 def _error_code(exc: BaseException) -> str:
     code = getattr(exc, "code", None)
     return code if type(code) is str and code else "PRODUCTION_SETUP_FAILED"
@@ -824,7 +735,7 @@ def _error_code(exc: BaseException) -> str:
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
-        execution_requested = arguments.execute or arguments.execute_with_tool_batches
+        execution_requested = arguments.execute_with_tool_batches
         manifest = _load_cli_authority(
             arguments.authority_manifest,
             production_confirmation_requested=(
@@ -844,159 +755,31 @@ def main(argv: list[str] | None = None) -> int:
                 > _MAX_PREFLIGHT_AGE_SECONDS
             ):
                 raise _CliContractError("PREFLIGHT_TIMESTAMP_NOT_CURRENT")
-            if arguments.execute_with_tool_batches:
-                setup = _build_execution_setup(
-                    arguments,
-                    manifest,
-                    manifest_sha256=manifest_hash,
-                    preflight_now=preflight_now,
-                )
-                batch_output = _execute_with_tool_batches(
-                    manifest,
-                    manifest_sha256=manifest_hash,
-                    setup=setup,
-                )
-                print(
-                    json.dumps(
-                        {
-                            "dry_run": False,
-                            "execution_scope": "R25_WITH_TOOL_BATCHES",
-                            "ok": True,
-                            "result": batch_output,
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                )
-                return 0
-            (
-                executor,
-                production_preflight,
-                runtime_config,
-                production_audit_root,
-            ) = _build_production_executor(
+            setup = _build_execution_setup(
                 arguments,
                 manifest,
                 manifest_sha256=manifest_hash,
                 preflight_now=preflight_now,
             )
-            resolved_pilot_inputs_sha256 = resolved_pilot_task_inputs_sha256(
-                resolve_pilot_task_inputs_v1(
-                    manifest.pilot,
-                    authorized_input_root=runtime_config.authorized_pilot_input_root,
-                    repository_root=REPOSITORY_ROOT,
-                )
-            )
-            result = run_authorized_sequence_with_executor(
+            batch_output = _execute_with_tool_batches(
                 manifest,
-                executor,
-                confirmed_manifest_sha256=manifest_hash,
+                manifest_sha256=manifest_hash,
+                setup=setup,
             )
-            integrity_output: dict[str, JsonValue] | None = None
-            if result.status.value == "COMPLETE":
-                pricing_sha256 = manifest.pricing_sha256
-                sentinel_config_sha256 = manifest.sentinel_config_sha256
-                max_integrity_wall_time_seconds = manifest.max_post_run_integrity_wall_time_seconds
-                if (
-                    type(pricing_sha256) is not str
-                    or type(sentinel_config_sha256) is not str
-                    or type(max_integrity_wall_time_seconds) is not int
-                ):
-                    raise _CliContractError("V2_INTEGRITY_AUTHORITY_BINDING_MISSING")
-                gate_authority = PostRunIntegrityAuthorityV1(
-                    run_id=manifest.run_id,
-                    source_commit=manifest.source_commit,
-                    authority_manifest_sha256=manifest_hash,
-                    preflight_report_sha256=executor.preflight_report_sha256,
-                    runtime_config_sha256=executor.runtime_config_sha256,
-                    pricing_sha256=pricing_sha256,
-                    sentinel_config_sha256=sentinel_config_sha256,
-                    factory_binding_sha256=executor.factory_binding_sha256,
-                    run_manifest=manifest,
-                    pilot_manifest=manifest.pilot,
-                    pilot_manifest_sha256=frozen_pilot_manifest_sha256(manifest.pilot),
-                    resolved_pilot_inputs_sha256=resolved_pilot_inputs_sha256,
-                    backend_endpoint=f"http://127.0.0.1:{runtime_config.backend_port}",
-                    expected_cell_count=len(manifest.pilot.cells),
-                    max_sequence_wall_time_seconds=(manifest.max_sequence_wall_time_seconds),
-                    max_wall_time_seconds=max_integrity_wall_time_seconds,
-                    production_audit_root=str(production_audit_root),
-                )
-                integrity_artifact, integrity_sha256, integrity_path = (
-                    run_post_run_integrity_gate_v1(
-                        sequence_output_root=executor.post_run_integrity_output_root,
-                        repository_root=REPOSITORY_ROOT,
-                        authority=gate_authority,
-                        sequence_started_monotonic_ns=(executor.sequence_started_monotonic_ns),
-                        sequence_deadline_monotonic_ns=(
-                            executor.post_run_integrity_deadline_monotonic_ns
-                        ),
-                    )
-                )
-                reopened, reopened_sha256 = reopen_validate_post_run_integrity_artifact_v1(
-                    integrity_path,
-                    repository_root=REPOSITORY_ROOT,
-                    authority=gate_authority,
-                    rerun_official_checker=False,
-                )
-                actual_sequence_wall_time_ms = (
-                    time.monotonic_ns() - executor.sequence_started_monotonic_ns + 999_999
-                ) // 1_000_000
-                if (
-                    reopened != integrity_artifact
-                    or reopened_sha256 != integrity_sha256
-                    or time.monotonic_ns() >= executor.post_run_integrity_deadline_monotonic_ns
-                    or actual_sequence_wall_time_ms > manifest.max_sequence_wall_time_seconds * 1000
-                ):
-                    raise _CliContractError("POST_RUN_INTEGRITY_REOPEN_MISMATCH")
-                integrity_output = {
-                    "artifact_path": str(integrity_path),
-                    "artifact_sha256": integrity_sha256,
-                    "collector_run_count": cast(int, integrity_artifact["collector_run_count"]),
-                    "ordered_collector_integrity_root_sha256": cast(
-                        str, integrity_artifact["ordered_collector_integrity_root_sha256"]
-                    ),
-                    "ordered_pilot_collector_integrity_root_sha256": cast(
-                        str,
-                        integrity_artifact["ordered_pilot_collector_integrity_root_sha256"],
-                    ),
-                    "ordered_smoke_collector_integrity_root_sha256": cast(
-                        str,
-                        integrity_artifact["ordered_smoke_collector_integrity_root_sha256"],
-                    ),
-                    "pilot_collector_run_count": cast(
-                        int, integrity_artifact["pilot_collector_run_count"]
-                    ),
-                    "smoke_collector_run_count": cast(
-                        int, integrity_artifact["smoke_collector_run_count"]
-                    ),
-                    "status": cast(str, integrity_artifact["status"]),
-                    "total_sequence_wall_time_ms_at_cli_reopen": (actual_sequence_wall_time_ms),
-                }
-            ok = result.status.value == "COMPLETE" and integrity_output is not None
             print(
                 json.dumps(
                     {
                         "dry_run": False,
-                        "integrity": integrity_output,
-                        "factory_binding_sha256": executor.factory_binding_sha256,
-                        "manifest_sha256": manifest_hash,
-                        "ok": ok,
-                        "preflight": production_preflight,
-                        "preflight_report_sha256": arguments.confirm_preflight_report_sha256,
-                        "pricing_sha256": manifest.pricing_sha256,
-                        "resolved_pilot_inputs_sha256": resolved_pilot_inputs_sha256,
-                        "result": _sequence_projection(result),
-                        "runtime_config_sha256": executor.runtime_config_sha256,
-                        "sentinel_config_sha256": manifest.sentinel_config_sha256,
+                        "execution_scope": "R25_WITH_TOOL_BATCHES",
+                        "ok": True,
+                        "result": batch_output,
                     },
                     ensure_ascii=False,
                     sort_keys=True,
                     separators=(",", ":"),
                 )
             )
-            return 0 if ok else 3
+            return 0
 
         base_report = inspect_local_resources(
             manifest,
@@ -1055,7 +838,6 @@ def main(argv: list[str] | None = None) -> int:
     except (
         LiveRunContractError,
         ProductionDriverError,
-        R25PostRunIntegrityError,
         _CliContractError,
     ) as exc:
         # Never dump an environment, manifest, Authorization header, secret or path.

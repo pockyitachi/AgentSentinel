@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
-import os
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -16,12 +15,6 @@ from _r2_4_topology_fixture import write_cpu_topology_artifact
 
 from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_4.contracts import canonical_json_bytes
-from mobile_world.runtime.sentinel.r2_4.live_attempt import (
-    LiveAttemptPricingV1,
-    live_attempt_pricing_projection,
-    live_attempt_pricing_sha256,
-)
-from mobile_world.runtime.sentinel.r2_4.live_executor import ProductionR24R25ExecutorV1
 from mobile_world.runtime.sentinel.r2_4.live_run import (
     R24_R25_RUN_AUTHORITY_SCHEMA_VERSION,
     R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V1,
@@ -36,7 +29,6 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     RunAuthorizationStatusV1,
     RunStageV1,
     SecretFileReferenceV1,
-    SequenceRunResultV1,
     SequenceSafetyV1,
     SequenceStageExecutorV1,
     SequenceStatusV1,
@@ -52,16 +44,6 @@ from mobile_world.runtime.sentinel.r2_4.live_run import (
     parse_authority_manifest,
     production_sentinel_config_sha256_v1,
     run_authorized_sequence_with_executor,
-)
-from mobile_world.runtime.sentinel.r2_4.production_driver import (
-    ProductionRuntimeConfigV1,
-    build_production_resource_lifecycle_adapter_v1,
-    production_runtime_config_projection,
-    production_runtime_config_sha256,
-)
-from mobile_world.runtime.sentinel.r2_4.production_preflight import (
-    production_preflight_report_sha256,
-    run_production_preflight_v1,
 )
 from mobile_world.runtime.sentinel.r2_5.artifact_builder import (
     cohort_selection_projection,
@@ -86,8 +68,6 @@ from mobile_world.runtime.sentinel.r2_5.pilot import (
     frozen_pilot_manifest_sha256,
     parse_frozen_pilot_manifest,
     pilot_task_source_projection,
-    resolve_pilot_task_inputs_v1,
-    resolved_pilot_task_inputs_sha256,
 )
 
 _TEST_NOW = datetime.now(UTC).replace(microsecond=0)
@@ -320,7 +300,7 @@ def _manifest(
         openai_stages=(
             OpenAIResponsesStageV1(
                 role=OpenAIRoleV1.RUBRIC,
-                model="gpt-5.6-sol",
+                model="gpt-5.6-luna",
                 endpoint="https://api.openai.com/v1/responses",
                 transport_kind="OPENAI_RESPONSES",
                 transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
@@ -335,7 +315,7 @@ def _manifest(
             ),
             OpenAIResponsesStageV1(
                 role=OpenAIRoleV1.HISTORY_POLICY,
-                model="gpt-5.6-sol",
+                model="gpt-5.6-luna",
                 endpoint="https://api.openai.com/v1/responses",
                 transport_kind="OPENAI_RESPONSES",
                 transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
@@ -829,6 +809,7 @@ def _load_cli_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("r24_r25_cli_for_test", script)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -860,232 +841,91 @@ def test_cli_execute_requires_complete_owner_pinned_inputs_and_emits_no_secret(
     assert "fixture-value-never-read" not in captured.err
 
 
-def test_cli_execute_constructs_exact_production_executor_before_dispatch(
+@pytest.mark.parametrize(
+    "execute_flag",
+    ("--execute", "--execute-with-tool-batches", "--execute-joint-batches"),
+)
+def test_cli_execute_aliases_route_only_to_with_tool_batches(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    execute_flag: str,
 ) -> None:
-    from mobile_world.runtime.sentinel.r2_4 import live_run
-
     manifest = _manifest(tmp_path)
     manifest_path = tmp_path / "authority.json"
-    module = _load_cli_module()
-    repository = tmp_path / "repo"
-    module.REPOSITORY_ROOT = repository
-    monkeypatch.setattr(live_run, "_git_state", lambda _: (manifest.source_commit, True))
-
-    executable = Path(sys.executable).resolve(strict=True)
-    environment_file = tmp_path / "runtime" / "backend.env"
-    environment_file.parent.mkdir()
-    environment_file.write_text("MOBILEWORLD_CPU_TEST=1\n", encoding="utf-8")
-    environment_file.chmod(0o600)
-    process_logs = tmp_path / "runtime" / "logs"
-    process_logs.mkdir(mode=0o700)
-    source_root = repository / "MobileWorld" / "src"
-    source_root.mkdir(parents=True)
-    environment_info = environment_file.stat()
-    runtime_config = ProductionRuntimeConfigV1(
-        backend_port=18082,
-        backend_device="emulator-5554",
-        qwen_gpu_index=0,
-        mai_gpu_index=1,
-        process_log_root=str(process_logs),
-        authorized_pilot_input_root=str(tmp_path / "inputs"),
-        repository_root=str(repository),
-        mobileworld_source_root=str(source_root),
-        vllm_python_executable=str(executable),
-        vllm_python_realpath=str(executable),
-        vllm_python_sha256=_sha(executable.read_bytes()),
-        vllm_python_byte_count=executable.stat().st_size,
-        vllm_version="0.10.1",
-        backend_image_id_sha256=_sha(b"cpu-construction-image-id"),
-        backend_environment_file=str(environment_file),
-        backend_environment_file_device=environment_info.st_dev,
-        backend_environment_file_inode=environment_info.st_ino,
-        backend_environment_file_mode=0o600,
-        backend_environment_file_uid=os.geteuid(),
-        backend_environment_file_byte_count=environment_info.st_size,
-        backend_environment_file_mtime_ns=environment_info.st_mtime_ns,
-    )
-    runtime_path = tmp_path / "runtime.json"
-    runtime_path.write_bytes(
-        canonical_json_bytes(cast(JsonValue, production_runtime_config_projection(runtime_config)))
-    )
-    runtime_path.chmod(0o600)
-    pricing = LiveAttemptPricingV1(
-        pricing_id="owner-cli-cpu-construction",
-        model="gpt-5.6-sol",
-        input_usd_micros_per_million_tokens=1_000_000,
-        cached_input_usd_micros_per_million_tokens=100_000,
-        output_usd_micros_per_million_tokens=2_000_000,
-        source_sha256=_sha(b"owner-pinned-pricing-source"),
-        effective_at_utc="2026-09-03T00:00:00Z",
-    )
-    pricing_path = tmp_path / "pricing.json"
-    pricing_path.write_bytes(
-        canonical_json_bytes(cast(JsonValue, live_attempt_pricing_projection(pricing)))
-    )
-    pricing_path.chmod(0o600)
-    runtime_sha256 = production_runtime_config_sha256(runtime_config)
-    resource_adapter = build_production_resource_lifecycle_adapter_v1(
-        runtime_config,
-        confirmed_config_sha256=runtime_sha256,
-    )
-    pricing_sha256 = live_attempt_pricing_sha256(pricing)
-    smoke_wall_time = sum(
-        case.max_wall_time_seconds for plan in manifest.smoke_plans for case in plan.cases
-    )
-    manifest = replace(
-        manifest,
-        runtime_config_sha256=runtime_sha256,
-        pricing_sha256=pricing_sha256,
-        resource_topology=runtime_config.resource_topology.value,
-        max_resource_cleanup_wall_time_seconds=(resource_adapter.full_cleanup_upper_bound_seconds),
-        resource_cleanup_upper_bound_sha256=(resource_adapter.full_cleanup_upper_bound_sha256),
-        max_model_switches=0,
-        max_model_switch_wall_time_seconds=0,
-        max_total_model_switch_wall_time_seconds=0,
-        max_sequence_wall_time_seconds=(
-            manifest.max_resource_preflight_wall_time_seconds
-            + smoke_wall_time
-            + manifest.pilot.max_total_wall_time_seconds
-            + resource_adapter.full_cleanup_upper_bound_seconds
-            + cast(int, manifest.max_post_run_integrity_wall_time_seconds)
-        ),
-    )
     manifest_path.write_bytes(
         canonical_json_bytes(cast(JsonValue, authority_manifest_projection(manifest)))
     )
     manifest_path.chmod(0o600)
-    # The full suite can import this module more than five minutes before this
-    # test runs.  Take the production-preflight timestamp at the actual CLI
-    # construction boundary so the fixture exercises the intended fresh-report
-    # path instead of expiring because of test-collection time.
-    preflight_now = datetime.now(UTC).replace(microsecond=0)
-    report = run_production_preflight_v1(
-        manifest,
-        confirmed_manifest_sha256=authority_manifest_sha256(manifest),
-        repository_root=repository,
-        now=preflight_now,
-        confirmed_runtime_config_sha256=runtime_sha256,
-        confirmed_pricing_sha256=pricing_sha256,
-        confirmed_sentinel_config_sha256=cast(str, manifest.sentinel_config_sha256),
-        confirmed_resource_topology=runtime_config.resource_topology.value,
-        confirmed_resource_cleanup_upper_bound_seconds=(
-            resource_adapter.full_cleanup_upper_bound_seconds
-        ),
-        confirmed_resource_cleanup_upper_bound_sha256=(
-            resource_adapter.full_cleanup_upper_bound_sha256
-        ),
-    )
-    assert report.eligible_for_post_preflight_factory
-    seen: list[ProductionR24R25ExecutorV1] = []
+    manifest_sha256 = authority_manifest_sha256(manifest)
+    module = _load_cli_module()
+    expected_setup = object()
+    calls: list[str] = []
 
-    def run_without_external_operations(
+    def build_setup(
+        _arguments: object,
         candidate: R24R25RunAuthorityManifestV1,
-        executor: object,
         *,
-        confirmed_manifest_sha256: str,
-    ) -> SequenceRunResultV1:
-        assert candidate is manifest or authority_manifest_sha256(candidate) == (
-            authority_manifest_sha256(manifest)
-        )
-        assert confirmed_manifest_sha256 == authority_manifest_sha256(manifest)
-        assert type(executor) is ProductionR24R25ExecutorV1
-        executor._sequence_started_ns = module.time.monotonic_ns()
-        seen.append(executor)
-        return SequenceRunResultV1(
-            schema_version="mobileworld.runtime.sentinel-r2.4-r2.5-sequence-result/v1",
-            run_id=manifest.run_id,
-            manifest_sha256=authority_manifest_sha256(manifest),
-            status=SequenceStatusV1.COMPLETE,
-            receipts=(),
-            failed_stage=None,
-            failure_code=None,
-        )
+        manifest_sha256: str,
+        preflight_now: datetime,
+    ) -> object:
+        assert authority_manifest_sha256(candidate) == manifest_sha256
+        assert preflight_now.tzinfo is UTC
+        calls.append("setup")
+        return expected_setup
 
-    monkeypatch.setattr(
-        module, "run_authorized_sequence_with_executor", run_without_external_operations
-    )
-    gate_artifact: dict[str, JsonValue] = {
-        "collector_run_count": len(manifest.pilot.cells) + 6,
-        "ordered_collector_integrity_root_sha256": _sha(b"ordered-integrity-root"),
-        "ordered_pilot_collector_integrity_root_sha256": _sha(b"ordered-pilot-integrity-root"),
-        "ordered_smoke_collector_integrity_root_sha256": _sha(b"ordered-smoke-integrity-root"),
-        "pilot_collector_run_count": len(manifest.pilot.cells),
-        "smoke_collector_run_count": 6,
-        "status": "VALID",
-    }
-    gate_sha256 = _sha(b"post-run-integrity")
-    gate_path = tmp_path / "post-run-integrity.v1.json"
-    gate_calls: list[str] = []
+    def execute_batches(
+        candidate: R24R25RunAuthorityManifestV1,
+        *,
+        manifest_sha256: str,
+        setup: object,
+    ) -> dict[str, JsonValue]:
+        assert authority_manifest_sha256(candidate) == manifest_sha256
+        assert setup is expected_setup
+        calls.append("with_tool_batches")
+        return {
+            "comparison_design": "WITH_TOOL_VS_HISTORICAL_NONPAIRED",
+            "with_tool_cell_count": 40,
+        }
 
-    def run_gate(**kwargs: object) -> tuple[dict[str, JsonValue], str, Path]:
-        assert kwargs["sequence_output_root"] == Path(manifest.output_root)
-        authority = kwargs["authority"]
-        assert authority.expected_cell_count == len(manifest.pilot.cells)
-        assert authority.factory_binding_sha256 == seen[0].factory_binding_sha256
-        assert authority.run_manifest == manifest
-        assert authority.source_commit == manifest.source_commit
-        assert authority.pilot_manifest == manifest.pilot
-        assert authority.backend_endpoint == f"http://127.0.0.1:{runtime_config.backend_port}"
-        assert authority.resolved_pilot_inputs_sha256 == resolved_pilot_task_inputs_sha256(
-            resolve_pilot_task_inputs_v1(
-                manifest.pilot,
-                authorized_input_root=runtime_config.authorized_pilot_input_root,
-                repository_root=repository,
-            )
-        )
-        assert kwargs["sequence_started_monotonic_ns"] == (seen[0].sequence_started_monotonic_ns)
-        assert kwargs["sequence_deadline_monotonic_ns"] == (
-            seen[0].post_run_integrity_deadline_monotonic_ns
-        )
-        gate_calls.append("run")
-        return gate_artifact, gate_sha256, gate_path
-
-    def reopen_gate(*args: object, **kwargs: object) -> tuple[dict[str, JsonValue], str]:
-        assert args == (gate_path,)
-        assert kwargs["rerun_official_checker"] is False
-        gate_calls.append("reopen")
-        return gate_artifact, gate_sha256
-
-    monkeypatch.setattr(module, "run_post_run_integrity_gate_v1", run_gate)
-    monkeypatch.setattr(module, "reopen_validate_post_run_integrity_artifact_v1", reopen_gate)
+    monkeypatch.setattr(module, "_build_execution_setup", build_setup)
+    monkeypatch.setattr(module, "_execute_with_tool_batches", execute_batches)
+    now = datetime.now(UTC).replace(microsecond=0)
     result = module.main(
         [
             "--authority-manifest",
             str(manifest_path),
-            "--execute",
+            execute_flag,
             "--confirm-manifest-sha256",
-            authority_manifest_sha256(manifest),
+            manifest_sha256,
             "--preflight-checked-at-utc",
-            preflight_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "--confirm-preflight-report-sha256",
-            production_preflight_report_sha256(report),
+            "b" * 64,
             "--runtime-config",
-            str(runtime_path),
+            str(tmp_path / "runtime.json"),
             "--confirm-runtime-config-sha256",
-            production_runtime_config_sha256(runtime_config),
+            "c" * 64,
             "--pricing",
-            str(pricing_path),
+            str(tmp_path / "pricing.json"),
             "--confirm-pricing-sha256",
-            live_attempt_pricing_sha256(pricing),
+            "d" * 64,
             "--production-audit-root",
-            str(tmp_path / "runtime" / "audit"),
+            str(tmp_path / "audit"),
         ]
     )
+
     captured = capsys.readouterr()
-    assert result == 0, captured.err
+    assert result == 0
     assert captured.err == ""
-    assert len(seen) == 1
+    assert calls == ["setup", "with_tool_batches"]
     output = json.loads(captured.out)
     assert output["dry_run"] is False
-    assert output["integrity"]["artifact_sha256"] == gate_sha256
-    assert output["integrity"]["collector_run_count"] == len(manifest.pilot.cells) + 6
-    assert output["integrity"]["pilot_collector_run_count"] == len(manifest.pilot.cells)
-    assert output["integrity"]["smoke_collector_run_count"] == 6
-    assert gate_calls == ["run", "reopen"]
-    assert not Path(manifest.output_root).exists()
+    assert output["execution_scope"] == "R25_WITH_TOOL_BATCHES"
+    assert output["result"] == {
+        "comparison_design": "WITH_TOOL_VS_HISTORICAL_NONPAIRED",
+        "with_tool_cell_count": 40,
+    }
 
 
 def test_cli_default_dry_run_hashes_only_declared_nonsecret_resources(

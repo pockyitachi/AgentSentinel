@@ -2115,7 +2115,7 @@ def test_shared_single_gpu_configuration_is_exact(
 
 @pytest.mark.parametrize(
     ("shutdown_grace_seconds", "health_poll_interval_ms", "expected_seconds"),
-    ((10, 250, 188), (60, 5_000, 450)),
+    ((10, 250, 278), (60, 5_000, 540)),
 )
 def test_shared_cleanup_upper_bound_covers_every_bounded_cleanup_path(
     tmp_path: Path,
@@ -2149,8 +2149,7 @@ def test_shared_cleanup_upper_bound_covers_every_bounded_cleanup_path(
         3 * shutdown_grace_seconds + 2 * poll_ceiling_seconds
     )
     assert value["pending_backend_cleanup_upper_bound_seconds"] == 105
-    assert value["final_shared_gpu_attestation_command_slots"] == 1
-    assert value["final_shared_gpu_attestation_upper_bound_seconds"] == 30
+    assert value["final_shared_gpu_attestation_upper_bound_seconds"] == 120
     assert value["cleanup_upper_bound_seconds"] == expected_seconds
     assert value["runtime_config_sha256"] == production_runtime_config_sha256(config)
     assert production_driver_module.canonical_json_bytes(cast(Any, envelope)) == (
@@ -2171,7 +2170,7 @@ def test_shared_cleanup_bound_hash_rejects_runtime_config_drift(
     first = build_cpu_test_resource_lifecycle_adapter_v1(first_config)
     drifted = build_cpu_test_resource_lifecycle_adapter_v1(drifted_config)
 
-    assert first.cleanup_upper_bound_seconds == drifted.cleanup_upper_bound_seconds == 188
+    assert first.cleanup_upper_bound_seconds == drifted.cleanup_upper_bound_seconds == 278
     assert first.runtime_config_sha256 != drifted.runtime_config_sha256
     assert first.cleanup_upper_bound_preimage != drifted.cleanup_upper_bound_preimage
     assert first.cleanup_upper_bound_sha256 != drifted.cleanup_upper_bound_sha256

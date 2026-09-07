@@ -5017,7 +5017,7 @@ def _production_cleanup_bound_seconds(
         if full_bound
         else (1 if topology == "SINGLE_GPU_SEQUENTIAL_SHARED" else 0)
     )
-    final_attestation_slots = 1 if topology == "SINGLE_GPU_SEQUENTIAL_SHARED" else 0
+    final_attestation_slots = 4 if topology == "SINGLE_GPU_SEQUENTIAL_SHARED" else 0
     final_attestation = final_attestation_slots * nvidia_timeout
     recomputed = maximum_model_cleanup_count * model + backend + final_attestation
     if (
