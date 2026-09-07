@@ -16,7 +16,6 @@ import io
 import json
 import math
 import os
-import pwd
 import re
 import secrets
 import signal
@@ -1597,84 +1596,15 @@ def _require_shared_gpu_capacity(value: ProductionSharedGpuAttestationV1) -> Non
         )
 
 
-def _validate_shared_gpu_tenants(
+def _validate_shared_gpu_identity(
     value: ProductionSharedGpuAttestationV1,
     *,
     baseline: ProductionSharedGpuAttestationV1,
-    owned_identity: OwnedProcessIdentityV1 | None,
-    allow_dynamic_foreign_tenants: bool = False,
-) -> str | None:
+) -> None:
+    """Require the configured physical GPU without inspecting other users' processes."""
+
     if value.gpu_index != baseline.gpu_index or value.gpu_uuid != baseline.gpu_uuid:
         raise ProductionDriverError("GPU_IDENTITY_MISMATCH", "shared physical GPU drifted")
-    baseline_identities = {_shared_gpu_process_identity(item) for item in baseline.processes}
-    baseline_pids = {item.pid for item in baseline.processes}
-    owned_process_seen = False
-    tenant_drift_message: str | None = None
-    for item in value.processes:
-        identity = _shared_gpu_process_identity(item)
-        if identity in baseline_identities:
-            continue
-        if item.pid in baseline_pids:
-            tenant_drift_message = (
-                tenant_drift_message or "a pre-existing shared GPU compute process identity drifted"
-            )
-        if (
-            owned_identity is not None
-            and item.uid == owned_identity.uid
-            and item.session_id == owned_identity.session_id
-        ):
-            owned_process_seen = True
-            continue
-        tenant_drift_message = (
-            tenant_drift_message or "a new non-owned compute process appeared on the shared GPU"
-        )
-    if owned_identity is not None and not owned_process_seen:
-        raise ProductionDriverError(
-            "GPU_OWNED_PROCESS_ABSENT",
-            "the owned model session has no bound compute process on the shared GPU",
-        )
-    if tenant_drift_message is not None:
-        if not allow_dynamic_foreign_tenants:
-            raise ProductionDriverError("GPU_SHARED_TENANT_DRIFT", tenant_drift_message)
-        return "GPU_SHARED_TENANT_DRIFT"
-    return None
-
-
-def _validate_shared_gpu_cleanup(
-    value: ProductionSharedGpuAttestationV1,
-    *,
-    baseline: ProductionSharedGpuAttestationV1,
-    stopped_models: tuple[ProductionModelStopEvidenceV1, ...],
-) -> str | None:
-    if value.gpu_index != baseline.gpu_index or value.gpu_uuid != baseline.gpu_uuid:
-        raise ProductionDriverError("GPU_IDENTITY_MISMATCH", "shared physical GPU drifted")
-    stopped_sessions = {(item.process.uid, item.process.session_id) for item in stopped_models}
-    stopped_identities = {
-        (item.process.pid, item.process.starttime_ticks, item.process.uid)
-        for item in stopped_models
-    }
-    if any(
-        (item.uid, item.session_id) in stopped_sessions
-        or (item.pid, item.starttime_ticks, item.uid) in stopped_identities
-        for item in value.processes
-    ):
-        raise ProductionDriverError(
-            "MODEL_REAP_UNCONFIRMED",
-            "an owned model identity remains in the final shared GPU census",
-        )
-    # Cleanup is also an admission boundary: baseline co-tenants may have
-    # exited, but no new PID or changed PID/pgrp/session/uid/start identity may
-    # appear while the project-owned model is being reaped.
-    try:
-        _validate_shared_gpu_tenants(value, baseline=baseline, owned_identity=None)
-    except ProductionDriverError as exc:
-        if exc.code != "GPU_SHARED_TENANT_DRIFT":
-            raise
-        # A foreign tenant anomaly must never grant authority to signal that
-        # process or prevent release of the project lease after owned cleanup.
-        # Persist the anomaly in the terminal cleanup evidence instead.
-        return exc.code
-    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1827,11 +1757,7 @@ class ProductionResourceStageEvidenceV1:
                 raise ProductionDriverError(
                     "INVALID_RESOURCE_EVIDENCE", "shared GPU attestation sequence differs"
                 )
-            _validate_shared_gpu_tenants(
-                ready,
-                baseline=baseline,
-                owned_identity=self.model_processes[0],
-            )
+            _validate_shared_gpu_identity(ready, baseline=baseline)
         elif (
             self.active_hosts != (PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)
             or self.shared_gpu_attestations
@@ -2051,15 +1977,13 @@ class ProductionModelHandoffEvidenceV1:
             raise ProductionDriverError("INVALID_MODEL_HANDOFF", "capacity thresholds differ")
         _require_shared_gpu_capacity(self.baseline_shared_gpu_attestation)
         _require_shared_gpu_capacity(self.post_stop_shared_gpu_attestation)
-        _validate_shared_gpu_tenants(
+        _validate_shared_gpu_identity(
             self.post_stop_shared_gpu_attestation,
             baseline=self.baseline_shared_gpu_attestation,
-            owned_identity=None,
         )
-        _validate_shared_gpu_tenants(
+        _validate_shared_gpu_identity(
             self.target_ready_shared_gpu_attestation,
             baseline=self.baseline_shared_gpu_attestation,
-            owned_identity=self.target_process,
         )
 
 
@@ -2367,90 +2291,6 @@ def _read_owned_process_identity(pid: int) -> OwnedProcessIdentityV1:
         ) from exc
 
 
-def _read_shared_gpu_process_evidence(
-    pid: int,
-    *,
-    used_gpu_memory_mib: int,
-) -> SharedGpuProcessEvidenceV1:
-    try:
-        proc = Path("/proc") / str(pid)
-        before = proc.stat()
-        fields = (proc / "stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()
-        after = proc.stat()
-        if (
-            before.st_dev != after.st_dev
-            or before.st_ino != after.st_ino
-            or before.st_uid != after.st_uid
-        ):
-            raise OSError("process identity changed during shared GPU attestation")
-        uid = after.st_uid
-        return SharedGpuProcessEvidenceV1(
-            pid=pid,
-            process_group_id=int(fields[2]),
-            session_id=int(fields[3]),
-            starttime_ticks=int(fields[19]),
-            uid=uid,
-            user=pwd.getpwuid(uid).pw_name,
-            used_gpu_memory_mib=used_gpu_memory_mib,
-        )
-    except (IndexError, KeyError, OSError, ValueError) as exc:
-        raise ProductionDriverError(
-            "GPU_PROCESS_IDENTITY_UNAVAILABLE",
-            "shared GPU compute process identity could not be proven",
-        ) from exc
-
-
-def _read_shared_gpu_process_census(
-    stdout: str,
-    *,
-    gpu_uuid: str,
-) -> tuple[SharedGpuProcessEvidenceV1, ...]:
-    processes: list[SharedGpuProcessEvidenceV1] = []
-    seen_processes: set[tuple[str, int]] = set()
-    expected_gpu_uuid = gpu_uuid.lower()
-    for line in stdout.splitlines():
-        if not line.strip():
-            continue
-        fields = tuple(item.strip() for item in line.split(","))
-        if len(fields) != 3 or fields[0].lower() != expected_gpu_uuid:
-            raise ProductionDriverError(
-                "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process row differs"
-            )
-        try:
-            pid = int(fields[1])
-            process_memory_mib = int(fields[2])
-        except ValueError as exc:
-            raise ProductionDriverError(
-                "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process memory differs"
-            ) from exc
-        process_key = (expected_gpu_uuid, pid)
-        if process_key in seen_processes:
-            raise ProductionDriverError(
-                "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU process row is duplicated"
-            )
-        seen_processes.add(process_key)
-        processes.append(
-            _read_shared_gpu_process_evidence(
-                pid,
-                used_gpu_memory_mib=process_memory_mib,
-            )
-        )
-    return tuple(sorted(processes, key=lambda item: (item.pid, item.starttime_ticks)))
-
-
-def _shared_gpu_process_identity(
-    value: SharedGpuProcessEvidenceV1,
-) -> tuple[int, int, int, int, int, str]:
-    return (
-        value.pid,
-        value.starttime_ticks,
-        value.process_group_id,
-        value.session_id,
-        value.uid,
-        value.user,
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class _OwnedSessionMemberV1:
     pid: int
@@ -2461,6 +2301,7 @@ class _OwnedSessionMemberV1:
 
 
 def _read_owned_session_member(pid: int) -> _OwnedSessionMemberV1 | None:
+    metadata_before: os.stat_result | None = None
     try:
         proc = Path("/proc") / str(pid)
         metadata_before = proc.stat()
@@ -2482,15 +2323,24 @@ def _read_owned_session_member(pid: int) -> _OwnedSessionMemberV1 | None:
     except FileNotFoundError:
         return None
     except (IndexError, OSError, ValueError) as exc:
+        # /proc is inherently racy. An unreadable foreign process is irrelevant
+        # to this run, but ambiguity around one of our own processes remains a
+        # cleanup failure.
+        if metadata_before is None or metadata_before.st_uid != os.geteuid():
+            return None
         raise ProductionDriverError(
             "MODEL_REAP_UNCONFIRMED",
-            "process identity could not be inspected after model stop",
+            "owned process identity could not be inspected after model stop",
         ) from exc
 
 
 def _owned_session_members(
     identity: OwnedProcessIdentityV1,
 ) -> tuple[_OwnedSessionMemberV1, ...]:
+    if identity.uid != os.geteuid():
+        raise ProductionDriverError(
+            "UNOWNED_PROCESS", "model session is not owned by the current user"
+        )
     members: list[_OwnedSessionMemberV1] = []
     try:
         entries = tuple(Path("/proc").iterdir())
@@ -2515,6 +2365,10 @@ def _owned_session_members(
 
 
 def _signal_owned_session_member(member: _OwnedSessionMemberV1, signum: int) -> None:
+    if member.uid != os.geteuid():
+        raise ProductionDriverError(
+            "MODEL_REAP_UNCONFIRMED", "session member is not owned by the current user"
+        )
     pidfd_open = getattr(os, "pidfd_open", None)
     pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
     if not callable(pidfd_open) or not callable(pidfd_send_signal):
@@ -2527,7 +2381,7 @@ def _signal_owned_session_member(member: _OwnedSessionMemberV1, signum: int) -> 
         current = _read_owned_session_member(member.pid)
         if current is None:
             return
-        if current != member:
+        if current != member or current.uid != os.geteuid():
             raise ProductionDriverError(
                 "MODEL_REAP_UNCONFIRMED",
                 "owned session PID identity changed before signaling",
@@ -3282,22 +3136,6 @@ class _PosixProductionResourceSystemV1:
                 "GPU_IDENTITY_MISMATCH",
                 "configured GPU index does not resolve to one exact physical GPU UUID",
             )
-        process_command = (
-            _NVIDIA_SMI_EXECUTABLE,
-            f"--id={gpu_index}",
-            "--query-compute-apps=gpu_uuid,pid",
-            "--format=csv,noheader,nounits",
-        )
-        processes = self._attestation_run(
-            process_command,
-            deadline_monotonic_ns=deadline_monotonic_ns,
-            deadline_failure_code=deadline_failure_code,
-        )
-        if processes.returncode != 0 or processes.stderr or processes.stdout.strip():
-            raise ProductionDriverError(
-                "GPU_ALREADY_OCCUPIED",
-                "configured GPU has a compute process or cannot be attested idle",
-            )
         return _hash_projection(
             "production-gpu-idle-attestation",
             cast(
@@ -3306,7 +3144,6 @@ class _PosixProductionResourceSystemV1:
                     "gpu_index": gpu_index,
                     "gpu_uuid": identity_fields[1].lower(),
                     "identity_query": list(identity_command),
-                    "process_query": list(process_command),
                 },
             ),
         )
@@ -3354,84 +3191,6 @@ class _PosixProductionResourceSystemV1:
             raise ProductionDriverError(
                 "GPU_CAPACITY_ATTESTATION_FAILED", "shared GPU capacity fields differ"
             ) from exc
-        process_command = (
-            _NVIDIA_SMI_EXECUTABLE,
-            f"--id={gpu_index}",
-            "--query-compute-apps=gpu_uuid,pid,used_gpu_memory",
-            "--format=csv,noheader,nounits",
-        )
-        process_result = self._attestation_run(
-            process_command,
-            deadline_monotonic_ns=deadline_monotonic_ns,
-            deadline_failure_code=deadline_failure_code,
-        )
-        if process_result.returncode != 0 or process_result.stderr:
-            raise ProductionDriverError(
-                "GPU_PROCESS_ATTESTATION_FAILED", "shared GPU compute census is unavailable"
-            )
-        processes = _read_shared_gpu_process_census(
-            process_result.stdout,
-            gpu_uuid=identity_fields[1],
-        )
-        process_result_after = self._attestation_run(
-            process_command,
-            deadline_monotonic_ns=deadline_monotonic_ns,
-            deadline_failure_code=deadline_failure_code,
-        )
-        if process_result_after.returncode != 0 or process_result_after.stderr:
-            raise ProductionDriverError(
-                "GPU_PROCESS_ATTESTATION_RACED",
-                "shared GPU compute rows changed during process identity binding",
-            )
-        try:
-            processes_after = _read_shared_gpu_process_census(
-                process_result_after.stdout,
-                gpu_uuid=identity_fields[1],
-            )
-        except ProductionDriverError as exc:
-            raise ProductionDriverError(
-                "GPU_PROCESS_ATTESTATION_RACED",
-                "shared GPU compute rows changed during process identity binding",
-            ) from exc
-        if tuple(map(_shared_gpu_process_identity, processes_after)) != tuple(
-            map(_shared_gpu_process_identity, processes)
-        ):
-            raise ProductionDriverError(
-                "GPU_PROCESS_ATTESTATION_RACED",
-                "shared GPU compute rows changed during process identity binding",
-            )
-        processes = processes_after
-        identity_after = self._attestation_run(
-            identity_command,
-            deadline_monotonic_ns=deadline_monotonic_ns,
-            deadline_failure_code=deadline_failure_code,
-        )
-        identity_fields_after = tuple(
-            item.strip() for item in identity_after.stdout.strip().split(",")
-        )
-        if (
-            identity_after.returncode != 0
-            or identity_after.stderr
-            or len(identity_fields_after) != 8
-            or identity_fields_after[0] != identity_fields[0]
-            or identity_fields_after[1].lower() != identity_fields[1].lower()
-            or identity_fields_after[2] != identity_fields[2]
-        ):
-            raise ProductionDriverError(
-                "GPU_CAPACITY_ATTESTATION_RACED",
-                "shared GPU identity or total memory changed during process binding",
-            )
-        try:
-            total_memory_mib = int(identity_fields_after[2])
-            free_memory_mib = int(identity_fields_after[3])
-            used_memory_mib = int(identity_fields_after[4])
-            reserved_memory_mib = int(identity_fields_after[5])
-            gpu_utilization_percent = int(identity_fields_after[6])
-            memory_utilization_percent = int(identity_fields_after[7])
-        except ValueError as exc:
-            raise ProductionDriverError(
-                "GPU_CAPACITY_ATTESTATION_FAILED", "shared GPU capacity fields differ"
-            ) from exc
         _require_monotonic_deadline(
             deadline_monotonic_ns,
             failure_code=deadline_failure_code,
@@ -3447,7 +3206,10 @@ class _PosixProductionResourceSystemV1:
             gpu_utilization_percent=gpu_utilization_percent,
             memory_utilization_percent=memory_utilization_percent,
             minimum_free_memory_mib=minimum_free_memory_mib,
-            processes=processes,
+            # Shared runs deliberately do not enumerate compute PIDs. Foreign
+            # jobs may appear, exit, or change identity without affecting this
+            # run's ownership or health checks.
+            processes=(),
         )
 
     def start_model(
@@ -3545,6 +3307,10 @@ class _PosixProductionResourceSystemV1:
                 stderr_handle=stderr_handle,
             )
             identity = _read_owned_process_identity(process.pid)
+            if identity.uid != os.geteuid():
+                raise ProductionDriverError(
+                    "UNOWNED_PROCESS", "spawned model process is not owned by the current user"
+                )
             owned = _OwnedModelProcessV1(
                 identity=identity,
                 process=process,
@@ -3629,19 +3395,28 @@ class _PosixProductionResourceSystemV1:
         )
         if process.poll() is None:
             try:
-                process_group_id = os.getpgid(pid)
-                session_id = os.getsid(pid)
-            except OSError as exc:
+                partial_identity = _read_owned_process_identity(pid)
+            except ProductionDriverError as exc:
                 raise ProductionDriverError(
                     "MODEL_PARTIAL_IDENTITY_LOST",
                     "partial model process identity is unavailable",
                 ) from exc
-            if process_group_id != pid or session_id != pid:
+            if (
+                partial_identity.uid != os.geteuid()
+                or partial_identity.process_group_id != pid
+                or partial_identity.session_id != pid
+            ):
                 raise ProductionDriverError(
                     "MODEL_PARTIAL_IDENTITY_LOST",
-                    "partial model did not retain its owned session",
+                    "partial model process is not the exact owned session leader",
                 )
-            os.killpg(process_group_id, signal.SIGKILL)
+            current = _read_owned_process_identity(pid)
+            if current != partial_identity or current.uid != os.geteuid():
+                raise ProductionDriverError(
+                    "MODEL_PARTIAL_IDENTITY_LOST",
+                    "partial model PID/starttime/session changed before cleanup",
+                )
+            os.killpg(partial_identity.process_group_id, signal.SIGKILL)
             wait_timeout_seconds = float(self._config.shutdown_grace_seconds)
             if deadline_monotonic_ns is not None:
                 remaining_ns = deadline_monotonic_ns - time.monotonic_ns()
@@ -3820,6 +3595,10 @@ class _PosixProductionResourceSystemV1:
             raise ProductionDriverError(
                 "MODEL_DISPATCH_IDENTITY_LOST", "model process is not the live owned child"
             )
+        if owned.identity.uid != os.geteuid():
+            raise ProductionDriverError(
+                "MODEL_DISPATCH_IDENTITY_LOST", "model process is not owned by the current user"
+            )
         if _read_owned_process_identity(owned.identity.pid) != owned.identity:
             raise ProductionDriverError(
                 "MODEL_DISPATCH_IDENTITY_LOST", "model PID/starttime identity changed"
@@ -3840,6 +3619,10 @@ class _PosixProductionResourceSystemV1:
         registered = self._models.get(owned.identity.pid)
         if registered is not owned:
             raise ProductionDriverError("UNOWNED_PROCESS", "model process is not module-owned")
+        if owned.identity.uid != os.geteuid():
+            raise ProductionDriverError(
+                "UNOWNED_PROCESS", "model process is not owned by the current user"
+            )
 
         def remaining_wait_seconds() -> float:
             if deadline_monotonic_ns is None:
@@ -3861,7 +3644,7 @@ class _PosixProductionResourceSystemV1:
         process = owned.process
         if process is not None and process.poll() is None:
             current = _read_owned_process_identity(owned.identity.pid)
-            if current != owned.identity:
+            if current != owned.identity or current.uid != os.geteuid():
                 raise ProductionDriverError(
                     "OWNED_PROCESS_IDENTITY_LOST", "PID identity changed before cleanup"
                 )
@@ -3870,7 +3653,7 @@ class _PosixProductionResourceSystemV1:
                 process.wait(timeout=remaining_wait_seconds())
             except subprocess.TimeoutExpired:
                 current = _read_owned_process_identity(owned.identity.pid)
-                if current != owned.identity:
+                if current != owned.identity or current.uid != os.geteuid():
                     raise ProductionDriverError(
                         "OWNED_PROCESS_IDENTITY_LOST", "PID changed during cleanup"
                     )
@@ -4502,13 +4285,7 @@ class _CpuRecordingResourceSystemV1:
             "--query-gpu=index,uuid",
             "--format=csv,noheader,nounits",
         )
-        process_command = (
-            _NVIDIA_SMI_EXECUTABLE,
-            f"--id={gpu_index}",
-            "--query-compute-apps=gpu_uuid,pid",
-            "--format=csv,noheader,nounits",
-        )
-        self._commands.extend((identity_command, process_command))
+        self._commands.append(identity_command)
         result = _hash_projection(
             "cpu-gpu-idle-attestation",
             cast(
@@ -4517,7 +4294,6 @@ class _CpuRecordingResourceSystemV1:
                     "gpu_index": gpu_index,
                     "gpu_uuid": f"gpu-{gpu_index:032x}",
                     "identity_query": list(identity_command),
-                    "process_query": list(process_command),
                 },
             ),
         )
@@ -4548,13 +4324,7 @@ class _CpuRecordingResourceSystemV1:
             "utilization.gpu,utilization.memory",
             "--format=csv,noheader,nounits",
         )
-        process_command = (
-            _NVIDIA_SMI_EXECUTABLE,
-            f"--id={gpu_index}",
-            "--query-compute-apps=gpu_uuid,pid,used_gpu_memory",
-            "--format=csv,noheader,nounits",
-        )
-        self._commands.extend((identity_command, process_command))
+        self._commands.append(identity_command)
         self._shared_attestation_count += 1
         active = tuple(self._active_models.values())
         free_memory_mib = 90_169 if not active else 56_212
@@ -4568,56 +4338,6 @@ class _CpuRecordingResourceSystemV1:
             free_memory_mib = 50_000
         total_memory_mib = 143_771
         reserved_memory_mib = 614
-        processes = [
-            SharedGpuProcessEvidenceV1(
-                pid=42_000,
-                process_group_id=42_000,
-                session_id=42_000,
-                starttime_ticks=4_200_000,
-                uid=1_001,
-                user="cpu-peer-a",
-                used_gpu_memory_mib=31_346,
-            ),
-            SharedGpuProcessEvidenceV1(
-                pid=42_001,
-                process_group_id=42_001,
-                session_id=42_001,
-                starttime_ticks=4_200_100,
-                uid=1_002,
-                user="cpu-peer-b",
-                used_gpu_memory_mib=22_256,
-            ),
-        ]
-        processes.extend(
-            SharedGpuProcessEvidenceV1(
-                pid=item.identity.pid,
-                process_group_id=item.identity.process_group_id,
-                session_id=item.identity.session_id,
-                starttime_ticks=item.identity.starttime_ticks,
-                uid=item.identity.uid,
-                user="cpu-owner",
-                used_gpu_memory_mib=33_957,
-            )
-            for item in active
-        )
-        if (
-            self._fault is CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT
-            and self._shared_attestation_count == 3
-        ) or (
-            self._fault is CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT_PERSISTS
-            and self._shared_attestation_count >= 3
-        ):
-            processes.append(
-                SharedGpuProcessEvidenceV1(
-                    pid=42_999,
-                    process_group_id=42_999,
-                    session_id=42_999,
-                    starttime_ticks=4_299_900,
-                    uid=os.geteuid(),
-                    user="cpu-owner",
-                    used_gpu_memory_mib=1_024,
-                )
-            )
         result = ProductionSharedGpuAttestationV1(
             gpu_index=gpu_index,
             gpu_uuid=f"GPU-{gpu_index:08x}-0000-0000-0000-000000000000",
@@ -4630,7 +4350,7 @@ class _CpuRecordingResourceSystemV1:
                 (total_memory_mib - free_memory_mib) * 100 // total_memory_mib
             ),
             minimum_free_memory_mib=minimum_free_memory_mib,
-            processes=tuple(processes),
+            processes=(),
         )
         _require_monotonic_deadline(
             deadline_monotonic_ns,
@@ -4954,7 +4674,6 @@ class ProductionResourceLifecycleAdapterV1:
         "_cleanup_failure_evidence",
         "_execution_factory_binding_sha256",
         "_last_shared_cleanup_attestation",
-        "_last_shared_cleanup_tenant_anomaly",
         "_reclaimed_cleanup_outcome",
         "_reclaimed_cleanup_values",
         "_stop_evidence",
@@ -4997,7 +4716,6 @@ class ProductionResourceLifecycleAdapterV1:
         self._cleanup_failure_evidence: bytes | None = None
         self._execution_factory_binding_sha256: str | None = None
         self._last_shared_cleanup_attestation: ProductionSharedGpuAttestationV1 | None = None
-        self._last_shared_cleanup_tenant_anomaly: str | None = None
         self._reclaimed_cleanup_outcome: bytes | None = None
         self._reclaimed_cleanup_values: (
             tuple[ProductionSharedGpuAttestationV1 | None, tuple[str, ...], str | None] | None
@@ -5452,10 +5170,9 @@ class ProductionResourceLifecycleAdapterV1:
                         deadline_monotonic_ns=deadline_ns,
                         deadline_failure_code=preflight_failure_code,
                     )
-                    _validate_shared_gpu_tenants(
+                    _validate_shared_gpu_identity(
                         ready_attestation,
                         baseline=self._shared_gpu_baseline,
-                        owned_identity=owned.identity,
                     )
                     shared_gpu_attestations.append(ready_attestation)
         except Exception as exc:
@@ -5688,10 +5405,9 @@ class ProductionResourceLifecycleAdapterV1:
                     JsonValue, production_shared_gpu_attestation_projection(post_stop)
                 )
                 _require_shared_gpu_capacity(post_stop)
-                _validate_shared_gpu_tenants(
+                _validate_shared_gpu_identity(
                     post_stop,
                     baseline=self._shared_gpu_baseline,
-                    owned_identity=None,
                 )
                 mai_resource = self._resources[PilotHostV1.MAI_UI]
                 target_snapshot_attestation_sha256 = _attest_snapshot_resource(
@@ -5772,10 +5488,9 @@ class ProductionResourceLifecycleAdapterV1:
                 progress["target_ready_shared_gpu_attestation"] = cast(
                     JsonValue, production_shared_gpu_attestation_projection(target_ready)
                 )
-                _validate_shared_gpu_tenants(
+                _validate_shared_gpu_identity(
                     target_ready,
                     baseline=self._shared_gpu_baseline,
-                    owned_identity=target.identity,
                 )
                 if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
                     raise ProductionDriverError(
@@ -5953,10 +5668,9 @@ class ProductionResourceLifecycleAdapterV1:
                     JsonValue, production_shared_gpu_attestation_projection(post_stop)
                 )
                 _require_shared_gpu_capacity(post_stop)
-                _validate_shared_gpu_tenants(
+                _validate_shared_gpu_identity(
                     post_stop,
                     baseline=self._shared_gpu_baseline,
-                    owned_identity=None,
                 )
                 require_switch_deadline("pilot switch authority elapsed before snapshot hash")
                 target_resource = self._resources[target_host]
@@ -6010,10 +5724,9 @@ class ProductionResourceLifecycleAdapterV1:
                 progress["target_ready_shared_gpu_attestation"] = cast(
                     JsonValue, production_shared_gpu_attestation_projection(target_ready)
                 )
-                _validate_shared_gpu_tenants(
+                _validate_shared_gpu_identity(
                     target_ready,
                     baseline=self._shared_gpu_baseline,
-                    owned_identity=target.identity,
                 )
                 require_switch_deadline(
                     "pilot switch authority elapsed during final ready validation"
@@ -6144,10 +5857,9 @@ class ProductionResourceLifecycleAdapterV1:
                     self._config.qwen_gpu_index,
                     minimum_free_memory_mib=0,
                 )
-                self._last_shared_cleanup_tenant_anomaly = _validate_shared_gpu_cleanup(
+                _validate_shared_gpu_identity(
                     final_shared_attestation,
                     baseline=self._shared_gpu_baseline,
-                    stopped_models=tuple(self._stop_evidence),
                 )
                 self._last_shared_cleanup_attestation = final_shared_attestation
             except Exception:
@@ -6274,11 +5986,9 @@ class ProductionResourceLifecycleAdapterV1:
                             production_shared_gpu_attestation_sha256(final_shared_attestation)
                         ),
                         "minimum_free_gpu_memory_mib": (self._config.minimum_free_gpu_memory_mib),
-                        "shared_gpu_tenant_continuity_status": (
-                            "UNCHANGED_OR_EXITED"
-                            if self._last_shared_cleanup_tenant_anomaly is None
-                            else self._last_shared_cleanup_tenant_anomaly
-                        ),
+                        # Kept for the published evidence shape. Foreign
+                        # processes are deliberately outside this run's scope.
+                        "shared_gpu_tenant_continuity_status": "NOT_INSPECTED",
                         "vllm_gpu_memory_utilization": (self._config.vllm_gpu_memory_utilization),
                     }
                 )
@@ -6329,33 +6039,6 @@ class ProductionResourceLifecycleAdapterV1:
             )
         )
         self._pending_model_switch_evidence.clear()
-        if (
-            self._last_shared_cleanup_tenant_anomaly is not None
-            and self._with_tool_batch_host is None
-        ):
-            failed_projection = dict(projection)
-            failed_projection.update(
-                {
-                    "cleanup_outcome": "OWNED_RESOURCES_RECLAIMED_TENANT_DRIFT",
-                    "failure_code": self._last_shared_cleanup_tenant_anomaly,
-                    "status": "FAILED_TENANT_CONTINUITY",
-                }
-            )
-            self._failure_evidence = canonical_json_bytes(
-                cast(
-                    JsonValue,
-                    {
-                        "domain": "production-resource-cleanup-failure-evidence",
-                        "schema_version": (PRODUCTION_RESOURCE_CLEANUP_EVIDENCE_SCHEMA_VERSION_V1),
-                        "value": failed_projection,
-                    },
-                )
-            )
-            self._cleanup_failure_evidence = self._failure_evidence
-            raise ProductionDriverError(
-                self._last_shared_cleanup_tenant_anomaly,
-                "owned cleanup completed but shared GPU tenant continuity failed closed",
-            )
         self._cleanup_success_evidence = cleanup_envelope
 
     def cleanup_success_evidence_preimage(self) -> bytes | None:
@@ -6554,16 +6237,14 @@ class ProductionResourceLifecycleAdapterV1:
                     dispatch_projection["shared_gpu_attestation_sha256"] = (
                         production_shared_gpu_attestation_sha256(shared_gpu_attestation)
                     )
-                    tenant_continuity_status = _validate_shared_gpu_tenants(
+                    _validate_shared_gpu_identity(
                         shared_gpu_attestation,
                         baseline=self._shared_gpu_baseline,
-                        owned_identity=model.identity,
-                        allow_dynamic_foreign_tenants=(self._with_tool_batch_host is host),
                     )
                     if self._with_tool_batch_host is host:
-                        dispatch_projection["shared_gpu_tenant_continuity_status"] = (
-                            tenant_continuity_status or "UNCHANGED_OR_EXITED"
-                        )
+                        # Compatibility field only; foreign processes are not
+                        # enumerated and cannot block an owned dispatch.
+                        dispatch_projection["shared_gpu_tenant_continuity_status"] = "NOT_INSPECTED"
                     require_dispatch_deadline("shared-GPU dispatch validation crossed its deadline")
             except Exception as exc:
                 if (

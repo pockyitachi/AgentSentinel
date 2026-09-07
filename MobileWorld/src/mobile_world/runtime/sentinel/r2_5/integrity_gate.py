@@ -3708,35 +3708,9 @@ def _require_pilot_switch_cleanup_bridge(
         code=code,
         name="cleanup.final_shared_gpu_attestation",
     )
-    baseline_tenants = {
-        (
-            item.pid,
-            item.starttime_ticks,
-            item.process_group_id,
-            item.session_id,
-            item.uid,
-            item.user,
-        )
-        for item in baseline.processes
-    }
-    final_tenants = {
-        (
-            item.pid,
-            item.starttime_ticks,
-            item.process_group_id,
-            item.session_id,
-            item.uid,
-            item.user,
-        )
-        for item in final_attestation.processes
-    }
-    stopped_identities = {
-        (item.process.pid, item.process.starttime_ticks, item.process.uid)
-        for item in stopped_models
-    }
     if (
         cleanup_value.get("cleanup_outcome") != "SHARED_MODELS_RECLAIMED"
-        or cleanup_value.get("shared_gpu_tenant_continuity_status") != "UNCHANGED_OR_EXITED"
+        or cleanup_value.get("shared_gpu_tenant_continuity_status") != "NOT_INSPECTED"
         or cleanup_value.get("minimum_free_gpu_memory_mib") != 51_200
         or cleanup_value.get("vllm_gpu_memory_utilization") != "0.24"
         or cleanup_value.get("final_shared_gpu_attestation_sha256")
@@ -3748,11 +3722,8 @@ def _require_pilot_switch_cleanup_bridge(
         or baseline.minimum_free_memory_mib != 51_200
         or baseline.free_memory_mib < baseline.minimum_free_memory_mib
         or final_attestation.minimum_free_memory_mib != 0
-        or not final_tenants.issubset(baseline_tenants)
-        or any(
-            (item.pid, item.starttime_ticks, item.uid) in stopped_identities
-            for item in final_attestation.processes
-        )
+        or baseline.processes
+        or final_attestation.processes
         or reclaimed_value.get("final_shared_gpu_attestation")
         != cleanup_value.get("final_shared_gpu_attestation")
         or len(lease_roots) != 1

@@ -1581,7 +1581,7 @@ def _build_sequence(
         "runtime_config_sha256": roots["runtime_config_sha256"],
         "sequence_execution_scope": "R24_R25_FULL",
         "sequence_scope_authority_sha256": roots["manifest_sha256"],
-        "shared_gpu_tenant_continuity_status": "UNCHANGED_OR_EXITED",
+        "shared_gpu_tenant_continuity_status": "NOT_INSPECTED",
         "status": "CLEANED",
         "stopped_model_sha256s": cast(JsonValue, stopped_model_sha256s),
         "stopped_models": cast(JsonValue, stopped_models),
