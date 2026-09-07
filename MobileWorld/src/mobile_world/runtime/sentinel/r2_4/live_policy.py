@@ -90,6 +90,7 @@ from mobile_world.runtime.sentinel.r2_3.contracts import TaskInstructionV1
 from mobile_world.runtime.sentinel.r2_3.session import RubricTaskSession
 from mobile_world.runtime.sentinel.r2_4.contracts import (
     R24ContractError,
+    R24RubricHistoryPrunePlanV1,
     RuntimeVerticalExecutionScope,
     RuntimeVerticalPolicyOutputV1,
     canonical_json_bytes,
@@ -149,7 +150,10 @@ from mobile_world.runtime.sentinel.r2_4.orchestration import (
     R24CoordinatedCallRecordV1,
     R24RuntimeCoordinatorV1,
 )
-from mobile_world.runtime.sentinel.r2_4.policy import promote_r22_policy_output
+from mobile_world.runtime.sentinel.r2_4.policy import (
+    apply_r23_redundant_history_prunes,
+    promote_r22_policy_output,
+)
 from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     CaseExecutionLeaseV1,
     ProductionPostPreflightFactoryV1,
@@ -3032,11 +3036,17 @@ class _PerCallAdmissionBridgeV1:
         self._packet: EvidencePacketV1 | None = None
         self._request: JsonValue | None = None
         self._history_ir: HistoryIR | None = None
+        self._rubric_history_prune_plan: R24RubricHistoryPrunePlanV1 | None = None
 
     @property
     def evidence_packet_sha256(self) -> str | None:
         packet = self._packet
         return None if packet is None else evidence_packet_sha256(deepcopy(packet))
+
+    @property
+    def rubric_history_prune_plan(self) -> R24RubricHistoryPrunePlanV1 | None:
+        value = self._rubric_history_prune_plan
+        return None if value is None else deepcopy(value)
 
     def evidence(
         self,
@@ -3048,6 +3058,9 @@ class _PerCallAdmissionBridgeV1:
         self._packet = deepcopy(evidence.packet)
         self._request = copy_json(request)
         self._history_ir = deepcopy(history_ir)
+        self._rubric_history_prune_plan = self._coordinator.rubric_history_prune_plan_for(
+            context.logical_call_id
+        )
         return evidence
 
     def admit(
@@ -4790,6 +4803,9 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                             history_ir=history_ir,
                             execution_control=execution_control,
                         )
+                        prune_plan = bridge.rubric_history_prune_plan
+                        if prune_plan is not None:
+                            output = apply_r23_redundant_history_prunes(output, prune_plan)
                     except GPT56PolicyError as exc:
                         semantic_failure = exc
                         if exc.code in _R22_RECEIPT_PUBLICATION_FAILURE_CODES:

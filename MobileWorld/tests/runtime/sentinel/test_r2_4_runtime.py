@@ -105,12 +105,17 @@ from mobile_world.runtime.sentinel.r2_4 import (
 )
 from mobile_world.runtime.sentinel.r2_4.contracts import (
     R24ContractError,
+    R24RubricHistoryPrunePlanV1,
+    R24RubricHistoryPruneTargetV1,
     RuntimeReplacementTemplate,
     RuntimeVerticalAdmittedPlanV1,
+    RuntimeVerticalDecisionV1,
     RuntimeVerticalOperationV1,
+    RuntimeVerticalPolicyOutputV1,
     replacement_text_for_template,
 )
 from mobile_world.runtime.sentinel.r2_4.live_attempt import history_policy_transport_schema_v1
+from mobile_world.runtime.sentinel.r2_4.policy import apply_r23_redundant_history_prunes
 from mobile_world.runtime.sentinel.r2_4.renderer import (
     render_vertical_admitted_plan,
     restore_vertical_original,
@@ -813,6 +818,86 @@ def _vertical_plan(
         else ""
     )
     return ir, plan, replacement
+
+
+def test_r23_duplicate_bridge_prunes_only_uncertain_history() -> None:
+    request_sha256 = "a" * 64
+    source_output_sha256 = "b" * 64
+    source_receipt_sha256 = "c" * 64
+    source_plan_sha256 = "d" * 64
+    source_transport_sha256 = "e" * 64
+    plan = RuntimeVerticalAdmittedPlanV1(
+        plan_id="r24-plan-bridge",
+        logical_call_id="r24-logical-call-bridge",
+        host_id="qwen3-vl",
+        history_family="flat_progress",
+        history_codec_id="qwen3vl-runtime",
+        history_codec_contract_version="v1",
+        source_request_sha256=request_sha256,
+        source_policy_output_sha256=source_output_sha256,
+        source_policy_receipt_sha256=source_receipt_sha256,
+        source_r22_admitted_plan_sha256=source_plan_sha256,
+        source_transport_descriptor_sha256=source_transport_sha256,
+        operations=(),
+    )
+    output = RuntimeVerticalPolicyOutputV1(
+        policy_id="r24-policy-bridge",
+        status=RuntimeVerticalStatus.EVALUATED,
+        decisions=(
+            RuntimeVerticalDecisionV1(
+                decision_id="r24-decision-uncertain",
+                target_id="r24-target-uncertain",
+                operation=RuntimeOperationKind.KEEP_UNCERTAIN,
+                source_decision_sha256="1" * 64,
+            ),
+            RuntimeVerticalDecisionV1(
+                decision_id="r24-decision-keep",
+                target_id="r24-target-keep",
+                operation=RuntimeOperationKind.KEEP,
+                source_decision_sha256="2" * 64,
+            ),
+        ),
+        admitted_plan=plan,
+        source_policy_output_sha256=source_output_sha256,
+        source_policy_receipt_sha256=source_receipt_sha256,
+        source_transport_descriptor_sha256=source_transport_sha256,
+        validation_checks=("R24_TEST_SOURCE_BOUND",),
+    )
+    bridge = R24RubricHistoryPrunePlanV1(
+        logical_call_id=plan.logical_call_id,
+        source_request_sha256=request_sha256,
+        prior_rubric_state_sha256="3" * 64,
+        current_rubric_state_sha256="4" * 64,
+        progress_signature_sha256="5" * 64,
+        candidates=(
+            R24RubricHistoryPruneTargetV1(
+                target_id="r24-target-uncertain",
+                target_record_id="record-00000000000000000000000000000001",
+                target_span_sha256="6" * 64,
+                duplicate_text_sha256="6" * 64,
+                older_record_index=1,
+                newest_record_index=4,
+            ),
+            R24RubricHistoryPruneTargetV1(
+                target_id="r24-target-keep",
+                target_record_id="record-00000000000000000000000000000002",
+                target_span_sha256="7" * 64,
+                duplicate_text_sha256="7" * 64,
+                older_record_index=2,
+                newest_record_index=5,
+            ),
+        ),
+    )
+
+    revised = apply_r23_redundant_history_prunes(output, bridge)
+
+    assert [item.operation for item in revised.decisions] == [
+        RuntimeOperationKind.DROP,
+        RuntimeOperationKind.KEEP,
+    ]
+    assert len(revised.admitted_plan.operations) == 1
+    assert revised.admitted_plan.operations[0].target_id == "r24-target-uncertain"
+    assert "R24_R23_STABLE_EXACT_DUPLICATE_PRUNE" in revised.validation_checks
 
 
 @pytest.mark.parametrize(

@@ -30,12 +30,16 @@ from mobile_world.offline.causal_replay.contracts import (
     canonical_sha256 as portable_canonical_sha256,
 )
 from mobile_world.runtime.sentinel.contracts import SentinelContext
-from mobile_world.runtime.sentinel.r2_2.contracts import evidence_packet_sha256
+from mobile_world.runtime.sentinel.r2_2.contracts import (
+    EligibleHistoryTargetV1,
+    evidence_packet_sha256,
+)
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import GPT56EvidenceInputV1
 from mobile_world.runtime.sentinel.r2_3.contracts import (
     R23ContractError,
     RecordPathBindingV1,
     RelevanceDisposition,
+    RubricTrackingStateV1,
     TaskInstructionV1,
     TopologyDeclarationV1,
     TopologyKind,
@@ -65,7 +69,10 @@ from mobile_world.runtime.sentinel.r2_3.session import (
 )
 from mobile_world.runtime.sentinel.r2_4.contracts import (
     R24ContractError,
+    R24RubricHistoryPrunePlanV1,
+    R24RubricHistoryPruneTargetV1,
     canonical_sha256,
+    snapshot_rubric_history_prune_plan,
 )
 from mobile_world.runtime.sentinel.r2_4.evidence import (
     CollectorEvidenceBundleV1,
@@ -222,6 +229,121 @@ def rubric_session_result_projection(
 
 def rubric_session_result_sha256(value: RubricSessionResultV1) -> str:
     return canonical_sha256(cast(JsonValue, rubric_session_result_projection(value)))
+
+
+def _rubric_progress_signature(value: RubricTrackingStateV1) -> dict[str, JsonValue]:
+    """Project only task-progress semantics, excluding per-call state metadata."""
+
+    if type(value) is not RubricTrackingStateV1:
+        raise R24OrchestrationError("UNTRUSTED_RUBRIC_RESULT", "rubric state has an untrusted type")
+    return {
+        "milestones": [
+            {"milestone_id": item.milestone_id, "state": item.state.value}
+            for item in sorted(value.milestone_states, key=lambda item: item.milestone_id)
+        ],
+        "paths": [
+            {"path_id": item.path_id, "state": item.state.value}
+            for item in sorted(value.path_states, key=lambda item: item.path_id)
+        ],
+        "frontier": [
+            {"path_id": item.path_id, "milestone_id": item.milestone_id}
+            for item in sorted(
+                value.frontier,
+                key=lambda item: (item.path_id, item.milestone_id),
+            )
+        ],
+    }
+
+
+def _rubric_history_prune_plan(
+    *,
+    logical_call_id: str,
+    prior_state: RubricTrackingStateV1,
+    current_state: RubricTrackingStateV1,
+    gpt56_input: GPT56EvidenceInputV1,
+    history_ir: HistoryIR,
+) -> R24RubricHistoryPrunePlanV1 | None:
+    """Derive a bounded exact-duplicate compaction plan after stalled progress."""
+
+    prior_signature = _rubric_progress_signature(prior_state)
+    current_signature = _rubric_progress_signature(current_state)
+    if prior_signature != current_signature:
+        return None
+
+    packet = gpt56_input.packet
+    targets_by_record: dict[str, list[EligibleHistoryTargetV1]] = {}
+    for target in packet.targets:
+        targets_by_record.setdefault(target.record_id, []).append(target)
+
+    # ``representation_record_index`` is local to a host-native container.  In
+    # particular, MAI records from distinct messages may all carry zero.  The
+    # History IR tuple itself is the frozen request-order census, so use its
+    # ordinal for cross-record age comparisons on both hosts.
+    record_indices = {
+        record.record_id: ordinal for ordinal, record in enumerate(history_ir.records)
+    }
+    globally_newest_record_ids = {
+        record_id
+        for record_id, _ in sorted(
+            record_indices.items(),
+            key=lambda item: (item[1], item[0]),
+            reverse=True,
+        )[:2]
+    }
+
+    duplicate_groups: dict[tuple[str, str], list[tuple[int, EligibleHistoryTargetV1]]] = {}
+    for record_id, targets in targets_by_record.items():
+        if len(targets) != 1 or record_id not in record_indices:
+            continue
+        target = targets[0]
+        duplicate_groups.setdefault(
+            (target.span_sha256, target.exact_text),
+            [],
+        ).append((record_indices[record_id], target))
+
+    candidates: list[R24RubricHistoryPruneTargetV1] = []
+    for group in duplicate_groups.values():
+        if len(group) < 3:
+            continue
+        ordered = sorted(group, key=lambda item: (item[0], item[1].target_id))
+        newest_record_index = ordered[-1][0]
+        protected_group_record_ids = {item[1].record_id for item in ordered[-2:]}
+        for older_record_index, target in ordered[:-2]:
+            if (
+                target.record_id in protected_group_record_ids
+                or target.record_id in globally_newest_record_ids
+            ):
+                continue
+            candidates.append(
+                R24RubricHistoryPruneTargetV1(
+                    target_id=target.target_id,
+                    target_record_id=target.record_id,
+                    target_span_sha256=target.span_sha256,
+                    duplicate_text_sha256=target.span_sha256,
+                    older_record_index=older_record_index,
+                    newest_record_index=newest_record_index,
+                )
+            )
+
+    candidate_cap = min(8, gpt56_input.target_count // 4)
+    if candidate_cap == 0 or not candidates:
+        return None
+    bounded_candidates = tuple(
+        sorted(
+            candidates,
+            key=lambda item: (item.older_record_index, item.target_id),
+        )[:candidate_cap]
+    )
+    if not bounded_candidates:
+        return None
+    return R24RubricHistoryPrunePlanV1(
+        logical_call_id=logical_call_id,
+        source_request_sha256=packet.raw_request_sha256,
+        prior_rubric_state_sha256=rubric_tracking_state_sha256(prior_state),
+        current_rubric_state_sha256=rubric_tracking_state_sha256(current_state),
+        progress_signature_sha256=canonical_sha256(cast(JsonValue, current_signature)),
+        candidates=bounded_candidates,
+    )
 
 
 def _snapshot_topology_run(value: TopologyRunV1) -> TopologyRunV1:
@@ -504,6 +626,7 @@ class R24RuntimeCoordinatorV1:
         self._stimulus_calls: dict[tuple[str, str], str] = {}
         self._stimulus_sha256_by_call: dict[str, str] = {}
         self._tracking_packet_sha256_by_call: dict[str, str] = {}
+        self._rubric_history_prune_plans: dict[str, R24RubricHistoryPrunePlanV1 | None] = {}
         self._collector_bundle_calls = 0
 
     def stimulus_sha256_for_call(self, logical_call_id: str) -> str | None:
@@ -961,6 +1084,25 @@ class R24RuntimeCoordinatorV1:
                 raise R24OrchestrationError(
                     "UNTRUSTED_RUBRIC_RESULT", "admitted tracking omitted its state"
                 )
+            try:
+                rubric_history_prune_plan = _rubric_history_prune_plan(
+                    logical_call_id=context.logical_call_id,
+                    prior_state=snapshot_tracking_state(current_state),
+                    current_state=snapshot_tracking_state(result.state),
+                    gpt56_input=gpt56_input,
+                    history_ir=history_ir,
+                )
+            except Exception as exc:
+                failure_code = "RUBRIC_HISTORY_PRUNE_PLAN_ERROR"
+                self._calls[context.logical_call_id] = _CachedCall(
+                    call_input_sha256=call_input_sha256,
+                    gpt56_input=None,
+                    record=None,
+                    failure_code=failure_code,
+                )
+                raise R24OrchestrationError(
+                    failure_code, "rubric history-prune plan construction failed"
+                ) from exc
             # There is no trusted record-level R2.2 SUPPORTED+KEEP resolver in
             # this checkpoint.  Bind only opaque record IDs, leave every path
             # association unknown, and require the R2.3 linker to emit RETAIN.
@@ -1026,6 +1168,11 @@ class R24RuntimeCoordinatorV1:
                 gpt56_input=cached_input,
                 record=record,
                 failure_code=None,
+            )
+            self._rubric_history_prune_plans[context.logical_call_id] = (
+                None
+                if rubric_history_prune_plan is None
+                else snapshot_rubric_history_prune_plan(rubric_history_prune_plan)
             )
             return _snapshot_gpt56_input(cached_input)
 
@@ -1329,6 +1476,25 @@ class R24RuntimeCoordinatorV1:
             if cached is None or cached.record is None:
                 return None
             return _snapshot_call_record(cached.record)
+
+    def rubric_history_prune_plan_for(
+        self, logical_call_id: str
+    ) -> R24RubricHistoryPrunePlanV1 | None:
+        """Return a detached stalled-progress duplicate-compaction plan, if any."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise TypeError("logical_call_id must be non-empty exact text")
+        with self._lock:
+            plan = self._rubric_history_prune_plans.get(logical_call_id)
+            if plan is None:
+                return None
+            detached = snapshot_rubric_history_prune_plan(plan)
+            if type(detached) is not R24RubricHistoryPrunePlanV1:
+                raise R24OrchestrationError(
+                    "UNTRUSTED_RUBRIC_HISTORY_PRUNE_PLAN",
+                    "rubric history-prune plan detach changed type",
+                )
+            return detached
 
     @property
     def records(self) -> tuple[R24CoordinatedCallRecordV1, ...]:

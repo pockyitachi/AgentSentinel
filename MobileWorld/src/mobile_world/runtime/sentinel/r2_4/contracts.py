@@ -290,6 +290,75 @@ CPU_FAKE_ACTIVE_AUTHORITY_SHA256 = cpu_fake_active_authority_sha256(CpuFakeActiv
 
 
 @dataclass(frozen=True, slots=True)
+class R24RubricHistoryPruneTargetV1:
+    """One exact older duplicate that the R2.3 bridge may prune."""
+
+    target_id: str
+    target_record_id: str
+    target_span_sha256: str
+    duplicate_text_sha256: str
+    older_record_index: int
+    newest_record_index: int
+
+    def __post_init__(self) -> None:
+        _require_semantic_id(self.target_id, "target_id")
+        _require_semantic_id(self.target_record_id, "target_record_id")
+        _require_sha256(self.target_span_sha256, "target_span_sha256")
+        _require_sha256(self.duplicate_text_sha256, "duplicate_text_sha256")
+        if (
+            type(self.older_record_index) is not int
+            or type(self.newest_record_index) is not int
+            or self.older_record_index < 0
+            or self.newest_record_index < 0
+        ):
+            raise R24ContractError(
+                "INVALID_RECORD_INDEX", "duplicate-history record indices must be non-negative"
+            )
+        if self.older_record_index >= self.newest_record_index:
+            raise R24ContractError(
+                "INVALID_DUPLICATE_ORDER", "the pruned record must be older than the retained one"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class R24RubricHistoryPrunePlanV1:
+    """Hash-bound, bounded bridge input for stable exact-duplicate pruning."""
+
+    logical_call_id: str
+    source_request_sha256: str
+    prior_rubric_state_sha256: str
+    current_rubric_state_sha256: str
+    progress_signature_sha256: str
+    candidates: tuple[R24RubricHistoryPruneTargetV1, ...]
+
+    def __post_init__(self) -> None:
+        _require_runtime_id(self.logical_call_id, "logical_call_id")
+        for value, name in (
+            (self.source_request_sha256, "source_request_sha256"),
+            (self.prior_rubric_state_sha256, "prior_rubric_state_sha256"),
+            (self.current_rubric_state_sha256, "current_rubric_state_sha256"),
+            (self.progress_signature_sha256, "progress_signature_sha256"),
+        ):
+            _require_sha256(value, name)
+        candidates = cast(
+            tuple[R24RubricHistoryPruneTargetV1, ...],
+            _require_exact_tuple(
+                self.candidates,
+                R24RubricHistoryPruneTargetV1,
+                "candidates",
+                maximum=8,
+            ),
+        )
+        for values, name in (
+            ((item.target_id for item in candidates), "candidate target IDs"),
+            ((item.target_record_id for item in candidates), "candidate record IDs"),
+        ):
+            materialized = tuple(values)
+            if len(materialized) != len(set(materialized)):
+                raise R24ContractError("DUPLICATE_RUNTIME_ID", f"{name} repeat")
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeVerticalDecisionV1:
     decision_id: str
     target_id: str
@@ -782,6 +851,75 @@ class RuntimeVerticalPolicy(Protocol):
     ) -> RuntimeVerticalPolicyOutputV1: ...
 
 
+def rubric_history_prune_target_projection(
+    value: R24RubricHistoryPruneTargetV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not R24RubricHistoryPruneTargetV1:
+        raise R24ContractError("UNTRUSTED_RUNTIME_TYPE", "prune target must use the exact type")
+    return {
+        "target_id": value.target_id,
+        "target_record_id": value.target_record_id,
+        "target_span_sha256": value.target_span_sha256,
+        "duplicate_text_sha256": value.duplicate_text_sha256,
+        "older_record_index": value.older_record_index,
+        "newest_record_index": value.newest_record_index,
+    }
+
+
+def rubric_history_prune_plan_projection(
+    value: R24RubricHistoryPrunePlanV1,
+) -> dict[str, JsonValue]:
+    if type(value) is not R24RubricHistoryPrunePlanV1:
+        raise R24ContractError("UNTRUSTED_RUNTIME_TYPE", "prune plan must use the exact type")
+    return {
+        "logical_call_id": value.logical_call_id,
+        "source_request_sha256": value.source_request_sha256,
+        "prior_rubric_state_sha256": value.prior_rubric_state_sha256,
+        "current_rubric_state_sha256": value.current_rubric_state_sha256,
+        "progress_signature_sha256": value.progress_signature_sha256,
+        "candidates": [rubric_history_prune_target_projection(item) for item in value.candidates],
+    }
+
+
+def snapshot_rubric_history_prune_plan(
+    value: R24RubricHistoryPrunePlanV1,
+) -> R24RubricHistoryPrunePlanV1:
+    if type(value) is not R24RubricHistoryPrunePlanV1:
+        raise R24ContractError("UNTRUSTED_RUNTIME_TYPE", "prune plan must use the exact type")
+    candidates = cast(
+        tuple[R24RubricHistoryPruneTargetV1, ...],
+        _require_exact_tuple(
+            value.candidates,
+            R24RubricHistoryPruneTargetV1,
+            "candidates",
+            maximum=8,
+        ),
+    )
+    return R24RubricHistoryPrunePlanV1(
+        logical_call_id=value.logical_call_id,
+        source_request_sha256=value.source_request_sha256,
+        prior_rubric_state_sha256=value.prior_rubric_state_sha256,
+        current_rubric_state_sha256=value.current_rubric_state_sha256,
+        progress_signature_sha256=value.progress_signature_sha256,
+        candidates=tuple(
+            R24RubricHistoryPruneTargetV1(
+                target_id=item.target_id,
+                target_record_id=item.target_record_id,
+                target_span_sha256=item.target_span_sha256,
+                duplicate_text_sha256=item.duplicate_text_sha256,
+                older_record_index=item.older_record_index,
+                newest_record_index=item.newest_record_index,
+            )
+            for item in candidates
+        ),
+    )
+
+
+def rubric_history_prune_plan_sha256(value: R24RubricHistoryPrunePlanV1) -> str:
+    trusted = snapshot_rubric_history_prune_plan(value)
+    return canonical_sha256(cast(JsonValue, rubric_history_prune_plan_projection(trusted)))
+
+
 def vertical_decision_projection(value: RuntimeVerticalDecisionV1) -> dict[str, JsonValue]:
     if type(value) is not RuntimeVerticalDecisionV1:
         raise R24ContractError("UNTRUSTED_RUNTIME_TYPE", "decision must use the exact type")
@@ -1125,6 +1263,8 @@ __all__ = [
     "CPU_FAKE_ACTIVE_AUTHORITY_SHA256",
     "CpuFakeActiveAuthorityV1",
     "R24ContractError",
+    "R24RubricHistoryPrunePlanV1",
+    "R24RubricHistoryPruneTargetV1",
     "RuntimeReplacementTemplate",
     "RuntimeReplacementTemplateV1",
     "RuntimeVerticalAdmittedPlanV1",
@@ -1146,6 +1286,10 @@ __all__ = [
     "cpu_fake_active_authority_sha256",
     "issue_cpu_fake_active_authority",
     "replacement_text_for_template",
+    "rubric_history_prune_plan_projection",
+    "rubric_history_prune_plan_sha256",
+    "rubric_history_prune_target_projection",
+    "snapshot_rubric_history_prune_plan",
     "snapshot_vertical_output",
     "snapshot_vertical_plan",
     "snapshot_vertical_receipt_bridge",

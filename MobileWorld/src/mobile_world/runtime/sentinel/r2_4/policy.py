@@ -43,6 +43,7 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     CPU_FAKE_ACTIVE_AUTHORITY_SHA256,
     CpuFakeActiveAuthorityV1,
     R24ContractError,
+    R24RubricHistoryPrunePlanV1,
     RuntimeReplacementTemplate,
     RuntimeVerticalAdmittedPlanV1,
     RuntimeVerticalDecisionV1,
@@ -52,7 +53,10 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     RuntimeVerticalStatus,
     canonical_sha256,
     cpu_fake_active_authority_sha256,
+    rubric_history_prune_plan_projection,
+    rubric_history_prune_target_projection,
     snapshot_json_value,
+    snapshot_rubric_history_prune_plan,
     snapshot_vertical_output,
 )
 
@@ -67,6 +71,7 @@ _PROMOTION_CHECKS = (
     "R24_ZERO_TARGET_NOOP_VALID",
 )
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_R23_REDUNDANT_HISTORY_PRUNE_CHECK = "R24_R23_STABLE_EXACT_DUPLICATE_PRUNE"
 
 
 def _projection_sha256(value: dict[str, JsonValue]) -> str:
@@ -402,6 +407,141 @@ def promote_r22_policy_output(
     return snapshot_vertical_output(output)
 
 
+def apply_r23_redundant_history_prunes(
+    output: RuntimeVerticalPolicyOutputV1,
+    plan: R24RubricHistoryPrunePlanV1,
+) -> RuntimeVerticalPolicyOutputV1:
+    """Apply only bounded R2.3-stable exact-duplicate prunes.
+
+    This bridge cannot override an R2.2 ``KEEP`` or an existing factual
+    ``DROP``/``REPLACE``.  A candidate is materialized only when its exact
+    target currently carries ``KEEP_UNCERTAIN``; the R2.2 source hashes and
+    execution authority remain unchanged.
+    """
+
+    trusted_output = snapshot_vertical_output(output)
+    trusted_prune_plan = snapshot_rubric_history_prune_plan(plan)
+    admitted_plan = trusted_output.admitted_plan
+    if trusted_prune_plan.logical_call_id != admitted_plan.logical_call_id:
+        raise R24ContractError(
+            "R23_PRUNE_LOGICAL_CALL_MISMATCH",
+            "rubric-history prune plan binds another logical actor call",
+        )
+    if trusted_prune_plan.source_request_sha256 != admitted_plan.source_request_sha256:
+        raise R24ContractError(
+            "R23_PRUNE_SOURCE_REQUEST_MISMATCH",
+            "rubric-history prune plan binds another actor request",
+        )
+
+    decisions_by_target = {item.target_id: item for item in trusted_output.decisions}
+    candidates_by_target = {item.target_id: item for item in trusted_prune_plan.candidates}
+    if not set(candidates_by_target).issubset(decisions_by_target):
+        raise R24ContractError(
+            "R23_PRUNE_UNKNOWN_TARGET",
+            "rubric-history prune candidate is absent from the R2.2 target census",
+        )
+
+    bridge_plan_projection = rubric_history_prune_plan_projection(trusted_prune_plan)
+    bridge_operations: list[RuntimeVerticalOperationV1] = []
+    decisions: list[RuntimeVerticalDecisionV1] = []
+    for decision in trusted_output.decisions:
+        candidate = candidates_by_target.get(decision.target_id)
+        if candidate is None or decision.operation is not RuntimeOperationKind.KEEP_UNCERTAIN:
+            decisions.append(
+                RuntimeVerticalDecisionV1(
+                    decision_id=decision.decision_id,
+                    target_id=decision.target_id,
+                    operation=decision.operation,
+                    source_decision_sha256=decision.source_decision_sha256,
+                )
+            )
+            continue
+
+        bridge_projection: dict[str, JsonValue] = {
+            "bridge_check": _R23_REDUNDANT_HISTORY_PRUNE_CHECK,
+            "plan": bridge_plan_projection,
+            "candidate": rubric_history_prune_target_projection(candidate),
+            "source_r22_decision_sha256": decision.source_decision_sha256,
+            "source_r22_operation": decision.operation.value,
+        }
+        bridge_sha256 = _projection_sha256(bridge_projection)
+        decisions.append(
+            RuntimeVerticalDecisionV1(
+                decision_id=decision.decision_id,
+                target_id=decision.target_id,
+                operation=RuntimeOperationKind.DROP,
+                source_decision_sha256=bridge_sha256,
+            )
+        )
+        operation_subject: dict[str, JsonValue] = {
+            "bridge_sha256": bridge_sha256,
+            "decision_id": decision.decision_id,
+            "target_id": candidate.target_id,
+            "target_record_id": candidate.target_record_id,
+            "target_span_sha256": candidate.target_span_sha256,
+        }
+        bridge_operations.append(
+            RuntimeVerticalOperationV1(
+                operation_id=_stable_id("r24-r23-op", operation_subject),
+                decision_id=decision.decision_id,
+                target_id=candidate.target_id,
+                target_record_id=candidate.target_record_id,
+                target_span_sha256=candidate.target_span_sha256,
+                kind=RuntimeOperationKind.DROP,
+                source_operation_sha256=bridge_sha256,
+            )
+        )
+
+    if not bridge_operations:
+        return trusted_output
+
+    operations = (*admitted_plan.operations, *bridge_operations)
+    plan_subject: dict[str, JsonValue] = {
+        "logical_call_id": admitted_plan.logical_call_id,
+        "source_policy_output_sha256": admitted_plan.source_policy_output_sha256,
+        "execution_scope": admitted_plan.execution_scope.value,
+        "execution_authority_sha256": admitted_plan.execution_authority_sha256,
+        "source_transport_binding_sha256": admitted_plan.source_transport_binding_sha256,
+        "operations": [item.operation_id for item in operations],
+    }
+    revised_plan = RuntimeVerticalAdmittedPlanV1(
+        plan_id=_stable_id("r24-plan", plan_subject),
+        logical_call_id=admitted_plan.logical_call_id,
+        host_id=admitted_plan.host_id,
+        history_family=admitted_plan.history_family,
+        history_codec_id=admitted_plan.history_codec_id,
+        history_codec_contract_version=admitted_plan.history_codec_contract_version,
+        source_request_sha256=admitted_plan.source_request_sha256,
+        source_policy_output_sha256=admitted_plan.source_policy_output_sha256,
+        source_policy_receipt_sha256=admitted_plan.source_policy_receipt_sha256,
+        source_transport_descriptor_sha256=(admitted_plan.source_transport_descriptor_sha256),
+        source_transport_binding_sha256=admitted_plan.source_transport_binding_sha256,
+        source_r22_admitted_plan_sha256=admitted_plan.source_r22_admitted_plan_sha256,
+        operations=operations,
+        execution_authority_sha256=admitted_plan.execution_authority_sha256,
+        execution_scope=admitted_plan.execution_scope,
+        schema_version=admitted_plan.schema_version,
+    )
+    validation_checks = trusted_output.validation_checks
+    if _R23_REDUNDANT_HISTORY_PRUNE_CHECK not in validation_checks:
+        validation_checks = (*validation_checks, _R23_REDUNDANT_HISTORY_PRUNE_CHECK)
+    revised_output = RuntimeVerticalPolicyOutputV1(
+        policy_id=trusted_output.policy_id,
+        status=trusted_output.status,
+        decisions=tuple(decisions),
+        admitted_plan=revised_plan,
+        source_policy_output_sha256=trusted_output.source_policy_output_sha256,
+        source_policy_receipt_sha256=trusted_output.source_policy_receipt_sha256,
+        source_transport_descriptor_sha256=(trusted_output.source_transport_descriptor_sha256),
+        source_transport_binding_sha256=trusted_output.source_transport_binding_sha256,
+        validation_checks=validation_checks,
+        execution_authority_sha256=trusted_output.execution_authority_sha256,
+        execution_scope=trusted_output.execution_scope,
+        schema_version=trusted_output.schema_version,
+    )
+    return snapshot_vertical_output(revised_output)
+
+
 class R22CpuFakeActivePolicyAdapter:
     """Adapt an injected R2.2 policy for offline ACTIVE request construction."""
 
@@ -550,5 +690,6 @@ CpuFakeActiveRuntimePolicyAdapter = R22CpuFakeActivePolicyAdapter
 __all__ = [
     "CpuFakeActiveRuntimePolicyAdapter",
     "R22CpuFakeActivePolicyAdapter",
+    "apply_r23_redundant_history_prunes",
     "promote_r22_policy_output",
 ]
