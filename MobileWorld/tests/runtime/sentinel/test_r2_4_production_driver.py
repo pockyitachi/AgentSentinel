@@ -2115,7 +2115,7 @@ def test_shared_single_gpu_configuration_is_exact(
 
 @pytest.mark.parametrize(
     ("shutdown_grace_seconds", "health_poll_interval_ms", "expected_seconds"),
-    ((10, 250, 278), (60, 5_000, 540)),
+    ((10, 250, 188), (60, 5_000, 450)),
 )
 def test_shared_cleanup_upper_bound_covers_every_bounded_cleanup_path(
     tmp_path: Path,
@@ -2149,7 +2149,8 @@ def test_shared_cleanup_upper_bound_covers_every_bounded_cleanup_path(
         3 * shutdown_grace_seconds + 2 * poll_ceiling_seconds
     )
     assert value["pending_backend_cleanup_upper_bound_seconds"] == 105
-    assert value["final_shared_gpu_attestation_upper_bound_seconds"] == 120
+    assert value["final_shared_gpu_attestation_command_slots"] == 1
+    assert value["final_shared_gpu_attestation_upper_bound_seconds"] == 30
     assert value["cleanup_upper_bound_seconds"] == expected_seconds
     assert value["runtime_config_sha256"] == production_runtime_config_sha256(config)
     assert production_driver_module.canonical_json_bytes(cast(Any, envelope)) == (
@@ -2170,7 +2171,7 @@ def test_shared_cleanup_bound_hash_rejects_runtime_config_drift(
     first = build_cpu_test_resource_lifecycle_adapter_v1(first_config)
     drifted = build_cpu_test_resource_lifecycle_adapter_v1(drifted_config)
 
-    assert first.cleanup_upper_bound_seconds == drifted.cleanup_upper_bound_seconds == 278
+    assert first.cleanup_upper_bound_seconds == drifted.cleanup_upper_bound_seconds == 188
     assert first.runtime_config_sha256 != drifted.runtime_config_sha256
     assert first.cleanup_upper_bound_preimage != drifted.cleanup_upper_bound_preimage
     assert first.cleanup_upper_bound_sha256 != drifted.cleanup_upper_bound_sha256
@@ -2226,7 +2227,7 @@ def test_legacy_cleanup_bound_stays_shared_only_and_full_v2_covers_concurrent(
     assert value["final_shared_gpu_attestation_upper_bound_seconds"] == 0
 
 
-def test_shared_gpu_attestation_binds_reserved_memory_and_uses_final_capacity(
+def test_shared_gpu_attestation_binds_capacity_without_querying_compute_processes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     system_type = production_driver_module._PosixProductionResourceSystemV1
@@ -2234,334 +2235,37 @@ def test_shared_gpu_attestation_binds_reserved_memory_and_uses_final_capacity(
         _shared_runtime_config(tmp_path), seal=production_driver_module._MODULE_SEAL
     )
     uuid = "GPU-12345678-1234-1234-1234-123456789abc"
-    responses = iter(
-        (
-            SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=f"5, {uuid}, 143771, 94750, 48407, 614, 20, 33\n",
-            ),
-            SimpleNamespace(returncode=0, stderr="", stdout=""),
-            SimpleNamespace(returncode=0, stderr="", stdout=""),
-            SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=f"5, {uuid}, 143771, 94730, 48427, 616, 21, 34\n",
-            ),
+    commands: list[tuple[str, ...]] = []
+
+    def attest(argv: tuple[str, ...], **_kwargs: object) -> SimpleNamespace:
+        commands.append(argv)
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=f"5, {uuid}, 143771, 94750, 48407, 614, 20, 33\n",
         )
-    )
+
     monkeypatch.setattr(
         system_type,
         "_attestation_run",
-        staticmethod(lambda _argv, **_kwargs: next(responses)),
+        staticmethod(attest),
     )
     attestation = system.attest_gpu_shared_capacity(5, minimum_free_memory_mib=51_200)
-    assert (attestation.free_memory_mib, attestation.used_memory_mib) == (94_730, 48_427)
-    assert attestation.reserved_memory_mib == 616
+    assert (attestation.free_memory_mib, attestation.used_memory_mib) == (94_750, 48_407)
+    assert attestation.reserved_memory_mib == 614
+    assert attestation.processes == ()
+    assert len(commands) == 1
+    assert all("query-compute-apps" not in argument for argument in commands[0])
     assert (
         production_driver_module.production_shared_gpu_attestation_projection(attestation)[
             "reserved_memory_mib"
         ]
-        == 616
+        == 614
     )
-    assert replace(attestation, used_memory_mib=48_423)
+    assert replace(attestation, used_memory_mib=48_403)
     with pytest.raises(ProductionDriverError) as raised:
-        replace(attestation, reserved_memory_mib=620)
+        replace(attestation, reserved_memory_mib=619)
     assert raised.value.code == "INVALID_GPU_ATTESTATION"
-
-
-def test_shared_gpu_attestation_allows_memory_drift_and_binds_final_process_memory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    system_type = production_driver_module._PosixProductionResourceSystemV1
-    system = system_type(
-        _shared_runtime_config(tmp_path), seal=production_driver_module._MODULE_SEAL
-    )
-    uuid = "GPU-12345678-1234-1234-1234-123456789abc"
-    responses = iter(
-        (
-            SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=f"5, {uuid}, 143771, 94750, 48407, 614, 20, 33\n",
-            ),
-            SimpleNamespace(returncode=0, stderr="", stdout=f"{uuid}, 4242, 31346\n"),
-            SimpleNamespace(returncode=0, stderr="", stdout=f"{uuid}, 4242, 31340\n"),
-            SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=f"5, {uuid}, 143771, 94730, 48427, 614, 21, 34\n",
-            ),
-        )
-    )
-    observed_memory: list[int] = []
-
-    def stable_process(
-        pid: int, *, used_gpu_memory_mib: int
-    ) -> production_driver_module.SharedGpuProcessEvidenceV1:
-        observed_memory.append(used_gpu_memory_mib)
-        return production_driver_module.SharedGpuProcessEvidenceV1(
-            pid=pid,
-            process_group_id=pid,
-            session_id=pid,
-            starttime_ticks=42_420,
-            uid=1_001,
-            user="cpu-peer",
-            used_gpu_memory_mib=used_gpu_memory_mib,
-        )
-
-    monkeypatch.setattr(
-        system_type,
-        "_attestation_run",
-        staticmethod(lambda _argv, **_kwargs: next(responses)),
-    )
-    monkeypatch.setattr(
-        production_driver_module,
-        "_read_shared_gpu_process_evidence",
-        stable_process,
-    )
-
-    attestation = system.attest_gpu_shared_capacity(5, minimum_free_memory_mib=51_200)
-
-    assert observed_memory == [31_346, 31_340]
-    assert len(attestation.processes) == 1
-    assert attestation.processes[0].used_gpu_memory_mib == 31_340
-    assert (
-        attestation.total_memory_mib,
-        attestation.free_memory_mib,
-        attestation.used_memory_mib,
-        attestation.reserved_memory_mib,
-        attestation.gpu_utilization_percent,
-        attestation.memory_utilization_percent,
-    ) == (143_771, 94_730, 48_427, 614, 21, 34)
-    assert (
-        attestation.free_memory_mib + attestation.used_memory_mib + attestation.reserved_memory_mib
-        == attestation.total_memory_mib
-    )
-
-
-def test_shared_gpu_attestation_rejects_gpu_uuid_drift_across_census(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    system_type = production_driver_module._PosixProductionResourceSystemV1
-    system = system_type(
-        _shared_runtime_config(tmp_path), seal=production_driver_module._MODULE_SEAL
-    )
-    first_uuid = "GPU-12345678-1234-1234-1234-123456789abc"
-    second_uuid = "GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    responses = iter(
-        (
-            SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=f"5, {first_uuid}, 143771, 94750, 48407, 614, 20, 33\n",
-            ),
-            SimpleNamespace(returncode=0, stderr="", stdout=""),
-            SimpleNamespace(returncode=0, stderr="", stdout=""),
-            SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=f"5, {second_uuid}, 143771, 94730, 48427, 614, 21, 34\n",
-            ),
-        )
-    )
-    monkeypatch.setattr(
-        system_type,
-        "_attestation_run",
-        staticmethod(lambda _argv, **_kwargs: next(responses)),
-    )
-
-    with pytest.raises(ProductionDriverError) as raised:
-        system.attest_gpu_shared_capacity(5, minimum_free_memory_mib=51_200)
-
-    assert raised.value.code == "GPU_CAPACITY_ATTESTATION_RACED"
-
-
-@pytest.mark.parametrize(
-    "process_drift",
-    (
-        "added",
-        "removed",
-        "starttime_ticks",
-        "process_group_id",
-        "session_id",
-        "uid",
-        "user",
-    ),
-)
-def test_shared_gpu_attestation_rejects_process_identity_drift_across_census(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    process_drift: str,
-) -> None:
-    system_type = production_driver_module._PosixProductionResourceSystemV1
-    system = system_type(
-        _shared_runtime_config(tmp_path), seal=production_driver_module._MODULE_SEAL
-    )
-    uuid = "GPU-12345678-1234-1234-1234-123456789abc"
-    one_process = f"{uuid}, 4242, 31346\n"
-    two_processes = one_process + f"{uuid}, 4243, 2048\n"
-    before_processes = two_processes if process_drift == "removed" else one_process
-    after_processes = two_processes if process_drift == "added" else one_process
-    responses = iter(
-        (
-            SimpleNamespace(
-                returncode=0,
-                stderr="",
-                stdout=f"5, {uuid}, 143771, 94750, 48407, 614, 20, 33\n",
-            ),
-            SimpleNamespace(returncode=0, stderr="", stdout=before_processes),
-            SimpleNamespace(returncode=0, stderr="", stdout=after_processes),
-        )
-    )
-    process_reads: dict[int, int] = {}
-
-    def process_with_optional_reuse(
-        pid: int, *, used_gpu_memory_mib: int
-    ) -> production_driver_module.SharedGpuProcessEvidenceV1:
-        read_index = process_reads.get(pid, 0)
-        process_reads[pid] = read_index + 1
-        process = production_driver_module.SharedGpuProcessEvidenceV1(
-            pid=pid,
-            process_group_id=pid,
-            session_id=pid,
-            starttime_ticks=pid * 10,
-            uid=1_001,
-            user="cpu-peer",
-            used_gpu_memory_mib=used_gpu_memory_mib,
-        )
-        if pid != 4_242 or read_index != 1 or process_drift in {"added", "removed"}:
-            return process
-        drifted_values: dict[str, int | str] = {
-            "starttime_ticks": process.starttime_ticks + 1,
-            "process_group_id": process.process_group_id + 1,
-            "session_id": process.session_id + 1,
-            "uid": process.uid + 1,
-            "user": "cpu-peer-reused",
-        }
-        return replace(process, **{process_drift: drifted_values[process_drift]})
-
-    monkeypatch.setattr(
-        system_type,
-        "_attestation_run",
-        staticmethod(lambda _argv, **_kwargs: next(responses)),
-    )
-    monkeypatch.setattr(
-        production_driver_module,
-        "_read_shared_gpu_process_evidence",
-        process_with_optional_reuse,
-    )
-
-    with pytest.raises(ProductionDriverError) as raised:
-        system.attest_gpu_shared_capacity(5, minimum_free_memory_mib=51_200)
-
-    assert raised.value.code == "GPU_PROCESS_ATTESTATION_RACED"
-
-
-@pytest.mark.parametrize(
-    "process_rows",
-    (
-        "{uuid}, 4242, 31346\n{uuid}, 4242, 31340\n",
-        "GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa, 4242, 31346\n",
-    ),
-)
-def test_shared_gpu_process_census_rejects_duplicate_or_wrong_gpu_identity(
-    monkeypatch: pytest.MonkeyPatch,
-    process_rows: str,
-) -> None:
-    uuid = "GPU-12345678-1234-1234-1234-123456789abc"
-    monkeypatch.setattr(
-        production_driver_module,
-        "_read_shared_gpu_process_evidence",
-        lambda pid, *, used_gpu_memory_mib: production_driver_module.SharedGpuProcessEvidenceV1(
-            pid=pid,
-            process_group_id=pid,
-            session_id=pid,
-            starttime_ticks=pid * 10,
-            uid=1_001,
-            user="cpu-peer",
-            used_gpu_memory_mib=used_gpu_memory_mib,
-        ),
-    )
-
-    with pytest.raises(ProductionDriverError) as raised:
-        production_driver_module._read_shared_gpu_process_census(
-            process_rows.format(uuid=uuid),
-            gpu_uuid=uuid,
-        )
-
-    assert raised.value.code == "GPU_PROCESS_ATTESTATION_FAILED"
-
-
-def test_shared_gpu_attestation_rejects_missing_owned_compute_row(tmp_path: Path) -> None:
-    adapter = build_cpu_test_resource_lifecycle_adapter_v1(_shared_runtime_config(tmp_path))
-    adapter.prepare(_resources(tmp_path), _shared_context())
-    evidence = adapter.evidence
-    assert evidence is not None
-    baseline, ready = evidence.shared_gpu_attestations
-    owned = evidence.model_processes[0]
-    missing = replace(ready, processes=baseline.processes)
-    with pytest.raises(ProductionDriverError) as raised:
-        production_driver_module._validate_shared_gpu_tenants(
-            missing, baseline=baseline, owned_identity=owned
-        )
-    assert raised.value.code == "GPU_OWNED_PROCESS_ABSENT"
-    adapter.cleanup(_shared_context())
-
-
-@pytest.mark.parametrize(
-    ("identity_field", "drifted_value"),
-    (
-        ("process_group_id", 52_000),
-        ("session_id", 52_000),
-        ("user", "cpu-peer-drifted"),
-    ),
-)
-def test_shared_gpu_tenant_validation_rejects_stable_pid_with_identity_drift(
-    tmp_path: Path,
-    identity_field: str,
-    drifted_value: int | str,
-) -> None:
-    adapter = build_cpu_test_resource_lifecycle_adapter_v1(_shared_runtime_config(tmp_path))
-    adapter.prepare(_resources(tmp_path), _shared_context())
-    evidence = adapter.evidence
-    assert evidence is not None
-    baseline = evidence.shared_gpu_attestations[0]
-    processes = list(baseline.processes)
-    processes[0] = replace(processes[0], **{identity_field: drifted_value})
-    drifted = replace(baseline, processes=tuple(processes))
-
-    with pytest.raises(ProductionDriverError) as raised:
-        production_driver_module._validate_shared_gpu_tenants(
-            drifted,
-            baseline=baseline,
-            owned_identity=None,
-        )
-
-    assert raised.value.code == "GPU_SHARED_TENANT_DRIFT"
-    adapter.cleanup(_shared_context())
-
-
-def test_shared_gpu_tenant_validation_allows_only_memory_drift(tmp_path: Path) -> None:
-    adapter = build_cpu_test_resource_lifecycle_adapter_v1(_shared_runtime_config(tmp_path))
-    adapter.prepare(_resources(tmp_path), _shared_context())
-    evidence = adapter.evidence
-    assert evidence is not None
-    baseline = evidence.shared_gpu_attestations[0]
-    processes = list(baseline.processes)
-    processes[0] = replace(
-        processes[0],
-        used_gpu_memory_mib=processes[0].used_gpu_memory_mib + 1,
-    )
-    memory_drifted = replace(baseline, processes=tuple(processes))
-
-    production_driver_module._validate_shared_gpu_tenants(
-        memory_drifted,
-        baseline=baseline,
-        owned_identity=None,
-    )
-    adapter.cleanup(_shared_context())
 
 
 def test_shared_initial_capacity_failure_reclaims_single_lease(tmp_path: Path) -> None:
@@ -2894,39 +2598,6 @@ def test_shared_handoff_deadline_gates_each_following_external_operation(
     now_ns[0] = 1
     adapter.cleanup(replace(context, authority_deadline_monotonic_ns=1_000))
     assert adapter.cleanup_success_evidence_preimage() is not None
-
-
-def test_shared_dispatch_tenant_drift_retains_complete_offender_and_recovers(
-    tmp_path: Path,
-) -> None:
-    adapter = build_cpu_test_resource_lifecycle_adapter_v1(
-        _shared_runtime_config(tmp_path),
-        CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT,
-    )
-    context = _shared_context()
-    adapter.prepare(_resources(tmp_path), context)
-    with pytest.raises(ProductionDriverError) as raised:
-        adapter.require_dispatch(
-            PilotHostV1.QWEN3_VL,
-            ProductionDispatchKindV1.ACTOR,
-            authority_deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
-        )
-    assert raised.value.code == "GPU_SHARED_TENANT_DRIFT"
-    failure = adapter.last_dispatch_failure_evidence_preimage()
-    assert failure is not None
-    value = json.loads(failure)["value"]
-    assert value["sequence_execution_scope"] == "R24_LIVE_SMOKE_ONLY"
-    offender = value["shared_gpu_attestation"]["processes"][-1]
-    assert offender == {
-        "pid": 42_999,
-        "process_group_id": 42_999,
-        "session_id": 42_999,
-        "starttime_ticks": 4_299_900,
-        "uid": os.geteuid(),
-        "used_gpu_memory_mib": 1_024,
-        "user": "cpu-owner",
-    }
-    adapter.cleanup(context)
 
 
 def test_successful_shared_dispatch_attestation_enters_full_unit_journal(
@@ -3276,84 +2947,6 @@ def test_production_smoke_port_keeps_fixture_and_actor_request_hashes_distinct(
     assert result.decision.raw_request_sha256 == actor_request_sha256
 
 
-def test_shared_cleanup_records_persistent_foreign_tenant_without_signaling_it(
-    tmp_path: Path,
-) -> None:
-    config = _shared_runtime_config(tmp_path)
-    context = _shared_context()
-    adapter = build_cpu_test_resource_lifecycle_adapter_v1(
-        config,
-        CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT_PERSISTS,
-    )
-    adapter.prepare(_resources(tmp_path), context)
-    with pytest.raises(ProductionDriverError) as raised:
-        adapter.require_dispatch(
-            PilotHostV1.QWEN3_VL,
-            ProductionDispatchKindV1.ACTOR,
-            authority_deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
-        )
-    assert raised.value.code == "GPU_SHARED_TENANT_DRIFT"
-    with pytest.raises(ProductionDriverError) as cleanup_error:
-        adapter.cleanup(context)
-    assert cleanup_error.value.code == "GPU_SHARED_TENANT_DRIFT"
-    assert adapter.cleanup_success_evidence_preimage() is None
-    cleanup = adapter.failure_evidence_preimage(RunStageV1.RESOURCE_PREFLIGHT)
-    assert cleanup is not None
-    cleanup_value = json.loads(cleanup)
-    assert cleanup_value["domain"] == "production-resource-cleanup-failure-evidence"
-    assert cleanup_value["value"]["status"] == "FAILED_TENANT_CONTINUITY"
-    assert cleanup_value["value"]["cleanup_outcome"] == ("OWNED_RESOURCES_RECLAIMED_TENANT_DRIFT")
-    final_processes = cleanup_value["value"]["final_shared_gpu_attestation"]["processes"]
-    assert final_processes[-1]["pid"] == 42_999
-    assert final_processes[-1]["user"] == "cpu-owner"
-    assert all(not item.startswith("pid:42") for item in adapter.cpu_trace.cleanup_targets)
-
-    replacement = build_cpu_test_resource_lifecycle_adapter_v1(config)
-    replacement.prepare(_resources(tmp_path), context)
-    replacement.cleanup(context)
-
-
-def test_with_tool_batch_records_dynamic_foreign_tenant_and_still_cleans_owned_resources(
-    tmp_path: Path,
-) -> None:
-    config = _shared_runtime_config(tmp_path)
-    context = _context()
-    pilot = _pilot(tmp_path)
-    adapter = build_cpu_test_resource_lifecycle_adapter_v1(
-        config,
-        CpuResourceLifecycleFaultV1.SHARED_GPU_TENANT_DRIFT_PERSISTS,
-    )
-    switch_authority = _cpu_pilot_switch_authority(adapter, pilot, context)
-    adapter.prepare(
-        _resources(tmp_path),
-        context,
-        pilot_switch_authority=switch_authority,
-        with_tool_initial_host=PilotHostV1.QWEN3_VL,
-    )
-
-    dispatch_sha256 = adapter.require_dispatch(
-        PilotHostV1.QWEN3_VL,
-        ProductionDispatchKindV1.ACTOR,
-        authority_deadline_monotonic_ns=time.monotonic_ns() + 1_000_000_000,
-    )
-    dispatch = adapter.last_dispatch_evidence_preimage()
-    assert dispatch is not None
-    assert hashlib.sha256(dispatch).hexdigest() == dispatch_sha256
-    dispatch_value = json.loads(dispatch)["value"]
-    assert dispatch_value["status"] == "PASSED"
-    assert dispatch_value["shared_gpu_tenant_continuity_status"] == ("GPU_SHARED_TENANT_DRIFT")
-    assert dispatch_value["shared_gpu_attestation"]["processes"][-1]["pid"] == 42_999
-
-    adapter.cleanup(context)
-    cleanup = adapter.cleanup_success_evidence_preimage()
-    assert cleanup is not None
-    cleanup_value = json.loads(cleanup)["value"]
-    assert cleanup_value["status"] == "CLEANED"
-    assert cleanup_value["shared_gpu_tenant_continuity_status"] == ("GPU_SHARED_TENANT_DRIFT")
-    assert cleanup_value["final_shared_gpu_attestation"]["processes"][-1]["pid"] == 42_999
-    assert all(not item.startswith("pid:42") for item in adapter.cpu_trace.cleanup_targets)
-
-
 def test_shared_scope_tamper_blocks_prepare_handoff_and_cleanup(tmp_path: Path) -> None:
     config = _shared_runtime_config(tmp_path)
     context = _shared_context()
@@ -3375,39 +2968,27 @@ def test_shared_scope_tamper_blocks_prepare_handoff_and_cleanup(tmp_path: Path) 
     adapter.cleanup(context)
 
 
-def test_gpu_idle_attestation_binds_index_uuid_and_rejects_foreign_compute_pid(
+def test_gpu_identity_attestation_binds_index_uuid_without_querying_compute_processes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     system_type = production_driver_module._PosixProductionResourceSystemV1
     system = system_type(_runtime_config(tmp_path), seal=production_driver_module._MODULE_SEAL)
     uuid = "GPU-12345678-1234-1234-1234-123456789abc"
-    responses = iter(
-        (
-            SimpleNamespace(returncode=0, stderr="", stdout=f"0, {uuid}\n"),
-            SimpleNamespace(returncode=0, stderr="", stdout=""),
-        )
-    )
+    commands: list[tuple[str, ...]] = []
+
+    def attest(argv: tuple[str, ...], **_kwargs: object) -> SimpleNamespace:
+        commands.append(argv)
+        return SimpleNamespace(returncode=0, stderr="", stdout=f"0, {uuid}\n")
+
     monkeypatch.setattr(
         system_type,
         "_attestation_run",
-        staticmethod(lambda _argv, **_kwargs: next(responses)),
+        staticmethod(attest),
     )
     assert system.attest_gpu_idle(0)
-
-    occupied_responses = iter(
-        (
-            SimpleNamespace(returncode=0, stderr="", stdout=f"0, {uuid}\n"),
-            SimpleNamespace(returncode=0, stderr="", stdout=f"{uuid}, 4242\n"),
-        )
-    )
-    monkeypatch.setattr(
-        system_type,
-        "_attestation_run",
-        staticmethod(lambda _argv, **_kwargs: next(occupied_responses)),
-    )
-    with pytest.raises(ProductionDriverError) as raised:
-        system.attest_gpu_idle(0)
-    assert raised.value.code == "GPU_ALREADY_OCCUPIED"
+    assert len(commands) == 1
+    assert "--query-gpu=index,uuid" in commands[0]
+    assert all("query-compute-apps" not in argument for argument in commands[0])
 
 
 def test_gpu_idle_attestation_rejects_index_uuid_identity_drift(

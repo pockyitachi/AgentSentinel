@@ -158,7 +158,7 @@ def _manifest(tmp_path: Path) -> R24SmokeRunAuthorityManifestV1:
         openai_stages=tuple(
             OpenAIResponsesStageV1(
                 role=role,
-                model="gpt-5.6-sol",
+                model="gpt-5.6-luna",
                 endpoint="https://api.openai.com/v1/responses",
                 transport_kind="OPENAI_RESPONSES",
                 transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
@@ -792,7 +792,7 @@ def test_smoke_executor_rejects_runtime_and_manifest_drift_before_resource_work(
 
 @pytest.mark.parametrize(
     "scenario",
-    ("driver", "broker", "cleanup_reserve_277", "cleanup_reserve_278"),
+    ("driver", "broker", "cleanup_reserve_187", "cleanup_reserve_188"),
 )
 def test_production_smoke_builder_cross_binds_factory_and_cleanup_before_io(
     tmp_path: Path,
@@ -861,10 +861,10 @@ def test_production_smoke_builder_cross_binds_factory_and_cleanup_before_io(
         "admitted_backend_cleanup_upper_bound_seconds": 45,
         "admitted_model_cleanup_upper_bound_seconds": 53,
         "backend_cleanup_upper_bound_seconds": 105,
-        "cleanup_upper_bound_seconds": 278,
+        "cleanup_upper_bound_seconds": 188,
         "docker_command_timeout_seconds": 15,
-        "final_shared_gpu_attestation_command_slots": 4,
-        "final_shared_gpu_attestation_upper_bound_seconds": 120,
+        "final_shared_gpu_attestation_command_slots": 1,
+        "final_shared_gpu_attestation_upper_bound_seconds": 30,
         "health_poll_interval_ceiling_seconds": 1,
         "health_poll_interval_ms": 250,
         "model_cleanup_upper_bound_seconds": 53,
@@ -898,7 +898,7 @@ def test_production_smoke_builder_cross_binds_factory_and_cleanup_before_io(
 
     def cleanup_bound(_: object) -> int:
         reads["bound"] += 1
-        return 278
+        return 188
 
     def cleanup_bound_preimage(_: object) -> bytes:
         reads["preimage"] += 1
@@ -961,14 +961,14 @@ def test_production_smoke_builder_cross_binds_factory_and_cleanup_before_io(
         "driver_adapters": driver,
         "case_authority_broker_provider": broker,
     }
-    if scenario == "cleanup_reserve_278":
+    if scenario == "cleanup_reserve_188":
         executor = build_production_r24_smoke_executor_v1(
             manifest,
             **arguments,
         )
         binding = executor._output._binding
         assert binding["resource_cleanup_upper_bound"] == json.loads(cleanup_preimage)
-        assert binding["resource_cleanup_upper_bound_seconds"] == 278
+        assert binding["resource_cleanup_upper_bound_seconds"] == 188
         assert (
             binding["resource_cleanup_upper_bound_sha256"]
             == hashlib.sha256(cleanup_preimage).hexdigest()
@@ -976,7 +976,7 @@ def test_production_smoke_builder_cross_binds_factory_and_cleanup_before_io(
     else:
         expected_error = (
             "INSUFFICIENT_RESOURCE_CLEANUP_RESERVE"
-            if scenario == "cleanup_reserve_277"
+            if scenario == "cleanup_reserve_187"
             else "SMOKE_FACTORY_COMPONENT_BINDING_MISMATCH"
         )
         with pytest.raises(LiveRunContractError, match=expected_error):

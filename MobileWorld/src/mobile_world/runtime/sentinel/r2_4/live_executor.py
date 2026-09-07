@@ -84,7 +84,6 @@ class CpuTestFaultV1(StrEnum):
     PILOT_ACTOR_BUDGET_OVERRUN = "PILOT_ACTOR_BUDGET_OVERRUN"
     SECRET_LEASE_UNAVAILABLE = "SECRET_LEASE_UNAVAILABLE"
     RESOURCE_CLEANUP_FAILURE = "RESOURCE_CLEANUP_FAILURE"
-    RESOURCE_CLEANUP_TENANT_DRIFT = "RESOURCE_CLEANUP_TENANT_DRIFT"
     QWEN_SMOKE_AND_RESOURCE_CLEANUP_FAILURE = "QWEN_SMOKE_AND_RESOURCE_CLEANUP_FAILURE"
     QWEN_TO_MAI_HANDOFF_FAILURE = "QWEN_TO_MAI_HANDOFF_FAILURE"
     MAI_SMOKE_FAILURE = "MAI_SMOKE_FAILURE"
@@ -4477,31 +4476,6 @@ class _CpuResourceAdapterV1:
         )
 
     def cleanup(self, context: StageAdapterContextV1) -> None:
-        if self._fault is CpuTestFaultV1.RESOURCE_CLEANUP_TENANT_DRIFT:
-            self._failure_evidence = _canonical_bytes(
-                {
-                    "domain": "production-resource-cleanup-failure-evidence",
-                    "value": {
-                        "cleanup_outcome": ("OWNED_RESOURCES_RECLAIMED_TENANT_DRIFT"),
-                        "failure_code": "GPU_SHARED_TENANT_DRIFT",
-                        "final_shared_gpu_attestation": {
-                            "processes": [
-                                {
-                                    "pid": 42_999,
-                                    "start_time_ticks": 900_001,
-                                    "uid": os.getuid(),
-                                }
-                            ]
-                        },
-                        "manifest_sha256": context.manifest_sha256,
-                        "status": "FAILED_TENANT_CONTINUITY",
-                    },
-                }
-            )
-            raise LiveRunContractError(
-                "GPU_SHARED_TENANT_DRIFT",
-                "CPU cleanup fixture retained a foreign-tenant continuity anomaly",
-            )
         if self._fault in {
             CpuTestFaultV1.RESOURCE_CLEANUP_FAILURE,
             CpuTestFaultV1.QWEN_SMOKE_AND_RESOURCE_CLEANUP_FAILURE,
@@ -5043,7 +5017,7 @@ def _production_cleanup_bound_seconds(
         if full_bound
         else (1 if topology == "SINGLE_GPU_SEQUENTIAL_SHARED" else 0)
     )
-    final_attestation_slots = 4 if topology == "SINGLE_GPU_SEQUENTIAL_SHARED" else 0
+    final_attestation_slots = 1 if topology == "SINGLE_GPU_SEQUENTIAL_SHARED" else 0
     final_attestation = final_attestation_slots * nvidia_timeout
     recomputed = maximum_model_cleanup_count * model + backend + final_attestation
     if (

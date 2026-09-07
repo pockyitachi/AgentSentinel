@@ -856,33 +856,6 @@ def test_cleanup_failure_is_explicit_and_transaction_never_commits(tmp_path: Pat
     )
 
 
-def test_cleanup_tenant_drift_reclaims_owned_resources_but_never_commits(
-    tmp_path: Path,
-) -> None:
-    manifest = _manifest(tmp_path)
-    executor, result = _run(
-        manifest,
-        CpuTestFaultV1.RESOURCE_CLEANUP_TENANT_DRIFT,
-    )
-
-    assert result.status is SequenceStatusV1.FAILED
-    assert result.failed_stage is RunStageV1.R25_PILOT
-    assert result.failure_code == "GPU_SHARED_TENANT_DRIFT"
-    assert executor.census.cleanup_attempted
-    assert not executor.census.cleanup_succeeded
-    assert not executor.census.output_committed
-    output = Path(manifest.output_root)
-    assert not (output / "terminal.json").exists()
-    failure = json.loads((output / "failure.json").read_text(encoding="utf-8"))
-    assert failure["failure_code"] == "GPU_SHARED_TENANT_DRIFT"
-    assert failure["resource_cleanup_failure_code"] == "GPU_SHARED_TENANT_DRIFT"
-    assert failure["resource_cleanup_status"] == ("OWNED_RESOURCES_CLEANED_TENANT_DRIFT")
-    cleanup = failure["resource_cleanup_evidence"]
-    assert cleanup["domain"] == "production-resource-cleanup-failure-evidence"
-    assert cleanup["value"]["status"] == "FAILED_TENANT_CONTINUITY"
-    assert cleanup["value"]["cleanup_outcome"] == ("OWNED_RESOURCES_RECLAIMED_TENANT_DRIFT")
-
-
 def test_stage_order_and_manifest_drift_are_terminal_before_external_work(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     executor = build_cpu_test_executor_v1(
