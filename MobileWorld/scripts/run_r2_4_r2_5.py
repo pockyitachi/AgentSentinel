@@ -2,10 +2,11 @@
 """Preflight or execute the owner-authorized treatment-only R2.5 batches.
 
 Dry-run is the default and performs no network, GPU, Docker, model, backend,
-secret-read, or actor-action operation. ``--execute`` is reachable only after
-the operator supplies four exact hash confirmations and a recent, reproducible
-deep-preflight timestamp. It is an alias for ``--execute-with-tool-batches``:
-fresh Qwen treatment suffix, cleanup, then all fresh MAI treatment cells.
+secret-read, or actor-action operation. ``--execute`` retains the reproducible
+confirmation path. ``--fast-with-tool-batches`` is the operator-direct path:
+fresh Qwen treatment suffix, cleanup, then all fresh MAI treatment cells,
+without promotion, confirmation hashes, Git binding, snapshot hashing, or a
+preflight timestamp.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import stat
 import sys
 import time
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -37,6 +38,7 @@ from mobile_world.runtime.sentinel.r2_4.live_policy import (
 from mobile_world.runtime.sentinel.r2_4.live_run import (
     LiveRunContractError,
     R24R25RunAuthorityManifestV1,
+    RunAuthorizationStatusV1,
     authority_manifest_sha256,
     inspect_local_resources,
     load_authority_manifest,
@@ -53,6 +55,7 @@ from mobile_world.runtime.sentinel.r2_4.production_driver import (
     ProductionResourceLifecycleAdapterV1,
     ProductionRuntimeConfigV1,
     WithToolJointBatchEvidenceV1,
+    build_operational_with_tool_resource_lifecycle_adapter_v1,
     build_production_case_authority_broker_provider_v1,
     build_production_driver_v1,
     build_production_pilot_switch_authority_v1,
@@ -63,6 +66,7 @@ from mobile_world.runtime.sentinel.r2_4.production_driver import (
 )
 from mobile_world.runtime.sentinel.r2_4.production_preflight import (
     ProductionPostPreflightFactoryV1,
+    issue_operational_with_tool_factory_v1,
     production_preflight_report_projection,
     production_preflight_report_sha256,
     require_production_post_preflight_factory_v1,
@@ -100,6 +104,7 @@ class _WithToolExecutionSetup:
     first_resource_adapter: ProductionResourceLifecycleAdapterV1
     cleanup_seconds: int
     cleanup_sha256: str
+    operational_fast: bool
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -120,6 +125,15 @@ def _parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Validate only; this is also the behavior when neither mode flag is supplied.",
+    )
+    mode.add_argument(
+        "--fast-with-tool-batches",
+        action="store_true",
+        help=(
+            "Operator-direct treatment run: no promotion, confirmation hashes, Git binding, "
+            "deep snapshot hashing, or preflight timestamp. Live ownership/capacity/port/model "
+            "health checks remain mandatory."
+        ),
     )
     mode.add_argument(
         "--execute",
@@ -147,6 +161,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--pricing", type=Path)
     parser.add_argument("--confirm-pricing-sha256")
     parser.add_argument("--production-audit-root", type=Path)
+    parser.add_argument(
+        "--fast-run-root",
+        type=Path,
+        help=("Required fresh external root for fast-mode process logs and audit output."),
+    )
     parser.add_argument(
         "--qwen-start-task-ordinal",
         type=int,
@@ -481,6 +500,116 @@ def _build_execution_setup(
         first_resource_adapter=resource_adapter,
         cleanup_seconds=cleanup_seconds,
         cleanup_sha256=cleanup_sha256,
+        operational_fast=False,
+    )
+
+
+def _build_operational_execution_setup(
+    arguments: argparse.Namespace,
+    template: R24R25RunAuthorityManifestV1,
+) -> tuple[R24R25RunAuthorityManifestV1, str, _WithToolExecutionSetup]:
+    """Build an in-memory compatibility envelope for one operator-direct run."""
+
+    if arguments.runtime_config is None or arguments.pricing is None:
+        raise _CliContractError("FAST_EXECUTE_ARGUMENTS_REQUIRED")
+    fast_root = arguments.fast_run_root
+    if type(fast_root) is not Path or not fast_root.is_absolute():
+        raise _CliContractError("FAST_EXECUTE_ARGUMENTS_REQUIRED")
+    try:
+        repository = REPOSITORY_ROOT.resolve(strict=True)
+        root = fast_root.resolve(strict=False)
+        parent = root.parent.resolve(strict=True)
+    except OSError as exc:
+        raise _CliContractError("INVALID_FAST_RUN_ROOT") from exc
+    if (
+        root.exists()
+        or root.is_symlink()
+        or not parent.is_dir()
+        or root == repository
+        or root.is_relative_to(repository)
+        or repository.is_relative_to(root)
+    ):
+        raise _CliContractError("INVALID_FAST_RUN_ROOT")
+
+    runtime_config = parse_production_runtime_config(
+        _load_small_json(cast(Path, arguments.runtime_config))
+    )
+    if Path(runtime_config.repository_root).resolve(strict=True) != repository:
+        raise _CliContractError("RUNTIME_REPOSITORY_MISMATCH")
+    runtime_config = replace(
+        runtime_config,
+        process_log_root=str(root / "process-logs"),
+    )
+    runtime_sha256 = production_runtime_config_sha256(runtime_config)
+    resource_adapter = build_operational_with_tool_resource_lifecycle_adapter_v1(runtime_config)
+    cleanup_seconds = resource_adapter.full_cleanup_upper_bound_seconds
+    cleanup_sha256 = resource_adapter.full_cleanup_upper_bound_sha256
+
+    pricing = _parse_pricing(_load_small_json(cast(Path, arguments.pricing)))
+    pricing_sha256 = live_attempt_pricing_sha256(pricing)
+    sentinel_config_sha256 = production_sentinel_config_sha256_v1()
+    previous_cleanup_seconds = template.max_resource_cleanup_wall_time_seconds
+    if type(previous_cleanup_seconds) is not int:
+        raise _CliContractError("FAST_TEMPLATE_V2_REQUIRED")
+    sequence_seconds = (
+        template.max_sequence_wall_time_seconds - previous_cleanup_seconds + cleanup_seconds
+    )
+    now = datetime.now(UTC).replace(microsecond=0)
+    issued_at_utc = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    expires_at_utc = (now + timedelta(seconds=sequence_seconds + 600)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    run_id = f"fast-with-tool-{now.strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
+    manifest = replace(
+        template,
+        run_id=run_id,
+        source_commit="0" * 40,
+        authorization=replace(
+            template.authorization,
+            status=RunAuthorizationStatusV1.OWNER_AUTHORIZED,
+            authorization_id=f"operator-direct-{now.strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}",
+            issued_at_utc=issued_at_utc,
+            expires_at_utc=expires_at_utc,
+        ),
+        output_root=str(root / "output"),
+        runtime_config_sha256=runtime_sha256,
+        pricing_sha256=pricing_sha256,
+        sentinel_config_sha256=sentinel_config_sha256,
+        max_resource_cleanup_wall_time_seconds=cleanup_seconds,
+        resource_cleanup_upper_bound_sha256=cleanup_sha256,
+        max_sequence_wall_time_seconds=sequence_seconds,
+    )
+    manifest_sha256 = authority_manifest_sha256(manifest)
+    factory, report = issue_operational_with_tool_factory_v1(manifest, now=now)
+
+    try:
+        root.mkdir(mode=0o700)
+        root.chmod(0o700)
+    except OSError as exc:
+        raise _CliContractError("INVALID_FAST_RUN_ROOT") from exc
+    audit_root = root / "audit"
+    audit_sink = ExternalProductionRuntimeAuditSinkV1(
+        audit_root,
+        repository_root=REPOSITORY_ROOT,
+    )
+    return (
+        manifest,
+        manifest_sha256,
+        _WithToolExecutionSetup(
+            factory=factory,
+            production_preflight=production_preflight_report_projection(report),
+            runtime_config=runtime_config,
+            runtime_config_sha256=runtime_sha256,
+            pricing=pricing,
+            pricing_sha256=pricing_sha256,
+            audit_sink=audit_sink,
+            audit_root=audit_root,
+            broker_provider=build_production_case_authority_broker_provider_v1(factory),
+            first_resource_adapter=resource_adapter,
+            cleanup_seconds=cleanup_seconds,
+            cleanup_sha256=cleanup_sha256,
+            operational_fast=True,
+        ),
     )
 
 
@@ -590,9 +719,13 @@ def _execute_with_tool_batches(
         lifecycle = (
             setup.first_resource_adapter
             if batch_index == 0
-            else build_production_resource_lifecycle_adapter_v1(
-                setup.runtime_config,
-                confirmed_config_sha256=setup.runtime_config_sha256,
+            else (
+                build_operational_with_tool_resource_lifecycle_adapter_v1(setup.runtime_config)
+                if setup.operational_fast
+                else build_production_resource_lifecycle_adapter_v1(
+                    setup.runtime_config,
+                    confirmed_config_sha256=setup.runtime_config_sha256,
+                )
             )
         )
         driver = build_production_driver_v1(
@@ -605,6 +738,8 @@ def _execute_with_tool_batches(
             resource_lifecycle=lifecycle,
             shared_budget_ledger=shared_budget_ledger,
         )
+        # Fast mode derives this compatibility token in memory; it is not an
+        # operator confirmation or startup gate.
         switch_authority = build_production_pilot_switch_authority_v1(
             factory=setup.factory,
             resource_lifecycle=lifecycle,
@@ -776,6 +911,7 @@ def _execute_with_tool_batches(
         "fresh_backend_container_count": len(set(backend_container_ids)),
         "fresh_baseline_cell_count": 0,
         "manifest_sha256": manifest_sha256,
+        "operational_fast_launch": setup.operational_fast,
         "preflight": cast(JsonValue, setup.production_preflight),
         "preflight_report_sha256": setup.factory.preflight_report_sha256,
         "pricing_sha256": setup.pricing_sha256,
@@ -824,6 +960,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
         execution_requested = arguments.execute_with_tool_batches
+        fast_execution_requested = arguments.fast_with_tool_batches
         manifest = _load_cli_authority(
             arguments.authority_manifest,
             production_confirmation_requested=(
@@ -832,6 +969,33 @@ def main(argv: list[str] | None = None) -> int:
             confirmed_manifest_sha256=arguments.confirm_manifest_sha256,
         )
         manifest_hash = authority_manifest_sha256(manifest)
+        if fast_execution_requested:
+            if not 1 <= arguments.qwen_start_task_ordinal <= len(manifest.pilot.tasks):
+                raise _CliContractError("WITH_TOOL_BATCH_SHAPE_MISMATCH")
+            manifest, manifest_hash, setup = _build_operational_execution_setup(
+                arguments,
+                manifest,
+            )
+            batch_output = _execute_with_tool_batches(
+                manifest,
+                manifest_sha256=manifest_hash,
+                setup=setup,
+                qwen_start_task_ordinal=arguments.qwen_start_task_ordinal,
+            )
+            print(
+                json.dumps(
+                    {
+                        "dry_run": False,
+                        "execution_scope": "R25_WITH_TOOL_FAST",
+                        "ok": True,
+                        "result": batch_output,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
         if execution_requested:
             if not 1 <= arguments.qwen_start_task_ordinal <= len(manifest.pilot.tasks):
                 raise _CliContractError("WITH_TOOL_BATCH_SHAPE_MISMATCH")

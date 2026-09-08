@@ -1548,6 +1548,44 @@ def test_shared_single_gpu_prepare_handoff_dispatch_and_cleanup_are_bound(
     assert adapter.cpu_trace.cleanup_targets[:2] == ("pid:10000", "pid:10001")
 
 
+def test_operational_with_tool_resource_start_skips_git_and_snapshot_hashes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_deep_snapshot_hash(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("operational launch must not hash model weights")
+
+    monkeypatch.setattr(
+        production_driver_module,
+        "_attest_snapshot_resource",
+        reject_deep_snapshot_hash,
+    )
+    config = _shared_runtime_config(tmp_path)
+    adapter = build_cpu_test_resource_lifecycle_adapter_v1(
+        config,
+        operational_fast_with_tool=True,
+    )
+    context = _context()
+    switch_authority = _cpu_pilot_switch_authority(adapter, _pilot(tmp_path), context)
+
+    adapter.prepare(
+        _resources(tmp_path),
+        context,
+        pilot_switch_authority=switch_authority,
+        with_tool_initial_host=PilotHostV1.QWEN3_VL,
+    )
+
+    commands = adapter.cpu_trace.commands
+    assert not any(command and command[0] == "/usr/bin/git" for command in commands)
+    assert sum("vllm.entrypoints.cli.main" in command for command in commands) == 1
+    assert adapter.cpu_trace.health_endpoints == (
+        "http://127.0.0.1:18080/health",
+        "http://127.0.0.1:18081/health",
+        "http://127.0.0.1:18081/v1/models",
+    )
+    adapter.cleanup(context)
+
+
 def test_full_shared_pilot_switches_mai_qwen_mai_with_bound_evidence(
     tmp_path: Path,
 ) -> None:

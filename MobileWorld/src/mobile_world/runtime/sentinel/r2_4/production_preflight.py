@@ -2480,6 +2480,119 @@ def require_production_post_preflight_factory_v1(
     )
 
 
+def issue_operational_with_tool_factory_v1(
+    manifest: R24R25RunAuthorityManifestV1,
+    *,
+    now: datetime | None = None,
+) -> tuple[ProductionPostPreflightFactoryV1, ProductionPreflightReportV1]:
+    """Issue the direct with-tool factory without promotion or reproducibility gates.
+
+    The compatibility report exists only because the request/secret workers consume
+    the established factory type.  This path deliberately does not inspect Git or
+    hash model files; the operational resource lifecycle performs the live GPU,
+    port, ownership, served-model and health checks immediately before use.
+    """
+
+    if type(manifest) is not R24R25RunAuthorityManifestV1:
+        raise TypeError("operational with-tool manifest type differs")
+    trusted = parse_authority_manifest(authority_manifest_projection(manifest))
+    if (
+        trusted.schema_version != R24_R25_RUN_AUTHORITY_SCHEMA_VERSION_V2
+        or trusted.resource_topology != "SINGLE_GPU_SEQUENTIAL_SHARED"
+        or trusted.authorization.status is not RunAuthorizationStatusV1.OWNER_AUTHORIZED
+    ):
+        raise ValueError("operational with-tool scope differs")
+    current, checked_at_utc = _canonical_now(now)
+    if not (
+        _timestamp(trusted.authorization.issued_at_utc)
+        <= current
+        < _timestamp(trusted.authorization.expires_at_utc)
+    ):
+        raise ValueError("operational with-tool invocation window differs")
+    ports, endpoint_checks = _actor_loopback_ports(trusted)
+    if not endpoint_checks or not all(check.passed for check in endpoint_checks):
+        raise ValueError("operational with-tool endpoints differ")
+    assert type(trusted.runtime_config_sha256) is str
+    assert type(trusted.pricing_sha256) is str
+    assert type(trusted.sentinel_config_sha256) is str
+    assert type(trusted.max_resource_cleanup_wall_time_seconds) is int
+    assert type(trusted.resource_cleanup_upper_bound_sha256) is str
+    assert type(trusted.max_model_switches) is int
+    assert type(trusted.max_model_switch_wall_time_seconds) is int
+    assert type(trusted.max_total_model_switch_wall_time_seconds) is int
+    assert type(trusted.max_post_run_integrity_wall_time_seconds) is int
+    manifest_sha256 = authority_manifest_sha256(trusted)
+    checks = (
+        ProductionPreflightCheckV1(
+            "operator_direct_with_tool",
+            True,
+            "OPERATIONAL",
+        ),
+    )
+    report = ProductionPreflightReportV1(
+        schema_version=PRODUCTION_PREFLIGHT_SCHEMA_VERSION,
+        run_id=trusted.run_id,
+        manifest_sha256=manifest_sha256,
+        source_commit=trusted.source_commit,
+        checked_at_utc=checked_at_utc,
+        authority_expires_at_utc=trusted.authorization.expires_at_utc,
+        authorized_stages=trusted.safety.stages,
+        execution_scope=SequenceExecutionScopeV1.R24_R25_FULL,
+        runtime_config_sha256=trusted.runtime_config_sha256,
+        pricing_sha256=trusted.pricing_sha256,
+        sentinel_config_sha256=trusted.sentinel_config_sha256,
+        resource_topology=trusted.resource_topology,
+        resource_cleanup_upper_bound_seconds=(trusted.max_resource_cleanup_wall_time_seconds),
+        resource_cleanup_upper_bound_sha256=trusted.resource_cleanup_upper_bound_sha256,
+        max_model_switches=trusted.max_model_switches,
+        max_model_switch_wall_time_seconds=trusted.max_model_switch_wall_time_seconds,
+        max_total_model_switch_wall_time_seconds=(trusted.max_total_model_switch_wall_time_seconds),
+        max_post_run_integrity_wall_time_seconds=(trusted.max_post_run_integrity_wall_time_seconds),
+        max_sequence_wall_time_seconds=trusted.max_sequence_wall_time_seconds,
+        base_preflight_sha256=canonical_sha256(
+            cast(
+                JsonValue,
+                {
+                    "manifest_sha256": manifest_sha256,
+                    "mode": "OPERATOR_DIRECT_WITH_TOOL",
+                },
+            )
+        ),
+        declared_snapshot_tree_sha256s=tuple(
+            resource.snapshot_tree_sha256 for resource in trusted.actor_resources
+        ),
+        actor_loopback_ports=ports,
+        pilot_task_manifest_sha256=trusted.pilot.task_manifest_sha256,
+        smoke_fixture_sha256s=tuple(
+            case.request_fixture_sha256 for plan in trusted.smoke_plans for case in plan.cases
+        ),
+        checks=checks,
+        all_checks_passed=True,
+        eligible_for_post_preflight_factory=True,
+        production_activation_available=production_activation_available_v1(),
+        secret_content_reads=0,
+        endpoint_connections=0,
+        gpu_operations=0,
+        docker_operations=0,
+        model_loads=0,
+        backend_operations=0,
+        actor_actions=0,
+        files_written=0,
+        _seal=_REPORT_SEAL,
+    )
+    report_sha256 = production_preflight_report_sha256(report)
+    factory = ProductionPostPreflightFactoryV1(
+        trusted,
+        report,
+        confirmed_manifest_sha256=manifest_sha256,
+        confirmed_preflight_report_sha256=report_sha256,
+        confirmed_pricing_sha256=trusted.pricing_sha256,
+        capability=_INSTALLED_PRODUCTION_CAPABILITY,
+        seal=_FACTORY_SEAL,
+    )
+    return factory, report
+
+
 __all__ = [
     "CASE_EXECUTION_LEASE_SCHEMA_VERSION",
     "PRODUCTION_PREFLIGHT_SCHEMA_VERSION",
@@ -2499,6 +2612,7 @@ __all__ = [
     "production_activation_available_v1",
     "production_preflight_report_projection",
     "production_preflight_report_sha256",
+    "issue_operational_with_tool_factory_v1",
     "r24_smoke_production_preflight_report_projection",
     "r24_smoke_production_preflight_report_sha256",
     "require_production_post_preflight_factory_v1",

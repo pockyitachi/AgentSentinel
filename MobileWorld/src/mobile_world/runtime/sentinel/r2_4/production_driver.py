@@ -2622,6 +2622,51 @@ def _attest_snapshot_resource(
     return digest.sha256
 
 
+def _attest_snapshot_resource_metadata(
+    resource: SnapshotResourceV1,
+    *,
+    deadline_monotonic_ns: int | None = None,
+    deadline_failure_code: str = "PILOT_SWITCH_DEADLINE_EXCEEDED",
+) -> str:
+    """Operational launch check: resolve the declared snapshot without hashing weights."""
+
+    _require_monotonic_deadline(
+        deadline_monotonic_ns,
+        failure_code=deadline_failure_code,
+        message="snapshot metadata check deadline elapsed",
+    )
+    try:
+        snapshot = Path(resource.snapshot_path).resolve(strict=True)
+        storage = Path(resource.snapshot_storage_root).resolve(strict=True)
+        metadata = snapshot.stat()
+    except OSError as exc:
+        raise ProductionDriverError(
+            "SNAPSHOT_METADATA_MISMATCH", "model snapshot directory is unavailable"
+        ) from exc
+    if not snapshot.is_dir() or not storage.is_dir() or not snapshot.is_relative_to(storage):
+        raise ProductionDriverError(
+            "SNAPSHOT_METADATA_MISMATCH", "model snapshot directory is outside storage"
+        )
+    _require_monotonic_deadline(
+        deadline_monotonic_ns,
+        failure_code=deadline_failure_code,
+        message="snapshot metadata check crossed its deadline",
+    )
+    return _hash_projection(
+        "operational-model-snapshot-metadata",
+        cast(
+            JsonValue,
+            {
+                "device": metadata.st_dev,
+                "host": resource.host.value,
+                "inode": metadata.st_ino,
+                "snapshot_path": str(snapshot),
+                "storage_root": str(storage),
+            },
+        ),
+    )
+
+
 def _attest_backend_environment_file(
     config: ProductionRuntimeConfigV1,
     *,
@@ -2747,6 +2792,26 @@ def _runtime_attestation_sha256(
                 "mobileworld_source_tree_git_sha1": source_tree_git_sha1,
                 "runtime_config_sha256": production_runtime_config_sha256(config),
                 "source_commit": source_commit,
+                "vllm_python_sha256": config.vllm_python_sha256,
+                "vllm_version": config.vllm_version,
+            },
+        ),
+    )
+
+
+def _operational_runtime_attestation_sha256(config: ProductionRuntimeConfigV1) -> str:
+    """Bind executable infrastructure while intentionally leaving Git state unbound."""
+
+    return _hash_projection(
+        "production-operational-runtime-attestation",
+        cast(
+            JsonValue,
+            {
+                "backend_image_id": f"sha256:{config.backend_image_id_sha256}",
+                "backend_network": _DOCKER_NETWORK,
+                "mobileworld_source_root": config.mobileworld_source_root,
+                "runtime_config_sha256": production_runtime_config_sha256(config),
+                "source_commit_binding": None,
                 "vllm_python_sha256": config.vllm_python_sha256,
                 "vllm_version": config.vllm_version,
             },
@@ -2992,10 +3057,15 @@ class _PosixProductionResourceSystemV1:
         config: ProductionRuntimeConfigV1,
         *,
         source_commit: str,
+        require_source_commit: bool = True,
         deadline_monotonic_ns: int | None = None,
         deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
     ) -> str:
-        if config != self._config or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
+        if (
+            config != self._config
+            or type(require_source_commit) is not bool
+            or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
+        ):
             raise ProductionDriverError(
                 "RUNTIME_ATTESTATION_FAILED", "runtime attestation authority differs"
             )
@@ -3027,47 +3097,49 @@ class _PosixProductionResourceSystemV1:
                 "SOURCE_TREE_BINDING_MISMATCH", "MobileWorld source mount differs"
             )
 
-        git_prefix = (
-            "/usr/bin/git",
-            "-c",
-            "core.fsmonitor=",
-            "-c",
-            "core.hooksPath=/dev/null",
-        )
-        head = self._attestation_run(
-            (*git_prefix, "rev-parse", "HEAD"),
-            cwd=repository,
-            deadline_monotonic_ns=deadline_monotonic_ns,
-            deadline_failure_code=deadline_failure_code,
-        )
-        status = self._attestation_run(
-            (*git_prefix, "status", "--porcelain=v1", "--untracked-files=all"),
-            cwd=repository,
-            deadline_monotonic_ns=deadline_monotonic_ns,
-            deadline_failure_code=deadline_failure_code,
-        )
-        tree = self._attestation_run(
-            (*git_prefix, "rev-parse", f"{source_commit}:MobileWorld/src"),
-            cwd=repository,
-            deadline_monotonic_ns=deadline_monotonic_ns,
-            deadline_failure_code=deadline_failure_code,
-        )
-        tree_sha1 = tree.stdout.strip()
-        if (
-            head.returncode != 0
-            or head.stderr
-            or head.stdout.strip() != source_commit
-            or status.returncode != 0
-            or status.stderr
-            or status.stdout
-            or tree.returncode != 0
-            or tree.stderr
-            or re.fullmatch(r"[0-9a-f]{40}", tree_sha1) is None
-        ):
-            raise ProductionDriverError(
-                "SOURCE_TREE_BINDING_MISMATCH",
-                "source tree is not the clean authorized commit",
+        tree_sha1: str | None = None
+        if require_source_commit:
+            git_prefix = (
+                "/usr/bin/git",
+                "-c",
+                "core.fsmonitor=",
+                "-c",
+                "core.hooksPath=/dev/null",
             )
+            head = self._attestation_run(
+                (*git_prefix, "rev-parse", "HEAD"),
+                cwd=repository,
+                deadline_monotonic_ns=deadline_monotonic_ns,
+                deadline_failure_code=deadline_failure_code,
+            )
+            status = self._attestation_run(
+                (*git_prefix, "status", "--porcelain=v1", "--untracked-files=all"),
+                cwd=repository,
+                deadline_monotonic_ns=deadline_monotonic_ns,
+                deadline_failure_code=deadline_failure_code,
+            )
+            tree = self._attestation_run(
+                (*git_prefix, "rev-parse", f"{source_commit}:MobileWorld/src"),
+                cwd=repository,
+                deadline_monotonic_ns=deadline_monotonic_ns,
+                deadline_failure_code=deadline_failure_code,
+            )
+            tree_sha1 = tree.stdout.strip()
+            if (
+                head.returncode != 0
+                or head.stderr
+                or head.stdout.strip() != source_commit
+                or status.returncode != 0
+                or status.stderr
+                or status.stdout
+                or tree.returncode != 0
+                or tree.stderr
+                or re.fullmatch(r"[0-9a-f]{40}", tree_sha1) is None
+            ):
+                raise ProductionDriverError(
+                    "SOURCE_TREE_BINDING_MISMATCH",
+                    "source tree is not the clean authorized commit",
+                )
 
         version_argv = (
             config.vllm_python_executable,
@@ -3119,6 +3191,9 @@ class _PosixProductionResourceSystemV1:
             raise ProductionDriverError(
                 "DOCKER_RESOURCE_BINDING_MISMATCH", "Docker network or image differs"
             )
+        if not require_source_commit:
+            return _operational_runtime_attestation_sha256(config)
+        assert tree_sha1 is not None
         return _runtime_attestation_sha256(
             config,
             source_commit=source_commit,
@@ -4251,6 +4326,7 @@ class _CpuRecordingResourceSystemV1:
         config: ProductionRuntimeConfigV1,
         *,
         source_commit: str,
+        require_source_commit: bool = True,
         deadline_monotonic_ns: int | None = None,
         deadline_failure_code: str = "RESOURCE_PREFLIGHT_DEADLINE_EXCEEDED",
     ) -> str:
@@ -4259,18 +4335,24 @@ class _CpuRecordingResourceSystemV1:
             failure_code=deadline_failure_code,
             message="CPU runtime attestation deadline elapsed",
         )
-        git_prefix = (
-            "/usr/bin/git",
-            "-c",
-            "core.fsmonitor=",
-            "-c",
-            "core.hooksPath=/dev/null",
-        )
-        self._commands.extend(
+        commands: list[tuple[str, ...]] = []
+        if require_source_commit:
+            git_prefix = (
+                "/usr/bin/git",
+                "-c",
+                "core.fsmonitor=",
+                "-c",
+                "core.hooksPath=/dev/null",
+            )
+            commands.extend(
+                (
+                    (*git_prefix, "rev-parse", "HEAD"),
+                    (*git_prefix, "status", "--porcelain=v1", "--untracked-files=all"),
+                    (*git_prefix, "rev-parse", f"{source_commit}:MobileWorld/src"),
+                )
+            )
+        commands.extend(
             (
-                (*git_prefix, "rev-parse", "HEAD"),
-                (*git_prefix, "status", "--porcelain=v1", "--untracked-files=all"),
-                (*git_prefix, "rev-parse", f"{source_commit}:MobileWorld/src"),
                 (
                     config.vllm_python_executable,
                     "-P",
@@ -4296,10 +4378,17 @@ class _CpuRecordingResourceSystemV1:
                 ),
             )
         )
-        result = _runtime_attestation_sha256(
-            config,
-            source_commit=source_commit,
-            source_tree_git_sha1=_hash_projection("cpu-source-tree-git-sha1", source_commit)[:40],
+        self._commands.extend(commands)
+        result = (
+            _runtime_attestation_sha256(
+                config,
+                source_commit=source_commit,
+                source_tree_git_sha1=_hash_projection("cpu-source-tree-git-sha1", source_commit)[
+                    :40
+                ],
+            )
+            if require_source_commit
+            else _operational_runtime_attestation_sha256(config)
         )
         _require_monotonic_deadline(
             deadline_monotonic_ns,
@@ -4699,6 +4788,7 @@ class ProductionResourceLifecycleAdapterV1:
         "_handoff_failure_evidence",
         "_model_switch_evidence",
         "_model_switch_failure_evidence",
+        "_operational_fast_with_tool",
         "_pending_model_switch_evidence",
         "_pilot_switch_authority",
         "_last_dispatch_evidence",
@@ -4726,16 +4816,19 @@ class ProductionResourceLifecycleAdapterV1:
         config: ProductionRuntimeConfigV1,
         *,
         system: _ResourceSystemV1,
+        operational_fast_with_tool: bool,
         seal: object,
     ) -> None:
         if (
             seal is not _MODULE_SEAL
             or type(config) is not ProductionRuntimeConfigV1
+            or type(operational_fast_with_tool) is not bool
             or type(system) not in {_PosixProductionResourceSystemV1, _CpuRecordingResourceSystemV1}
         ):
             raise PermissionError("resource lifecycle adapter is module-owned")
         self._config = config
         self._system = system
+        self._operational_fast_with_tool = operational_fast_with_tool
         self._backend: _OwnedBackendContainerV1 | None = None
         self._models: dict[PilotHostV1, _OwnedModelProcessV1] = {}
         self._model_specs: dict[PilotHostV1, ProductionCommandSpecV1] = {}
@@ -4765,6 +4858,24 @@ class ProductionResourceLifecycleAdapterV1:
         self._with_tool_batch_host: PilotHostV1 | None = None
         self._stop_evidence: list[ProductionModelStopEvidenceV1] = []
         self._lock = threading.RLock()
+
+    def _attest_model_snapshot(
+        self,
+        resource: SnapshotResourceV1,
+        *,
+        deadline_monotonic_ns: int | None,
+        deadline_failure_code: str,
+    ) -> str:
+        attest = (
+            _attest_snapshot_resource_metadata
+            if self._operational_fast_with_tool
+            else _attest_snapshot_resource
+        )
+        return attest(
+            resource,
+            deadline_monotonic_ns=deadline_monotonic_ns,
+            deadline_failure_code=deadline_failure_code,
+        )
 
     def _bind_execution_factory(self, factory: ProductionPostPreflightFactoryV1) -> None:
         """Bind the lifecycle to the exact factory used by the execution port."""
@@ -4899,6 +5010,11 @@ class ProductionResourceLifecycleAdapterV1:
         with_tool_initial_host: PilotHostV1 | None = None,
     ) -> AdapterStageResultV1:
         trusted_context = _snapshot_context(context)
+        if self._operational_fast_with_tool and with_tool_initial_host is None:
+            raise ProductionDriverError(
+                "OPERATIONAL_FAST_SCOPE_MISMATCH",
+                "operational fast lifecycle is restricted to with-tool batches",
+            )
         if with_tool_initial_host is not None and (
             type(with_tool_initial_host) is not PilotHostV1
             or trusted_context.sequence_execution_scope != "R24_R25_FULL"
@@ -5014,10 +5130,10 @@ class ProductionResourceLifecycleAdapterV1:
 
         try:
             require_dispatch_authority()
-            # Preflight evidence is not a lease on mutable model directories.  Rehash
-            # both complete trees immediately before any Docker/process operation.
+            # Strict runs rehash content; operational with-tool runs only require
+            # the configured snapshot directories to resolve under their storage root.
             for resource in trusted_resources:
-                _attest_snapshot_resource(
+                self._attest_model_snapshot(
                     resource,
                     deadline_monotonic_ns=deadline_ns,
                     deadline_failure_code=preflight_failure_code,
@@ -5078,6 +5194,7 @@ class ProductionResourceLifecycleAdapterV1:
             runtime_attestation_sha256 = self._system.attest_runtime(
                 self._config,
                 source_commit=trusted_context.source_commit,
+                require_source_commit=not self._operational_fast_with_tool,
                 deadline_monotonic_ns=deadline_ns,
                 deadline_failure_code=preflight_failure_code,
             )
@@ -5192,9 +5309,9 @@ class ProductionResourceLifecycleAdapterV1:
                         deadline_failure_code=preflight_failure_code,
                     )
                 )
-                # Bind the loaded/READY model to the same immutable tree that was
-                # checked before Popen; a mutable snapshot may not race startup.
-                _attest_snapshot_resource(
+                # Repeat the selected strict or metadata-only snapshot check after
+                # the model endpoint reports ready.
+                self._attest_model_snapshot(
                     resource,
                     deadline_monotonic_ns=deadline_ns,
                     deadline_failure_code=preflight_failure_code,
@@ -5451,7 +5568,7 @@ class ProductionResourceLifecycleAdapterV1:
                     baseline=self._shared_gpu_baseline,
                 )
                 mai_resource = self._resources[PilotHostV1.MAI_UI]
-                target_snapshot_attestation_sha256 = _attest_snapshot_resource(
+                target_snapshot_attestation_sha256 = self._attest_model_snapshot(
                     mai_resource,
                     deadline_monotonic_ns=trusted_context.authority_deadline_monotonic_ns,
                     deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
@@ -5501,7 +5618,7 @@ class ProductionResourceLifecycleAdapterV1:
                         "handoff owner authority elapsed during MAI readiness",
                     )
                 progress["target_health_sha256"] = target_health
-                target_snapshot_attestation_after_sha256 = _attest_snapshot_resource(
+                target_snapshot_attestation_after_sha256 = self._attest_model_snapshot(
                     mai_resource,
                     deadline_monotonic_ns=trusted_context.authority_deadline_monotonic_ns,
                     deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
@@ -5715,7 +5832,7 @@ class ProductionResourceLifecycleAdapterV1:
                 )
                 require_switch_deadline("pilot switch authority elapsed before snapshot hash")
                 target_resource = self._resources[target_host]
-                snapshot_before = _attest_snapshot_resource(
+                snapshot_before = self._attest_model_snapshot(
                     target_resource,
                     deadline_monotonic_ns=switch_deadline_monotonic_ns,
                 )
@@ -5748,7 +5865,7 @@ class ProductionResourceLifecycleAdapterV1:
                 )
                 progress["target_health_sha256"] = target_health
                 require_switch_deadline("pilot switch authority elapsed before snapshot rehash")
-                snapshot_after = _attest_snapshot_resource(
+                snapshot_after = self._attest_model_snapshot(
                     target_resource,
                     deadline_monotonic_ns=switch_deadline_monotonic_ns,
                 )
@@ -6391,15 +6508,19 @@ class ProductionResourceLifecycleAdapterV1:
 def build_cpu_test_resource_lifecycle_adapter_v1(
     config: ProductionRuntimeConfigV1,
     fault: CpuResourceLifecycleFaultV1 = CpuResourceLifecycleFaultV1.NONE,
+    *,
+    operational_fast_with_tool: bool = False,
 ) -> ProductionResourceLifecycleAdapterV1:
     if (
         type(config) is not ProductionRuntimeConfigV1
         or type(fault) is not CpuResourceLifecycleFaultV1
+        or type(operational_fast_with_tool) is not bool
     ):
         raise ProductionDriverError("UNTRUSTED_TYPE", "runtime config type differs")
     return ProductionResourceLifecycleAdapterV1(
         config,
         system=_CpuRecordingResourceSystemV1(fault, seal=_MODULE_SEAL),
+        operational_fast_with_tool=operational_fast_with_tool,
         seal=_MODULE_SEAL,
     )
 
@@ -6418,6 +6539,22 @@ def build_production_resource_lifecycle_adapter_v1(
     return ProductionResourceLifecycleAdapterV1(
         config,
         system=_PosixProductionResourceSystemV1(config, seal=_MODULE_SEAL),
+        operational_fast_with_tool=False,
+        seal=_MODULE_SEAL,
+    )
+
+
+def build_operational_with_tool_resource_lifecycle_adapter_v1(
+    config: ProductionRuntimeConfigV1,
+) -> ProductionResourceLifecycleAdapterV1:
+    """Build the direct with-tool lifecycle without hash-confirmation ceremony."""
+
+    if type(config) is not ProductionRuntimeConfigV1:
+        raise ProductionDriverError("UNTRUSTED_TYPE", "runtime config type differs")
+    return ProductionResourceLifecycleAdapterV1(
+        config,
+        system=_PosixProductionResourceSystemV1(config, seal=_MODULE_SEAL),
+        operational_fast_with_tool=True,
         seal=_MODULE_SEAL,
     )
 
@@ -13851,6 +13988,7 @@ __all__ = [
     "SmokeStageEvidenceV1",
     "build_cpu_test_production_driver_v1",
     "build_cpu_test_resource_lifecycle_adapter_v1",
+    "build_operational_with_tool_resource_lifecycle_adapter_v1",
     "build_production_driver_v1",
     "build_production_pilot_switch_authority_v1",
     "build_production_case_authority_broker_provider_v1",
