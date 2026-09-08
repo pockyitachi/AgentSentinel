@@ -1803,8 +1803,11 @@ class PromptSentinel:
                 fallback_context=(raw, context, config, role, history_codec_id, started),
                 transaction=receipt_transaction,
             )
-            if audit_prepared and (
-                base_result.receipt.validation_status is not SentinelValidationStatus.PASSED
+            if (
+                audit_prepared
+                and base_result.receipt.validation_status
+                is not SentinelValidationStatus.PASSED
+                and type(self._runtime_audit) is not ProductionRuntimeAuditV1
             ):
                 assert self._runtime_audit is not None
                 self._runtime_audit.cancel(context.logical_call_id)
