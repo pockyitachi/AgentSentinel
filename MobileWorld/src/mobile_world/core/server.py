@@ -142,21 +142,24 @@ def _lifecycle_transition_snapshot() -> tuple[str | None, float | None]:
 
 
 def _ensure_controller_healthy(req_device: str) -> AndroidController:
-    if req_device not in CONTROLLERS:
+    controller = CONTROLLERS.get(req_device)
+    publish_after_validation = controller is None
+    if controller is None:
         logger.info(f"[INIT] Device {req_device} not initialized, initializing...")
-        ctr = AndroidController(device=req_device)
-        CONTROLLERS[req_device] = ctr
-    viewport_size = getattr(CONTROLLERS[req_device], "viewport_size", (None, None))
+        controller = AndroidController(device=req_device)
+    viewport_size = getattr(controller, "viewport_size", (None, None))
     if not (
         isinstance(viewport_size, tuple)
         and len(viewport_size) == 2
         and all(isinstance(value, int) and value > 0 for value in viewport_size)
     ):
         raise DeviceUnhealthyError(f"Device is not healthy: invalid viewport for {req_device}")
-    if not CONTROLLERS[req_device].check_health(try_times=3):
+    if not controller.check_health(try_times=3):
         logger.error(f"[INIT] Device {req_device} is not healthy")
         raise DeviceUnhealthyError(f"Device is not healthy: {req_device}")
-    return CONTROLLERS[req_device]
+    if publish_after_validation:
+        CONTROLLERS[req_device] = controller
+    return controller
 
 
 def ensure_controller(req_device: str) -> AndroidController:

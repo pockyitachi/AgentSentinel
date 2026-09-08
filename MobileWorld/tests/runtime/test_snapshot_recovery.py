@@ -650,6 +650,36 @@ def _response_json(response: Any) -> dict[str, Any]:
     return json.loads(response.body)
 
 
+def test_initial_controller_failure_is_not_cached_and_retry_reconstructs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructed: list[_HealthyController] = []
+
+    class InitiallyUnhealthyController(_HealthyController):
+        def check_health(self, try_times: int = 0) -> bool:
+            assert try_times == 3
+            return len(constructed) > 1
+
+    def controller_factory(device: str) -> InitiallyUnhealthyController:
+        controller = InitiallyUnhealthyController(device)
+        constructed.append(controller)
+        return controller
+
+    monkeypatch.setattr(server, "AndroidController", controller_factory)
+
+    with pytest.raises(HTTPException) as raised:
+        server.ensure_controller("emulator-fixture")
+
+    assert raised.value.status_code == 500
+    assert server.CONTROLLERS == {}
+
+    controller = server.ensure_controller("emulator-fixture")
+
+    assert len(constructed) == 2
+    assert controller is constructed[1]
+    assert server.CONTROLLERS == {"emulator-fixture": constructed[1]}
+
+
 def test_server_rejects_empty_input_text_as_typed_client_error() -> None:
     controller = _HealthyController()
     server.CONTROLLERS["emulator-fixture"] = controller
