@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -212,6 +213,29 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         dest="audit_log_root",
         help="Explicit raw audit data root; when enabled it must be outside the Git repository",
     )
+    parser.add_argument(
+        "--sentinel-mode",
+        "--sentinel",
+        dest="sentinel_mode",
+        choices=("off", "shadow", "active"),
+        default="off",
+        help=(
+            "Enable the in-process history Sentinel for each task. SHADOW observes only; "
+            "ACTIVE may edit model-visible history (default: off)."
+        ),
+    )
+    parser.add_argument(
+        "--sentinel-api-key-env",
+        dest="sentinel_api_key_env",
+        default="OPENAI_API_KEY",
+        help="Environment variable containing the Sentinel provider key",
+    )
+    parser.add_argument(
+        "--sentinel-base-url",
+        dest="sentinel_base_url",
+        default="https://api.openai.com/v1",
+        help="OpenAI-compatible base URL used only by Sentinel",
+    )
     stream_chunk_group = parser.add_mutually_exclusive_group()
     stream_chunk_group.add_argument(
         "--audit-store-stream-chunks",
@@ -384,18 +408,24 @@ def configure_parser(subparsers: argparse._SubParsersAction) -> None:
     )
 
 
-def _start_eval_audit(args: argparse.Namespace, *, effective_api_key: str | None):
+def _start_eval_audit(
+    args: argparse.Namespace,
+    *,
+    effective_api_key: str | None,
+    sentinel_api_key: str | None = None,
+):
     """Bootstrap only the explicitly enabled collector for this eval invocation."""
 
+    sentinel_enabled = getattr(args, "sentinel_mode", "off") != "off"
     config = AuditConfig.from_cli_values(
-        enable_audit=bool(getattr(args, "enable_audit", False)),
+        enable_audit=bool(getattr(args, "enable_audit", False) or sentinel_enabled),
         audit_log_root=getattr(args, "audit_log_root", None),
         audit_store_stream_chunks=bool(getattr(args, "audit_store_stream_chunks", True)),
     )
     if not config.enabled:
         return bootstrap_audit_run(config)
 
-    known_secrets = [secret for secret in (effective_api_key,) if secret]
+    known_secrets = [secret for secret in (effective_api_key, sentinel_api_key) if secret]
     seed_environment_key = os.getenv("DOUBAO_API_KEY")
     if seed_environment_key:
         known_secrets.append(seed_environment_key)
@@ -431,15 +461,52 @@ def _run_evaluation_once(
 ):
     """Run one physical eval invocation inside one independently finalized audit run."""
 
+    sentinel_mode = getattr(args, "sentinel_mode", "off")
+    sentinel_enabled = sentinel_mode != "off"
+    prompt_sentinel_runtime_factory = None
+    sentinel_api_key = None
+    if sentinel_enabled and getattr(args, "audit_log_root", None) is None:
+        audit_root = (
+            Path(tempfile.gettempdir())
+            / "mobileworld-audit"
+            / f"eval-{os.getpid()}-{time.time_ns()}"
+        )
+        args.audit_log_root = str(audit_root)
+        logger.info("Prompt Sentinel audit root: {}", audit_root)
+    if sentinel_enabled:
+        key_env = getattr(args, "sentinel_api_key_env", "OPENAI_API_KEY")
+        sentinel_api_key = os.getenv(key_env)
+        if not sentinel_api_key:
+            raise ValueError(f"Sentinel API key environment variable is empty: {key_env}")
+        audit_root = Path(args.audit_log_root).expanduser().resolve(strict=False)
+        args.audit_log_root = str(audit_root)
+        from mobile_world.runtime.sentinel.contracts import SentinelMode
+        from mobile_world.runtime.sentinel.lean_runtime import LeanSentinelRunFactoryV1
+
+        prompt_sentinel_runtime_factory = LeanSentinelRunFactoryV1(
+            mode=SentinelMode(sentinel_mode.upper()),
+            api_key=sentinel_api_key,
+            receipt_root=audit_root / "sentinel_receipts",
+            base_url=getattr(args, "sentinel_base_url", "https://api.openai.com/v1"),
+        )
+
     try:
-        lifecycle = _start_eval_audit(args, effective_api_key=api_key)
+        lifecycle = _start_eval_audit(
+            args,
+            effective_api_key=api_key,
+            sentinel_api_key=sentinel_api_key,
+        )
     except Exception:
+        if sentinel_enabled:
+            raise
         logger.exception(
             "Audit bootstrap failed before a durable run could be created; "
             "continuing this evaluation without audit artifacts"
         )
         lifecycle = DEGRADED_AUDIT_LIFECYCLE
     if getattr(lifecycle, "degraded", False):
+        if sentinel_enabled:
+            raise RuntimeError("Prompt Sentinel requires a working Collector audit lifecycle")
         logger.error(
             "Audit storage could not initialize; continuing this evaluation without audit artifacts"
         )
@@ -447,6 +514,7 @@ def _run_evaluation_once(
         result = run_agent_with_evaluation(
             api_key=api_key,
             audit_lifecycle=lifecycle if lifecycle.enabled else None,
+            prompt_sentinel_runtime_factory=prompt_sentinel_runtime_factory,
             **runner_kwargs,
         )
     except BaseException:

@@ -22,6 +22,8 @@ def test_audit_cli_defaults_off_and_accepts_explicit_chunk_policy() -> None:
     assert defaults.audit_log_root is None
     assert not hasattr(defaults, "audit_collector_mode")
     assert defaults.audit_store_stream_chunks is True
+    assert defaults.sentinel_mode == "off"
+    assert defaults.sentinel_api_key_env == "OPENAI_API_KEY"
 
     configured = _parse(
         "--agent-type",
@@ -34,6 +36,17 @@ def test_audit_cli_defaults_off_and_accepts_explicit_chunk_policy() -> None:
     assert configured.enable_audit is True
     assert configured.audit_log_root == "/external/audit"
     assert configured.audit_store_stream_chunks is False
+
+    sentinel = _parse(
+        "--agent-type",
+        "fixture",
+        "--sentinel",
+        "active",
+        "--sentinel-api-key-env",
+        "FIXTURE_SENTINEL_KEY",
+    )
+    assert sentinel.sentinel_mode == "active"
+    assert sentinel.sentinel_api_key_env == "FIXTURE_SENTINEL_KEY"
 
     with pytest.raises(SystemExit):
         _parse(

@@ -775,6 +775,7 @@ def _process_task_on_env(
     audit_lifecycle: Any = None,
     audit_task_index: int = 1,
     audit_suite_family: str = "mobile_world",
+    prompt_sentinel_runtime_factory: Callable[[], Any] | None = None,
     **kwargs,
 ) -> dict:
     """Process a single task on a specific environment.
@@ -810,6 +811,7 @@ def _process_task_on_env(
         filter=thread_filter,
     )
     env, container_name = env_queue.get()
+    sentinel_runtime = None
 
     try:
         with logger.contextualize(thread_id=thread_id, container_name=container_name):
@@ -820,6 +822,8 @@ def _process_task_on_env(
                 default=False,
             )
             if not audit_enabled:
+                if prompt_sentinel_runtime_factory is not None:
+                    raise ValueError("Prompt Sentinel requires enabled Collector audit")
                 # Preserve the original feature-off control flow exactly.
                 if enable_mcp:
                     assert isinstance(env, AndroidMCPEnvClient), (
@@ -908,12 +912,30 @@ def _process_task_on_env(
                         return None
 
                 try:
+                    if prompt_sentinel_runtime_factory is not None:
+                        if "prompt_sentinel" in kwargs:
+                            raise ValueError(
+                                "prompt_sentinel and prompt_sentinel_runtime_factory conflict"
+                            )
+                        sentinel_runtime = prompt_sentinel_runtime_factory()
+                        prompt_sentinel = getattr(sentinel_runtime, "sentinel", None)
+                        if prompt_sentinel is None:
+                            raise TypeError(
+                                "prompt_sentinel_runtime_factory returned no PromptSentinel"
+                            )
+                    else:
+                        prompt_sentinel = None
                     agent = create_agent(
                         agent_type,
                         model_name,
                         llm_base_url,
                         api_key,
                         env=env,
+                        **(
+                            {"prompt_sentinel": prompt_sentinel}
+                            if prompt_sentinel is not None
+                            else {}
+                        ),
                         **kwargs,
                     )
                 except Exception as error:
@@ -1034,6 +1056,13 @@ def _process_task_on_env(
                 "score": task_score,
             }
     finally:
+        if sentinel_runtime is not None:
+            try:
+                close = getattr(sentinel_runtime, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                logger.exception("Prompt Sentinel task runtime cleanup failed")
         # Remove the thread-specific handler
         logger.remove(thread_handler_id)
         env_queue.put((env, container_name))
@@ -1072,6 +1101,7 @@ def run_agent_with_evaluation(
     shuffle_tasks: bool = False,
     auto_retry: int = 10,
     audit_lifecycle: Any = None,
+    prompt_sentinel_runtime_factory: Callable[[], Any] | None = None,
     **kwargs,
 ) -> list[dict]:
     """Run the agent and return the evaluation results.
@@ -1181,6 +1211,7 @@ def run_agent_with_evaluation(
                     audit_lifecycle=audit_lifecycle,
                     audit_task_index=audit_task_indices.get(task_name, 1),
                     audit_suite_family=suite_family,
+                    prompt_sentinel_runtime_factory=prompt_sentinel_runtime_factory,
                     **kwargs,
                 )
                 for task_name in pending_tasks
