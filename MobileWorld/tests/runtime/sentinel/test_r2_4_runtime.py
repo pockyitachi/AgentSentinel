@@ -47,6 +47,7 @@ from mobile_world.runtime.sentinel import (
     SentinelPolicyOutput,
 )
 from mobile_world.runtime.sentinel.contracts import SentinelCallRole
+from mobile_world.runtime.sentinel.lean_runtime import LeanSentinelRunFactoryV1
 from mobile_world.runtime.sentinel.r2_2.contracts import (
     POLICY_PROPOSAL_SCHEMA_VERSION,
     CurrentObservationV1,
@@ -114,7 +115,10 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     RuntimeVerticalPolicyOutputV1,
     replacement_text_for_template,
 )
+from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
+from mobile_world.runtime.sentinel.r2_4.lean_policy import LeanActiveRuntimePolicyV1
 from mobile_world.runtime.sentinel.r2_4.live_attempt import history_policy_transport_schema_v1
+from mobile_world.runtime.sentinel.r2_4.orchestration import R24RuntimeCoordinatorV1
 from mobile_world.runtime.sentinel.r2_4.policy import apply_r23_redundant_history_prunes
 from mobile_world.runtime.sentinel.r2_4.production_audit import (
     MemoryProductionRuntimeAuditSinkV1,
@@ -902,6 +906,98 @@ def test_r23_duplicate_bridge_prunes_only_uncertain_history() -> None:
     assert len(revised.admitted_plan.operations) == 1
     assert revised.admitted_plan.operations[0].target_id == "r24-target-uncertain"
     assert "R24_R23_STABLE_EXACT_DUPLICATE_PRUNE" in revised.validation_checks
+
+
+def test_lean_factory_builds_task_runtime_without_dispatch(tmp_path) -> None:
+    runtime = LeanSentinelRunFactoryV1(
+        mode=SentinelMode.ACTIVE,
+        api_key="cpu-test-key",
+        receipt_root=tmp_path / "sentinel-receipts",
+    )()
+
+    assert type(runtime.sentinel.policy) is LeanActiveRuntimePolicyV1
+    assert not tuple((tmp_path / "sentinel-receipts").iterdir())
+    runtime.close()
+    runtime.close()
+
+
+def test_lean_active_seam_keeps_r23_duplicate_prune(monkeypatch) -> None:
+    built = _build_adapter_case("qwen")
+    proposal = _r22_proposal(built.packet)
+    decision = cast(dict[str, JsonValue], cast(list[JsonValue], proposal["decisions"])[0])
+    decision.update(
+        {
+            "factual_verdict": "UNVERIFIABLE",
+            "temporal_validity": "UNKNOWN",
+            "proposed_operation": "KEEP_UNCERTAIN",
+            "evidence_refs": [],
+            "confidence_millis": 0,
+            "reason_code": "INSUFFICIENT_EVIDENCE",
+            "uncertainty_codes": ["EVIDENCE_MISSING"],
+            "rationale_summary": "The bounded evidence is insufficient.",
+            "fallback_status": "ABSTAIN_TO_ORIGINAL",
+        }
+    )
+    proposal["status"] = "ABSTAIN"
+    source, _receipts = _source_policy(
+        built,
+        _R22FakeTransport(json.dumps(proposal, separators=(",", ":"), sort_keys=True)),
+    )
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=CollectorEvidenceFactoryV1(),
+        session_factory=lambda _task_run_id, _task: None,
+    )
+    target = built.packet.targets[0]
+    prune_plan = R24RubricHistoryPrunePlanV1(
+        logical_call_id=built.context.logical_call_id,
+        source_request_sha256=built.packet.raw_request_sha256,
+        prior_rubric_state_sha256="3" * 64,
+        current_rubric_state_sha256="4" * 64,
+        progress_signature_sha256="5" * 64,
+        candidates=(
+            R24RubricHistoryPruneTargetV1(
+                target_id=target.target_id,
+                target_record_id=target.record_id,
+                target_span_sha256=target.span_sha256,
+                duplicate_text_sha256=target.span_sha256,
+                older_record_index=0,
+                newest_record_index=3,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "rubric_history_prune_plan_for",
+        lambda logical_call_id: (
+            prune_plan if logical_call_id == built.context.logical_call_id else None
+        ),
+    )
+    policy = LeanActiveRuntimePolicyV1(source, coordinator=coordinator)
+    sink = MemorySentinelReceiptSink()
+    sentinel = PromptSentinel(
+        policy=policy,
+        codec_registry=build_runtime_history_codec_resolver(),
+        host_configs={
+            built.context.host_id: SentinelHostConfig(
+                mode=SentinelMode.ACTIVE,
+                policy_timeout_ms=1_000,
+            )
+        },
+        receipt_sink=sink,
+        global_switch=SentinelGlobalSwitch(),
+    )
+
+    result = sentinel.before_model_call(
+        cast(JsonValue, built.request),
+        built.context,
+        QWEN_CODEC_ID,
+        SentinelCallRole.ACTOR,
+    )
+
+    assert type(result) is RuntimeVerticalSentinelResultV1
+    assert result.receipt.edit_applied
+    assert result.final_request != built.request
+    assert result.bridge.decision_kinds == (SentinelDecisionKind.DROP,)
 
 
 @pytest.mark.parametrize(

@@ -18,8 +18,10 @@ import binascii
 import hashlib
 import io
 import json
+import math
 import re
 import threading
+import time
 from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime
@@ -29,12 +31,15 @@ from pathlib import Path
 from typing import Final, cast
 
 from jsonschema import Draft202012Validator, RefResolver  # type: ignore[import-untyped]
+from openai import OpenAI
 from PIL import Image
 
 from mobile_world.offline.causal_replay.contracts import JsonValue
 from mobile_world.runtime.sentinel.r2_2.contracts import PolicyExecutionControlV1
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
+    SUPPORTED_OPENAI_SDK_VERSION,
     ResponsesEnvelopeV1,
+    _project_openai_response,
     responses_envelope_hash_projection,
 )
 from mobile_world.runtime.sentinel.r2_3.contracts import (
@@ -3560,6 +3565,153 @@ class CpuFakeRubricProviderPortV1(_BaseRubricProviderPortV1):
         return output
 
 
+class DirectOpenAIRubricProviderPortV1(_BaseRubricProviderPortV1):
+    """Lean Responses transport for ordinary ``mw eval`` runs.
+
+    Unlike the production pilot port, this adapter has no manifest, preflight,
+    process factory, cost authority, or case lease.  The caller's explicit eval
+    configuration is the live-call authorization.  It still consumes only the
+    history-free Collector projection assembled by the coordinator.
+    """
+
+    def __init__(self, *, client: OpenAI, timeout_seconds: float) -> None:
+        super().__init__()
+        if type(client) is not OpenAI:
+            raise TypeError("client must be the exact supported OpenAI SDK client")
+        if type(client.max_retries) is not int or client.max_retries != 0:
+            raise ValueError("the dedicated OpenAI client must set max_retries=0")
+        if type(timeout_seconds) not in {int, float} or isinstance(timeout_seconds, bool):
+            raise TypeError("timeout_seconds must be an exact number")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive and finite")
+        self._client = client
+        self._timeout_seconds = float(timeout_seconds)
+
+    @property
+    def execution_scope(self) -> LiveRubricExecutionScopeV1:
+        # This existing enum value describes an explicitly requested network
+        # call; it does not imply the removed pilot authority machinery.
+        return LiveRubricExecutionScopeV1.OWNER_AUTHORIZED_LIVE
+
+    @property
+    def config_projection(self) -> dict[str, JsonValue]:
+        return {
+            "execution_scope": self.execution_scope.value,
+            "model": LIVE_RUBRIC_MODEL,
+            "openai_sdk_version": SUPPORTED_OPENAI_SDK_VERSION,
+            "sdk_max_retries": 0,
+            "timeout_ns": round(self._timeout_seconds * 1_000_000_000),
+            "transport": "DIRECT_OPENAI_RESPONSES",
+        }
+
+    def bind_collector_call(
+        self,
+        *,
+        bundle: CollectorEvidenceBundleV1,
+        logical_call_id: str,
+        actor_request_sha256: str,
+        deadline_monotonic_ns: int,
+        max_cost_usd_micros: int,
+        case_lease: CaseExecutionLeaseV1 | None,
+        execution_control: PolicyExecutionControlV1 | None = None,
+        constraint_binding: LiveRubricAttemptConstraintBindingV1 | None = None,
+    ) -> None:
+        del deadline_monotonic_ns, max_cost_usd_micros, execution_control
+        if case_lease is not None or constraint_binding is not None:
+            raise LiveRubricError(
+                "LEAN_AUTHORITY_FORBIDDEN", "direct rubric transport rejects case authority"
+            )
+        image = bind_current_collector_image(bundle, logical_call_id=logical_call_id)
+        self._bind_context(
+            image=image,
+            stimulus=bundle.r23_snapshot,
+            actor_request_sha256=actor_request_sha256,
+        )
+
+    def bind_collector_projection(
+        self,
+        *,
+        stimulus: RubricEvidenceSnapshotV1,
+        current_image_data_url: str,
+        current_image_sha256: str,
+        logical_call_id: str,
+        actor_request_sha256: str,
+    ) -> None:
+        image = bind_current_collector_image_projection(
+            stimulus=stimulus,
+            current_image_data_url=current_image_data_url,
+            current_image_sha256=current_image_sha256,
+            logical_call_id=logical_call_id,
+        )
+        self._bind_context(
+            image=image,
+            stimulus=stimulus,
+            actor_request_sha256=actor_request_sha256,
+        )
+
+    def _bind_context(
+        self,
+        *,
+        image: BoundCollectorCurrentImageV1,
+        stimulus: RubricEvidenceSnapshotV1,
+        actor_request_sha256: str,
+    ) -> None:
+        self._contexts.bind(
+            _RubricCallContextV1(
+                logical_call_id=image.logical_call_id,
+                task_run_id=image.task_run_id,
+                actor_request_sha256=actor_request_sha256,
+                deadline_monotonic_ns=(
+                    time.monotonic_ns() + round(self._timeout_seconds * 1_000_000_000)
+                ),
+                max_cost_usd_micros=0,
+                constraint_binding=None,
+                stimulus=_snapshot_rubric_stimulus(stimulus),
+                image=image,
+                case_lease=None,
+                execution_control=None,
+            )
+        )
+
+    def invoke(
+        self,
+        *,
+        operation: LiveRubricOperationV1,
+        context: _RubricCallContextV1,
+        provider_input: dict[str, JsonValue],
+        request: CanonicalHistoryPolicyRequestV1,
+        prompt_sha256: str,
+        input_schema_version: str,
+        output_schema_sha256: str,
+        backend_extension: R24RubricBackendExtensionDescriptorV1,
+        current_image_binding_sha256: str | None,
+    ) -> str:
+        del provider_input, prompt_sha256, input_schema_version
+        del output_schema_sha256, current_image_binding_sha256
+        if context.case_lease is not None or context.constraint_binding is not None:
+            raise LiveRubricError(
+                "LEAN_AUTHORITY_FORBIDDEN", "direct rubric context carries case authority"
+            )
+        self._reserve((context.task_run_id, context.logical_call_id, operation))
+        self._attest_extension(backend_extension)
+        remaining_seconds = (context.deadline_monotonic_ns - time.monotonic_ns()) / 1e9
+        if remaining_seconds <= 0:
+            raise LiveRubricError("RUBRIC_TIMEOUT", "direct rubric deadline elapsed")
+        try:
+            kwargs = json.loads(request.canonical_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise LiveRubricError(
+                "UNTRUSTED_PROVIDER_REQUEST", "canonical provider request could not be decoded"
+            ) from exc
+        if type(kwargs) is not dict:
+            raise LiveRubricError("UNTRUSTED_PROVIDER_REQUEST", "provider request is not an object")
+        raw = self._client.responses.create(
+            **kwargs,
+            timeout=min(self._timeout_seconds, remaining_seconds),
+        )
+        return _project_openai_response(raw, requested_model=LIVE_RUBRIC_MODEL).output_text
+
+
 class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
     """Exact case-bound bridge to the cancellable RUBRIC attempt runner."""
 
@@ -3998,7 +4150,9 @@ class ProductionRubricProviderPortV1(_BaseRubricProviderPortV1):
         return result.output_text
 
 
-RubricProviderPortV1 = CpuFakeRubricProviderPortV1 | ProductionRubricProviderPortV1
+RubricProviderPortV1 = (
+    CpuFakeRubricProviderPortV1 | DirectOpenAIRubricProviderPortV1 | ProductionRubricProviderPortV1
+)
 
 
 class LiveOpenAIRubricBackendV1:
@@ -4007,6 +4161,7 @@ class LiveOpenAIRubricBackendV1:
     def __init__(self, *, provider_port: RubricProviderPortV1) -> None:
         if type(provider_port) not in {
             CpuFakeRubricProviderPortV1,
+            DirectOpenAIRubricProviderPortV1,
             ProductionRubricProviderPortV1,
         }:
             raise LiveRubricError("UNTRUSTED_PROVIDER_PORT", "provider port type differs")
@@ -4155,8 +4310,11 @@ class LiveOpenAIRubricBackendV1:
                 constraint_binding=constraint_binding,
             )
             return
-        cpu_provider = cast(CpuFakeRubricProviderPortV1, self._provider)
-        cpu_provider.bind_collector_call(
+        direct_or_cpu_provider = cast(
+            CpuFakeRubricProviderPortV1 | DirectOpenAIRubricProviderPortV1,
+            self._provider,
+        )
+        direct_or_cpu_provider.bind_collector_call(
             bundle=bundle,
             logical_call_id=logical_call_id,
             actor_request_sha256=actor_request_sha256,
@@ -4643,6 +4801,7 @@ def rubric_binding_from_packet(packet: RubricTrackingPacketV1):
 __all__ = [
     "BoundCollectorCurrentImageV1",
     "CpuFakeRubricProviderPortV1",
+    "DirectOpenAIRubricProviderPortV1",
     "LIVE_RUBRIC_BACKEND_EXTENSION_SCHEMA_VERSION",
     "LIVE_RUBRIC_BACKEND_VERSION",
     "LIVE_RUBRIC_CALL_RECEIPT_SCHEMA_VERSION",

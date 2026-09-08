@@ -118,6 +118,7 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     vertical_output_projection,
     vertical_output_sha256,
 )
+from mobile_world.runtime.sentinel.r2_4.lean_policy import LeanActiveRuntimePolicyV1
 from mobile_world.runtime.sentinel.r2_4.live_attempt import (
     ProductionOpenAIAttemptCallV1,
 )
@@ -991,6 +992,11 @@ class PromptSentinel:
                     raise TypeError("R2.4 CPU fake ACTIVE requires the exact trusted adapter")
                 if runtime_audit is not None and type(runtime_audit) is not R24RuntimeAuditV1:
                     raise TypeError("R2.4 CPU fake policy requires the exact CPU audit")
+            elif vertical_policy.execution_scope is RuntimeVerticalExecutionScope.LEAN_EVAL_ACTIVE:
+                if type(policy_object) is not LeanActiveRuntimePolicyV1:
+                    raise TypeError("lean eval ACTIVE requires the exact trusted adapter")
+                if runtime_audit is not None:
+                    raise TypeError("legacy R2.4 audit cannot attest the lean eval scope")
             elif (
                 vertical_policy.execution_scope
                 is RuntimeVerticalExecutionScope.OWNER_AUTHORIZED_LIVE_ACTIVE
@@ -1384,7 +1390,10 @@ class PromptSentinel:
                     overlay_declaration_sha256 = extraction.overlay.sha256
                     if extraction.status is RuntimeHistoryExtractionStatusV1.NO_HISTORY:
                         no_history_record: R24CoordinatedCallRecordV1 | None = None
-                        if type(self._policy) is OwnerAuthorizedLivePerCallPolicyV1:
+                        if type(self._policy) in {
+                            OwnerAuthorizedLivePerCallPolicyV1,
+                            LeanActiveRuntimePolicyV1,
+                        }:
                             prepared = self._evaluate_policy_with_timeout(
                                 request=raw,
                                 context=context,
@@ -1805,8 +1814,7 @@ class PromptSentinel:
             )
             if (
                 audit_prepared
-                and base_result.receipt.validation_status
-                is not SentinelValidationStatus.PASSED
+                and base_result.receipt.validation_status is not SentinelValidationStatus.PASSED
                 and type(self._runtime_audit) is not ProductionRuntimeAuditV1
             ):
                 assert self._runtime_audit is not None
@@ -1911,10 +1919,10 @@ class PromptSentinel:
                     | R24CoordinatedCallRecordV1
                 )
                 if no_history:
-                    if (
-                        execution_fence is None
-                        or type(self._policy) is not OwnerAuthorizedLivePerCallPolicyV1
-                    ):
+                    if execution_fence is None or type(self._policy) not in {
+                        OwnerAuthorizedLivePerCallPolicyV1,
+                        LeanActiveRuntimePolicyV1,
+                    }:
                         raise SentinelContractError(
                             "no-history rubric execution requires the exact production policy"
                         )
@@ -2068,6 +2076,7 @@ class PromptSentinel:
             R22CpuFakeActivePolicyAdapter,
             R22OwnerAuthorizedLivePolicyAdapter,
             OwnerAuthorizedLivePerCallPolicyV1,
+            LeanActiveRuntimePolicyV1,
         }:
             raise SentinelContractError("R2.4 policy adapter type is untrusted")
         vertical_policy = cast(RuntimeVerticalPolicy, self._policy)

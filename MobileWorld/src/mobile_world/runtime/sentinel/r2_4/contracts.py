@@ -61,6 +61,7 @@ class RuntimeVerticalExecutionScope(StrEnum):
     """Execution authority carried by the additive R2.4 overlay."""
 
     CPU_FAKE_ACTIVE = "CPU_FAKE_ACTIVE"
+    LEAN_EVAL_ACTIVE = "LEAN_EVAL_ACTIVE"
     OWNER_AUTHORIZED_LIVE_ACTIVE = "OWNER_AUTHORIZED_LIVE_ACTIVE"
 
 

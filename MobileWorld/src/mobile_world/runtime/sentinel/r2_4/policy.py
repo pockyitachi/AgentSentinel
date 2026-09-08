@@ -234,6 +234,33 @@ def promote_r22_policy_output(
                 "CPU_FAKE_AUTHORITY_REQUIRED", "promotion binds another CPU fake authority"
             )
         resolved_checks = _PROMOTION_CHECKS if validation_checks is None else validation_checks
+    elif execution_scope is RuntimeVerticalExecutionScope.LEAN_EVAL_ACTIVE:
+        if authority is not None:
+            raise R24ContractError(
+                "LEAN_AUTHORITY_MISMATCH", "CPU fake authority cannot authorize lean eval"
+            )
+        if (
+            type(execution_authority_sha256) is not str
+            or _SHA256.fullmatch(execution_authority_sha256) is None
+        ):
+            raise R24ContractError(
+                "LEAN_CONFIGURATION_REQUIRED", "lean eval needs a configuration hash"
+            )
+        required_lean_checks = {
+            "R24_LEAN_EVAL_CONFIGURATION_BOUND",
+            "R24_LEAN_DIRECT_APPLICATION",
+            "R24_SOURCE_TRANSPORT_DESCRIPTOR_BOUND",
+            "R24_SOURCE_TRANSPORT_BINDING_BOUND",
+            "R24_NO_ACTION_OR_TOOL_AUTHORITY",
+        }
+        if type(validation_checks) is not tuple or not required_lean_checks.issubset(
+            validation_checks
+        ):
+            raise R24ContractError(
+                "LEAN_CONFIGURATION_REQUIRED",
+                "lean promotion checks do not bind the direct runtime",
+            )
+        resolved_checks = validation_checks
     else:
         if authority is not None:
             raise R24ContractError(
