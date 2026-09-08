@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import requests
 from fastapi import HTTPException
 from PIL import Image
 
@@ -1109,6 +1110,48 @@ def test_android_client_request_deadline_scope_restores_after_exception() -> Non
         with client.request_deadline_scope(1):
             raise AssertionError("expired deadline scope must not open")
     assert client._request_deadline_monotonic_ns == original_deadline
+
+
+def test_android_initial_global_init_retries_before_task_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    urls: list[str] = []
+
+    class _Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+    class _Session:
+        init_attempts = 0
+
+        def post(self, url: str, **_: object) -> _Response:
+            path = url.removeprefix("http://fixture.invalid")
+            urls.append(path)
+            if path == "/init":
+                self.init_attempts += 1
+                if self.init_attempts < 3:
+                    raise requests.ConnectionError("transient global init failure")
+                return _Response()
+            assert path == "/task/init"
+            assert self.init_attempts == 3
+            return _Response()
+
+    client = object.__new__(AndroidEnvClient)
+    client._initialized = False
+    client._request_deadline_monotonic_ns = None
+    client._session = cast(Any, _Session())
+    client.base_url = "http://fixture.invalid"
+    client.device = "emulator-fixture"
+    client._current_task_type = None
+    client.get_screenshot = lambda *, wait_to_stabilize: Image.new("RGB", (2, 2))
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    observation = client.initialize_task("FixtureTask")
+
+    assert type(observation.screenshot) is Image.Image
+    assert client._initialized is True
+    assert urls == ["/init", "/init", "/init", "/task/init"]
 
 
 def test_android_teardown_marks_dispatch_only_at_session_boundary() -> None:

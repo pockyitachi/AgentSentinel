@@ -129,6 +129,15 @@ class AndroidEnvClient:
 
         return self._initialized is True
 
+    @backoff.on_exception(
+        backoff.expo,
+        requests.RequestException,
+        max_tries=3,
+        jitter=None,
+        on_backoff=lambda details: logger.warning(
+            f"Retrying initial environment /init after error (attempt {details['tries']}/3)"
+        ),
+    )
     def _ensure_initialized(self):
         """Ensure the device is initialized."""
         if not self._initialized:
