@@ -1239,7 +1239,7 @@ def test_resource_lifecycle_uses_only_fixed_argv_loopback_health_and_owned_clean
     assert (result.actor_calls, result.openai_calls, result.actor_actions) == (0, 0, 0)
 
     commands = adapter.cpu_trace.commands
-    assert len(commands) == 13
+    assert len(commands) == 11
     (
         git_head,
         git_status,
@@ -1249,10 +1249,8 @@ def test_resource_lifecycle_uses_only_fixed_argv_loopback_health_and_owned_clean
         image,
         docker,
         qwen_gpu_identity,
-        qwen_gpu_processes,
         qwen,
         mai_gpu_identity,
-        mai_gpu_processes,
         mai,
     ) = commands
     assert git_head[-2:] == ("rev-parse", "HEAD")
@@ -1286,6 +1284,7 @@ def test_resource_lifecycle_uses_only_fixed_argv_loopback_health_and_owned_clean
         "run",
         "--detach",
         "--rm",
+        "--no-healthcheck",
         "--privileged",
         "--name",
         f"r24-{'a' * 20}",
@@ -1307,22 +1306,10 @@ def test_resource_lifecycle_uses_only_fixed_argv_loopback_health_and_owned_clean
         "--query-gpu=index,uuid",
         "--format=csv,noheader,nounits",
     )
-    assert qwen_gpu_processes == (
-        "/usr/bin/nvidia-smi",
-        "--id=0",
-        "--query-compute-apps=gpu_uuid,pid",
-        "--format=csv,noheader,nounits",
-    )
     assert mai_gpu_identity == (
         "/usr/bin/nvidia-smi",
         "--id=1",
         "--query-gpu=index,uuid",
-        "--format=csv,noheader,nounits",
-    )
-    assert mai_gpu_processes == (
-        "/usr/bin/nvidia-smi",
-        "--id=1",
-        "--query-compute-apps=gpu_uuid,pid",
         "--format=csv,noheader,nounits",
     )
     for command, expected_port, expected_snapshot in (
@@ -3129,6 +3116,132 @@ def test_backend_nonzero_launch_with_exact_absence_clears_pending_name(
         system.start_backend(spec)
     assert raised.value.code == "BACKEND_START_FAILED"
     assert system.residual_capabilities()["pending_backend_names"] == []
+
+
+def _owned_backend_for_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[
+    production_driver_module._PosixProductionResourceSystemV1,
+    production_driver_module._OwnedBackendContainerV1,
+]:
+    config = _runtime_config(tmp_path)
+    system_type = production_driver_module._PosixProductionResourceSystemV1
+    system = system_type(config, seal=production_driver_module._MODULE_SEAL)
+    spec = production_driver_module._backend_command_spec(config, manifest_sha256="a" * 64)
+    container_id = "1" * 64
+    name = spec.argv[spec.argv.index("--name") + 1]
+    owned = production_driver_module._OwnedBackendContainerV1(
+        container_id=container_id,
+        name=name,
+        spec=spec,
+    )
+    system._backend_candidates[container_id] = owned
+    monkeypatch.setattr(
+        system_type,
+        "_docker_run",
+        staticmethod(
+            lambda _argv, **_kwargs: SimpleNamespace(
+                returncode=0,
+                stdout=(f"{container_id} /{name} sha256:{config.backend_image_id_sha256} true\n"),
+                stderr="",
+            )
+        ),
+    )
+    return system, owned
+
+
+def test_backend_dispatch_attestation_retries_active_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    system, owned = _owned_backend_for_attestation(tmp_path, monkeypatch)
+    health_responses = iter(
+        (
+            {
+                "ok": False,
+                "transition_in_progress": True,
+                "transition_overdue": False,
+                "transition_name": "health",
+            },
+            {"ok": True},
+        )
+    )
+    health_calls: list[str] = []
+
+    def health_json(endpoint: str, path: str, *, timeout_seconds: float) -> object:
+        assert endpoint == owned.spec.endpoint
+        assert path == "/health"
+        assert 0 < timeout_seconds <= 2.0
+        health_calls.append(path)
+        return next(health_responses)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(production_driver_module, "_bounded_http_json", health_json)
+    monkeypatch.setattr(production_driver_module.time, "sleep", sleeps.append)
+
+    assert len(system.attest_backend(owned)) == 64
+    assert health_calls == ["/health", "/health"]
+    assert sleeps == [0.025]
+
+
+@pytest.mark.parametrize(
+    "health,expected",
+    (
+        (
+            {
+                "ok": False,
+                "transition_in_progress": True,
+                "transition_overdue": False,
+            },
+            True,
+        ),
+        ({"ok": False}, False),
+        (
+            {
+                "ok": False,
+                "transition_in_progress": True,
+                "transition_overdue": True,
+            },
+            False,
+        ),
+        (
+            {
+                "ok": False,
+                "transition_in_progress": 1,
+                "transition_overdue": False,
+            },
+            False,
+        ),
+    ),
+)
+def test_backend_transition_retry_classifier_requires_exact_booleans(
+    health: object, expected: bool
+) -> None:
+    assert production_driver_module._backend_transition_is_in_progress(health) is expected
+
+
+def test_backend_dispatch_attestation_bounds_transition_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    system, owned = _owned_backend_for_attestation(tmp_path, monkeypatch)
+    health_calls: list[str] = []
+    monkeypatch.setattr(
+        production_driver_module,
+        "_bounded_http_json",
+        lambda _endpoint, path, **_kwargs: health_calls.append(path)
+        or {
+            "ok": False,
+            "transition_in_progress": True,
+            "transition_overdue": False,
+        },
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(production_driver_module.time, "sleep", sleeps.append)
+
+    with pytest.raises(ProductionDriverError) as raised:
+        system.attest_backend(owned)
+    assert raised.value.code == "BACKEND_DISPATCH_HEALTH_FAILED"
+    assert health_calls == ["/health"] * 3
+    assert sleeps == [0.025, 0.025]
 
 
 def test_admitted_backend_already_gone_clears_owned_capability_without_stop(

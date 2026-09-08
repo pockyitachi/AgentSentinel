@@ -236,6 +236,8 @@ _SHARED_MINIMUM_FREE_GPU_MEMORY_MIB_V1: Final[int] = 51_200
 _NVIDIA_MEMORY_ACCOUNTING_TOLERANCE_MIB_V1: Final[int] = 4
 _RESOURCE_DOCKER_COMMAND_TIMEOUT_SECONDS_V1: Final[int] = 15
 _RESOURCE_ATTESTATION_COMMAND_TIMEOUT_SECONDS_V1: Final[int] = 30
+_BACKEND_TRANSITION_HEALTH_ATTEMPT_LIMIT_V1: Final[int] = 3
+_BACKEND_TRANSITION_HEALTH_RETRY_INTERVAL_SECONDS_V1: Final[float] = 0.25
 _MOBILEWORLD_BACKEND_IMAGE: Final[str] = "mobile_world:reset"
 _PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1: Final[int] = (
     PRODUCTION_ATTEMPT_TERMINATION_UPPER_BOUND_NS_V1
@@ -1407,6 +1409,7 @@ def _backend_command_spec(
             "run",
             "--detach",
             "--rm",
+            "--no-healthcheck",
             "--privileged",
             "--name",
             name,
@@ -2835,6 +2838,17 @@ def _bounded_http_json(endpoint: str, path: str, *, timeout_seconds: float) -> o
         ) from exc
 
 
+def _backend_transition_is_in_progress(health: object) -> bool:
+    if type(health) is not dict:
+        return False
+    mapping = cast(dict[object, object], health)
+    return (
+        mapping.get("ok") is False
+        and mapping.get("transition_in_progress") is True
+        and mapping.get("transition_overdue") is False
+    )
+
+
 class _PosixProductionResourceSystemV1:
     """Concrete production I/O owner.  All commands originate in this module."""
 
@@ -4013,35 +4027,57 @@ class _PosixProductionResourceSystemV1:
                 "BACKEND_DISPATCH_IDENTITY_LOST",
                 "backend container ID/image/running state changed",
             )
-        try:
-            health = _bounded_http_json(
-                owned.spec.endpoint,
-                "/health",
-                timeout_seconds=_deadline_timeout_seconds(
-                    deadline_monotonic_ns,
-                    maximum_seconds=2.0,
-                    failure_code=deadline_failure_code,
-                    message="backend health deadline elapsed",
-                ),
+        for attempt_index in range(_BACKEND_TRANSITION_HEALTH_ATTEMPT_LIMIT_V1):
+            try:
+                health = _bounded_http_json(
+                    owned.spec.endpoint,
+                    "/health",
+                    timeout_seconds=_deadline_timeout_seconds(
+                        deadline_monotonic_ns,
+                        maximum_seconds=2.0,
+                        failure_code=deadline_failure_code,
+                        message="backend health deadline elapsed",
+                    ),
+                )
+            except Exception as exc:
+                if (
+                    deadline_monotonic_ns is not None
+                    and time.monotonic_ns() >= deadline_monotonic_ns
+                ):
+                    raise ProductionDriverError(
+                        deadline_failure_code,
+                        "backend health exhausted its absolute deadline",
+                    ) from exc
+                raise
+            _require_monotonic_deadline(
+                deadline_monotonic_ns,
+                failure_code=deadline_failure_code,
+                message="backend health crossed its deadline",
             )
-        except Exception as exc:
-            if deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns:
+            if type(health) is dict and cast(dict[object, object], health).get("ok") is True:
+                return _hash_projection(
+                    "backend-dispatch-attestation",
+                    cast(JsonValue, {"container_id": owned.container_id, "health": health}),
+                )
+            if (
+                not _backend_transition_is_in_progress(health)
+                or attempt_index + 1 == _BACKEND_TRANSITION_HEALTH_ATTEMPT_LIMIT_V1
+            ):
                 raise ProductionDriverError(
-                    deadline_failure_code,
-                    "backend health exhausted its absolute deadline",
-                ) from exc
-            raise
-        _require_monotonic_deadline(
-            deadline_monotonic_ns,
-            failure_code=deadline_failure_code,
-            message="backend health crossed its deadline",
-        )
-        if type(health) is not dict or cast(dict[object, object], health).get("ok") is not True:
-            raise ProductionDriverError("BACKEND_DISPATCH_HEALTH_FAILED", "backend health differs")
-        return _hash_projection(
-            "backend-dispatch-attestation",
-            cast(JsonValue, {"container_id": owned.container_id, "health": health}),
-        )
+                    "BACKEND_DISPATCH_HEALTH_FAILED", "backend health differs"
+                )
+            sleep_seconds = min(
+                _BACKEND_TRANSITION_HEALTH_RETRY_INTERVAL_SECONDS_V1,
+                self._config.health_poll_interval_ms / 1_000,
+            )
+            if deadline_monotonic_ns is not None:
+                sleep_seconds = min(
+                    sleep_seconds,
+                    max(0.0, (deadline_monotonic_ns - time.monotonic_ns()) / 1_000_000_000),
+                )
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+        raise AssertionError("unreachable backend health retry state")
 
     def stop_backend(self, owned: _OwnedBackendContainerV1) -> None:
         if self._backend_candidates.get(owned.container_id) is not owned:
