@@ -1861,6 +1861,46 @@ def test_model_health_request_uses_remaining_deadline_and_skips_registry_after_c
     assert registry_calls == []
 
 
+def test_fixed_docker_timeout_before_absolute_deadline_is_recoverable_for_with_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now_ns = 1_000_000_000
+    observed_timeouts: list[float] = []
+
+    def timeout_run(argv: list[str], **kwargs: Any) -> None:
+        observed_timeouts.append(cast(float, kwargs["timeout"]))
+        raise production_driver_module.subprocess.TimeoutExpired(
+            cmd=argv,
+            timeout=kwargs["timeout"],
+        )
+
+    monkeypatch.setattr(production_driver_module.time, "monotonic_ns", lambda: now_ns)
+    monkeypatch.setattr(production_driver_module.subprocess, "run", timeout_run)
+
+    with pytest.raises(ProductionDriverError) as raised:
+        production_driver_module._PosixProductionResourceSystemV1._docker_run(
+            ("/usr/bin/docker", "container", "inspect", "owned-container"),
+            timeout_seconds=15,
+            deadline_monotonic_ns=now_ns + 60_000_000_000,
+            deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
+        )
+
+    assert raised.value.code == "DOCKER_COMMAND_TIMEOUT"
+    assert not production_driver_module._with_tool_cell_failure_is_hard(raised.value)
+
+    with pytest.raises(ProductionDriverError) as deadline_raised:
+        production_driver_module._PosixProductionResourceSystemV1._docker_run(
+            ("/usr/bin/docker", "container", "inspect", "owned-container"),
+            timeout_seconds=15,
+            deadline_monotonic_ns=now_ns + 1_000_000_000,
+            deadline_failure_code="OWNER_AUTHORITY_EXPIRED",
+        )
+
+    assert deadline_raised.value.code == "OWNER_AUTHORITY_EXPIRED"
+    assert production_driver_module._with_tool_cell_failure_is_hard(deadline_raised.value)
+    assert observed_timeouts == [15.0, 1.0]
+
+
 def test_posix_model_start_deadline_clips_partial_reap_and_retains_uncertainty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

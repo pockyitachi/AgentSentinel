@@ -2980,7 +2980,13 @@ class _PosixProductionResourceSystemV1:
             )
             return result
         except subprocess.TimeoutExpired as exc:
-            if deadline_monotonic_ns is not None:
+            deadline_limited_timeout = (
+                deadline_monotonic_ns is not None
+                and bounded_timeout_seconds < float(timeout_seconds)
+            )
+            if deadline_limited_timeout or (
+                deadline_monotonic_ns is not None and time.monotonic_ns() >= deadline_monotonic_ns
+            ):
                 raise ProductionDriverError(
                     deadline_failure_code, "Docker operation exceeded its absolute deadline"
                 ) from exc
