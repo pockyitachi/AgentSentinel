@@ -6762,6 +6762,8 @@ def _with_tool_safe_original_fallback_admitted(
     attempts: tuple[LiveAttemptReceiptV1, ...],
     policy_failure_code: str | None,
     policy_failure_budget_settled: bool,
+    live_cost_exact: bool,
+    conservative_unknown_cost_charge_usd_micros: int | None,
     has_live_binding: bool,
     run_fatal_clear: bool,
 ) -> bool:
@@ -6782,6 +6784,7 @@ def _with_tool_safe_original_fallback_admitted(
             SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE,
             SentinelFallbackReason.RENDERER_FAILURE,
             SentinelFallbackReason.INVARIANT_FAILURE,
+            SentinelFallbackReason.SIDECAR_FAILURE,
         }
         or value.fallback_check is None
         or value.raw_request_sha256 != value.final_request_sha256
@@ -6800,15 +6803,30 @@ def _with_tool_safe_original_fallback_admitted(
         if value.actor_call_index == 1
         else (LiveAttemptRoleV1.RUBRIC, LiveAttemptRoleV1.HISTORY_POLICY)
     )
+    unknown_attempts = tuple(
+        item for item in attempts if item.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+    )
     if (
         len(attempts) > len(expected_roles)
         or tuple(item.role for item in attempts) != expected_roles[: len(attempts)]
+        or live_cost_exact != (not unknown_attempts)
+        or (
+            unknown_attempts
+            and (
+                type(conservative_unknown_cost_charge_usd_micros) is not int
+                or conservative_unknown_cost_charge_usd_micros <= 0
+            )
+        )
+        or (not unknown_attempts and conservative_unknown_cost_charge_usd_micros is not None)
         or any(
             item.status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
             or item.dispatch_count not in {0, 1}
             or not item.worker_reaped
-            or item.cost_status is not LiveAttemptCostStatusV1.EXACT
-            or item.cost_usd_micros is None
+            or (item.cost_status is LiveAttemptCostStatusV1.EXACT and item.cost_usd_micros is None)
+            or (
+                item.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+                and (item.dispatch_count != 1 or item.cost_usd_micros is not None)
+            )
             for item in attempts
         )
     ):
@@ -6828,7 +6846,8 @@ def _with_tool_safe_original_fallback_admitted(
         and value.census.openai_calls
         == value.census.rubric_openai_calls + value.census.history_policy_openai_calls
         and value.census.cost_usd_micros
-        == sum(cast(int, item.cost_usd_micros) for item in attempts)
+        == sum(item.cost_usd_micros or 0 for item in attempts)
+        + (conservative_unknown_cost_charge_usd_micros or 0)
     )
 
 
@@ -10548,15 +10567,29 @@ class _ProductionFixedExecutionPortV1:
         *,
         actor_call_index: int,
     ) -> ActorDecisionEvidenceV1:
-        if not receipt.live_cost_exact:
-            raise ProductionDriverError(
-                "LIVE_COST_ACCOUNTING_UNKNOWN",
-                "post-dispatch unknown cost cannot enter a successful stage decision",
-            )
         policy = state.policy
         attempts: tuple[LiveAttemptReceiptV1, ...] = ()
         policy_failure_code: str | None = None
+        conservative_unknown_cost_charge: int | None = None
         binding: ResolvedLivePolicyCallBindingV1 | None = None
+        if policy is not None:
+            try:
+                conservative_unknown_cost_charge = (
+                    policy.conservative_cost_original_fallback_charge_for_call(
+                        receipt.logical_call_id
+                    )
+                )
+            except Exception:
+                conservative_unknown_cost_charge = None
+        if not receipt.live_cost_exact and (
+            not getattr(state, "allow_safe_original_fallback", False)
+            or type(conservative_unknown_cost_charge) is not int
+            or conservative_unknown_cost_charge <= 0
+        ):
+            raise ProductionDriverError(
+                "LIVE_COST_ACCOUNTING_UNKNOWN",
+                "post-dispatch unknown cost lacks conservative fallback settlement",
+            )
         if policy is None:
             rubric_hashes: tuple[str, ...] = ()
             history_hash = None
@@ -10612,7 +10645,7 @@ class _ProductionFixedExecutionPortV1:
             except Exception:
                 policy_failure_code = None
             if binding is not None:
-                if binding.actor_call_index != actor_call_index:
+                if not receipt.live_cost_exact or binding.actor_call_index != actor_call_index:
                     raise ProductionDriverError(
                         "LIVE_CALL_BINDING_MISMATCH", "actor call index differs"
                     )
@@ -10660,7 +10693,9 @@ class _ProductionFixedExecutionPortV1:
                 history_policy_openai_calls=history_dispatches,
                 openai_calls=receipt.live_openai_calls,
                 actor_actions=1 if receipt.action_executed else 0,
-                cost_usd_micros=receipt.live_cost_usd_micros,
+                cost_usd_micros=(
+                    receipt.live_cost_usd_micros + (conservative_unknown_cost_charge or 0)
+                ),
                 wall_time_ms=(receipt.total_ns + 999_999) // 1_000_000,
             ),
         )
@@ -10676,6 +10711,7 @@ class _ProductionFixedExecutionPortV1:
             try:
                 policy_failure_budget_settled = (
                     policy.known_cost_original_fallback_settled_for_call(receipt.logical_call_id)
+                    or conservative_unknown_cost_charge is not None
                 )
             except Exception:
                 policy_failure_budget_settled = False
@@ -10684,6 +10720,8 @@ class _ProductionFixedExecutionPortV1:
                 attempts=attempts,
                 policy_failure_code=policy_failure_code,
                 policy_failure_budget_settled=policy_failure_budget_settled,
+                live_cost_exact=receipt.live_cost_exact,
+                conservative_unknown_cost_charge_usd_micros=(conservative_unknown_cost_charge),
                 has_live_binding=binding is not None,
                 run_fatal_clear=self._run_fatal_latch.state is None,
             )

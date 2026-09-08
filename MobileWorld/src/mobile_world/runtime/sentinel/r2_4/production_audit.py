@@ -4207,6 +4207,16 @@ class ProductionRuntimeAuditV1:
     def run_fatal_latch(self) -> ProductionRunFatalLatchV1:
         return self._run_fatal_latch
 
+    def _unknown_cost_conservatively_settled(self, logical_call_id: str) -> bool:
+        policy = self._policy
+        if policy is None:
+            return False
+        try:
+            charge = policy.conservative_cost_original_fallback_charge_for_call(logical_call_id)
+        except Exception:
+            return False
+        return type(charge) is int and charge > 0
+
     def _observe_and_require_run_not_fatal(
         self,
         logical_call_id: str,
@@ -4224,6 +4234,9 @@ class ProductionRuntimeAuditV1:
                 self._run_fatal_latch.observe_attempts(
                     logical_call_id=logical_call_id,
                     attempts=attempts,
+                    unknown_cost_conservatively_settled=(
+                        self._unknown_cost_conservatively_settled(logical_call_id)
+                    ),
                 )
             self._run_fatal_latch.require_clear()
         except ProductionRunFatalError as exc:
@@ -4762,6 +4775,9 @@ class ProductionRuntimeAuditV1:
                 self._run_fatal_latch.observe_attempts(
                     logical_call_id=logical_call_id,
                     attempts=attempts,
+                    unknown_cost_conservatively_settled=(
+                        self._unknown_cost_conservatively_settled(logical_call_id)
+                    ),
                 )
             except ProductionRunFatalError as exc:
                 raise ProductionRuntimeAuditError(exc.code, str(exc)) from exc

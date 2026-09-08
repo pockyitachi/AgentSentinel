@@ -443,8 +443,8 @@ def _completed_semantic_attempt(
         late_output_detected=False,
         duration_ns=attempt_index,
         failure_code=None,
-        requested_model="gpt-5.6-sol",
-        returned_model="gpt-5.6-sol",
+        requested_model="gpt-5.6-luna",
+        returned_model="gpt-5.6-luna",
     )
 
 
@@ -482,8 +482,8 @@ def _generic_fallback_terminal_receipt(
         executed_action_sha256=action_sha256 if action_executed else None,
         provider_attempt_count=1,
         live_openai_calls=sum(item.dispatch_count for item in attempts),
-        live_cost_usd_micros=sum(cast(int, item.cost_usd_micros) for item in attempts),
-        live_cost_exact=True,
+        live_cost_usd_micros=sum(item.cost_usd_micros or 0 for item in attempts),
+        live_cost_exact=all(item.cost_status is LiveAttemptCostStatusV1.EXACT for item in attempts),
         total_ns=1,
         detail_sha256="1" * 64,
         _seal=production_audit_module._RECEIPT_SEAL,
@@ -3532,6 +3532,99 @@ def test_post_dispatch_unknown_cost_cannot_enter_successful_decision() -> None:
             actor_call_index=1,
         )
     assert raised.value.code == "LIVE_COST_ACCOUNTING_UNKNOWN"
+
+
+def test_with_tool_reaped_unknown_cost_uses_conservative_original_fallback() -> None:
+    logical_call_id = "conservative-original-fallback"
+    request_sha256 = "a" * 64
+    rubric_attempt = _completed_semantic_attempt(
+        LiveAttemptRoleV1.RUBRIC,
+        logical_call_id=logical_call_id,
+        request_sha256=request_sha256,
+        attempt_index=1,
+    )
+    history_attempt = replace(
+        _completed_semantic_attempt(
+            LiveAttemptRoleV1.HISTORY_POLICY,
+            logical_call_id=logical_call_id,
+            request_sha256=request_sha256,
+            attempt_index=2,
+        ),
+        status=LiveAttemptStatusV1.FAILED,
+        response_envelope_sha256=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+        cost_usd_micros=None,
+        termination=LiveAttemptTerminationV1.TERM,
+        worker_exit_code=-15,
+        failure_code="PROVIDER_CHILD_FAILED",
+        requested_model=None,
+        returned_model=None,
+    )
+    attempts = (rubric_attempt, history_attempt)
+
+    class _Policy:
+        execution_authority_sha256 = "1" * 64
+
+        @staticmethod
+        def attempt_receipts_for_call(_: str) -> tuple[LiveAttemptReceiptV1, ...]:
+            return attempts
+
+        @staticmethod
+        def call_binding(_: str) -> object:
+            raise RuntimeError("failed semantic call has no admitted binding")
+
+        @staticmethod
+        def failure_for_call(_: str) -> str:
+            return "POLICY_TRANSPORT_ERROR"
+
+        @staticmethod
+        def known_cost_original_fallback_settled_for_call(_: str) -> bool:
+            return False
+
+        @staticmethod
+        def conservative_cost_original_fallback_charge_for_call(_: str) -> int:
+            return 17
+
+    receipt = _generic_fallback_terminal_receipt(
+        logical_call_id=logical_call_id,
+        attempts=attempts,
+        fallback_reason=production_driver_module.SentinelFallbackReason.POLICY_EXCEPTION,
+        fallback_check="policy_exception",
+        action_executed=True,
+    )
+    deadline_ns = time.monotonic_ns() + 1_000_000_000
+    state = production_driver_module._ProductionUnitStateV1(
+        unit_id="fallback:conservative",
+        host=PilotHostV1.QWEN3_VL,
+        task_name="conservative-fallback-task",
+        deadline_monotonic_ns=deadline_ns,
+        cleanup_deadline_monotonic_ns=deadline_ns,
+        authority_deadline_monotonic_ns=deadline_ns,
+        attempt_termination_upper_bound_ns=0,
+        environment=None,
+        observation=None,
+        allow_safe_original_fallback=True,
+        policy=cast(Any, _Policy()),
+    )
+    port = object.__new__(production_driver_module._ProductionFixedExecutionPortV1)
+    object.__setattr__(port, "_run_fatal_latch", build_production_run_fatal_latch_v1())
+    object.__setattr__(
+        port,
+        "_factory",
+        SimpleNamespace(preflight_report_sha256="2" * 64, factory_binding_sha256="3" * 64),
+    )
+
+    decision = port._decision_from_receipt(state, receipt, actor_call_index=2)
+
+    assert receipt.live_cost_exact is False
+    assert history_attempt.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+    assert decision.raw_request_sha256 == decision.final_request_sha256
+    assert decision.final_request_sha256 == decision.provider_request_sha256
+    assert decision.census.cost_usd_micros == 18
 
 
 def test_unit_deadlines_reserve_hash_bound_cleanup_grace_before_dispatch() -> None:

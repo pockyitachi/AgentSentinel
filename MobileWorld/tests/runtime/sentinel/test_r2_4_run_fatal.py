@@ -253,6 +253,17 @@ def test_post_dispatch_unknown_accounting_irreversibly_trips_independent_latch(
         latch.require_clear()
     assert raised.value.code == "RUN_FATAL_LIVE_COST_ACCOUNTING_UNKNOWN"
 
+    settled_latch = build_production_run_fatal_latch_v1()
+    assert (
+        settled_latch.observe_attempts(
+            logical_call_id=attempt.logical_call_id,
+            attempts=(attempt,),
+            unknown_cost_conservatively_settled=True,
+        )
+        is None
+    )
+    settled_latch.require_clear()
+
 
 def test_zero_dispatch_unknown_accounting_does_not_trip_dispatch_latch() -> None:
     source = _accounting_unknown_attempt(LiveAttemptStatusV1.FAILED)

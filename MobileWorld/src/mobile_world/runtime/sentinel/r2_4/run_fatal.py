@@ -83,10 +83,11 @@ class ProductionRunFatalLatchV1:
         *,
         logical_call_id: str,
         attempts: tuple[LiveAttemptReceiptV1, ...],
+        unknown_cost_conservatively_settled: bool = False,
     ) -> ProductionRunFatalStateV1 | None:
         """Trip on the first unsafe terminal, with worker uncertainty first."""
 
-        if type(attempts) is not tuple:
+        if type(attempts) is not tuple or type(unknown_cost_conservatively_settled) is not bool:
             raise ProductionRunFatalError("UNTRUSTED_TYPE", "attempts must be an exact tuple")
         trusted = tuple(snapshot_live_attempt_receipt(item) for item in attempts)
         if any(item.logical_call_id != logical_call_id for item in trusted):
@@ -101,15 +102,23 @@ class ProductionRunFatalLatchV1:
         )
         failure_code = _TERMINATION_UNCONFIRMED
         if terminal is None:
-            terminal = next(
-                (
-                    item
-                    for item in trusted
-                    if item.dispatch_count > 0
-                    and item.cost_status is LiveAttemptCostStatusV1.UNKNOWN
-                ),
-                None,
+            unknown = tuple(
+                item
+                for item in trusted
+                if item.dispatch_count > 0 and item.cost_status is LiveAttemptCostStatusV1.UNKNOWN
             )
+            if (
+                unknown
+                and unknown_cost_conservatively_settled
+                and all(
+                    item.dispatch_count == 1
+                    and item.worker_reaped
+                    and item.status is not LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+                    for item in unknown
+                )
+            ):
+                return self.state
+            terminal = None if not unknown else unknown[0]
             failure_code = _LIVE_COST_ACCOUNTING_UNKNOWN
         if terminal is None:
             return self.state

@@ -243,6 +243,8 @@ _LIVE_BUDGET_LEDGER_SEAL = object()
 _HISTORY_REQUEST_PROOF_SEAL = object()
 _R22_RECEIPT_PUBLICATION_FAILURE_CODES = frozenset(
     {
+        "POLICY_RECEIPT_ADMISSION_FAILED",
+        "POLICY_RECEIPT_BINDING_FAILED",
         "POLICY_RECEIPT_PREPARE_FAILED",
         "POLICY_RECEIPT_PREPARE_MUTATED",
         "POLICY_RECEIPT_PUBLISH_FAILED",
@@ -255,6 +257,12 @@ _WITH_TOOL_SAFE_SEMANTIC_FAILURE_CODES = frozenset(
         "EVIDENCE_PACKET_REJECTED",
         "POLICY_DEADLINE_EXCEEDED",
         "POLICY_PROPOSAL_NOT_ADMITTED",
+        "POLICY_RECEIPT_ADMISSION_FAILED",
+        "POLICY_RECEIPT_BINDING_FAILED",
+        "POLICY_RECEIPT_PREPARE_FAILED",
+        "POLICY_RECEIPT_PREPARE_MUTATED",
+        "POLICY_RECEIPT_PUBLISH_FAILED",
+        "POLICY_RECEIPT_PUBLISH_MUTATED",
         "POLICY_RESPONSE_INVALID",
         "POLICY_TRANSPORT_ERROR",
         "RUBRIC_RELEVANCE_FALLBACK",
@@ -3185,6 +3193,7 @@ class ProductionLiveBudgetLedgerV1:
         "_case_grants",
         "_case_reserved",
         "_case_spent",
+        "_conservative_charges_by_logical_call",
         "_factory_binding_sha256",
         "_failed",
         "_global_grant",
@@ -3256,6 +3265,7 @@ class ProductionLiveBudgetLedgerV1:
         self._reservation_costs: dict[str, int] = {}
         self._reservation_id_by_logical_call: dict[str, str] = {}
         self._reservation_settled_costs: dict[str, int] = {}
+        self._conservative_charges_by_logical_call: dict[str, int] = {}
         self._pilot_case_keys = frozenset(pilot_case_keys)
         self._global_grant = global_grant
         self._global_reserved = 0
@@ -3403,7 +3413,14 @@ class ProductionLiveBudgetLedgerV1:
             if key not in self._pilot_case_keys:
                 return attempt_cost_ceiling_usd_micros
             attempt_ids = self._reservation_attempt_ids[reservation.reservation_id]
-            if attempt_id in attempt_ids or len(attempt_ids) >= reservation.expected_attempt_count:
+            if (
+                attempt_id in attempt_ids
+                or len(attempt_ids) >= reservation.expected_attempt_count
+                or any(
+                    owner_reservation_id == reservation.reservation_id
+                    for owner_reservation_id, _ in self._attempt_reservations.values()
+                )
+            ):
                 raise R24ContractError(
                     "LIVE_BUDGET_UNAVAILABLE", "request budget reservation is unavailable"
                 )
@@ -3454,9 +3471,13 @@ class ProductionLiveBudgetLedgerV1:
                     "LIVE_BUDGET_AUTHORITY_MISMATCH", "request settlement authority differs"
                 )
             amount = attempt_reservation[1]
+            if exact_cost_usd_micros is None:
+                # A durable UNKNOWN receipt keeps its request-specific reserve
+                # active.  Only the scoped Original-fallback settlement below
+                # may convert that upper bound into conservative spent cost.
+                return
             if (
-                exact_cost_usd_micros is None
-                or type(exact_cost_usd_micros) is not int
+                type(exact_cost_usd_micros) is not int
                 or exact_cost_usd_micros < 0
                 or exact_cost_usd_micros > amount
             ):
@@ -3515,6 +3536,104 @@ class ProductionLiveBudgetLedgerV1:
             if reservation.case_key not in self._pilot_case_keys:
                 self._case_reserved[reservation.case_key] -= reserved_cost
                 self._case_spent[reservation.case_key] += exact_cost_usd_micros
+
+    def settle_failed_call_conservative_cost(
+        self,
+        reservation: _LiveBudgetReservationV1,
+        *,
+        attempts: tuple[LiveAttemptReceiptV1, ...],
+    ) -> int:
+        """Charge UNKNOWN pilot attempts at their request-specific upper bounds."""
+
+        if type(reservation) is not _LiveBudgetReservationV1 or type(attempts) is not tuple:
+            raise R24ContractError("INVALID_LIVE_BUDGET", "failed-call settlement differs")
+        trusted_attempts = tuple(snapshot_live_attempt_receipt(value) for value in attempts)
+        with self._lock:
+            current = self._reservations.get(reservation.reservation_id)
+            reserved_cost = self._reservation_costs.get(reservation.reservation_id)
+            settled_cost = self._reservation_settled_costs.get(reservation.reservation_id)
+            formed_attempt_ids = self._reservation_attempt_ids.get(reservation.reservation_id)
+            receipt_ids = {item.attempt_id for item in trusted_attempts}
+            active = {
+                attempt_id: amount
+                for attempt_id, (owner_reservation_id, amount) in self._attempt_reservations.items()
+                if owner_reservation_id == reservation.reservation_id
+            }
+            unknown_ids = {
+                item.attempt_id
+                for item in trusted_attempts
+                if item.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+            }
+            known_cost = sum(
+                item.cost_usd_micros
+                for item in trusted_attempts
+                if item.cost_status is LiveAttemptCostStatusV1.EXACT
+                and item.cost_usd_micros is not None
+            )
+            conservative_charge = sum(active.values())
+            if (
+                self._failed
+                or current != reservation
+                or reservation.case_key not in self._pilot_case_keys
+                or reserved_cost is None
+                or settled_cost is None
+                or formed_attempt_ids is None
+                or not unknown_ids
+                or len(trusted_attempts) > reservation.expected_attempt_count
+                or len(receipt_ids) != len(trusted_attempts)
+                or receipt_ids != formed_attempt_ids
+                or set(active) != unknown_ids
+                or reserved_cost != conservative_charge
+                or conservative_charge <= 0
+                or known_cost != settled_cost
+                or any(
+                    item.logical_call_id != reservation.logical_call_id
+                    or f"{RunStageV1.R25_PILOT.value}:{item.case_id}" != reservation.case_key
+                    or item.status is LiveAttemptStatusV1.TERMINATION_UNCONFIRMED
+                    or item.dispatch_count not in {0, 1}
+                    or not item.worker_reaped
+                    or (
+                        item.cost_status is LiveAttemptCostStatusV1.EXACT
+                        and (item.cost_usd_micros is None or item.attempt_id in active)
+                    )
+                    or (
+                        item.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+                        and (
+                            item.dispatch_count != 1
+                            or item.cost_usd_micros is not None
+                            or item.attempt_id not in active
+                        )
+                    )
+                    for item in trusted_attempts
+                )
+            ):
+                self._failed = True
+                raise R24ContractError(
+                    "LIVE_COST_RESERVATION_EXCEEDED",
+                    "unknown failed call lacks a reaped receipt or conservative reserve",
+                )
+            for attempt_id in active:
+                del self._attempt_reservations[attempt_id]
+            self._case_reserved[reservation.case_key] -= conservative_charge
+            self._case_spent[reservation.case_key] += conservative_charge
+            self._global_reserved -= conservative_charge
+            self._global_spent += conservative_charge
+            self._conservative_charges_by_logical_call[reservation.logical_call_id] = (
+                conservative_charge
+            )
+            del self._reservations[reservation.reservation_id]
+            del self._reservation_attempt_ids[reservation.reservation_id]
+            del self._reservation_costs[reservation.reservation_id]
+            del self._reservation_settled_costs[reservation.reservation_id]
+            del self._reservation_id_by_logical_call[reservation.logical_call_id]
+            return conservative_charge
+
+    def conservative_charge_for_call(self, logical_call_id: str) -> int | None:
+        """Return the UNKNOWN-cost upper-bound charge after atomic settlement."""
+
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            return self._conservative_charges_by_logical_call.get(logical_call_id)
 
     def settle_failed_call_known_cost(
         self,
@@ -4348,6 +4467,20 @@ class OwnerAuthorizedLivePerCallPolicyV1:
                 )
             return logical_call_id in self._known_cost_original_fallbacks
 
+    def conservative_cost_original_fallback_charge_for_call(
+        self,
+        logical_call_id: str,
+    ) -> int | None:
+        """Return a batch-only UNKNOWN-cost upper-bound charge, if settled."""
+
+        _require_id(logical_call_id, "logical_call_id")
+        with self._lock:
+            if logical_call_id not in self._call_inputs:
+                raise R24ContractError(
+                    "PER_CALL_ATTEMPTS_UNAVAILABLE", "logical call was never registered"
+                )
+            return self._budget_ledger.conservative_charge_for_call(logical_call_id)
+
     def _settle_completed_proposal_rejection(
         self,
         reservation: _LiveBudgetReservationV1,
@@ -4400,11 +4533,17 @@ class OwnerAuthorizedLivePerCallPolicyV1:
             or failure_code not in _WITH_TOOL_SAFE_SEMANTIC_FAILURE_CODES
         ):
             return False
-        self._budget_ledger.settle_failed_call_known_cost(
-            reservation,
-            attempts=attempts,
-        )
-        self._known_cost_original_fallbacks.add(reservation.logical_call_id)
+        if any(item.cost_status is LiveAttemptCostStatusV1.UNKNOWN for item in attempts):
+            self._budget_ledger.settle_failed_call_conservative_cost(
+                reservation,
+                attempts=attempts,
+            )
+        else:
+            self._budget_ledger.settle_failed_call_known_cost(
+                reservation,
+                attempts=attempts,
+            )
+            self._known_cost_original_fallbacks.add(reservation.logical_call_id)
         return True
 
     def coordinated_record_for_call(self, logical_call_id: str) -> R24CoordinatedCallRecordV1:

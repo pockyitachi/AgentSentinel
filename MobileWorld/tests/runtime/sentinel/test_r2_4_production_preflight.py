@@ -223,7 +223,7 @@ def _sealed_openai_request_kwargs(role: LiveAttemptRoleV1) -> dict[str, object]:
         max_output_tokens = 8192
         content = [{"type": "input_text", "text": "{}"}]
     return {
-        "model": "gpt-5.6-sol",
+        "model": "gpt-5.6-luna",
         "instructions": instructions,
         "input": [{"role": "user", "content": content}],
         "reasoning": {"effort": reasoning_effort},
@@ -444,7 +444,7 @@ def _smoke(tmp_path: Path, host: PilotHostV1) -> HostLiveSmokePlanV1:
 def _history_policy_stage() -> OpenAIResponsesStageV1:
     return OpenAIResponsesStageV1(
         role=OpenAIRoleV1.HISTORY_POLICY,
-        model="gpt-5.6-sol",
+        model="gpt-5.6-luna",
         endpoint="https://api.openai.com/v1/responses",
         transport_kind="OPENAI_RESPONSES",
         transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
@@ -462,7 +462,7 @@ def _history_policy_stage() -> OpenAIResponsesStageV1:
 def _rubric_stage() -> OpenAIResponsesStageV1:
     return OpenAIResponsesStageV1(
         role=OpenAIRoleV1.RUBRIC,
-        model="gpt-5.6-sol",
+        model="gpt-5.6-luna",
         endpoint="https://api.openai.com/v1/responses",
         transport_kind="OPENAI_RESPONSES",
         transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
@@ -592,7 +592,7 @@ def _budget_factory(
     manifest, repo = _manifest(tmp_path)
     pricing = LiveAttemptPricingV1(
         pricing_id="r25-request-budget-fixture",
-        model="gpt-5.6-sol",
+        model="gpt-5.6-luna",
         input_usd_micros_per_million_tokens=4_000_000,
         cached_input_usd_micros_per_million_tokens=1_000_000,
         output_usd_micros_per_million_tokens=20_000_000,
@@ -759,8 +759,8 @@ def test_r25_request_cost_budget_settles_exact_semantic_rejection(
         worker_pid=12_001,
         worker_exit_code=0,
         worker_reaped=True,
-        requested_model="gpt-5.6-sol",
-        returned_model="gpt-5.6-sol",
+        requested_model="gpt-5.6-luna",
+        returned_model="gpt-5.6-luna",
     )
     completed_history = replace(
         completed_rubric,
@@ -821,6 +821,62 @@ def test_r25_request_cost_budget_settles_exact_semantic_rejection(
         attempts=(partial_attempt,),
     )
     assert partial_logical_call_id in policy._known_cost_original_fallbacks
+
+    unknown_logical_call_id = "r25-budget-conservative-fallback"
+    unknown_attempt_id = "r25-budget-conservative-history"
+    unknown_reservation = ledger.reserve_call(
+        descriptor,
+        logical_call_id=unknown_logical_call_id,
+        actor_call_index=4,
+        attempt_count=2,
+    )
+    assert (
+        ledger.reserve_request_cost(
+            stage=RunStageV1.R25_PILOT.value,
+            case_id=descriptor.case_id,
+            logical_call_id=unknown_logical_call_id,
+            attempt_id=unknown_attempt_id,
+            request_worst_case_cost_usd_micros=7,
+            attempt_cost_ceiling_usd_micros=descriptor.max_cost_usd_micros,
+        )
+        == 7
+    )
+    ledger.settle_request_cost(
+        stage=RunStageV1.R25_PILOT.value,
+        case_id=descriptor.case_id,
+        logical_call_id=unknown_logical_call_id,
+        attempt_id=unknown_attempt_id,
+        exact_cost_usd_micros=None,
+    )
+    unknown_attempt = replace(
+        completed_history,
+        attempt_id=unknown_attempt_id,
+        logical_call_id=unknown_logical_call_id,
+        status=LiveAttemptStatusV1.FAILED,
+        response_envelope_sha256=None,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        cost_status=LiveAttemptCostStatusV1.UNKNOWN,
+        cost_usd_micros=None,
+        cancellation_requested=False,
+        termination=LiveAttemptTerminationV1.TERM,
+        worker_exit_code=-15,
+        late_output_detected=False,
+        failure_code="PROVIDER_CHILD_FAILED",
+        requested_model=None,
+        returned_model=None,
+    )
+    assert policy._settle_known_cost_original_fallback(
+        unknown_reservation,
+        failure=R24ContractError("POLICY_TRANSPORT_ERROR", "provider child failed"),
+        attempts=(unknown_attempt,),
+    )
+    assert unknown_attempt.cost_status is LiveAttemptCostStatusV1.UNKNOWN
+    assert unknown_attempt.cost_usd_micros is None
+    assert ledger.conservative_charge_for_call(unknown_logical_call_id) == 7
+    assert unknown_logical_call_id not in policy._known_cost_original_fallbacks
 
 
 def test_r25_request_cost_budget_freezes_unknown_and_rejects_global_exhaustion(
@@ -1218,7 +1274,7 @@ def test_exact_role_bound_child_can_cancel_before_secret_or_dispatch(
     manifest, repo = _manifest(tmp_path)
     pricing = LiveAttemptPricingV1(
         pricing_id="owner-cli-pin",
-        model="gpt-5.6-sol",
+        model="gpt-5.6-luna",
         input_usd_micros_per_million_tokens=1_000_000,
         cached_input_usd_micros_per_million_tokens=100_000,
         output_usd_micros_per_million_tokens=2_000_000,
