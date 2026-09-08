@@ -208,6 +208,9 @@ PRODUCTION_PILOT_EVIDENCE_SCHEMA_VERSION_V2: Final[str] = (
 PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
     "mobileworld.runtime.sentinel-r2.5-with-tool-joint-batch-evidence/v1"
 )
+PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.5-with-tool-joint-batch-evidence/v2"
+)
 PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
     "mobileworld.runtime.sentinel-r2.4-model-handoff-evidence/v1"
 )
@@ -7644,10 +7647,16 @@ class WithToolJointBatchEvidenceV1:
     host: PilotHostV1
     cells: tuple[PilotCellEvidenceV1, ...]
     census: DriverStageCensusV1
+    full_task_count: int = 20
+    task_ordinal_start: int = 1
+    task_ordinal_end: int = 20
     schema_version: str = PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1
 
     def __post_init__(self) -> None:
-        if self.schema_version != PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1:
+        if self.schema_version not in {
+            PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1,
+            PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2,
+        }:
             raise ProductionDriverError("UNKNOWN_SCHEMA", "joint-batch evidence schema differs")
         _require_sha256(self.manifest_sha256, "manifest_sha256")
         _require_safe_id(self.run_id, "run_id")
@@ -7660,8 +7669,24 @@ class WithToolJointBatchEvidenceV1:
         if type(self.host) is not PilotHostV1:
             raise ProductionDriverError("INVALID_EVIDENCE", "joint-batch host differs")
         if (
+            type(self.full_task_count) is not int
+            or not 20 <= self.full_task_count <= 30
+            or type(self.task_ordinal_start) is not int
+            or type(self.task_ordinal_end) is not int
+            or not 1 <= self.task_ordinal_start <= self.task_ordinal_end
+            or self.task_ordinal_end != self.full_task_count
+            or (
+                self.schema_version == PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1
+                and self.task_ordinal_start != 1
+            )
+        ):
+            raise ProductionDriverError(
+                "INVALID_EVIDENCE", "joint-batch task ordinal segment differs"
+            )
+        expected_cell_count = self.task_ordinal_end - self.task_ordinal_start + 1
+        if (
             type(self.cells) is not tuple
-            or not 20 <= len(self.cells) <= 30
+            or len(self.cells) != expected_cell_count
             or any(type(item) is not PilotCellEvidenceV1 for item in self.cells)
             or any(
                 item.manifest_sha256 != self.manifest_sha256
@@ -7881,7 +7906,7 @@ def with_tool_joint_batch_evidence_projection(
 ) -> dict[str, JsonValue]:
     if type(value) is not WithToolJointBatchEvidenceV1:
         raise ProductionDriverError("UNTRUSTED_TYPE", "joint-batch evidence must use exact type")
-    return {
+    projection: dict[str, JsonValue] = {
         "actor_resources_sha256": value.actor_resources_sha256,
         "cells": [cast(JsonValue, _pilot_cell_evidence_projection(item)) for item in value.cells],
         "census": cast(JsonValue, _census_projection(value.census)),
@@ -7895,6 +7920,15 @@ def with_tool_joint_batch_evidence_projection(
         "schema_version": value.schema_version,
         "strict_matched_pilot_compatible": False,
     }
+    if value.schema_version == PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2:
+        projection.update(
+            {
+                "full_task_count": value.full_task_count,
+                "task_ordinal_end": value.task_ordinal_end,
+                "task_ordinal_start": value.task_ordinal_start,
+            }
+        )
+    return projection
 
 
 def smoke_stage_evidence_sha256(value: SmokeStageEvidenceV1) -> str:
@@ -8311,12 +8345,15 @@ def _validate_with_tool_joint_batch_reservation(
     context: StageAdapterContextV1,
     *,
     cell_count: int,
+    task_ordinal_start: int,
 ) -> None:
     actor = cell_count * pilot.max_steps_per_cell
     openai = cell_count * pilot.max_steps_per_cell * 2
     wall = cell_count * pilot.per_cell_timeout_seconds * 1_000
     if (
-        cell_count != len(pilot.tasks)
+        type(task_ordinal_start) is not int
+        or not 1 <= task_ordinal_start <= len(pilot.tasks)
+        or cell_count != len(pilot.tasks) - task_ordinal_start + 1
         or actor > context.remaining_actor_calls
         or openai > context.remaining_openai_calls
         or wall > context.remaining_wall_time_ms
@@ -12298,6 +12335,7 @@ class FixedPilotAdapterV1:
             context,
             lease,
             with_tool_batch_host=None,
+            with_tool_task_ordinal_start=1,
         )
 
     def run_with_tool_joint_batch(
@@ -12309,6 +12347,7 @@ class FixedPilotAdapterV1:
         lease: CaseAuthorityBrokerV1,
         *,
         host: PilotHostV1,
+        start_task_ordinal: int = 1,
     ) -> AdapterStageResultV1:
         """Run only the frozen ACTIVE cell for ``host`` and no fresh baseline.
 
@@ -12318,6 +12357,8 @@ class FixedPilotAdapterV1:
 
         if type(host) is not PilotHostV1:
             raise ProductionDriverError("UNTRUSTED_TYPE", "joint-batch host differs")
+        if type(start_task_ordinal) is not int:
+            raise ProductionDriverError("UNTRUSTED_TYPE", "joint-batch start task ordinal differs")
         return self._run(
             pilot,
             actor_resources,
@@ -12325,6 +12366,7 @@ class FixedPilotAdapterV1:
             context,
             lease,
             with_tool_batch_host=host,
+            with_tool_task_ordinal_start=start_task_ordinal,
         )
 
     def _run(
@@ -12336,6 +12378,7 @@ class FixedPilotAdapterV1:
         lease: CaseAuthorityBrokerV1,
         *,
         with_tool_batch_host: PilotHostV1 | None,
+        with_tool_task_ordinal_start: int,
     ) -> AdapterStageResultV1:
         with self._lock:
             if self._evidence is not None:
@@ -12350,21 +12393,27 @@ class FixedPilotAdapterV1:
             if with_tool_batch_host is None:
                 selected_cells = tuple(enumerate(trusted_pilot.cells))
             else:
-                selected_cells = tuple(
+                host_cells = tuple(
                     (index, cell)
                     for index, cell in enumerate(trusted_pilot.cells)
                     if cell.host is with_tool_batch_host and cell.arm is PilotArmV1.JOINT_SENTINEL
                 )
                 if (
-                    len(selected_cells) != len(trusted_pilot.tasks)
-                    or tuple(cell.task_id for _, cell in selected_cells)
+                    len(host_cells) != len(trusted_pilot.tasks)
+                    or tuple(cell.task_id for _, cell in host_cells)
                     != tuple(task.task_id for task in trusted_pilot.tasks)
-                    or any(cell.sentinel_mode != "ACTIVE" for _, cell in selected_cells)
+                    or any(cell.sentinel_mode != "ACTIVE" for _, cell in host_cells)
                 ):
                     raise ProductionDriverError(
                         "WITH_TOOL_BATCH_MATRIX_MISMATCH",
                         "batch must contain one frozen ACTIVE joint cell per task",
                     )
+                if not 1 <= with_tool_task_ordinal_start <= len(host_cells):
+                    raise ProductionDriverError(
+                        "WITH_TOOL_BATCH_TASK_ORDINAL_INVALID",
+                        "joint-batch start task ordinal is outside the frozen cohort",
+                    )
+                selected_cells = host_cells[with_tool_task_ordinal_start - 1 :]
             self._failure_evidence = canonical_json_bytes(
                 cast(
                     JsonValue,
@@ -12380,6 +12429,14 @@ class FixedPilotAdapterV1:
                         ),
                         "batch_host": (
                             None if with_tool_batch_host is None else with_tool_batch_host.value
+                        ),
+                        **(
+                            {
+                                "full_task_count": len(trusted_pilot.tasks),
+                                "task_ordinal_start": with_tool_task_ordinal_start,
+                            }
+                            if with_tool_batch_host is not None
+                            else {}
                         ),
                         "manifest_sha256": trusted_context.manifest_sha256,
                         "run_id": trusted_context.run_id,
@@ -12408,6 +12465,7 @@ class FixedPilotAdapterV1:
                     trusted_pilot,
                     trusted_context,
                     cell_count=len(selected_cells),
+                    task_ordinal_start=with_tool_task_ordinal_start,
                 )
             resource_hashes = {value.host: _resource_sha256(value) for value in resources}
             resources_sha = _hash_projection(
@@ -12930,6 +12988,14 @@ class FixedPilotAdapterV1:
                     host=with_tool_batch_host,
                     cells=tuple(records),
                     census=census,
+                    full_task_count=len(trusted_pilot.tasks),
+                    task_ordinal_start=with_tool_task_ordinal_start,
+                    task_ordinal_end=len(trusted_pilot.tasks),
+                    schema_version=(
+                        PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1
+                        if with_tool_task_ordinal_start == 1
+                        else PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2
+                    ),
                 )
                 evidence_projection = with_tool_joint_batch_evidence_projection(evidence)
                 evidence_sha256 = with_tool_joint_batch_evidence_sha256(evidence)
@@ -13115,6 +13181,7 @@ __all__ = [
     "OFFICIAL_RESULT_EVALUATOR_ID_V1",
     "PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION",
     "PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1",
+    "PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2",
     "PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_PILOT_MODEL_SWITCH_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1",

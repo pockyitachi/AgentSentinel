@@ -842,14 +842,20 @@ def test_cli_execute_requires_complete_owner_pinned_inputs_and_emits_no_secret(
 
 
 @pytest.mark.parametrize(
-    "execute_flag",
-    ("--execute", "--execute-with-tool-batches", "--execute-joint-batches"),
+    ("execute_flag", "expected_qwen_start_task_ordinal"),
+    (
+        ("--execute", 1),
+        ("--execute-with-tool-batches", 1),
+        ("--execute-joint-batches", 1),
+        ("--execute", 9),
+    ),
 )
 def test_cli_execute_aliases_route_only_to_with_tool_batches(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     execute_flag: str,
+    expected_qwen_start_task_ordinal: int,
 ) -> None:
     manifest = _manifest(tmp_path)
     manifest_path = tmp_path / "authority.json"
@@ -879,41 +885,44 @@ def test_cli_execute_aliases_route_only_to_with_tool_batches(
         *,
         manifest_sha256: str,
         setup: object,
+        qwen_start_task_ordinal: int,
     ) -> dict[str, JsonValue]:
         assert authority_manifest_sha256(candidate) == manifest_sha256
         assert setup is expected_setup
+        assert qwen_start_task_ordinal == expected_qwen_start_task_ordinal
         calls.append("with_tool_batches")
         return {
             "comparison_design": "WITH_TOOL_VS_HISTORICAL_NONPAIRED",
-            "with_tool_cell_count": 40,
+            "with_tool_cell_count": 40 if qwen_start_task_ordinal == 1 else 32,
         }
 
     monkeypatch.setattr(module, "_build_execution_setup", build_setup)
     monkeypatch.setattr(module, "_execute_with_tool_batches", execute_batches)
     now = datetime.now(UTC).replace(microsecond=0)
-    result = module.main(
-        [
-            "--authority-manifest",
-            str(manifest_path),
-            execute_flag,
-            "--confirm-manifest-sha256",
-            manifest_sha256,
-            "--preflight-checked-at-utc",
-            now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "--confirm-preflight-report-sha256",
-            "b" * 64,
-            "--runtime-config",
-            str(tmp_path / "runtime.json"),
-            "--confirm-runtime-config-sha256",
-            "c" * 64,
-            "--pricing",
-            str(tmp_path / "pricing.json"),
-            "--confirm-pricing-sha256",
-            "d" * 64,
-            "--production-audit-root",
-            str(tmp_path / "audit"),
-        ]
-    )
+    argv = [
+        "--authority-manifest",
+        str(manifest_path),
+        execute_flag,
+        "--confirm-manifest-sha256",
+        manifest_sha256,
+        "--preflight-checked-at-utc",
+        now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "--confirm-preflight-report-sha256",
+        "b" * 64,
+        "--runtime-config",
+        str(tmp_path / "runtime.json"),
+        "--confirm-runtime-config-sha256",
+        "c" * 64,
+        "--pricing",
+        str(tmp_path / "pricing.json"),
+        "--confirm-pricing-sha256",
+        "d" * 64,
+        "--production-audit-root",
+        str(tmp_path / "audit"),
+    ]
+    if expected_qwen_start_task_ordinal != 1:
+        argv.extend(["--qwen-start-task-ordinal", str(expected_qwen_start_task_ordinal)])
+    result = module.main(argv)
 
     captured = capsys.readouterr()
     assert result == 0
@@ -924,7 +933,7 @@ def test_cli_execute_aliases_route_only_to_with_tool_batches(
     assert output["execution_scope"] == "R25_WITH_TOOL_BATCHES"
     assert output["result"] == {
         "comparison_design": "WITH_TOOL_VS_HISTORICAL_NONPAIRED",
-        "with_tool_cell_count": 40,
+        "with_tool_cell_count": 40 if expected_qwen_start_task_ordinal == 1 else 32,
     }
 
 

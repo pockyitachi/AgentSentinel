@@ -596,7 +596,7 @@ def _shared_context(**kwargs: int) -> StageAdapterContextV1:
 def _policy_stage() -> OpenAIResponsesStageV1:
     return OpenAIResponsesStageV1(
         role=OpenAIRoleV1.HISTORY_POLICY,
-        model="gpt-5.6-sol",
+        model="gpt-5.6-luna",
         endpoint="https://api.openai.com/v1/responses",
         transport_kind="OPENAI_RESPONSES",
         transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
@@ -5457,7 +5457,7 @@ def test_fixed_pilot_adapter_runs_matched_20_task_80_cell_reset_action_result_ma
     )
 
 
-def test_with_tool_joint_batches_use_fresh_selected_host_and_only_20_active_cells(
+def test_with_tool_joint_batches_support_qwen_continuation_then_full_mai(
     tmp_path: Path,
 ) -> None:
     pilot = replace(
@@ -5469,16 +5469,20 @@ def test_with_tool_joint_batches_use_fresh_selected_host_and_only_20_active_cell
         max_total_openai_calls=4_000,
     )
     resources = _resources(tmp_path)
-    context = _context(
-        actor_calls=1_000,
-        openai_calls=2_000,
-        wall_time_ms=72_000_000,
-    )
+    segment_counts: list[int] = []
+    segment_contexts: list[StageAdapterContextV1] = []
 
-    for host, first_index in (
-        (PilotHostV1.QWEN3_VL, 1),
-        (PilotHostV1.MAI_UI, 3),
+    for host, first_index, start_task_ordinal, expected_cell_count in (
+        (PilotHostV1.QWEN3_VL, 33, 9, 12),
+        (PilotHostV1.MAI_UI, 3, 1, 20),
     ):
+        context = _context(
+            actor_calls=expected_cell_count * 50,
+            openai_calls=expected_cell_count * 100,
+            wall_time_ms=expected_cell_count * 3_600_000,
+        )
+        segment_counts.append(expected_cell_count)
+        segment_contexts.append(context)
         lifecycle = build_cpu_test_resource_lifecycle_adapter_v1(_shared_runtime_config(tmp_path))
         switch_authority = _cpu_pilot_switch_authority(lifecycle, pilot, context)
         try:
@@ -5500,17 +5504,28 @@ def test_with_tool_joint_batches_use_fresh_selected_host_and_only_20_active_cell
                 context,
                 _Lease(context.manifest_sha256),
                 host=host,
+                start_task_ordinal=start_task_ordinal,
             )
             evidence = adapters.pilot.evidence
             assert isinstance(
                 evidence,
                 production_driver_module.WithToolJointBatchEvidenceV1,
             )
-            assert (result.actor_calls, result.openai_calls, result.actor_actions) == (20, 40, 20)
-            assert len(evidence.cells) == len(result.completed_units) == 20
+            assert (result.actor_calls, result.openai_calls, result.actor_actions) == (
+                expected_cell_count,
+                2 * expected_cell_count,
+                expected_cell_count,
+            )
+            assert len(evidence.cells) == len(result.completed_units) == expected_cell_count
             assert tuple(item.sequence_index for item in evidence.cells) == tuple(
                 range(first_index, len(pilot.cells), 4)
             )
+            assert tuple(item.task_id for item in evidence.cells) == tuple(
+                item.task_id for item in pilot.tasks[start_task_ordinal - 1 :]
+            )
+            assert evidence.full_task_count == 20
+            assert evidence.task_ordinal_start == start_task_ordinal
+            assert evidence.task_ordinal_end == 20
             assert all(
                 item.host is host
                 and item.arm is PilotArmV1.JOINT_SENTINEL
@@ -5523,13 +5538,35 @@ def test_with_tool_joint_batches_use_fresh_selected_host_and_only_20_active_cell
             assert projection["comparison_baseline"] == "HISTORICAL_NONPAIRED"
             assert projection["fresh_baseline_cell_count"] == 0
             assert projection["strict_matched_pilot_compatible"] is False
+            if start_task_ordinal == 1:
+                assert "task_ordinal_start" not in projection
+            else:
+                assert projection["task_ordinal_start"] == 9
+                assert projection["task_ordinal_end"] == 20
+                assert projection["full_task_count"] == 20
             assert result.evidence_sha256 == (
                 production_driver_module.with_tool_joint_batch_evidence_sha256(evidence)
             )
-            assert adapters.cpu_trace.pilot_dispatches == 20
-            assert not adapters.cpu_trace.smoke_dispatches
+            trace = adapters.cpu_trace
+            assert (
+                trace.pilot_resets,
+                trace.pilot_dispatches,
+                trace.cleanup_attempts,
+            ) == (expected_cell_count, expected_cell_count, expected_cell_count)
+            assert trace.events[:3] == (
+                f"RESET:pilot:{first_index:03d}",
+                f"RUN:pilot:{first_index:03d}",
+                f"CLEANUP:pilot:{first_index:03d}",
+            )
+            assert not trace.smoke_dispatches
         finally:
             lifecycle.cleanup(context)
+
+    assert segment_counts == [12, 20]
+    assert sum(segment_counts) == 32
+    assert sum(item.remaining_actor_calls for item in segment_contexts) == 32 * 50
+    assert sum(item.remaining_openai_calls for item in segment_contexts) == 32 * 50 * 2
+    assert sum(item.remaining_wall_time_ms for item in segment_contexts) == 32 * 3_600_000
 
 
 def test_pilot_cell_evidence_projection_crossing_cell_deadline_is_not_admitted(

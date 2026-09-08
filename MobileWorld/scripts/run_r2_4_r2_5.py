@@ -5,7 +5,7 @@ Dry-run is the default and performs no network, GPU, Docker, model, backend,
 secret-read, or actor-action operation. ``--execute`` is reachable only after
 the operator supplies four exact hash confirmations and a recent, reproducible
 deep-preflight timestamp. It is an alias for ``--execute-with-tool-batches``:
-fresh Qwen treatment cells, cleanup, then fresh MAI treatment cells.
+fresh Qwen treatment suffix, cleanup, then all fresh MAI treatment cells.
 """
 
 from __future__ import annotations
@@ -128,9 +128,9 @@ def _parser() -> argparse.ArgumentParser:
         dest="execute_with_tool_batches",
         action="store_true",
         help=(
-            "Run the historical-control treatment path: fresh Qwen backend/model for "
-            "20 ACTIVE 50-step cells, cleanup, then fresh MAI backend/model for 20 cells. "
-            "No smoke or fresh baseline is run. --execute is an alias for this mode."
+            "Run the historical-control treatment path: fresh Qwen backend/model for the "
+            "selected ACTIVE 50-step suffix, cleanup, then fresh MAI backend/model for all "
+            "20 cells. No smoke or fresh baseline is run. --execute is an alias for this mode."
         ),
     )
     parser.add_argument("--confirm-manifest-sha256")
@@ -147,6 +147,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--pricing", type=Path)
     parser.add_argument("--confirm-pricing-sha256")
     parser.add_argument("--production-audit-root", type=Path)
+    parser.add_argument(
+        "--qwen-start-task-ordinal",
+        type=int,
+        default=1,
+        help=(
+            "One-based frozen-cohort task ordinal for the fresh Qwen batch; "
+            "MAI always runs the complete cohort. Defaults to 1."
+        ),
+    )
     return parser
 
 
@@ -508,9 +517,15 @@ def _execute_with_tool_batches(
     *,
     manifest_sha256: str,
     setup: _WithToolExecutionSetup,
+    qwen_start_task_ordinal: int = 1,
 ) -> dict[str, JsonValue]:
     task_count = len(manifest.pilot.tasks)
-    if task_count != 20 or manifest.pilot.max_steps_per_cell != _WITH_TOOL_MAX_STEPS:
+    if (
+        task_count != 20
+        or manifest.pilot.max_steps_per_cell != _WITH_TOOL_MAX_STEPS
+        or type(qwen_start_task_ordinal) is not int
+        or not 1 <= qwen_start_task_ordinal <= task_count
+    ):
         raise _CliContractError("WITH_TOOL_BATCH_SHAPE_MISMATCH")
     resolved_pilot_inputs_sha256 = resolved_pilot_task_inputs_sha256(
         resolve_pilot_task_inputs_v1(
@@ -519,19 +534,23 @@ def _execute_with_tool_batches(
             repository_root=REPOSITORY_ROOT,
         )
     )
-    treatment_actor_cap = 2 * task_count * _WITH_TOOL_MAX_STEPS
+    qwen_task_count = task_count - qwen_start_task_ordinal + 1
+    batch_task_counts = (qwen_task_count, task_count)
+    new_cell_count = sum(batch_task_counts)
+    treatment_actor_cap = new_cell_count * _WITH_TOOL_MAX_STEPS
     treatment_openai_cap = 2 * treatment_actor_cap
-    treatment_wall_time_cap_ms = 2 * task_count * manifest.pilot.per_cell_timeout_seconds * 1_000
+    treatment_wall_time_cap_ms = new_cell_count * manifest.pilot.per_cell_timeout_seconds * 1_000
 
     started_ns = time.monotonic_ns()
     integrity_seconds = manifest.max_post_run_integrity_wall_time_seconds
     if type(integrity_seconds) is not int:
         raise _CliContractError("V2_WITH_TOOL_AUTHORITY_BINDING_MISSING")
-    batch_work_seconds = (
+    batch_work_seconds = tuple(
         manifest.max_resource_preflight_wall_time_seconds
-        + task_count * manifest.pilot.per_cell_timeout_seconds
+        + count * manifest.pilot.per_cell_timeout_seconds
+        for count in batch_task_counts
     )
-    required_seconds = 2 * (batch_work_seconds + setup.cleanup_seconds) + integrity_seconds
+    required_seconds = sum(batch_work_seconds) + 2 * setup.cleanup_seconds + integrity_seconds
     expires_at = datetime.strptime(
         manifest.authorization.expires_at_utc, "%Y-%m-%dT%H:%M:%SZ"
     ).replace(tzinfo=UTC)
@@ -542,8 +561,8 @@ def _execute_with_tool_batches(
         raise _CliContractError("WITH_TOOL_SEQUENCE_BUDGET_EXCEEDED")
     cursor_ns = started_ns
     deadlines: list[tuple[int, int, int]] = []
-    for index in range(2):
-        work_deadline_ns = cursor_ns + batch_work_seconds * 1_000_000_000
+    for index, work_seconds in enumerate(batch_work_seconds):
+        work_deadline_ns = cursor_ns + work_seconds * 1_000_000_000
         cleanup_deadline_ns = work_deadline_ns + setup.cleanup_seconds * 1_000_000_000
         integrity_share = integrity_seconds // 2 + (integrity_seconds % 2 if index else 0)
         integrity_deadline_ns = cleanup_deadline_ns + integrity_share * 1_000_000_000
@@ -556,6 +575,8 @@ def _execute_with_tool_batches(
 
     for batch_index, host in enumerate((PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)):
         work_deadline_ns, cleanup_deadline_ns, integrity_deadline_ns = deadlines[batch_index]
+        batch_task_count = batch_task_counts[batch_index]
+        task_ordinal_start = qwen_start_task_ordinal if batch_index == 0 else 1
         lifecycle = (
             setup.first_resource_adapter
             if batch_index == 0
@@ -587,8 +608,8 @@ def _execute_with_tool_batches(
             sequence_scope_authority_sha256=manifest_sha256,
             run_id=manifest.run_id,
             source_commit=manifest.source_commit,
-            remaining_actor_calls=treatment_actor_cap // 2,
-            remaining_openai_calls=treatment_openai_cap // 2,
+            remaining_actor_calls=batch_task_count * _WITH_TOOL_MAX_STEPS,
+            remaining_openai_calls=2 * batch_task_count * _WITH_TOOL_MAX_STEPS,
             remaining_cost_usd_micros=manifest.pilot.max_total_cost_usd_micros,
             remaining_wall_time_ms=(work_deadline_ns - batch_started_ns) // 1_000_000,
             authority_deadline_monotonic_ns=work_deadline_ns,
@@ -614,6 +635,7 @@ def _execute_with_tool_batches(
                     context,
                     broker,
                     host=host,
+                    start_task_ordinal=task_ordinal_start,
                 )
             finally:
                 broker.close()
@@ -648,18 +670,25 @@ def _execute_with_tool_batches(
             raise _CliContractError("WITH_TOOL_COLLECTOR_INTEGRITY_TIMEOUT")
         batch_evidences.append(batch_evidence)
         backend_container_ids.append(resource_evidence.backend_container_id)
-        batches.append(
-            {
-                "census": evidence_projection["census"],
-                "cleanup_evidence_sha256": cleanup_sha256,
-                "collector_integrity_checks": cast(JsonValue, integrity_checks),
-                "evidence_sha256": batch_result.evidence_sha256,
-                "evidence_projection": cast(JsonValue, evidence_projection),
-                "host": host.value,
-                "resource_evidence_sha256": resource_result.evidence_sha256,
-                "wall_time_ms": (time.monotonic_ns() - batch_started_ns + 999_999) // 1_000_000,
-            }
-        )
+        batch_output: dict[str, JsonValue] = {
+            "census": evidence_projection["census"],
+            "cleanup_evidence_sha256": cleanup_sha256,
+            "collector_integrity_checks": cast(JsonValue, integrity_checks),
+            "evidence_sha256": batch_result.evidence_sha256,
+            "evidence_projection": cast(JsonValue, evidence_projection),
+            "host": host.value,
+            "resource_evidence_sha256": resource_result.evidence_sha256,
+            "wall_time_ms": (time.monotonic_ns() - batch_started_ns + 999_999) // 1_000_000,
+        }
+        if qwen_start_task_ordinal != 1:
+            batch_output.update(
+                {
+                    "task_ordinal_end": task_count,
+                    "task_ordinal_start": task_ordinal_start,
+                    "with_tool_cell_count": batch_task_count,
+                }
+            )
+        batches.append(batch_output)
 
     actor_calls = sum(item.census.actor_calls for item in batch_evidences)
     openai_calls = sum(item.census.openai_calls for item in batch_evidences)
@@ -678,7 +707,7 @@ def _execute_with_tool_batches(
     )
     if (
         len(set(backend_container_ids)) != 2
-        or integrity_count != 2 * task_count
+        or integrity_count != new_cell_count
         or actor_calls > treatment_actor_cap
         or actor_calls > manifest.pilot.max_total_actor_calls
         or openai_calls > treatment_openai_cap
@@ -691,7 +720,7 @@ def _execute_with_tool_batches(
     total_wall_time_ms = (time.monotonic_ns() - started_ns + 999_999) // 1_000_000
     if total_wall_time_ms > manifest.max_sequence_wall_time_seconds * 1_000:
         raise _CliContractError("WITH_TOOL_SEQUENCE_BUDGET_EXCEEDED")
-    return {
+    output: dict[str, JsonValue] = {
         "audit_root": str(setup.audit_root),
         "batches": cast(JsonValue, batches),
         "census": {
@@ -723,8 +752,19 @@ def _execute_with_tool_batches(
         "sentinel_config_sha256": manifest.sentinel_config_sha256,
         "strict_matched_pilot_compatible": False,
         "total_wall_time_ms": total_wall_time_ms,
-        "with_tool_cell_count": 2 * task_count,
+        "with_tool_cell_count": new_cell_count,
     }
+    if qwen_start_task_ordinal != 1:
+        output.update(
+            {
+                "continuation": {
+                    "qwen_prior_task_count_not_reexecuted": qwen_start_task_ordinal - 1,
+                    "qwen_start_task_ordinal": qwen_start_task_ordinal,
+                },
+                "schema_version": "mobileworld.runtime.sentinel.r2.5-with-tool-two-batch-run/v2",
+            }
+        )
+    return output
 
 
 def _error_code(exc: BaseException) -> str:
@@ -745,6 +785,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         manifest_hash = authority_manifest_sha256(manifest)
         if execution_requested:
+            if not 1 <= arguments.qwen_start_task_ordinal <= len(manifest.pilot.tasks):
+                raise _CliContractError("WITH_TOOL_BATCH_SHAPE_MISMATCH")
             _require_execute_arguments(arguments)
             if arguments.confirm_manifest_sha256 != manifest_hash:
                 raise _CliContractError("MANIFEST_CONFIRMATION_MISMATCH")
@@ -765,6 +807,7 @@ def main(argv: list[str] | None = None) -> int:
                 manifest,
                 manifest_sha256=manifest_hash,
                 setup=setup,
+                qwen_start_task_ordinal=arguments.qwen_start_task_ordinal,
             )
             print(
                 json.dumps(
