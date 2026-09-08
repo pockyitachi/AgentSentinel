@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from copy import deepcopy
+from threading import Lock
 from typing import Any, cast
 
 from mobile_world.offline.causal_replay.contracts import HistoryIR, JsonValue
@@ -83,6 +85,15 @@ class LeanActiveRuntimePolicyV1:
         self._source_transport_descriptor_sha256 = descriptor_sha256
         self._source_transport_binding_sha256 = binding_sha256
         self._execution_authority_sha256 = authority
+        # The coordinator, rubric session, provider context store, and admission
+        # bridge are task-local state machines.  Keep one logical call in that
+        # stateful path at a time, including while the seam joins a timed-out
+        # worker.
+        self._evaluation_lock = Lock()
+        # The seam holds this separate gate in its caller thread while its
+        # policy worker runs.  A later logical call therefore cannot start its
+        # own timeout clock while the prior timed-out worker is being joined.
+        self._logical_call_gate = Lock()
 
     @property
     def policy_id(self) -> str:
@@ -99,6 +110,12 @@ class LeanActiveRuntimePolicyV1:
     @property
     def execution_authority_sha256(self) -> str:
         return self._execution_authority_sha256
+
+    def run_with_logical_call_gate[T](self, call: Callable[[], T]) -> T:
+        if not callable(call):
+            raise TypeError("logical-call gate requires a callable")
+        with self._logical_call_gate:
+            return call()
 
     @staticmethod
     def _inputs(
@@ -137,12 +154,13 @@ class LeanActiveRuntimePolicyV1:
         history_ir: HistoryIR,
     ) -> RuntimeVerticalPolicyOutputV1:
         request_copy, context_copy, history_copy = self._inputs(request, context, history_ir)
-        source = self._source_policy.evaluate(
-            request=request_copy,
-            context=context_copy,
-            history_ir=history_copy,
-        )
-        return self._promote(source, context.logical_call_id)
+        with self._evaluation_lock:
+            source = self._source_policy.evaluate(
+                request=request_copy,
+                context=context_copy,
+                history_ir=history_copy,
+            )
+            return self._promote(source, context.logical_call_id)
 
     def evaluate_with_control(
         self,
@@ -153,13 +171,14 @@ class LeanActiveRuntimePolicyV1:
         execution_control: PolicyExecutionControlV1,
     ) -> RuntimeVerticalPolicyOutputV1:
         request_copy, context_copy, history_copy = self._inputs(request, context, history_ir)
-        source = self._source_policy.evaluate_with_control(
-            request=request_copy,
-            context=context_copy,
-            history_ir=history_copy,
-            execution_control=execution_control,
-        )
-        return self._promote(source, context.logical_call_id)
+        with self._evaluation_lock:
+            source = self._source_policy.evaluate_with_control(
+                request=request_copy,
+                context=context_copy,
+                history_ir=history_copy,
+                execution_control=execution_control,
+            )
+            return self._promote(source, context.logical_call_id)
 
     def prepare_no_history_with_control(
         self,
@@ -170,7 +189,8 @@ class LeanActiveRuntimePolicyV1:
     ) -> R24CoordinatedCallRecordV1:
         if not isinstance(execution_control, PolicyExecutionControlV1):
             raise TypeError("no-history rubric preparation needs the seam execution fence")
-        return self._coordinator.prepare_no_history(deepcopy(request), deepcopy(context))
+        with self._evaluation_lock:
+            return self._coordinator.prepare_no_history(deepcopy(request), deepcopy(context))
 
 
 __all__ = ["LeanActiveRuntimePolicyV1"]

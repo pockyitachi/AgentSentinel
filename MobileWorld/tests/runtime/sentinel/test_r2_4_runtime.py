@@ -7,7 +7,7 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from io import BytesIO
-from threading import Event
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -991,6 +991,100 @@ def test_lean_active_seam_keeps_r23_duplicate_prune(monkeypatch) -> None:
     assert result.receipt.edit_applied
     assert result.final_request != built.request
     assert result.bridge.decision_kinds == (SentinelDecisionKind.DROP,)
+
+
+def test_lean_timeout_joins_and_serializes_the_next_logical_call(monkeypatch) -> None:
+    built = _build_adapter_case("qwen")
+    source, _receipts = _source_policy(
+        built,
+        _R22FakeTransport(json.dumps(_r22_proposal(built.packet))),
+    )
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=CollectorEvidenceFactoryV1(),
+        session_factory=lambda _task_run_id, _task: None,
+    )
+    policy = LeanActiveRuntimePolicyV1(source, coordinator=coordinator)
+    first_entered = Event()
+    second_entered = Event()
+    release = Event()
+    state_lock = Lock()
+    active = 0
+    maximum_active = 0
+    invocation_count = 0
+
+    def blocked_evaluate(**_kwargs: Any) -> Any:
+        nonlocal active, maximum_active, invocation_count
+        with state_lock:
+            invocation_count += 1
+            invocation = invocation_count
+            active += 1
+            maximum_active = max(maximum_active, active)
+        try:
+            if invocation == 1:
+                first_entered.set()
+                assert release.wait(2)
+            else:
+                second_entered.set()
+            raise RuntimeError("injected provider failure")
+        finally:
+            with state_lock:
+                active -= 1
+
+    monkeypatch.setattr(source, "evaluate_with_control", blocked_evaluate)
+    sentinel = PromptSentinel(
+        policy=policy,
+        codec_registry=build_runtime_history_codec_resolver(),
+        host_configs={
+            built.context.host_id: SentinelHostConfig(
+                mode=SentinelMode.ACTIVE,
+                policy_timeout_ms=20,
+            )
+        },
+        receipt_sink=MemorySentinelReceiptSink(),
+        global_switch=SentinelGlobalSwitch(),
+    )
+    results: dict[str, Any] = {}
+    errors: list[BaseException] = []
+
+    def invoke(logical_call_id: str) -> None:
+        try:
+            results[logical_call_id] = sentinel.before_model_call(
+                cast(JsonValue, built.request),
+                replace(built.context, logical_call_id=logical_call_id),
+                QWEN_CODEC_ID,
+                SentinelCallRole.ACTOR,
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    first = Thread(target=invoke, args=("lean-timeout-call-1",))
+    first.start()
+    assert first_entered.wait(1)
+    time.sleep(0.05)
+    assert first.is_alive(), "timeout must join the still-running task-local worker"
+
+    second = Thread(target=invoke, args=("lean-timeout-call-2",))
+    second.start()
+    time.sleep(0.05)
+    assert not second_entered.is_set()
+
+    release.set()
+    first.join(2)
+    second.join(2)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert errors == []
+    assert second_entered.is_set()
+    assert maximum_active == 1
+    assert set(results) == {"lean-timeout-call-1", "lean-timeout-call-2"}
+    assert (
+        results["lean-timeout-call-1"].receipt.fallback_reason
+        is SentinelFallbackReason.POLICY_TIMEOUT
+    )
+    assert (
+        results["lean-timeout-call-2"].receipt.fallback_reason
+        is SentinelFallbackReason.POLICY_EXCEPTION
+    )
 
 
 @pytest.mark.parametrize(

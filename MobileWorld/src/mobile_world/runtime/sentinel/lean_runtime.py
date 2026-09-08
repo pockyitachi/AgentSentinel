@@ -20,7 +20,12 @@ from typing import cast
 
 from openai import DefaultHttpxClient, OpenAI, Timeout
 
-from mobile_world.offline.causal_replay.contracts import HistoryIR, JsonValue, copy_json
+from mobile_world.offline.causal_replay.contracts import (
+    HistoryIR,
+    JsonValue,
+    canonical_json_bytes,
+    copy_json,
+)
 from mobile_world.runtime.sentinel.contracts import (
     SentinelContext,
     SentinelHostConfig,
@@ -29,6 +34,7 @@ from mobile_world.runtime.sentinel.contracts import (
 from mobile_world.runtime.sentinel.r2_2.contracts import (
     EvidencePacketV1,
     RuntimeAdmissionBundleV1,
+    evidence_packet_projection,
 )
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
     GPT56SentinelPolicy,
@@ -63,13 +69,11 @@ _MAI_HOST_ID = "mobileworld.mai-ui.actor"
 
 
 class _AdmissionBridgeV1:
-    """Retain the exact request/IR authority for one sequential policy call."""
+    """Retain exact admission inputs, isolated by logical actor call."""
 
     def __init__(self, coordinator: R24RuntimeCoordinatorV1) -> None:
         self._coordinator = coordinator
-        self._packet: EvidencePacketV1 | None = None
-        self._request: JsonValue | None = None
-        self._history_ir: HistoryIR | None = None
+        self._pending: dict[str, tuple[EvidencePacketV1, JsonValue, HistoryIR]] = {}
         self._lock = Lock()
 
     def evidence(
@@ -79,10 +83,19 @@ class _AdmissionBridgeV1:
         history_ir: HistoryIR,
     ):
         evidence = self._coordinator(request, context, history_ir)
+        packet = deepcopy(evidence.packet)
+        if type(packet) is not EvidencePacketV1:
+            raise RuntimeError("Collector evidence returned an untrusted packet type")
+        if packet.logical_call_id != context.logical_call_id:
+            raise RuntimeError("Collector evidence differs from its logical call")
         with self._lock:
-            self._packet = deepcopy(evidence.packet)
-            self._request = copy_json(request)
-            self._history_ir = deepcopy(history_ir)
+            if context.logical_call_id in self._pending:
+                raise RuntimeError("logical call already has pending admission inputs")
+            self._pending[context.logical_call_id] = (
+                packet,
+                copy_json(request),
+                deepcopy(history_ir),
+            )
         return evidence
 
     def admit(
@@ -91,23 +104,26 @@ class _AdmissionBridgeV1:
         proposal_projection: dict[str, JsonValue],
         provenance: PolicyCallProvenanceV1,
     ) -> RuntimeAdmissionBundleV1:
-        del packet_projection
+        if type(packet_projection) is not dict:
+            raise RuntimeError("policy admission packet projection must be an exact object")
+        logical_call_id = packet_projection.get("logical_call_id")
+        if type(logical_call_id) is not str:
+            raise RuntimeError("policy admission omitted its logical call")
         with self._lock:
-            packet = deepcopy(self._packet)
-            request = copy_json(self._request) if self._request is not None else None
-            history_ir = deepcopy(self._history_ir)
-        if (
-            type(packet) is not EvidencePacketV1
-            or request is None
-            or type(history_ir) is not HistoryIR
+            pending = self._pending.pop(logical_call_id, None)
+        if pending is None:
+            raise RuntimeError("policy admission has no pending inputs for its logical call")
+        packet, request, history_ir = pending
+        if canonical_json_bytes(cast(JsonValue, packet_projection)) != canonical_json_bytes(
+            cast(JsonValue, evidence_packet_projection(packet))
         ):
-            raise RuntimeError("policy admission ran before Collector evidence construction")
+            raise RuntimeError("policy admission packet differs from Collector evidence")
         return proposal_admission(
-            packet,
+            deepcopy(packet),
             proposal_projection,
             provenance,
-            source_request=request,
-            history_ir=history_ir,
+            source_request=copy_json(request),
+            history_ir=deepcopy(history_ir),
         )
 
 

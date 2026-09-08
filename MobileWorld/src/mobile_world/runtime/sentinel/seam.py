@@ -1882,6 +1882,41 @@ class PromptSentinel:
         | RuntimeVerticalPolicyOutputV1
         | R24CoordinatedCallRecordV1
     ):
+        if type(self._policy) is LeanActiveRuntimePolicyV1:
+            return self._policy.run_with_logical_call_gate(
+                lambda: self._evaluate_policy_worker_with_timeout(
+                    request=request,
+                    context=context,
+                    history_ir=history_ir,
+                    timeout_ms=timeout_ms,
+                    evaluation_started=evaluation_started,
+                    no_history=no_history,
+                )
+            )
+        return self._evaluate_policy_worker_with_timeout(
+            request=request,
+            context=context,
+            history_ir=history_ir,
+            timeout_ms=timeout_ms,
+            evaluation_started=evaluation_started,
+            no_history=no_history,
+        )
+
+    def _evaluate_policy_worker_with_timeout(
+        self,
+        *,
+        request: JsonValue,
+        context: SentinelContext,
+        history_ir: Any,
+        timeout_ms: int,
+        evaluation_started: Event,
+        no_history: bool = False,
+    ) -> (
+        SentinelPolicyOutput
+        | RuntimeSentinelPolicyOutputV1
+        | RuntimeVerticalPolicyOutputV1
+        | R24CoordinatedCallRecordV1
+    ):
         """Run the replaceable backend behind a real, bounded daemon wait."""
 
         finished = Event()
@@ -1975,11 +2010,14 @@ class PromptSentinel:
                 cancel_before_policy.set()
             if execution_fence is not None:
                 execution_fence.cancel()
-            if type(self._policy) is OwnerAuthorizedLivePerCallPolicyV1:
-                # This exact module-owned policy can prepare more than one child
-                # (rubric then history).  Do not expose Original until a child
-                # prepared concurrently with cancellation has observed the
-                # closed fence, published its terminal receipt, and been joined.
+            if type(self._policy) in {
+                OwnerAuthorizedLivePerCallPolicyV1,
+                LeanActiveRuntimePolicyV1,
+            }:
+                # These exact module-owned policies can prepare more than one
+                # provider call (rubric then history).  Do not expose Original
+                # until the old task-local worker has observed cancellation and
+                # exited; otherwise it could overlap the next logical call.
                 worker.join()
             raise _EvaluationFailure(
                 SentinelFallbackReason.POLICY_TIMEOUT,
