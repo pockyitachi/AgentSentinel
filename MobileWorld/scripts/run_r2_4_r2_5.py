@@ -513,7 +513,7 @@ def _build_operational_execution_setup(
     if arguments.runtime_config is None or arguments.pricing is None:
         raise _CliContractError("FAST_EXECUTE_ARGUMENTS_REQUIRED")
     fast_root = arguments.fast_run_root
-    if type(fast_root) is not Path or not fast_root.is_absolute():
+    if not isinstance(fast_root, Path) or not fast_root.is_absolute():
         raise _CliContractError("FAST_EXECUTE_ARGUMENTS_REQUIRED")
     try:
         repository = REPOSITORY_ROOT.resolve(strict=True)

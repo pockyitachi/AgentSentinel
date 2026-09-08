@@ -2526,7 +2526,7 @@ def issue_operational_with_tool_factory_v1(
         ProductionPreflightCheckV1(
             "operator_direct_with_tool",
             True,
-            "OPERATIONAL",
+            "DECLARATION",
         ),
     )
     report = ProductionPreflightReportV1(
