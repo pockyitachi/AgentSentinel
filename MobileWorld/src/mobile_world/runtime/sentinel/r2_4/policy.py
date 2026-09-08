@@ -213,11 +213,11 @@ def promote_r22_policy_output(
     execution_authority_sha256: str | None = None,
     validation_checks: tuple[str, ...] | None = None,
 ) -> RuntimeVerticalPolicyOutputV1:
-    """Project an exact admitted R2.2 output into an authority-bound overlay.
+    """Project an exact admitted R2.2 output into the vertical overlay.
 
-    This function constructs data; it never grants execution authority.  The
-    common seam admits only an exact adapter that independently validates the
-    corresponding CPU token or owner-authored live manifest.
+    This function constructs data; it never grants permission to perform I/O.
+    The ordinary eval path binds its direct runtime configuration, while CPU
+    tests retain their exact offline token.
     """
 
     if type(execution_scope) is not RuntimeVerticalExecutionScope:
@@ -261,27 +261,8 @@ def promote_r22_policy_output(
                 "lean promotion checks do not bind the direct runtime",
             )
         resolved_checks = validation_checks
-    else:
-        if authority is not None:
-            raise R24ContractError(
-                "LIVE_AUTHORITY_MISMATCH", "CPU fake authority cannot authorize a live scope"
-            )
-        if (
-            type(execution_authority_sha256) is not str
-            or _SHA256.fullmatch(execution_authority_sha256) is None
-        ):
-            raise R24ContractError(
-                "LIVE_AUTHORITY_REQUIRED", "live promotion requires the owner manifest hash"
-            )
-        if type(validation_checks) is not tuple or not {
-            "R24_OWNER_AUTHORITY_MANIFEST_BOUND",
-            "R24_LIVE_TRANSPORT_DESCRIPTOR_BOUND",
-            "R24_LIVE_TRANSPORT_BINDING_BOUND",
-        }.issubset(validation_checks):
-            raise R24ContractError(
-                "LIVE_AUTHORITY_REQUIRED", "live promotion checks do not bind its authorities"
-            )
-        resolved_checks = validation_checks
+    else:  # pragma: no cover - the enum is closed above.
+        raise R24ContractError("UNSUPPORTED_EXECUTION_SCOPE", "execution scope is unsupported")
     if (
         type(source_transport_descriptor_sha256) is not str
         or _SHA256.fullmatch(source_transport_descriptor_sha256) is None

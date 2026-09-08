@@ -117,13 +117,8 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
 )
 from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
 from mobile_world.runtime.sentinel.r2_4.lean_policy import LeanActiveRuntimePolicyV1
-from mobile_world.runtime.sentinel.r2_4.live_attempt import history_policy_transport_schema_v1
 from mobile_world.runtime.sentinel.r2_4.orchestration import R24RuntimeCoordinatorV1
 from mobile_world.runtime.sentinel.r2_4.policy import apply_r23_redundant_history_prunes
-from mobile_world.runtime.sentinel.r2_4.production_audit import (
-    MemoryProductionRuntimeAuditSinkV1,
-    ProductionRuntimeAuditV1,
-)
 from mobile_world.runtime.sentinel.r2_4.renderer import (
     render_vertical_admitted_plan,
     restore_vertical_original,
@@ -522,8 +517,6 @@ def test_observed_violation_shape_stays_rejected_and_corrected_output_is_admitte
     raw_text = _synthetic_history_output_with_observed_violation_shape()
     raw = cast(dict[str, JsonValue], json.loads(raw_text))
     assert json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")) == raw_text
-    Draft202012Validator(history_policy_transport_schema_v1().as_dict()).validate(raw)
-
     full_validator = Draft202012Validator(ProposalSchemaSnapshotV1.from_checked_in().as_dict())
     errors = tuple(full_validator.iter_errors(raw))
     assert len(errors) == 4
@@ -1235,63 +1228,6 @@ def test_material_vertical_result_binds_overlay_and_cache_returns_fresh_snapshot
     assert first.overlay_declaration_sha256 == overlay.sha256
     assert source.evaluate_count == len(transport.calls) == 1
     assert len(policy_sink.receipts) == len(seam_sink.receipts) == 1
-
-
-def test_production_audit_fallback_survives_sentinel_receipt_commit_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    built = _build_adapter_case("qwen")
-    transport = _R22FakeTransport(json.dumps(_r22_proposal(built.packet)))
-    adapter, _source, _policy_sink = _active_adapter(built, transport)
-    sentinel, _seam_sink = _vertical_sentinel(built, adapter)
-
-    class FailingTransaction:
-        def commit(self, _receipt: object) -> None:
-            raise OSError("injected Sentinel receipt commit failure")
-
-        def abort(self) -> None:
-            return None
-
-    class FailingReceiptSink:
-        def begin(self, _logical_call_id: str) -> FailingTransaction:
-            return FailingTransaction()
-
-    audit = ProductionRuntimeAuditV1(
-        policy=None,
-        sink=MemoryProductionRuntimeAuditSinkV1(),
-    )
-    pending: list[str] = []
-
-    def begin_pre_provider(_self: object, **_kwargs: object) -> None:
-        pending[:] = ["transformed"]
-
-    def begin_fallback_pre_provider(_self: object, **_kwargs: object) -> None:
-        assert pending == ["transformed"]
-        pending[:] = ["fallback"]
-
-    def cancel(_self: object, _logical_call_id: str) -> None:
-        pending.clear()
-
-    monkeypatch.setattr(ProductionRuntimeAuditV1, "begin_pre_provider", begin_pre_provider)
-    monkeypatch.setattr(
-        ProductionRuntimeAuditV1,
-        "begin_fallback_pre_provider",
-        begin_fallback_pre_provider,
-    )
-    monkeypatch.setattr(ProductionRuntimeAuditV1, "cancel", cancel)
-    sentinel._receipt_sink = FailingReceiptSink()
-    sentinel._runtime_audit = audit
-
-    result = sentinel.logical_call(
-        host_id=built.context.host_id,
-        history_codec_id=QWEN_CODEC_ID,
-    ).before_model_call(cast(JsonValue, built.request))
-
-    assert type(result) is RuntimeVerticalSentinelResultV1
-    assert result.receipt.fallback_reason is SentinelFallbackReason.SIDECAR_FAILURE
-    assert result.receipt.validation_checks == ("sidecar_commit_failed",)
-    assert result.raw_request == result.candidate_request == result.final_request
-    assert pending == ["fallback"]
 
 
 @pytest.mark.parametrize(

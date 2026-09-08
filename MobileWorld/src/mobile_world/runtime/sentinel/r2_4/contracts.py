@@ -58,11 +58,10 @@ class R24ContractError(ValueError):
 
 
 class RuntimeVerticalExecutionScope(StrEnum):
-    """Execution authority carried by the additive R2.4 overlay."""
+    """Closed execution scope for the core vertical policy overlay."""
 
     CPU_FAKE_ACTIVE = "CPU_FAKE_ACTIVE"
     LEAN_EVAL_ACTIVE = "LEAN_EVAL_ACTIVE"
-    OWNER_AUTHORIZED_LIVE_ACTIVE = "OWNER_AUTHORIZED_LIVE_ACTIVE"
 
 
 class RuntimeVerticalStatus(StrEnum):
