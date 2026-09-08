@@ -36,6 +36,7 @@ DEFAULT_MAX_STEP = 15
 # HTTP budget above that bounded infrastructure path so the client cannot retry
 # while the original request still owns the lifecycle.
 TASK_INITIALIZATION_TIMEOUT_SECONDS = 600
+_TASK_INITIALIZATION_ERROR_BODY_LOG_MAX_CHARS = 2_048
 
 
 class CleanupTaskTeardownStatusV1(StrEnum):
@@ -64,6 +65,19 @@ def _safe_audit_hook(hook, *args, **kwargs) -> None:
         # Collector state is best-effort and is finalized as incomplete by its
         # own boundary.  Never replace a live environment result/exception.
         pass
+
+
+def _bounded_task_init_error_body(response: requests.Response) -> str:
+    try:
+        body = response.text
+    except Exception:
+        return "<response body unavailable>"
+    if type(body) is not str:
+        return "<response body unavailable>"
+    marker = "...<truncated>"
+    if len(body) > _TASK_INITIALIZATION_ERROR_BODY_LOG_MAX_CHARS:
+        body = body[: _TASK_INITIALIZATION_ERROR_BODY_LOG_MAX_CHARS - len(marker)] + marker
+    return body
 
 
 class AndroidEnvClient:
@@ -348,6 +362,30 @@ class AndroidEnvClient:
         # For the new server, this is just a no-op
         return Response(status="success", message="Suite reinitialized")
 
+    @backoff.on_exception(
+        backoff.expo,
+        requests.RequestException,
+        max_tries=3,
+        jitter=None,
+        on_backoff=lambda details: logger.warning(
+            f"Retrying MobileWorld /task/init after error (attempt {details['tries']}/3)"
+        ),
+    )
+    def _post_task_init(self, init_data: dict[str, object]) -> None:
+        """Retry only the reset-style task init before observation or actor work."""
+
+        response = self._session.post(
+            f"{self.base_url}/task/init",
+            json=init_data,
+            timeout=self._request_timeout(TASK_INITIALIZATION_TIMEOUT_SECONDS),
+        )
+        try:
+            response.raise_for_status()
+        except requests.RequestException:
+            body = _bounded_task_init_error_body(response)
+            logger.warning(f"MobileWorld /task/init failed (HTTP {response.status_code}): {body!r}")
+            raise
+
     def initialize_task(
         self,
         task_name: str,
@@ -382,12 +420,7 @@ class AndroidEnvClient:
                         "reset_seed": reset_seed,
                     }
                 )
-            response = self._session.post(
-                f"{self.base_url}/task/init",
-                json=init_data,
-                timeout=self._request_timeout(TASK_INITIALIZATION_TIMEOUT_SECONDS),
-            )
-            response.raise_for_status()
+            self._post_task_init(init_data)
 
             self._current_task_type = task_name
 

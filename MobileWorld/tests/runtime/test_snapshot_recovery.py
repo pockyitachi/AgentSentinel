@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from PIL import Image
 
 from mobile_world.core import server
+from mobile_world.runtime import client as client_module
 from mobile_world.runtime import controller as controller_module
 from mobile_world.runtime.client import (
     TASK_INITIALIZATION_TIMEOUT_SECONDS,
@@ -426,6 +427,62 @@ def test_task_init_client_sends_complete_frozen_episode_binding(
         "task_parameters_sha256": parameters_sha256,
         "task_trial": 1,
     }
+
+
+def test_task_init_client_retries_only_post_before_screenshot_and_bounds_error_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    urls: list[str] = []
+    warnings: list[str] = []
+    screenshot_calls = 0
+    oversized_body = (
+        "x" * client_module._TASK_INITIALIZATION_ERROR_BODY_LOG_MAX_CHARS + "DO_NOT_LOG"
+    )
+
+    class Response:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+            self.text = oversized_body if status_code == 500 else "ok"
+
+        def raise_for_status(self) -> None:
+            if self.status_code == 500:
+                raise requests.HTTPError("transient task init failure")
+
+    class Session:
+        attempts = 0
+
+        def post(self, url: str, **_: object) -> Response:
+            urls.append(url.removeprefix("http://fixture.invalid"))
+            self.attempts += 1
+            return Response(500 if self.attempts < 3 else 200)
+
+    def get_screenshot(*, wait_to_stabilize: bool) -> Image.Image:
+        nonlocal screenshot_calls
+        assert wait_to_stabilize is True
+        screenshot_calls += 1
+        return Image.new("RGB", (2, 2))
+
+    client = object.__new__(AndroidEnvClient)
+    client.base_url = "http://fixture.invalid"
+    client.device = "emulator-fixture"
+    client._current_task_type = None
+    client._ensure_initialized = lambda: None
+    client._request_deadline_monotonic_ns = None
+    client._session = cast(Any, Session())
+    client.get_screenshot = get_screenshot
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    monkeypatch.setattr(client_module.logger, "warning", warnings.append)
+
+    observation = client.initialize_task("FixtureTask")
+
+    assert type(observation.screenshot) is Image.Image
+    assert urls == ["/task/init", "/task/init", "/task/init"]
+    assert screenshot_calls == 1
+    assert client._current_task_type == "FixtureTask"
+    emitted = "\n".join(warnings)
+    assert "HTTP 500" in emitted
+    assert "...<truncated>" in emitted
+    assert "DO_NOT_LOG" not in emitted
 
 
 def test_task_init_client_rejects_partial_frozen_episode_binding() -> None:
