@@ -937,6 +937,52 @@ def test_cli_execute_aliases_route_only_to_with_tool_batches(
     }
 
 
+def test_with_tool_collector_integrity_failure_is_retained_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_cli_module()
+    collector_root = tmp_path / "collector"
+    monkeypatch.setattr(
+        module,
+        "check_run_integrity",
+        lambda *_args, **_kwargs: {
+            "valid": False,
+            "errors": ["invalid_task_ended_payload"],
+            "warnings": [],
+        },
+    )
+
+    checks = module._with_tool_collector_integrity_checks(
+        {
+            "cells": [
+                {
+                    "collector_run_locator": {
+                        "collector_run_id": "collector-run",
+                        "collector_run_root": str(collector_root),
+                    },
+                    "sequence_index": 8,
+                    "task_id": "task-009",
+                }
+            ],
+            "failed_cells": [],
+        }
+    )
+
+    assert checks == [
+        {
+            "collector_run_id": "collector-run",
+            "collector_run_root": str(collector_root),
+            "report": {
+                "valid": False,
+                "errors": ["invalid_task_ended_payload"],
+                "warnings": [],
+            },
+            "sequence_index": 8,
+            "task_id": "task-009",
+        }
+    ]
+
+
 def test_cli_default_dry_run_hashes_only_declared_nonsecret_resources(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

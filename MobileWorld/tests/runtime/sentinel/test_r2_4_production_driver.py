@@ -5662,6 +5662,87 @@ def test_with_tool_joint_batches_support_qwen_continuation_then_full_mai(
     assert sum(item.remaining_wall_time_ms for item in segment_contexts) == 32 * 3_600_000
 
 
+@pytest.mark.parametrize(
+    ("fault", "expected_actor_calls"),
+    (
+        (CpuProductionDriverFaultV1.PILOT_CELL_007_DISPATCH_FAILURE, 19),
+        (CpuProductionDriverFaultV1.PILOT_CELL_007_COLLECTOR_FAILURE, 20),
+    ),
+)
+def test_with_tool_batch_records_safe_cell_failure_and_continues(
+    tmp_path: Path,
+    fault: CpuProductionDriverFaultV1,
+    expected_actor_calls: int,
+) -> None:
+    adapters = build_cpu_test_production_driver_v1(fault)
+    pilot = replace(
+        _pilot(tmp_path),
+        max_steps_per_cell=50,
+        per_cell_timeout_seconds=3_600,
+        max_total_wall_time_seconds=72_000,
+        max_total_actor_calls=2_000,
+        max_total_openai_calls=2_000,
+    )
+    context = _context(
+        actor_calls=1_000,
+        openai_calls=2_000,
+        wall_time_ms=72_000_000,
+    )
+
+    result = adapters.pilot.run_with_tool_joint_batch(
+        pilot,
+        _resources(tmp_path),
+        _live_stages(),
+        context,
+        _Lease(context.manifest_sha256),
+        host=PilotHostV1.MAI_UI,
+        start_task_ordinal=1,
+    )
+
+    evidence = adapters.pilot.evidence
+    assert isinstance(evidence, production_driver_module.WithToolJointBatchEvidenceV1)
+    assert evidence.schema_version == (
+        production_driver_module.PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3
+    )
+    assert len(evidence.cells) == len(result.completed_units) == 19
+    assert result.provider_final_request_proven is False
+    assert len(evidence.failed_cells) == 1
+    failed = evidence.failed_cells[0]
+    assert (failed.sequence_index, failed.task_id, failed.host) == (
+        7,
+        pilot.tasks[1].task_id,
+        PilotHostV1.MAI_UI,
+    )
+    assert failed.cleanup_receipt_sha256
+    assert evidence.census.actor_calls == expected_actor_calls
+    assert evidence.census.openai_calls == expected_actor_calls * 2
+    assert evidence.census.actor_actions == expected_actor_calls
+    projection = production_driver_module.with_tool_joint_batch_evidence_projection(evidence)
+    assert len(projection["cells"]) == 19
+    assert len(projection["failed_cells"]) == 1
+    assert projection["failed_cells"][0]["failure_evidence"]["status"] == (
+        "FAILED_CELL_SAFE_CLEANUP"
+    )
+    trace = adapters.cpu_trace
+    assert (trace.pilot_resets, trace.pilot_dispatches, trace.cleanup_attempts) == (20, 20, 20)
+    assert "RESET:pilot:011" in trace.events
+    assert trace.events[-1] == "CLEANUP:pilot:079"
+
+
+@pytest.mark.parametrize(
+    "code",
+    (
+        "MODEL_DISPATCH_IDENTITY_LOST",
+        "BACKEND_DISPATCH_IDENTITY_LOST",
+        "HOST_DISABLED",
+    ),
+)
+def test_with_tool_identity_failures_remain_hard(code: str) -> None:
+    assert production_driver_module._with_tool_cell_failure_is_hard(
+        ProductionDriverError(code, "fixture identity failure")
+    )
+
+
 def test_pilot_cell_evidence_projection_crossing_cell_deadline_is_not_admitted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

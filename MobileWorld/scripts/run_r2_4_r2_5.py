@@ -487,19 +487,26 @@ def _build_execution_setup(
 def _with_tool_collector_integrity_checks(
     projection: dict[str, JsonValue],
 ) -> list[dict[str, JsonValue]]:
-    raw_cells = cast(list[JsonValue], projection["cells"])
+    raw_cells = [
+        *cast(list[JsonValue], projection["cells"]),
+        *cast(list[JsonValue], projection.get("failed_cells", [])),
+    ]
     checks: list[dict[str, JsonValue]] = []
     for raw_cell in raw_cells:
         cell = cast(dict[str, JsonValue], raw_cell)
-        locator = cast(dict[str, JsonValue], cell["collector_run_locator"])
+        raw_locator = cell.get("collector_run_locator")
+        if type(raw_locator) is not dict:
+            continue
+        locator = raw_locator
         collector_root = cast(str, locator["collector_run_root"])
-        report = check_run_integrity(Path(collector_root), write_report=False)
-        if (
-            report.get("valid") is not True
-            or report.get("errors") != []
-            or report.get("warnings") != []
-        ):
-            raise _CliContractError("WITH_TOOL_COLLECTOR_INTEGRITY_FAILED")
+        try:
+            report = check_run_integrity(Path(collector_root), write_report=False)
+        except Exception as error:  # noqa: BLE001 - preserve failed-cell evidence
+            report = {
+                "valid": False,
+                "errors": [f"integrity_check_failed:{type(error).__name__}"],
+                "warnings": [],
+            }
         checks.append(
             {
                 "collector_run_id": locator["collector_run_id"],
@@ -572,6 +579,9 @@ def _execute_with_tool_batches(
     batches: list[dict[str, JsonValue]] = []
     batch_evidences: list[WithToolJointBatchEvidenceV1] = []
     backend_container_ids: list[str] = []
+    failed_cell_count = 0
+    attempted_cell_count = 0
+    collector_integrity_all_valid = True
 
     for batch_index, host in enumerate((PilotHostV1.QWEN3_VL, PilotHostV1.MAI_UI)):
         work_deadline_ns, cleanup_deadline_ns, integrity_deadline_ns = deadlines[batch_index]
@@ -666,6 +676,20 @@ def _execute_with_tool_batches(
                 cleanup_sha256 = hashlib.sha256(cleanup_evidence).hexdigest()
         evidence_projection = with_tool_joint_batch_evidence_projection(batch_evidence)
         integrity_checks = _with_tool_collector_integrity_checks(evidence_projection)
+        successful_cells = cast(list[JsonValue], evidence_projection["cells"])
+        failed_cells = cast(list[JsonValue], evidence_projection.get("failed_cells", []))
+        batch_attempted_count = len(successful_cells) + len(failed_cells)
+        batch_failed_count = len(failed_cells)
+        batch_integrity_valid = len(integrity_checks) == batch_attempted_count and all(
+            type(check.get("report")) is dict
+            and cast(dict[str, JsonValue], check["report"]).get("valid") is True
+            and cast(dict[str, JsonValue], check["report"]).get("errors") == []
+            and cast(dict[str, JsonValue], check["report"]).get("warnings") == []
+            for check in integrity_checks
+        )
+        attempted_cell_count += batch_attempted_count
+        failed_cell_count += batch_failed_count
+        collector_integrity_all_valid = collector_integrity_all_valid and batch_integrity_valid
         if time.monotonic_ns() >= integrity_deadline_ns:
             raise _CliContractError("WITH_TOOL_COLLECTOR_INTEGRITY_TIMEOUT")
         batch_evidences.append(batch_evidence)
@@ -680,6 +704,15 @@ def _execute_with_tool_batches(
             "resource_evidence_sha256": resource_result.evidence_sha256,
             "wall_time_ms": (time.monotonic_ns() - batch_started_ns + 999_999) // 1_000_000,
         }
+        if batch_failed_count or not batch_integrity_valid:
+            batch_output.update(
+                {
+                    "attempted_cell_count": batch_attempted_count,
+                    "collector_integrity_all_valid": batch_integrity_valid,
+                    "failed_cell_count": batch_failed_count,
+                    "successful_cell_count": len(successful_cells),
+                }
+            )
         if qwen_start_task_ordinal != 1:
             batch_output.update(
                 {
@@ -707,7 +740,8 @@ def _execute_with_tool_batches(
     )
     if (
         len(set(backend_container_ids)) != 2
-        or integrity_count != new_cell_count
+        or attempted_cell_count != new_cell_count
+        or integrity_count > attempted_cell_count
         or actor_calls > treatment_actor_cap
         or actor_calls > manifest.pilot.max_total_actor_calls
         or openai_calls > treatment_openai_cap
@@ -762,6 +796,20 @@ def _execute_with_tool_batches(
                     "qwen_start_task_ordinal": qwen_start_task_ordinal,
                 },
                 "schema_version": "mobileworld.runtime.sentinel.r2.5-with-tool-two-batch-run/v2",
+            }
+        )
+    if failed_cell_count or not collector_integrity_all_valid:
+        output.update(
+            {
+                "attempted_cell_count": attempted_cell_count,
+                "collector_integrity": {
+                    "all_valid": collector_integrity_all_valid,
+                    "missing_run_count": attempted_cell_count - integrity_count,
+                    "run_count": integrity_count,
+                },
+                "failed_cell_count": failed_cell_count,
+                "schema_version": "mobileworld.runtime.sentinel.r2.5-with-tool-two-batch-run/v3",
+                "successful_cell_count": attempted_cell_count - failed_cell_count,
             }
         )
     return output

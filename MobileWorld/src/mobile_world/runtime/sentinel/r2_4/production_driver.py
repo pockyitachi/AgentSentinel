@@ -211,6 +211,9 @@ PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
 PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2: Final[str] = (
     "mobileworld.runtime.sentinel-r2.5-with-tool-joint-batch-evidence/v2"
 )
+PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3: Final[str] = (
+    "mobileworld.runtime.sentinel-r2.5-with-tool-joint-batch-evidence/v3"
+)
 PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1: Final[str] = (
     "mobileworld.runtime.sentinel-r2.4-model-handoff-evidence/v1"
 )
@@ -341,6 +344,7 @@ class CpuProductionDriverFaultV1(StrEnum):
     PILOT_CELL_001_RESET_STATE_DRIFT = "PILOT_CELL_001_RESET_STATE_DRIFT"
     PILOT_CELL_007_DISPATCH_FAILURE = "PILOT_CELL_007_DISPATCH_FAILURE"
     PILOT_CELL_007_CLEANUP_FAILURE = "PILOT_CELL_007_CLEANUP_FAILURE"
+    PILOT_CELL_007_COLLECTOR_FAILURE = "PILOT_CELL_007_COLLECTOR_FAILURE"
     PILOT_CELL_007_POST_DISPATCH_ADMISSION_FAILURE = (
         "PILOT_CELL_007_POST_DISPATCH_ADMISSION_FAILURE"
     )
@@ -7650,6 +7654,86 @@ class PilotStageEvidenceV1:
 
 
 @dataclass(frozen=True, slots=True)
+class WithToolCellFailureEvidenceV1:
+    """A failed treatment cell whose local runtime was safely cleaned."""
+
+    manifest_sha256: str
+    run_id: str
+    sequence_index: int
+    task_id: str
+    host: PilotHostV1
+    failure_phase: str
+    failure_code: str
+    cleanup_receipt_sha256: str
+    census: DriverStageCensusV1
+    failure_evidence_preimage: bytes
+    failure_evidence_sha256: str
+    collector_run_locator_preimage: bytes | None = None
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.manifest_sha256, "manifest_sha256")
+        _require_safe_id(self.run_id, "run_id")
+        if type(self.sequence_index) is not int or self.sequence_index < 0:
+            raise ProductionDriverError("INVALID_EVIDENCE", "failed cell index differs")
+        _require_safe_id(self.task_id, "task_id")
+        if type(self.host) is not PilotHostV1:
+            raise ProductionDriverError("INVALID_EVIDENCE", "failed cell host differs")
+        for value, name in (
+            (self.failure_phase, "failure_phase"),
+            (self.failure_code, "failure_code"),
+        ):
+            if type(value) is not str or not value or len(value) > 128:
+                raise ProductionDriverError("INVALID_EVIDENCE", f"{name} differs")
+        _require_sha256(self.cleanup_receipt_sha256, "cleanup_receipt_sha256")
+        _require_sha256(self.failure_evidence_sha256, "failure_evidence_sha256")
+        if type(self.census) is not DriverStageCensusV1:
+            raise ProductionDriverError("INVALID_CENSUS", "failed cell census type differs")
+        if (
+            type(self.failure_evidence_preimage) is not bytes
+            or hashlib.sha256(self.failure_evidence_preimage).hexdigest()
+            != self.failure_evidence_sha256
+        ):
+            raise ProductionDriverError("INVALID_EVIDENCE", "failed cell evidence hash differs")
+        try:
+            decoded = json.loads(self.failure_evidence_preimage)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProductionDriverError(
+                "INVALID_EVIDENCE", "failed cell evidence is not JSON"
+            ) from exc
+        if (
+            type(decoded) is not dict
+            or canonical_json_bytes(cast(JsonValue, decoded)) != self.failure_evidence_preimage
+            or decoded.get("sequence_index") != self.sequence_index
+            or decoded.get("task_id") != self.task_id
+            or decoded.get("host") != self.host.value
+            or decoded.get("manifest_sha256") != self.manifest_sha256
+            or decoded.get("run_id") != self.run_id
+            or decoded.get("failure_phase") != self.failure_phase
+            or decoded.get("failure_code") != self.failure_code
+            or decoded.get("cleanup_receipt_sha256") != self.cleanup_receipt_sha256
+            or decoded.get("status") != "FAILED_CELL_SAFE_CLEANUP"
+        ):
+            raise ProductionDriverError("INVALID_EVIDENCE", "failed cell evidence differs")
+        if self.collector_run_locator_preimage is not None:
+            try:
+                locator = json.loads(self.collector_run_locator_preimage)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ProductionDriverError(
+                    "INVALID_EVIDENCE", "failed cell Collector locator is not JSON"
+                ) from exc
+            if (
+                type(locator) is not dict
+                or canonical_json_bytes(cast(JsonValue, locator))
+                != self.collector_run_locator_preimage
+                or locator.get("sequence_index") != self.sequence_index
+                or locator.get("task_id") != self.task_id
+            ):
+                raise ProductionDriverError(
+                    "INVALID_EVIDENCE", "failed cell Collector locator differs"
+                )
+
+
+@dataclass(frozen=True, slots=True)
 class WithToolJointBatchEvidenceV1:
     """One ACTIVE-only host batch for descriptive comparison to historical controls.
 
@@ -7669,12 +7753,14 @@ class WithToolJointBatchEvidenceV1:
     full_task_count: int = 20
     task_ordinal_start: int = 1
     task_ordinal_end: int = 20
+    failed_cells: tuple[WithToolCellFailureEvidenceV1, ...] = ()
     schema_version: str = PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1
 
     def __post_init__(self) -> None:
         if self.schema_version not in {
             PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1,
             PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2,
+            PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3,
         }:
             raise ProductionDriverError("UNKNOWN_SCHEMA", "joint-batch evidence schema differs")
         _require_sha256(self.manifest_sha256, "manifest_sha256")
@@ -7698,6 +7784,18 @@ class WithToolJointBatchEvidenceV1:
                 self.schema_version == PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1
                 and self.task_ordinal_start != 1
             )
+            or (
+                self.schema_version
+                in {
+                    PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1,
+                    PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2,
+                }
+                and self.failed_cells
+            )
+            or (
+                self.schema_version == PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3
+                and not self.failed_cells
+            )
         ):
             raise ProductionDriverError(
                 "INVALID_EVIDENCE", "joint-batch task ordinal segment differs"
@@ -7705,8 +7803,10 @@ class WithToolJointBatchEvidenceV1:
         expected_cell_count = self.task_ordinal_end - self.task_ordinal_start + 1
         if (
             type(self.cells) is not tuple
-            or len(self.cells) != expected_cell_count
+            or type(self.failed_cells) is not tuple
+            or len(self.cells) + len(self.failed_cells) != expected_cell_count
             or any(type(item) is not PilotCellEvidenceV1 for item in self.cells)
+            or any(type(item) is not WithToolCellFailureEvidenceV1 for item in self.failed_cells)
             or any(
                 item.manifest_sha256 != self.manifest_sha256
                 or item.run_id != self.run_id
@@ -7717,6 +7817,20 @@ class WithToolJointBatchEvidenceV1:
             )
             or len({item.task_id for item in self.cells}) != len(self.cells)
             or len({item.sequence_index for item in self.cells}) != len(self.cells)
+            or any(item.host is not self.host for item in self.failed_cells)
+            or any(
+                item.manifest_sha256 != self.manifest_sha256 or item.run_id != self.run_id
+                for item in self.failed_cells
+            )
+            or len(
+                {item.task_id for item in self.cells} | {item.task_id for item in self.failed_cells}
+            )
+            != expected_cell_count
+            or len(
+                {item.sequence_index for item in self.cells}
+                | {item.sequence_index for item in self.failed_cells}
+            )
+            != expected_cell_count
         ):
             raise ProductionDriverError(
                 "INVALID_EVIDENCE",
@@ -7887,6 +8001,32 @@ def _pilot_cell_evidence_projection(value: PilotCellEvidenceV1) -> dict[str, Jso
     return projection
 
 
+def _with_tool_failed_cell_evidence_projection(
+    value: WithToolCellFailureEvidenceV1,
+) -> dict[str, JsonValue]:
+    projection: dict[str, JsonValue] = {
+        "census": cast(JsonValue, _census_projection(value.census)),
+        "cleanup_receipt_sha256": value.cleanup_receipt_sha256,
+        "failure_code": value.failure_code,
+        "failure_evidence": cast(JsonValue, json.loads(value.failure_evidence_preimage)),
+        "failure_evidence_sha256": value.failure_evidence_sha256,
+        "failure_phase": value.failure_phase,
+        "host": value.host.value,
+        "manifest_sha256": value.manifest_sha256,
+        "run_id": value.run_id,
+        "sequence_index": value.sequence_index,
+        "task_id": value.task_id,
+    }
+    if value.collector_run_locator_preimage is not None:
+        projection["collector_run_locator"] = cast(
+            JsonValue, json.loads(value.collector_run_locator_preimage)
+        )
+        projection["collector_run_locator_sha256"] = hashlib.sha256(
+            value.collector_run_locator_preimage
+        ).hexdigest()
+    return projection
+
+
 def smoke_stage_evidence_projection(value: SmokeStageEvidenceV1) -> dict[str, JsonValue]:
     if type(value) is not SmokeStageEvidenceV1:
         raise ProductionDriverError("UNTRUSTED_TYPE", "smoke evidence must use exact type")
@@ -7939,7 +8079,10 @@ def with_tool_joint_batch_evidence_projection(
         "schema_version": value.schema_version,
         "strict_matched_pilot_compatible": False,
     }
-    if value.schema_version == PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2:
+    if value.schema_version in {
+        PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2,
+        PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3,
+    }:
         projection.update(
             {
                 "full_task_count": value.full_task_count,
@@ -7947,6 +8090,11 @@ def with_tool_joint_batch_evidence_projection(
                 "task_ordinal_start": value.task_ordinal_start,
             }
         )
+    if value.schema_version == PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3:
+        projection["failed_cells"] = [
+            cast(JsonValue, _with_tool_failed_cell_evidence_projection(item))
+            for item in value.failed_cells
+        ]
     return projection
 
 
@@ -8446,9 +8594,22 @@ class _CleanupResultV1:
     unit_journal_preimage: bytes | None = None
     unit_journal_sha256: str | None = None
     unit_journal_validated_reference: _ValidatedUnitJournalReferenceV1 | None = None
+    collector_failure_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_sha256(self.cleanup_receipt_sha256, "cleanup_receipt_sha256")
+        if (
+            type(self.collector_failure_codes) is not tuple
+            or len(self.collector_failure_codes) > 8
+            or len(set(self.collector_failure_codes)) != len(self.collector_failure_codes)
+            or any(
+                type(value) is not str or not value.startswith("COLLECTOR_") or len(value) > 128
+                for value in self.collector_failure_codes
+            )
+        ):
+            raise ProductionDriverError(
+                "INVALID_EVIDENCE", "cleanup Collector failure codes differ"
+            )
         for raw, name, expected_sha256 in (
             (
                 self.cleanup_evidence_preimage,
@@ -8601,6 +8762,57 @@ def _exception_secondary_failure_code(error: BaseException | None) -> str | None
     ):
         return error.secondary_failure_code
     return None
+
+
+_WITH_TOOL_HARD_CELL_FAILURE_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "CASE_DEADLINE_EXCEEDED",
+        "HOST_DISABLED",
+        "INVALID_SECRET_LEASE",
+        "LIVE_COST_ACCOUNTING_UNKNOWN",
+        "OWNER_AUTHORITY_EXPIRED",
+        "PILOT_CELL_TIMEOUT",
+        "PILOT_SCOPE_UNAUTHORIZED",
+        "PRODUCTION_AUTHORITY_MISMATCH",
+        "TERMINATION_UNCONFIRMED",
+    }
+)
+_WITH_TOOL_HARD_CELL_FAILURE_PREFIXES: Final[tuple[str, ...]] = (
+    "BACKEND_OWNERSHIP_",
+    "BACKEND_DISPATCH_",
+    "CASE_BROKER_",
+    "CASE_EXECUTION_LEASE_",
+    "CLEANUP_",
+    "GPU_",
+    "INVALID_DEADLINE_",
+    "INVALID_GPU_",
+    "INVALID_PROCESS_",
+    "LIVE_BUDGET_",
+    "LIVE_CASE_COST_",
+    "LIVE_GLOBAL_COST_",
+    "LIVE_COST_RESERVATION_",
+    "MODEL_DISPATCH_",
+    "OWNED_PROCESS_",
+    "RESOURCE_",
+    "RUN_FATAL_",
+    "UNIT_DEADLINE_",
+    "UNOWNED_PROCESS",
+)
+
+
+def _with_tool_cell_failure_is_hard(error: BaseException | None) -> bool:
+    codes = (
+        getattr(error, "code", None),
+        getattr(error, "secondary_failure_code", None),
+    )
+    return any(
+        type(code) is str
+        and (
+            code in _WITH_TOOL_HARD_CELL_FAILURE_CODES
+            or code.startswith(_WITH_TOOL_HARD_CELL_FAILURE_PREFIXES)
+        )
+        for code in codes
+    )
 
 
 def _cleanup_outcome_projection(
@@ -8793,8 +9005,14 @@ def _pilot_unit_failure_preimage(
     failure_phase: str,
     failure_code: str,
     unit_failure_evidence: JsonValue | None,
+    failed_records: list[WithToolCellFailureEvidenceV1] | None = None,
 ) -> bytes:
     completed_records = [_pilot_cell_evidence_projection(item) for item in records]
+    failed = (
+        []
+        if not failed_records
+        else [_with_tool_failed_cell_evidence_projection(item) for item in failed_records]
+    )
     return canonical_json_bytes(
         cast(
             JsonValue,
@@ -8821,6 +9039,16 @@ def _pilot_unit_failure_preimage(
                 "failed_task_id": invocation.cell.task_id,
                 "failure_code": failure_code,
                 "failure_phase": failure_phase,
+                **(
+                    {}
+                    if not failed
+                    else {
+                        "prior_failed_records": failed,
+                        "prior_failed_records_sha256": _hash_projection(
+                            "with-tool-failed-unit-journal", cast(JsonValue, failed)
+                        ),
+                    }
+                ),
                 "manifest_sha256": context.manifest_sha256,
                 "run_id": context.run_id,
                 "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
@@ -8829,6 +9057,119 @@ def _pilot_unit_failure_preimage(
                 "unit_failure_evidence": unit_failure_evidence,
             },
         )
+    )
+
+
+def _with_tool_cell_failure_evidence(
+    *,
+    invocation: _PilotInvocationV1,
+    reset: _PilotResetResultV1 | None,
+    port_result: _PilotPortResultV1 | None,
+    cleanup: _CleanupResultV1,
+    dispatch_error: BaseException | None,
+    failure_phase: str,
+    failure_code: str,
+    unit_failure_evidence: JsonValue | None,
+    census: DriverStageCensusV1,
+) -> WithToolCellFailureEvidenceV1:
+    evidence = cast(
+        JsonValue,
+        {
+            "cleanup_receipt_sha256": cleanup.cleanup_receipt_sha256,
+            "collector_failure_codes": list(cleanup.collector_failure_codes),
+            "current_unit": _pilot_current_unit_projection(
+                invocation,
+                reset,
+                port_result,
+                cleanup,
+                cleanup_attempted=True,
+                cleanup_error=None,
+            ),
+            "dispatch_failure_code": (
+                _exception_code(dispatch_error, "PILOT_CELL_EXECUTION_FAILED")
+                if dispatch_error is not None
+                else None
+            ),
+            "failure_code": failure_code,
+            "failure_phase": failure_phase,
+            "host": invocation.cell.host.value,
+            "manifest_sha256": invocation.manifest_sha256,
+            "run_id": invocation.run_id,
+            "schema_version": PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3,
+            "sequence_index": invocation.sequence_index,
+            "status": "FAILED_CELL_SAFE_CLEANUP",
+            "task_id": invocation.cell.task_id,
+            "unit_failure_evidence": unit_failure_evidence,
+        },
+    )
+    raw = canonical_json_bytes(evidence)
+    return WithToolCellFailureEvidenceV1(
+        manifest_sha256=invocation.manifest_sha256,
+        run_id=invocation.run_id,
+        sequence_index=invocation.sequence_index,
+        task_id=invocation.cell.task_id,
+        host=invocation.cell.host,
+        failure_phase=failure_phase,
+        failure_code=failure_code,
+        cleanup_receipt_sha256=cleanup.cleanup_receipt_sha256,
+        census=census,
+        failure_evidence_preimage=raw,
+        failure_evidence_sha256=hashlib.sha256(raw).hexdigest(),
+        collector_run_locator_preimage=cleanup.collector_run_locator_preimage,
+    )
+
+
+def _pilot_progress_preimage(
+    *,
+    context: StageAdapterContextV1,
+    records: list[PilotCellEvidenceV1],
+    failed_records: list[WithToolCellFailureEvidenceV1],
+) -> bytes:
+    completed = [_pilot_cell_evidence_projection(item) for item in records]
+    failed = [_with_tool_failed_cell_evidence_projection(item) for item in failed_records]
+    failed_projection: dict[str, JsonValue] = {}
+    if failed:
+        failed_projection = {
+            "failed_cell_indices": [item.sequence_index for item in failed_records],
+            "failed_records": cast(JsonValue, failed),
+            "failed_records_sha256": _hash_projection(
+                "with-tool-failed-unit-journal", cast(JsonValue, failed)
+            ),
+        }
+    return canonical_json_bytes(
+        cast(
+            JsonValue,
+            {
+                "completed_cell_indices": [item.sequence_index for item in records],
+                "completed_records": completed,
+                "completed_records_sha256": _hash_projection(
+                    "pilot-completed-unit-journal", cast(JsonValue, completed)
+                ),
+                "failure_code": "PILOT_STAGE_INTERRUPTED",
+                "manifest_sha256": context.manifest_sha256,
+                "run_id": context.run_id,
+                "schema_version": (
+                    PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3
+                    if failed
+                    else PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION
+                ),
+                "stage": RunStageV1.R25_PILOT.value,
+                "status": "IN_PROGRESS",
+                **failed_projection,
+            },
+        )
+    )
+
+
+def _pilot_outcome_census(
+    records: list[PilotCellEvidenceV1],
+    failed_records: list[WithToolCellFailureEvidenceV1],
+    *extra: DriverStageCensusV1,
+) -> DriverStageCensusV1:
+    return _sum_census(
+        tuple(item.census for item in records)
+        + tuple(item.census for item in failed_records)
+        + extra
     )
 
 
@@ -9177,6 +9518,28 @@ class _CpuFixedExecutionPortV1:
         )
         if smoke_cleanup_fault or pilot_cleanup_fault:
             raise RuntimeError("private CPU cleanup failure")
+        if (
+            type(invocation) is _PilotInvocationV1
+            and invocation.sequence_index == 7
+            and self._fault is CpuProductionDriverFaultV1.PILOT_CELL_007_COLLECTOR_FAILURE
+        ):
+            return _CleanupResultV1(
+                cleanup_receipt_sha256=_hash_projection(
+                    "cpu-unit-cleanup",
+                    cast(
+                        JsonValue,
+                        {
+                            "collector_failure_codes": ["COLLECTOR_FINALIZE_FAILED"],
+                            "deadline_binding": cast(
+                                JsonValue, _unit_deadline_projection(invocation)
+                            ),
+                            "manifest_sha256": invocation.manifest_sha256,
+                            "unit_id": unit_id,
+                        },
+                    ),
+                ),
+                collector_failure_codes=("COLLECTOR_FINALIZE_FAILED",),
+            )
         return _CleanupResultV1(
             cleanup_receipt_sha256=_hash_projection(
                 "cpu-unit-cleanup",
@@ -9692,12 +10055,19 @@ class _ProductionFixedExecutionPortV1:
         agent = self._new_agent(
             host=host, sentinel=sentinel, deadline_ns=invocation.deadline_monotonic_ns
         )
+        # Register every owned runtime immediately so outer bounded cleanup can
+        # close it even when initialization or Collector startup fails.
+        state.agent = agent
+        state.policy = policy
+        state.runtime_audit = runtime_audit
         agent.initialize(task_goal)
         lifecycle, binding = self._new_lifecycle(
             invocation=invocation,
             agent=agent,
             environment=state.environment if state.environment is not None else {"smoke": True},
         )
+        state.lifecycle = lifecycle
+        state.task_binding = binding
         started = binding.capture.start_task(
             task_name=state.task_name,
             task_goal=task_goal,
@@ -9712,23 +10082,10 @@ class _ProductionFixedExecutionPortV1:
             whole_task_attempt_index=1,
         )
         if started is None or not binding.capture.capture_complete:
-            lifecycle.finish_task_attempt(
-                binding=binding,
-                result=None,
-                exception=None,
-                retry_planned=False,
-                runtime_status="crashed",
-            )
-            lifecycle.finalize(runtime_status="crashed")
             raise ProductionDriverError(
                 "COLLECTOR_TASK_START_FAILED", "Collector task event is unavailable"
             )
         state.observation = initial_observation
-        state.lifecycle = lifecycle
-        state.task_binding = binding
-        state.agent = agent
-        state.policy = policy
-        state.runtime_audit = runtime_audit
         state.execution_evidence_trace = ExecutionEvidenceTrace(binding.task_recorder)
 
     def _step_context(
@@ -11505,6 +11862,63 @@ class _ProductionFixedExecutionPortV1:
             )
             return cast(JsonValue, projection)
 
+    def _failed_pilot_census_for_unit(self, invocation: _PilotInvocationV1) -> DriverStageCensusV1:
+        """Account completed decisions plus one terminal failed actor call."""
+
+        unit_id = self._unit_id(invocation)
+        with self._lock:
+            state = self._units.get(unit_id)
+        if state is None:
+            return _sum_census(())
+        values: list[DriverCallCensusV1 | DriverStageCensusV1] = [
+            item.census for item in state.decision_journal
+        ]
+        completed_call_ids = {item.logical_call_id for item in state.decision_journal}
+        audit = state.runtime_audit
+        failure = None if audit is None else audit.latest_failure_receipt
+        if (
+            type(failure) is ProductionRuntimeAuditFailureReceiptV1
+            and failure.logical_call_id not in completed_call_ids
+        ):
+            attempts: tuple[LiveAttemptReceiptV1, ...] = ()
+            conservative_charge: int | None = None
+            if state.policy is not None:
+                attempts = state.policy.attempt_receipts_for_call(failure.logical_call_id)
+                conservative_charge = (
+                    state.policy.conservative_cost_original_fallback_charge_for_call(
+                        failure.logical_call_id
+                    )
+                )
+            rubric_calls = sum(
+                item.dispatch_count for item in attempts if item.role is LiveAttemptRoleV1.RUBRIC
+            )
+            history_calls = sum(
+                item.dispatch_count
+                for item in attempts
+                if item.role is LiveAttemptRoleV1.HISTORY_POLICY
+            )
+            if failure.live_openai_calls != rubric_calls + history_calls or (
+                not failure.live_cost_exact
+                and (type(conservative_charge) is not int or conservative_charge <= 0)
+            ):
+                raise ProductionDriverError(
+                    "LIVE_COST_ACCOUNTING_UNKNOWN",
+                    "failed actor call lacks complete settled census",
+                )
+            values.append(
+                DriverCallCensusV1(
+                    actor_calls=1,
+                    offline_rubric_evaluations=0,
+                    rubric_openai_calls=rubric_calls,
+                    history_policy_openai_calls=history_calls,
+                    openai_calls=failure.live_openai_calls,
+                    actor_actions=0,
+                    cost_usd_micros=(failure.live_cost_usd_micros + (conservative_charge or 0)),
+                    wall_time_ms=(failure.total_ns + 999_999) // 1_000_000,
+                )
+            )
+        return _sum_census(tuple(values))
+
     def cleanup_unit(self, invocation: _SmokeInvocationV1 | _PilotInvocationV1) -> _CleanupResultV1:
         unit_id = self._unit_id(invocation)
         factory = getattr(self, "_factory", None)
@@ -11548,12 +11962,19 @@ class _ProductionFixedExecutionPortV1:
             "CLEANUP_DEADLINE_EXCEEDED" if cleanup_deadline_expired else None
         )
         failures: list[str] = ["CLEANUP_DEADLINE_EXCEEDED"] if cleanup_deadline_expired else []
+        collector_failures: list[str] = []
+
+        def record_collector_failure(code: str) -> None:
+            collector_failures.append(code)
+            failures.append(code)
+
         if journal_failure_code is not None:
             failures.append(journal_failure_code)
         teardown_result: object = None
         teardown_result_evidence: dict[str, JsonValue] | None = None
         teardown_result_sha256: str | None = None
         teardown_attempted = False
+        environment_close_confirmed = state.environment is None
         if state.environment is not None and not cleanup_deadline_expired:
             try:
                 initialization_confirmed = state.environment.is_initialized
@@ -11653,19 +12074,23 @@ class _ProductionFixedExecutionPortV1:
                 failures.append(cleanup_dispatch_failure_code)
             try:
                 state.environment.close()
+                environment_close_confirmed = True
             except Exception:
                 failures.append("ENVIRONMENT_CLOSE_FAILED")
         elif state.environment is not None:
             try:
                 state.environment.close()
+                environment_close_confirmed = True
             except Exception:
                 failures.append("ENVIRONMENT_CLOSE_FAILED")
+        agent_close_confirmed = state.agent is None
         if state.agent is not None:
             try:
                 state.agent.done()
                 close = getattr(state.agent.openai_client, "close", None)
                 if callable(close):
                     close()
+                agent_close_confirmed = True
             except Exception:
                 failures.append("AGENT_CLOSE_FAILED")
         final_manifest_hash: str | None = None
@@ -11678,7 +12103,7 @@ class _ProductionFixedExecutionPortV1:
             binding = state.task_binding
             task_run_id = binding.metadata.task_run_id
             if not binding.capture.capture_complete:
-                failures.append("COLLECTOR_INCOMPLETE")
+                record_collector_failure("COLLECTOR_INCOMPLETE")
             unit_completed = state.completed and not failures
             smoke_invocation = type(invocation) is _SmokeInvocationV1
             smoke_parser_completed = unit_completed and smoke_invocation
@@ -11704,9 +12129,9 @@ class _ProductionFixedExecutionPortV1:
                     ),
                 )
                 if not binding.capture.capture_complete and "COLLECTOR_INCOMPLETE" not in failures:
-                    failures.append("COLLECTOR_INCOMPLETE")
+                    record_collector_failure("COLLECTOR_INCOMPLETE")
             except Exception:
-                failures.append("COLLECTOR_END_TASK_FAILED")
+                record_collector_failure("COLLECTOR_END_TASK_FAILED")
             try:
                 state.lifecycle.finish_task_attempt(
                     binding=binding,
@@ -11716,12 +12141,12 @@ class _ProductionFixedExecutionPortV1:
                     runtime_status=task_runtime_status,
                 )
             except Exception:
-                failures.append("COLLECTOR_FINISH_ATTEMPT_FAILED")
+                record_collector_failure("COLLECTOR_FINISH_ATTEMPT_FAILED")
             try:
                 run_runtime_status = "completed" if unit_completed and not failures else "crashed"
                 final_path = state.lifecycle.finalize(runtime_status=run_runtime_status)
                 if final_path is None or not final_path.is_file() or final_path.is_symlink():
-                    failures.append("COLLECTOR_FINALIZE_FAILED")
+                    record_collector_failure("COLLECTOR_FINALIZE_FAILED")
                 else:
                     raw = final_path.read_bytes()
                     final_manifest_hash = hashlib.sha256(raw).hexdigest()
@@ -11730,7 +12155,7 @@ class _ProductionFixedExecutionPortV1:
                         try:
                             final_manifest_value = json.loads(raw)
                         except (UnicodeDecodeError, json.JSONDecodeError):
-                            failures.append("COLLECTOR_FINALIZE_FAILED")
+                            record_collector_failure("COLLECTOR_FINALIZE_FAILED")
                         else:
                             recorder = getattr(state.lifecycle, "recorder", None)
                             if (
@@ -11743,7 +12168,7 @@ class _ProductionFixedExecutionPortV1:
                                 or recorder is None
                                 or final_path.parent != recorder.run_root
                             ):
-                                failures.append("COLLECTOR_FINALIZE_FAILED")
+                                record_collector_failure("COLLECTOR_FINALIZE_FAILED")
                             else:
                                 final_manifest_path = final_path.absolute()
                                 final_manifest_capture_complete = cast(
@@ -11753,7 +12178,7 @@ class _ProductionFixedExecutionPortV1:
                                     str, final_manifest_value["runtime_status"]
                                 )
             except Exception:
-                failures.append("COLLECTOR_FINALIZE_FAILED")
+                record_collector_failure("COLLECTOR_FINALIZE_FAILED")
         if (
             cleanup_dispatch_failure_code is None
             and time.monotonic_ns() >= state.cleanup_deadline_monotonic_ns
@@ -11785,7 +12210,7 @@ class _ProductionFixedExecutionPortV1:
                 "collector_task_run_id": task_run_id,
             }
         if not failures and durable_full_unit and state.collector_run_binding is None:
-            failures.append("COLLECTOR_DURABLE_BINDING_INCOMPLETE")
+            record_collector_failure("COLLECTOR_DURABLE_BINDING_INCOMPLETE")
         if (
             not failures
             and type(resource_lifecycle) is ProductionResourceLifecycleAdapterV1
@@ -11806,6 +12231,53 @@ class _ProductionFixedExecutionPortV1:
                 journal_failure_code = _exception_code(exc, "UNIT_EVIDENCE_PUBLICATION_FAILED")
                 failures.append(journal_failure_code)
         if failures:
+            unique_collector_failures = tuple(dict.fromkeys(collector_failures))
+            if (
+                type(invocation) is _PilotInvocationV1
+                and invocation.allow_safe_original_fallback
+                and unique_collector_failures
+                and set(failures) == set(unique_collector_failures)
+                and teardown_result_evidence is not None
+                and teardown_result_sha256 is not None
+                and environment_close_confirmed
+                and agent_close_confirmed
+                and time.monotonic_ns() < state.cleanup_deadline_monotonic_ns
+                and self._run_fatal_latch.state is None
+            ):
+                collector_failure_cleanup_evidence: dict[str, JsonValue] = {
+                    "agent_close_confirmed": True,
+                    "collector_failure_codes": list(unique_collector_failures),
+                    "deadline_binding": cast(
+                        JsonValue,
+                        _deadline_projection(
+                            execution_deadline=state.deadline_monotonic_ns,
+                            cleanup_deadline=state.cleanup_deadline_monotonic_ns,
+                            authority_deadline=state.authority_deadline_monotonic_ns,
+                            attempt_termination_upper_bound_ns=(
+                                state.attempt_termination_upper_bound_ns
+                            ),
+                        ),
+                    ),
+                    "environment_close_confirmed": True,
+                    "manifest_sha256": invocation.manifest_sha256,
+                    "safe_cleanup_confirmed": True,
+                    "task_run_id": task_run_id,
+                    "teardown_attempted": teardown_attempted,
+                    "teardown_result": cast(JsonValue, teardown_result_evidence),
+                    "teardown_result_sha256": teardown_result_sha256,
+                    "unit_id": unit_id,
+                }
+                cleanup_evidence_preimage = _projection_preimage(
+                    "production-unit-cleanup-with-collector-failure",
+                    cast(JsonValue, collector_failure_cleanup_evidence),
+                )
+                with self._lock:
+                    self._units.pop(unit_id, None)
+                return _CleanupResultV1(
+                    cleanup_receipt_sha256=hashlib.sha256(cleanup_evidence_preimage).hexdigest(),
+                    cleanup_evidence_preimage=cleanup_evidence_preimage,
+                    collector_failure_codes=unique_collector_failures,
+                )
             if cleanup_dispatch_failure_code == "CLEANUP_DEADLINE_EXCEEDED":
                 with self._lock:
                     self._units.pop(unit_id, None)
@@ -12520,6 +12992,7 @@ class FixedPilotAdapterV1:
                 ),
             )
             records: list[PilotCellEvidenceV1] = []
+            failed_records: list[WithToolCellFailureEvidenceV1] = []
             effective_reset_states: dict[str, str] = {}
             resource_lifecycle = (
                 self._port._resource_lifecycle
@@ -12691,6 +13164,8 @@ class FixedPilotAdapterV1:
                 reset: _PilotResetResultV1 | None = None
                 port_result: _PilotPortResultV1 | None = None
                 dispatch_error: Exception | None = None
+                failed_dispatch_census = _sum_census(())
+                failed_dispatch_census_error: Exception | None = None
                 unit_failure_evidence: JsonValue | None = None
                 try:
                     candidate_reset = self._port.reset_pilot_cell(invocation)
@@ -12713,6 +13188,12 @@ class FixedPilotAdapterV1:
                             failure_phase="DISPATCH",
                             failure_code=_exception_code(exc, "PILOT_CELL_EXECUTION_FAILED"),
                         )
+                        try:
+                            failed_dispatch_census = self._port._failed_pilot_census_for_unit(
+                                invocation
+                            )
+                        except Exception as census_exc:
+                            failed_dispatch_census_error = census_exc
                 cleanup: _CleanupResultV1 | None = None
                 cleanup_error: Exception | None = None
                 cleanup_attempted = True
@@ -12752,6 +13233,7 @@ class FixedPilotAdapterV1:
                         failure_phase=first_failure_phase,
                         failure_code=first_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
+                        failed_records=failed_records,
                     )
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         self._port._release_unpublished_unit_evidence(invocation)
@@ -12759,6 +13241,7 @@ class FixedPilotAdapterV1:
                         first_failure_code,
                         "pilot unit first failure retained; cleanup also failed",
                     ) from None
+                assert cleanup is not None
                 if dispatch_error is not None or reset is None or port_result is None:
                     dispatch_failure_code = _exception_code(
                         dispatch_error, "PILOT_CELL_EXECUTION_FAILED"
@@ -12769,6 +13252,71 @@ class FixedPilotAdapterV1:
                             failure_phase="DISPATCH",
                             failure_code=dispatch_failure_code,
                         )
+                    continuation_guard_error: Exception | None = failed_dispatch_census_error
+                    if (
+                        continuation_guard_error is None
+                        and with_tool_batch_host is not None
+                        and not _with_tool_cell_failure_is_hard(dispatch_error)
+                    ):
+                        try:
+                            if type(self._port) is _ProductionFixedExecutionPortV1:
+                                self._port._require_run_dispatch_allowed()
+                            if (
+                                time.monotonic_ns()
+                                >= trusted_context.authority_deadline_monotonic_ns
+                            ):
+                                raise ProductionDriverError(
+                                    "OWNER_AUTHORITY_EXPIRED",
+                                    "with-tool continuation authority elapsed",
+                                )
+                        except Exception as exc:
+                            continuation_guard_error = exc
+                    if (
+                        continuation_guard_error is None
+                        and with_tool_batch_host is not None
+                        and not _with_tool_cell_failure_is_hard(dispatch_error)
+                    ):
+                        failed_wall_ms = max(
+                            failed_dispatch_census.wall_time_ms,
+                            (time.monotonic_ns() - unit_started_ns + 999_999) // 1_000_000,
+                        )
+                        failed_dispatch_census = replace(
+                            failed_dispatch_census, wall_time_ms=failed_wall_ms
+                        )
+                        failed_record = _with_tool_cell_failure_evidence(
+                            invocation=invocation,
+                            reset=reset,
+                            port_result=port_result,
+                            cleanup=cleanup,
+                            dispatch_error=dispatch_error,
+                            failure_phase="DISPATCH",
+                            failure_code=dispatch_failure_code,
+                            unit_failure_evidence=unit_failure_evidence,
+                            census=failed_dispatch_census,
+                        )
+                        cumulative = _pilot_outcome_census(
+                            records, failed_records, failed_record.census
+                        )
+                        if (
+                            cumulative.actor_calls > trusted_pilot.max_total_actor_calls
+                            or cumulative.openai_calls > trusted_pilot.max_total_openai_calls
+                            or cumulative.cost_usd_micros > trusted_pilot.max_total_cost_usd_micros
+                            or cumulative.wall_time_ms
+                            > trusted_pilot.max_total_wall_time_seconds * 1000
+                        ):
+                            raise ProductionDriverError(
+                                "PILOT_BUDGET_EXCEEDED",
+                                "with-tool failed-cell census exceeded authority",
+                            )
+                        failed_records.append(failed_record)
+                        self._failure_evidence = _pilot_progress_preimage(
+                            context=trusted_context,
+                            records=records,
+                            failed_records=failed_records,
+                        )
+                        if type(self._port) is _ProductionFixedExecutionPortV1:
+                            self._port._release_unpublished_unit_evidence(invocation)
+                        continue
                     self._failure_evidence = _pilot_unit_failure_preimage(
                         context=trusted_context,
                         records=records,
@@ -12782,13 +13330,89 @@ class FixedPilotAdapterV1:
                         failure_phase="DISPATCH",
                         failure_code=dispatch_failure_code,
                         unit_failure_evidence=unit_failure_evidence,
+                        failed_records=failed_records,
                     )
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         self._port._release_unpublished_unit_evidence(invocation)
+                    if continuation_guard_error is not None:
+                        if isinstance(continuation_guard_error, ProductionDriverError):
+                            raise continuation_guard_error
+                        raise ProductionDriverError(
+                            "PILOT_FAILED_CELL_CENSUS_INVALID",
+                            "failed cell cannot continue without complete accounting",
+                        ) from continuation_guard_error
                     raise ProductionDriverError(
                         dispatch_failure_code, "pilot cell dispatch failed closed"
                     ) from None
-                assert cleanup is not None
+                if cleanup.collector_failure_codes and with_tool_batch_host is None:
+                    raise ProductionDriverError(
+                        cleanup.collector_failure_codes[0],
+                        "strict pilot Collector cleanup failed closed",
+                    )
+                if cleanup.collector_failure_codes:
+                    try:
+                        collector_census = _validate_pilot_decisions(
+                            trusted_pilot,
+                            cell,
+                            port_result.decisions,
+                            allow_safe_original_fallback=True,
+                        )
+                        collector_census = replace(
+                            collector_census,
+                            wall_time_ms=max(
+                                collector_census.wall_time_ms,
+                                (time.monotonic_ns() - unit_started_ns + 999_999) // 1_000_000,
+                            ),
+                        )
+                        if (
+                            type(self._port) is _ProductionFixedExecutionPortV1
+                            and self._port._run_fatal_latch.state is not None
+                        ):
+                            self._port._require_run_dispatch_allowed()
+                        if time.monotonic_ns() >= trusted_context.authority_deadline_monotonic_ns:
+                            raise ProductionDriverError(
+                                "OWNER_AUTHORITY_EXPIRED",
+                                "with-tool continuation authority elapsed",
+                            )
+                        failure_code = cleanup.collector_failure_codes[0]
+                        failed_record = _with_tool_cell_failure_evidence(
+                            invocation=invocation,
+                            reset=reset,
+                            port_result=port_result,
+                            cleanup=cleanup,
+                            dispatch_error=None,
+                            failure_phase="COLLECTOR",
+                            failure_code=failure_code,
+                            unit_failure_evidence=unit_failure_evidence,
+                            census=collector_census,
+                        )
+                        cumulative = _pilot_outcome_census(
+                            records, failed_records, failed_record.census
+                        )
+                        if (
+                            cumulative.actor_calls > trusted_pilot.max_total_actor_calls
+                            or cumulative.openai_calls > trusted_pilot.max_total_openai_calls
+                            or cumulative.cost_usd_micros > trusted_pilot.max_total_cost_usd_micros
+                            or cumulative.wall_time_ms
+                            > trusted_pilot.max_total_wall_time_seconds * 1000
+                        ):
+                            raise ProductionDriverError(
+                                "PILOT_BUDGET_EXCEEDED",
+                                "with-tool failed-cell census exceeded authority",
+                            )
+                    except Exception:
+                        if type(self._port) is _ProductionFixedExecutionPortV1:
+                            self._port._release_unpublished_unit_evidence(invocation)
+                        raise
+                    failed_records.append(failed_record)
+                    self._failure_evidence = _pilot_progress_preimage(
+                        context=trusted_context,
+                        records=records,
+                        failed_records=failed_records,
+                    )
+                    if type(self._port) is _ProductionFixedExecutionPortV1:
+                        self._port._release_unpublished_unit_evidence(invocation)
+                    continue
                 try:
                     _require_sha256(reset.reset_receipt_sha256, "reset_receipt_sha256")
                     _require_sha256(
@@ -12869,7 +13493,7 @@ class FixedPilotAdapterV1:
                             record,
                             census=replace(record.census, wall_time_ms=admission_wall_ms),
                         )
-                    cumulative = _sum_census(tuple(item.census for item in (*records, record)))
+                    cumulative = _pilot_outcome_census(records, failed_records, record.census)
                     if (
                         cumulative.actor_calls > trusted_pilot.max_total_actor_calls
                         or cumulative.openai_calls > trusted_pilot.max_total_openai_calls
@@ -12881,30 +13505,6 @@ class FixedPilotAdapterV1:
                             "PILOT_BUDGET_EXCEEDED",
                             "pilot cumulative census exceeded authority",
                         )
-                    completed_records = [
-                        _pilot_cell_evidence_projection(item) for item in (*records, record)
-                    ]
-                    next_failure_evidence = canonical_json_bytes(
-                        cast(
-                            JsonValue,
-                            {
-                                "completed_cell_indices": [
-                                    item.sequence_index for item in (*records, record)
-                                ],
-                                "completed_records": completed_records,
-                                "completed_records_sha256": _hash_projection(
-                                    "pilot-completed-unit-journal",
-                                    cast(JsonValue, completed_records),
-                                ),
-                                "failure_code": "PILOT_STAGE_INTERRUPTED",
-                                "manifest_sha256": trusted_context.manifest_sha256,
-                                "run_id": trusted_context.run_id,
-                                "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
-                                "stage": RunStageV1.R25_PILOT.value,
-                                "status": "IN_PROGRESS",
-                            },
-                        )
-                    )
                     admitted_ns = time.monotonic_ns()
                     admitted_wall_ms = max(
                         record.census.wall_time_ms,
@@ -12922,30 +13522,6 @@ class FixedPilotAdapterV1:
                         record = replace(
                             record,
                             census=replace(record.census, wall_time_ms=admitted_wall_ms),
-                        )
-                        completed_records = [
-                            _pilot_cell_evidence_projection(item) for item in (*records, record)
-                        ]
-                        next_failure_evidence = canonical_json_bytes(
-                            cast(
-                                JsonValue,
-                                {
-                                    "completed_cell_indices": [
-                                        item.sequence_index for item in (*records, record)
-                                    ],
-                                    "completed_records": completed_records,
-                                    "completed_records_sha256": _hash_projection(
-                                        "pilot-completed-unit-journal",
-                                        cast(JsonValue, completed_records),
-                                    ),
-                                    "failure_code": "PILOT_STAGE_INTERRUPTED",
-                                    "manifest_sha256": trusted_context.manifest_sha256,
-                                    "run_id": trusted_context.run_id,
-                                    "schema_version": PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION,
-                                    "stage": RunStageV1.R25_PILOT.value,
-                                    "status": "IN_PROGRESS",
-                                },
-                            )
                         )
                         final_admission_ns = time.monotonic_ns()
                         if (
@@ -12978,6 +13554,7 @@ class FixedPilotAdapterV1:
                         failure_phase="POST_DISPATCH_ADMISSION",
                         failure_code=failure_code,
                         unit_failure_evidence=unit_failure_evidence,
+                        failed_records=failed_records,
                     )
                     if type(self._port) is _ProductionFixedExecutionPortV1:
                         self._port._release_unpublished_unit_evidence(invocation)
@@ -12988,7 +13565,11 @@ class FixedPilotAdapterV1:
                         "pilot evidence admission failed closed",
                     ) from exc
                 records.append(record)
-                self._failure_evidence = next_failure_evidence
+                self._failure_evidence = _pilot_progress_preimage(
+                    context=trusted_context,
+                    records=records,
+                    failed_records=failed_records,
+                )
             if (
                 with_tool_batch_host is None
                 and shared_sequential
@@ -12997,7 +13578,7 @@ class FixedPilotAdapterV1:
                 raise ProductionDriverError(
                     "PILOT_SWITCH_CENSUS_MISMATCH", "pilot switch census differs"
                 )
-            census = _sum_census(tuple(record.census for record in records))
+            census = _pilot_outcome_census(records, failed_records)
             if with_tool_batch_host is None:
                 pilot_evidence = PilotStageEvidenceV1(
                     manifest_sha256=trusted_context.manifest_sha256,
@@ -13029,10 +13610,15 @@ class FixedPilotAdapterV1:
                     full_task_count=len(trusted_pilot.tasks),
                     task_ordinal_start=with_tool_task_ordinal_start,
                     task_ordinal_end=len(trusted_pilot.tasks),
+                    failed_cells=tuple(failed_records),
                     schema_version=(
-                        PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1
-                        if with_tool_task_ordinal_start == 1
-                        else PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2
+                        PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3
+                        if failed_records
+                        else (
+                            PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1
+                            if with_tool_task_ordinal_start == 1
+                            else PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2
+                        )
                     ),
                 )
                 evidence_projection = with_tool_joint_batch_evidence_projection(evidence)
@@ -13053,8 +13639,8 @@ class FixedPilotAdapterV1:
                 openai_calls=census.openai_calls,
                 actor_actions=census.actor_actions,
                 cost_usd_micros=census.cost_usd_micros,
-                completed_units=tuple(f"pilot-cell-{index:03d}" for index, _ in selected_cells),
-                provider_final_request_proven=True,
+                completed_units=tuple(f"pilot-cell-{item.sequence_index:03d}" for item in records),
+                provider_final_request_proven=not failed_records,
             )
 
     @property
@@ -13220,6 +13806,7 @@ __all__ = [
     "PRODUCTION_DRIVER_EVIDENCE_SCHEMA_VERSION",
     "PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V2",
+    "PRODUCTION_WITH_TOOL_JOINT_BATCH_EVIDENCE_SCHEMA_VERSION_V3",
     "PRODUCTION_MODEL_HANDOFF_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_PILOT_MODEL_SWITCH_EVIDENCE_SCHEMA_VERSION_V1",
     "PRODUCTION_RESOURCE_CLEANUP_BOUND_SCHEMA_VERSION_V1",
@@ -13238,6 +13825,7 @@ __all__ = [
     "DriverStageCensusV1",
     "FixedLiveSmokeAdapterV1",
     "FixedPilotAdapterV1",
+    "WithToolCellFailureEvidenceV1",
     "WithToolJointBatchEvidenceV1",
     "OfficialTaskResultEvidenceV1",
     "PilotCellEvidenceV1",
