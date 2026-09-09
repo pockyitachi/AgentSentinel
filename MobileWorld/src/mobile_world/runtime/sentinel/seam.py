@@ -1631,7 +1631,10 @@ class PromptSentinel:
                     | R24CoordinatedCallRecordV1
                 )
                 if no_history:
-                    if execution_fence is None or type(self._policy) is not LeanActiveRuntimePolicyV1:
+                    if (
+                        execution_fence is None
+                        or type(self._policy) is not LeanActiveRuntimePolicyV1
+                    ):
                         raise SentinelContractError(
                             "no-history rubric execution requires the exact lean policy"
                         )
