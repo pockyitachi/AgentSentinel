@@ -111,7 +111,10 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     snapshot_vertical_sentinel_result,
     vertical_output_projection,
 )
-from mobile_world.runtime.sentinel.r2_4.lean_policy import LeanActiveRuntimePolicyV1
+from mobile_world.runtime.sentinel.r2_4.lean_policy import (
+    LeanActiveRuntimePolicyV1,
+    LeanPolicyPoisonedError,
+)
 from mobile_world.runtime.sentinel.r2_4.orchestration import R24CoordinatedCallRecordV1
 from mobile_world.runtime.sentinel.r2_4.policy import R22CpuFakeActivePolicyAdapter
 from mobile_world.runtime.sentinel.r2_4.renderer import (
@@ -127,6 +130,13 @@ _CHECK_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
 _CURRENT_LOGICAL_CALL: ContextVar[SentinelLogicalCall | None] = ContextVar(
     "mobileworld_prompt_sentinel_logical_call", default=None
 )
+_LEAN_TIMEOUT_JOIN_GRACE_SECONDS = 0.01
+
+
+def _remaining_deadline_seconds(*, deadline_ns: int, now_ns: int) -> float:
+    """Return only the unused part of one already-running deadline."""
+
+    return max(0.0, (deadline_ns - now_ns) / 1_000_000_000)
 
 
 def _implements_sentinel_policy(value: object) -> bool:
@@ -242,6 +252,15 @@ class _PolicyExecutionFence(PolicyExecutionControlV1):
     def _require_open(self) -> None:
         if self._cancelled.is_set() or self._clock_ns() >= self._deadline_ns:
             raise TimeoutError("R2.2 policy execution deadline has closed")
+
+    def remaining_seconds(self) -> float:
+        """Return time left on the one seam-owned absolute deadline."""
+
+        self._require_open()
+        remaining = (self._deadline_ns - self._clock_ns()) / 1_000_000_000
+        if remaining <= 0:
+            raise TimeoutError("R2.2 policy execution deadline has closed")
+        return remaining
 
     def run_transport[T](self, call: Callable[[], T]) -> T:
         if not callable(call):
@@ -1560,16 +1579,22 @@ class PromptSentinel:
         | R24CoordinatedCallRecordV1
     ):
         if type(self._policy) is LeanActiveRuntimePolicyV1:
-            return self._policy.run_with_logical_call_gate(
-                lambda: self._evaluate_policy_worker_with_timeout(
-                    request=request,
-                    context=context,
-                    history_ir=history_ir,
-                    timeout_ms=timeout_ms,
-                    evaluation_started=evaluation_started,
-                    no_history=no_history,
+            try:
+                return self._policy.run_with_logical_call_gate(
+                    lambda: self._evaluate_policy_worker_with_timeout(
+                        request=request,
+                        context=context,
+                        history_ir=history_ir,
+                        timeout_ms=timeout_ms,
+                        evaluation_started=evaluation_started,
+                        no_history=no_history,
+                    )
                 )
-            )
+            except LeanPolicyPoisonedError as exc:
+                raise _EvaluationFailure(
+                    SentinelFallbackReason.POLICY_TIMEOUT,
+                    "policy_disabled_after_timeout",
+                ) from exc
         return self._evaluate_policy_worker_with_timeout(
             request=request,
             context=context,
@@ -1601,9 +1626,10 @@ class PromptSentinel:
         policy_start_gate = Lock()
         outcome: list[tuple[bool, Any]] = []
         policy_started = self._clock_ns()
+        policy_deadline_ns = policy_started + timeout_ms * 1_000_000
         execution_fence = (
             _PolicyExecutionFence(
-                deadline_ns=policy_started + timeout_ms * 1_000_000,
+                deadline_ns=policy_deadline_ns,
                 clock_ns=self._clock_ns,
             )
             if self._runtime_evidence_policy or self._runtime_vertical_policy
@@ -1682,17 +1708,26 @@ class PromptSentinel:
             daemon=True,
         )
         worker.start()
-        if not finished.wait(timeout_ms / 1000):
+        wait_seconds = _remaining_deadline_seconds(
+            deadline_ns=policy_deadline_ns,
+            now_ns=self._clock_ns(),
+        )
+        if not finished.wait(wait_seconds):
             with policy_start_gate:
                 cancel_before_policy.set()
             if execution_fence is not None:
                 execution_fence.cancel()
             if type(self._policy) is LeanActiveRuntimePolicyV1:
-                # The lean policy can prepare a rubric call followed by a history
-                # call. Do not expose Original until its task-local worker has
-                # observed cancellation and exited, or the next logical call
-                # could overlap its stateful coordinator/admission bridge.
-                worker.join()
+                # A transport is required to obey the shared remaining-time
+                # budget. If it does not, poison this task-local state machine so
+                # later calls fail open without starting another worker/provider.
+                self._policy.poison()
+                worker.join(
+                    timeout=min(
+                        _LEAN_TIMEOUT_JOIN_GRACE_SECONDS,
+                        timeout_ms / 1_000,
+                    )
+                )
             raise _EvaluationFailure(
                 SentinelFallbackReason.POLICY_TIMEOUT,
                 "policy_deadline_exceeded",

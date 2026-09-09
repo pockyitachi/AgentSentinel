@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import time
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from io import BytesIO
@@ -46,6 +47,7 @@ from mobile_world.runtime.sentinel import (
     SentinelMode,
     SentinelPolicyOutput,
 )
+from mobile_world.runtime.sentinel import seam as sentinel_seam_module
 from mobile_world.runtime.sentinel.contracts import SentinelCallRole
 from mobile_world.runtime.sentinel.lean_runtime import LeanSentinelRunFactoryV1
 from mobile_world.runtime.sentinel.r2_2.contracts import (
@@ -78,6 +80,7 @@ from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
     ResponsesEnvelopeV1,
     ResponsesRequestV1,
     TransportDescriptorV1,
+    remaining_policy_transport_seconds,
 )
 from mobile_world.runtime.sentinel.r2_2.metrics import R22PolicyMetrics
 from mobile_world.runtime.sentinel.r2_2.runtime_overlay import (
@@ -993,7 +996,7 @@ def test_lean_active_seam_keeps_r23_duplicate_prune(monkeypatch) -> None:
     assert result.bridge.decision_kinds == (SentinelDecisionKind.DROP,)
 
 
-def test_lean_timeout_joins_and_serializes_the_next_logical_call(monkeypatch) -> None:
+def test_lean_timeout_is_bounded_and_poison_prevents_a_second_provider(monkeypatch) -> None:
     built = _build_adapter_case("qwen")
     source, _receipts = _source_policy(
         built,
@@ -1007,6 +1010,7 @@ def test_lean_timeout_joins_and_serializes_the_next_logical_call(monkeypatch) ->
     first_entered = Event()
     second_entered = Event()
     release = Event()
+    worker_exited = Event()
     state_lock = Lock()
     active = 0
     maximum_active = 0
@@ -1029,6 +1033,8 @@ def test_lean_timeout_joins_and_serializes_the_next_logical_call(monkeypatch) ->
         finally:
             with state_lock:
                 active -= 1
+            if invocation == 1:
+                worker_exited.set()
 
     monkeypatch.setattr(source, "evaluate_with_control", blocked_evaluate)
     sentinel = PromptSentinel(
@@ -1057,25 +1063,36 @@ def test_lean_timeout_joins_and_serializes_the_next_logical_call(monkeypatch) ->
         except BaseException as exc:  # pragma: no cover - surfaced below
             errors.append(exc)
 
+    assert sentinel_seam_module._remaining_deadline_seconds(
+        deadline_ns=1_000_000_000,
+        now_ns=400_000_000,
+    ) == pytest.approx(0.6)
+    assert (
+        sentinel_seam_module._remaining_deadline_seconds(
+            deadline_ns=1_000_000_000,
+            now_ns=1_100_000_000,
+        )
+        == 0
+    )
+
+    started = time.monotonic()
     first = Thread(target=invoke, args=("lean-timeout-call-1",))
     first.start()
     assert first_entered.wait(1)
-    time.sleep(0.05)
-    assert first.is_alive(), "timeout must join the still-running task-local worker"
+    first.join(1)
+    first_elapsed = time.monotonic() - started
+    assert not first.is_alive()
+    assert first_elapsed < 0.2
 
     second = Thread(target=invoke, args=("lean-timeout-call-2",))
     second.start()
-    time.sleep(0.05)
-    assert not second_entered.is_set()
+    second.join(1)
 
-    release.set()
-    first.join(2)
-    second.join(2)
-
-    assert not first.is_alive() and not second.is_alive()
+    assert not second.is_alive()
     assert errors == []
-    assert second_entered.is_set()
+    assert not second_entered.is_set()
     assert maximum_active == 1
+    assert invocation_count == 1
     assert set(results) == {"lean-timeout-call-1", "lean-timeout-call-2"}
     assert (
         results["lean-timeout-call-1"].receipt.fallback_reason
@@ -1083,8 +1100,100 @@ def test_lean_timeout_joins_and_serializes_the_next_logical_call(monkeypatch) ->
     )
     assert (
         results["lean-timeout-call-2"].receipt.fallback_reason
-        is SentinelFallbackReason.POLICY_EXCEPTION
+        is SentinelFallbackReason.POLICY_TIMEOUT
     )
+    assert results["lean-timeout-call-2"].receipt.policy_evaluated is False
+
+    release.set()
+    assert worker_exited.wait(1)
+
+
+def test_lean_rubric_then_history_transport_uses_one_remaining_deadline(monkeypatch) -> None:
+    built = _build_adapter_case("qwen")
+    transport = _R22FakeTransport(json.dumps(_r22_proposal(built.packet)))
+    source, _receipts = _source_policy(built, transport)
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=CollectorEvidenceFactoryV1(),
+        session_factory=lambda _task_run_id, _task: None,
+    )
+    policy = LeanActiveRuntimePolicyV1(source, coordinator=coordinator)
+    remaining = iter((0.04, 0.02))
+    observed_remaining: list[float] = []
+    rubric_timeouts: list[float] = []
+
+    class SharedDeadlineControl:
+        def remaining_seconds(self) -> float:
+            value = next(remaining)
+            observed_remaining.append(value)
+            return value
+
+        def run_transport[T](self, call: Callable[[], T]) -> T:
+            return call()
+
+        def publish_receipt(self, publish: Callable[[], None]) -> None:
+            publish()
+
+    original_evidence_factory = source._evidence_packet_factory
+
+    def rubric_then_evidence(*args: Any) -> Any:
+        # The production coordinator makes its rubric call while building this
+        # packet. Consume the first slice of the shared deadline at that seam.
+        rubric_timeouts.append(remaining_policy_transport_seconds(0.05))
+        return original_evidence_factory(*args)
+
+    monkeypatch.setattr(source, "_evidence_packet_factory", rubric_then_evidence)
+    policy.evaluate_with_control(
+        request=cast(JsonValue, built.request),
+        context=built.context,
+        history_ir=built.history_ir,
+        execution_control=SharedDeadlineControl(),
+    )
+
+    assert observed_remaining == [0.04, 0.02]
+    assert rubric_timeouts == [pytest.approx(0.035)]
+    assert len(transport.calls) == 1
+    history_timeout = transport.calls[0][2]
+    assert history_timeout == pytest.approx(0.015)
+    assert history_timeout < rubric_timeouts[0]
+
+
+def test_lean_no_history_rubric_uses_the_same_remaining_deadline(monkeypatch) -> None:
+    built = _build_adapter_case("qwen")
+    source, _receipts = _source_policy(
+        built,
+        _R22FakeTransport(json.dumps(_r22_proposal(built.packet))),
+    )
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=CollectorEvidenceFactoryV1(),
+        session_factory=lambda _task_run_id, _task: None,
+    )
+    policy = LeanActiveRuntimePolicyV1(source, coordinator=coordinator)
+    observed: list[float] = []
+
+    class SharedDeadlineControl:
+        def remaining_seconds(self) -> float:
+            return 0.02
+
+        def run_transport[T](self, call: Callable[[], T]) -> T:
+            return call()
+
+        def publish_receipt(self, publish: Callable[[], None]) -> None:
+            publish()
+
+    def observe_deadline(_request: JsonValue, _context: SentinelContext) -> Any:
+        observed.append(remaining_policy_transport_seconds(0.05))
+        raise RuntimeError("stop after observing the rubric deadline")
+
+    monkeypatch.setattr(coordinator, "prepare_no_history", observe_deadline)
+    with pytest.raises(RuntimeError, match="stop after observing"):
+        policy.prepare_no_history_with_control(
+            request=cast(JsonValue, built.request),
+            context=built.context,
+            execution_control=SharedDeadlineControl(),
+        )
+
+    assert len(observed) == 1
+    assert 0 < observed[0] < 0.02
 
 
 @pytest.mark.parametrize(

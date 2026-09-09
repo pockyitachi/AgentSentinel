@@ -37,6 +37,7 @@ from mobile_world.offline.causal_replay.contracts import (
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
     SUPPORTED_OPENAI_SDK_VERSION,
     _project_openai_response,
+    remaining_policy_transport_seconds,
 )
 from mobile_world.runtime.sentinel.r2_3.contracts import (
     GateOperator,
@@ -548,9 +549,13 @@ class DirectOpenAIRubricProviderV1:
         remaining_seconds = (context.deadline_monotonic_ns - time.monotonic_ns()) / 1e9
         if remaining_seconds <= 0:
             raise LeanRubricError("RUBRIC_TIMEOUT", "rubric deadline elapsed")
+        try:
+            shared_remaining_seconds = remaining_policy_transport_seconds(self._timeout_seconds)
+        except TimeoutError as exc:
+            raise LeanRubricError("RUBRIC_TIMEOUT", "shared policy deadline elapsed") from exc
         raw = self._client.responses.create(
             **request_kwargs,
-            timeout=min(self._timeout_seconds, remaining_seconds),
+            timeout=min(self._timeout_seconds, remaining_seconds, shared_remaining_seconds),
         )
         return _project_openai_response(
             raw,

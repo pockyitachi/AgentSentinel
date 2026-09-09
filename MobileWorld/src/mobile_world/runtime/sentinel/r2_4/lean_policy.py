@@ -17,6 +17,7 @@ from mobile_world.runtime.sentinel.r2_2.contracts import (
 )
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import (
     GPT56SentinelPolicy,
+    bind_policy_execution_control,
     openai_responses_transport_binding_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.contracts import (
@@ -40,6 +41,10 @@ _LEAN_PROMOTION_CHECKS = (
     "R24_SOURCE_TRANSPORT_BINDING_BOUND",
     "R24_NO_ACTION_OR_TOOL_AUTHORITY",
 )
+
+
+class LeanPolicyPoisonedError(TimeoutError):
+    """A prior unconfirmed timeout permanently disabled task-local Sentinel work."""
 
 
 class LeanActiveRuntimePolicyV1:
@@ -86,14 +91,28 @@ class LeanActiveRuntimePolicyV1:
         self._source_transport_binding_sha256 = binding_sha256
         self._execution_authority_sha256 = authority
         # The coordinator, rubric session, provider context store, and admission
-        # bridge are task-local state machines.  Keep one logical call in that
-        # stateful path at a time, including while the seam joins a timed-out
-        # worker.
+        # bridge are task-local state machines. Keep one logical call in that
+        # stateful path at a time.
         self._evaluation_lock = Lock()
         # The seam holds this separate gate in its caller thread while its
-        # policy worker runs.  A later logical call therefore cannot start its
-        # own timeout clock while the prior timed-out worker is being joined.
+        # policy worker runs. A timeout poisons this task-local policy before
+        # the gate is released, so later calls fail open without starting work.
         self._logical_call_gate = Lock()
+        self._poison_lock = Lock()
+        self._poisoned = False
+
+    def _require_healthy(self) -> None:
+        with self._poison_lock:
+            if self._poisoned:
+                raise LeanPolicyPoisonedError(
+                    "lean Sentinel was disabled after an unconfirmed timeout"
+                )
+
+    def poison(self) -> None:
+        """Permanently disable this task-local policy after a stuck worker."""
+
+        with self._poison_lock:
+            self._poisoned = True
 
     @property
     def policy_id(self) -> str:
@@ -115,6 +134,7 @@ class LeanActiveRuntimePolicyV1:
         if not callable(call):
             raise TypeError("logical-call gate requires a callable")
         with self._logical_call_gate:
+            self._require_healthy()
             return call()
 
     @staticmethod
@@ -155,6 +175,7 @@ class LeanActiveRuntimePolicyV1:
     ) -> RuntimeVerticalPolicyOutputV1:
         request_copy, context_copy, history_copy = self._inputs(request, context, history_ir)
         with self._evaluation_lock:
+            self._require_healthy()
             source = self._source_policy.evaluate(
                 request=request_copy,
                 context=context_copy,
@@ -172,12 +193,15 @@ class LeanActiveRuntimePolicyV1:
     ) -> RuntimeVerticalPolicyOutputV1:
         request_copy, context_copy, history_copy = self._inputs(request, context, history_ir)
         with self._evaluation_lock:
-            source = self._source_policy.evaluate_with_control(
-                request=request_copy,
-                context=context_copy,
-                history_ir=history_copy,
-                execution_control=execution_control,
-            )
+            self._require_healthy()
+            with bind_policy_execution_control(execution_control):
+                source = self._source_policy.evaluate_with_control(
+                    request=request_copy,
+                    context=context_copy,
+                    history_ir=history_copy,
+                    execution_control=execution_control,
+                )
+            self._require_healthy()
             return self._promote(source, context.logical_call_id)
 
     def prepare_no_history_with_control(
@@ -190,7 +214,11 @@ class LeanActiveRuntimePolicyV1:
         if not isinstance(execution_control, PolicyExecutionControlV1):
             raise TypeError("no-history rubric preparation needs the seam execution fence")
         with self._evaluation_lock:
-            return self._coordinator.prepare_no_history(deepcopy(request), deepcopy(context))
+            self._require_healthy()
+            with bind_policy_execution_control(execution_control):
+                result = self._coordinator.prepare_no_history(deepcopy(request), deepcopy(context))
+            self._require_healthy()
+            return result
 
 
-__all__ = ["LeanActiveRuntimePolicyV1"]
+__all__ = ["LeanActiveRuntimePolicyV1", "LeanPolicyPoisonedError"]

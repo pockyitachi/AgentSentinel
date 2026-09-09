@@ -15,6 +15,8 @@ import json
 import math
 import re
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -115,9 +117,56 @@ _SDK_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}")
 _DATA_IMAGE = re.compile(r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]*={0,2})")
 _MAX_JSON_BYTES = 2 * 1024 * 1024
 _MAX_IMAGE_BYTES = 40 * 1024 * 1024
+_POLICY_FINISH_RESERVE_SECONDS = 0.25
+
+_CURRENT_POLICY_EXECUTION_CONTROL: ContextVar[PolicyExecutionControlV1 | None] = ContextVar(
+    "mobileworld_current_policy_execution_control",
+    default=None,
+)
 
 AdmissionBundleT = TypeVar("AdmissionBundleT")
 PolicyOutputT = TypeVar("PolicyOutputT")
+
+
+def remaining_policy_transport_seconds(
+    maximum_seconds: float,
+    *,
+    execution_control: PolicyExecutionControlV1 | None = None,
+) -> float:
+    """Cap one provider call by the current policy worker's absolute deadline."""
+
+    _validate_positive_finite_seconds(maximum_seconds, "transport timeout")
+    control = (
+        execution_control
+        if execution_control is not None
+        else _CURRENT_POLICY_EXECUTION_CONTROL.get()
+    )
+    if control is None:
+        return float(maximum_seconds)
+    if not isinstance(control, PolicyExecutionControlV1):
+        raise TypeError("execution control must implement the exact policy deadline interface")
+    remaining = control.remaining_seconds()
+    _validate_positive_finite_seconds(remaining, "remaining policy deadline")
+    reserve = min(_POLICY_FINISH_RESERVE_SECONDS, float(maximum_seconds) * 0.1)
+    effective = min(float(maximum_seconds), remaining - reserve)
+    if effective <= 0:
+        raise TimeoutError("policy deadline has no provider-call budget remaining")
+    return effective
+
+
+@contextmanager
+def bind_policy_execution_control(execution_control: PolicyExecutionControlV1):
+    """Expose one seam-owned deadline to nested rubric provider calls."""
+
+    if not isinstance(execution_control, PolicyExecutionControlV1):
+        raise TypeError("execution control must implement the exact policy deadline interface")
+    token: Token[PolicyExecutionControlV1 | None] = _CURRENT_POLICY_EXECUTION_CONTROL.set(
+        execution_control
+    )
+    try:
+        yield execution_control
+    finally:
+        _CURRENT_POLICY_EXECUTION_CONTROL.reset(token)
 
 
 class GPT56PolicyError(RuntimeError):
@@ -1273,6 +1322,13 @@ class _LocalPolicyExecutionControl:
         if perf_counter_ns() >= self._deadline_ns:
             raise _PolicyDeadlineExceeded("policy execution deadline elapsed")
 
+    def remaining_seconds(self) -> float:
+        self._require_live()
+        remaining = (self._deadline_ns - perf_counter_ns()) / 1_000_000_000
+        if remaining <= 0:
+            raise _PolicyDeadlineExceeded("policy execution deadline elapsed")
+        return remaining
+
     def run_transport[T](self, call: Callable[[], T]) -> T:
         if not callable(call):
             raise TypeError("transport callback must be callable")
@@ -1520,11 +1576,15 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
             transport_request = _detach_request(responses_request)
 
             def invoke_transport() -> ResponsesEnvelopeV1:
+                timeout_seconds = remaining_policy_transport_seconds(
+                    self._timeout_seconds,
+                    execution_control=execution_control,
+                )
                 state.transport_calls = 1
                 return transport_create(
                     transport_request,
                     call_role=SentinelCallRole.SENTINEL,
-                    timeout_seconds=self._timeout_seconds,
+                    timeout_seconds=timeout_seconds,
                 )
 
             try:
@@ -2006,8 +2066,10 @@ __all__ = [
     "ResponsesTransportV1",
     "SUPPORTED_OPENAI_SDK_VERSION",
     "TransportDescriptorV1",
+    "bind_policy_execution_control",
     "openai_responses_transport_binding_projection",
     "openai_responses_transport_binding_sha256",
+    "remaining_policy_transport_seconds",
     "responses_create_kwargs",
     "responses_envelope_hash_projection",
     "responses_request_config_dict",
