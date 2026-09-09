@@ -67,6 +67,7 @@ from mobile_world.runtime.sentinel.r2_2.sidecar import (
     detach_r22_policy_receipt,
     r22_policy_receipt_dict,
 )
+from mobile_world.runtime.sentinel.schemas import read_sentinel_schema_bytes
 
 GPT56_POLICY_ID = "mobileworld.runtime.sentinel-policy.gpt56/v1"
 GPT56_REQUEST_SCHEMA_VERSION = "mobileworld.runtime.sentinel-gpt56-request/v1"
@@ -229,10 +230,12 @@ class ProposalSchemaSnapshotV1:
 
     @classmethod
     def from_checked_in(cls, path: Path | None = None) -> ProposalSchemaSnapshotV1:
-        source = _checked_in_proposal_schema_path() if path is None else path
-        if not isinstance(cast(object, source), Path) or not source.is_absolute():
-            raise ValueError("checked-in schema path must be absolute")
-        raw = source.read_bytes()
+        if path is None:
+            raw = read_sentinel_schema_bytes("r2_2", "policy_proposal.v1.schema.json")
+        else:
+            if not isinstance(cast(object, path), Path) or not path.is_absolute():
+                raise ValueError("checked-in schema path must be absolute")
+            raw = path.read_bytes()
         schema = _strict_json_object(raw, require_canonical=False)
         return cls.from_value(schema)
 
@@ -260,10 +263,13 @@ class EvidencePacketSchemaSnapshotV1:
 
     @classmethod
     def from_checked_in(cls, path: Path | None = None) -> EvidencePacketSchemaSnapshotV1:
-        source = _checked_in_evidence_schema_path() if path is None else path
-        if not isinstance(cast(object, source), Path) or not source.is_absolute():
-            raise ValueError("checked-in evidence schema path must be absolute")
-        schema = _strict_json_object(source.read_bytes(), require_canonical=False)
+        if path is None:
+            raw = read_sentinel_schema_bytes("r2_2", "evidence_packet.v1.schema.json")
+        else:
+            if not isinstance(cast(object, path), Path) or not path.is_absolute():
+                raise ValueError("checked-in evidence schema path must be absolute")
+            raw = path.read_bytes()
+        schema = _strict_json_object(raw, require_canonical=False)
         canonical = canonical_json_bytes(schema)
         return cls(canonical_bytes=canonical, sha256=hashlib.sha256(canonical).hexdigest())
 
@@ -271,28 +277,6 @@ class EvidencePacketSchemaSnapshotV1:
         if type(self) is not EvidencePacketSchemaSnapshotV1:
             raise TypeError("evidence schema projection requires the exact trusted type")
         return _strict_json_object(self.canonical_bytes, require_canonical=True)
-
-
-def _checked_in_proposal_schema_path() -> Path:
-    repository_root = Path(__file__).resolve().parents[6]
-    return (
-        repository_root
-        / "mobileworld_audit_handoff"
-        / "schemas"
-        / "r2_2"
-        / "policy_proposal.v1.schema.json"
-    )
-
-
-def _checked_in_evidence_schema_path() -> Path:
-    repository_root = Path(__file__).resolve().parents[6]
-    return (
-        repository_root
-        / "mobileworld_audit_handoff"
-        / "schemas"
-        / "r2_2"
-        / "evidence_packet.v1.schema.json"
-    )
 
 
 def _require_strict_object_schemas(node: JsonValue) -> None:

@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_3/tracking_packet.v1.schema.json",
+  "title": "R2.3 History-Free Rubric Tracking Packet v1",
+  "description": "Standalone grounding packet over task instruction, current GUI, completed transition evidence, and prior rubric state. It has no actor-history or History-IR field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["packet_id", "logical_call_id", "task_run_id", "step_id", "rubric_binding", "prior_state", "cutoff", "task", "current_observation", "evidence_index", "input_exclusions", "topology", "schema_version"],
+  "properties": {
+    "packet_id": {"$ref": "#/$defs/runtimeId"},
+    "logical_call_id": {"$ref": "#/$defs/runtimeId"},
+    "task_run_id": {"$ref": "#/$defs/runtimeId"},
+    "step_id": {"$ref": "#/$defs/runtimeId"},
+    "rubric_binding": {"$ref": "#/$defs/rubricBinding"},
+    "prior_state": {"$ref": "#/$defs/trackingState"},
+    "cutoff": {"$ref": "#/$defs/cutoff"},
+    "task": {"$ref": "#/$defs/task"},
+    "current_observation": {"$ref": "#/$defs/currentObservation"},
+    "evidence_index": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/evidence"}},
+    "input_exclusions": {"$ref": "#/$defs/exclusions"},
+    "topology": {"$ref": "#/$defs/isolatedTopology"},
+    "schema_version": {"const": "mobileworld.runtime.rubric-tracking-packet/v1"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "runtimeId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "semanticId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"},
+    "rubricBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rubric_id", "rubric_version", "rubric_sha256"],
+      "properties": {"rubric_id": {"$ref": "#/$defs/semanticId"}, "rubric_version": {"type": "integer", "minimum": 1}, "rubric_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["factual_truth_authority", "history_edit_authority", "action_or_tool_authority", "archive_execution_authority"],
+      "properties": {"factual_truth_authority": {"const": false}, "history_edit_authority": {"const": false}, "action_or_tool_authority": {"const": false}, "archive_execution_authority": {"const": false}}
+    },
+    "isolatedTopology": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "independent_grounding_claim_eligible"],
+      "properties": {"kind": {"const": "ISOLATED_HISTORY_FREE"}, "independent_grounding_claim_eligible": {"const": true}}
+    },
+    "topology": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "independent_grounding_claim_eligible"],
+      "properties": {"kind": {"enum": ["ISOLATED_HISTORY_FREE", "JOINT_NON_INDEPENDENT"]}, "independent_grounding_claim_eligible": {"type": "boolean"}},
+      "allOf": [{"if": {"properties": {"kind": {"const": "ISOLATED_HISTORY_FREE"}}, "required": ["kind"]}, "then": {"properties": {"independent_grounding_claim_eligible": {"const": true}}}, "else": {"properties": {"independent_grounding_claim_eligible": {"const": false}}}}]
+    },
+    "task": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_event_id", "source_event_seq", "exact_text", "text_sha256", "source_event_type"],
+      "properties": {"source_event_id": {"$ref": "#/$defs/semanticId"}, "source_event_seq": {"type": "integer", "minimum": 1}, "exact_text": {"type": "string", "minLength": 1, "maxLength": 32768}, "text_sha256": {"$ref": "#/$defs/sha256"}, "source_event_type": {"const": "task_started"}}
+    },
+    "cutoff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["run_id", "task_run_id", "step_id", "current_observation_event_id", "cutoff_event_seq"],
+      "properties": {"run_id": {"$ref": "#/$defs/runtimeId"}, "task_run_id": {"$ref": "#/$defs/runtimeId"}, "step_id": {"$ref": "#/$defs/runtimeId"}, "current_observation_event_id": {"$ref": "#/$defs/semanticId"}, "cutoff_event_seq": {"type": "integer", "minimum": 1}}
+    },
+    "textProjection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "exact_text", "text_sha256"],
+      "properties": {"kind": {"enum": ["TEXT", "CANONICAL_JSON_TEXT"]}, "exact_text": {"type": "string", "minLength": 1, "maxLength": 65536}, "text_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "imageProjection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["content_sha256", "media_type", "width", "height", "kind"],
+      "properties": {"content_sha256": {"$ref": "#/$defs/sha256"}, "media_type": {"enum": ["image/png", "image/jpeg", "image/webp"]}, "width": {"type": "integer", "minimum": 1, "maximum": 32768}, "height": {"type": "integer", "minimum": 1, "maximum": 32768}, "kind": {"const": "IMAGE_REFERENCE"}}
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_id", "role", "source_event_id", "source_event_type", "source_event_seq", "task_run_id", "caused_by_event_id", "payload_sha256", "projection", "observed_by_cutoff"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/semanticId"},
+        "role": {"enum": ["CURRENT_UI_SCREENSHOT", "CURRENT_ACCESSIBILITY", "COMPLETED_TRANSITION_STATUS", "COMPLETED_POST_UI_STATE", "AGENT_VISIBLE_TOOL_RESULT", "USER_RESPONSE"]},
+        "source_event_id": {"$ref": "#/$defs/semanticId"},
+        "source_event_type": {"enum": ["step_started", "transition_completed", "transition_failed", "transition_not_executed"]},
+        "source_event_seq": {"type": "integer", "minimum": 1},
+        "task_run_id": {"$ref": "#/$defs/runtimeId"},
+        "caused_by_event_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/semanticId"}]},
+        "payload_sha256": {"$ref": "#/$defs/sha256"},
+        "projection": {"oneOf": [{"$ref": "#/$defs/textProjection"}, {"$ref": "#/$defs/imageProjection"}]},
+        "observed_by_cutoff": {"const": true}
+      },
+      "allOf": [
+        {"if": {"properties": {"role": {"const": "CURRENT_UI_SCREENSHOT"}}, "required": ["role"]}, "then": {"properties": {"source_event_type": {"const": "step_started"}, "caused_by_event_id": {"type": "null"}, "projection": {"$ref": "#/$defs/imageProjection"}}}},
+        {"if": {"properties": {"role": {"const": "CURRENT_ACCESSIBILITY"}}, "required": ["role"]}, "then": {"properties": {"source_event_type": {"const": "step_started"}, "caused_by_event_id": {"type": "null"}, "projection": {"$ref": "#/$defs/textProjection"}}}},
+        {"if": {"properties": {"role": {"const": "COMPLETED_POST_UI_STATE"}}, "required": ["role"]}, "then": {"properties": {"source_event_type": {"enum": ["transition_completed", "transition_failed"]}}}},
+        {"if": {"properties": {"role": {"enum": ["COMPLETED_TRANSITION_STATUS", "COMPLETED_POST_UI_STATE", "AGENT_VISIBLE_TOOL_RESULT", "USER_RESPONSE"]}}, "required": ["role"]}, "then": {"properties": {"source_event_type": {"enum": ["transition_completed", "transition_failed", "transition_not_executed"]}, "caused_by_event_id": {"$ref": "#/$defs/semanticId"}, "projection": {"$ref": "#/$defs/textProjection"}}}},
+        {"if": {"properties": {"role": {"enum": ["AGENT_VISIBLE_TOOL_RESULT", "USER_RESPONSE"]}}, "required": ["role"]}, "then": {"properties": {"source_event_type": {"const": "transition_completed"}}}}
+      ]
+    },
+    "currentObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_event_id", "source_event_seq", "screenshot_evidence_id", "screenshot_content_sha256", "accessibility_evidence_ids"],
+      "properties": {"source_event_id": {"$ref": "#/$defs/semanticId"}, "source_event_seq": {"type": "integer", "minimum": 1}, "screenshot_evidence_id": {"$ref": "#/$defs/semanticId"}, "screenshot_content_sha256": {"$ref": "#/$defs/sha256"}, "accessibility_evidence_ids": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"$ref": "#/$defs/semanticId"}}}
+    },
+    "exclusions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["natural_language_actor_history_included", "history_ir_included", "history_policy_output_used_as_truth", "future_event_included", "task_outcome_included", "benchmark_checker_included", "replay_result_included", "collector_raw_mutated"],
+      "properties": {"natural_language_actor_history_included": {"const": false}, "history_ir_included": {"const": false}, "history_policy_output_used_as_truth": {"const": false}, "future_event_included": {"const": false}, "task_outcome_included": {"const": false}, "benchmark_checker_included": {"const": false}, "replay_result_included": {"const": false}, "collector_raw_mutated": {"const": false}}
+    },
+    "evidenceRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidence_id", "payload_sha256", "relation"],
+      "properties": {"evidence_id": {"$ref": "#/$defs/semanticId"}, "payload_sha256": {"$ref": "#/$defs/sha256"}, "relation": {"enum": ["SUPPORTS_STATE", "REFUTES_STATE", "OBSERVES_PROGRESS"]}}
+    },
+    "milestoneState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["milestone_id", "state", "evidence_refs", "reason_code"],
+      "properties": {"milestone_id": {"$ref": "#/$defs/semanticId"}, "state": {"enum": ["pending", "in_progress", "satisfied", "violated", "unknown"]}, "evidence_refs": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/evidenceRef"}}, "reason_code": {"enum": ["NOT_STARTED", "CURRENT_GUI_SUPPORT", "COMPLETED_TRANSITION_SUPPORT", "CURRENT_GUI_REFUTATION", "COMPLETED_TRANSITION_REFUTATION", "PROGRESS_OBSERVED", "PRESERVE_PRIOR_STATE", "AMBIGUOUS_GUI", "INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"]}},
+      "allOf": [
+        {"if": {"properties": {"state": {"const": "pending"}}, "required": ["state"]}, "then": {"properties": {"evidence_refs": {"maxItems": 0}, "reason_code": {"const": "NOT_STARTED"}}}},
+        {"if": {"allOf": [{"properties": {"state": {"const": "satisfied"}}, "required": ["state"]}, {"not": {"properties": {"reason_code": {"const": "PRESERVE_PRIOR_STATE"}}, "required": ["reason_code"]}}]}, "then": {"properties": {"evidence_refs": {"minItems": 1, "contains": {"type": "object", "properties": {"relation": {"const": "SUPPORTS_STATE"}}, "required": ["relation"]}, "minContains": 1}, "reason_code": {"enum": ["CURRENT_GUI_SUPPORT", "COMPLETED_TRANSITION_SUPPORT"]}}}},
+        {"if": {"allOf": [{"properties": {"state": {"const": "violated"}}, "required": ["state"]}, {"not": {"properties": {"reason_code": {"const": "PRESERVE_PRIOR_STATE"}}, "required": ["reason_code"]}}]}, "then": {"properties": {"evidence_refs": {"minItems": 1, "contains": {"type": "object", "properties": {"relation": {"const": "REFUTES_STATE"}}, "required": ["relation"]}, "minContains": 1}, "reason_code": {"enum": ["CURRENT_GUI_REFUTATION", "COMPLETED_TRANSITION_REFUTATION"]}}}},
+        {"if": {"allOf": [{"properties": {"state": {"const": "in_progress"}}, "required": ["state"]}, {"not": {"properties": {"reason_code": {"const": "PRESERVE_PRIOR_STATE"}}, "required": ["reason_code"]}}]}, "then": {"properties": {"evidence_refs": {"minItems": 1, "contains": {"type": "object", "properties": {"relation": {"const": "OBSERVES_PROGRESS"}}, "required": ["relation"]}, "minContains": 1}, "reason_code": {"const": "PROGRESS_OBSERVED"}}}},
+        {"if": {"properties": {"reason_code": {"const": "PRESERVE_PRIOR_STATE"}}, "required": ["reason_code"]}, "then": {"properties": {"state": {"enum": ["in_progress", "satisfied", "violated", "unknown"]}}}},
+        {"if": {"properties": {"state": {"const": "unknown"}}, "required": ["state"]}, "then": {"properties": {"reason_code": {"enum": ["PRESERVE_PRIOR_STATE", "AMBIGUOUS_GUI", "INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"]}}}}
+      ]
+    },
+    "pathState": {"type": "object", "additionalProperties": false, "required": ["path_id", "state"], "properties": {"path_id": {"$ref": "#/$defs/semanticId"}, "state": {"enum": ["viable", "inactive", "unknown"]}}},
+    "frontier": {"type": "object", "additionalProperties": false, "required": ["path_id", "milestone_id"], "properties": {"path_id": {"$ref": "#/$defs/semanticId"}, "milestone_id": {"$ref": "#/$defs/semanticId"}}},
+    "actorVisible": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "exact_text", "text_sha256", "content_kind", "independently_configured", "actor_request_injected", "history_filtering_controlled"],
+      "properties": {"enabled": {"type": "boolean"}, "exact_text": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 8192}]}, "text_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "content_kind": {"const": "DETERMINISTIC_STATUS_ONLY"}, "independently_configured": {"const": true}, "actor_request_injected": {"const": false}, "history_filtering_controlled": {"const": false}},
+      "allOf": [{"if": {"properties": {"enabled": {"const": false}}, "required": ["enabled"]}, "then": {"properties": {"exact_text": {"type": "null"}, "text_sha256": {"type": "null"}}}, "else": {"properties": {"exact_text": {"type": "string", "minLength": 1}, "text_sha256": {"$ref": "#/$defs/sha256"}}}}]
+    },
+    "trackingState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state_id", "rubric_binding", "state_version", "source_packet_id", "logical_call_id", "prior_state_sha256", "milestone_states", "path_states", "frontier", "topology", "actor_visible", "authority", "output_kind", "schema_version"],
+      "properties": {"state_id": {"$ref": "#/$defs/semanticId"}, "rubric_binding": {"$ref": "#/$defs/rubricBinding"}, "state_version": {"type": "integer", "minimum": 0}, "source_packet_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/runtimeId"}]}, "logical_call_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/runtimeId"}]}, "prior_state_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "milestone_states": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/$defs/milestoneState"}}, "path_states": {"type": "array", "minItems": 2, "maxItems": 128, "items": {"$ref": "#/$defs/pathState"}}, "frontier": {"type": "array", "maxItems": 4096, "items": {"$ref": "#/$defs/frontier"}}, "topology": {"$ref": "#/$defs/isolatedTopology"}, "actor_visible": {"$ref": "#/$defs/actorVisible"}, "authority": {"$ref": "#/$defs/authority"}, "output_kind": {"const": "TRACKING_STATE"}, "schema_version": {"const": "mobileworld.runtime.rubric-tracker-output/v1"}},
+      "allOf": [{"if": {"properties": {"state_version": {"const": 0}}, "required": ["state_version"]}, "then": {"properties": {"source_packet_id": {"type": "null"}, "logical_call_id": {"type": "null"}, "prior_state_sha256": {"type": "null"}}}, "else": {"properties": {"source_packet_id": {"$ref": "#/$defs/runtimeId"}, "logical_call_id": {"$ref": "#/$defs/runtimeId"}, "prior_state_sha256": {"$ref": "#/$defs/sha256"}}}}]
+    }
+  }
+}

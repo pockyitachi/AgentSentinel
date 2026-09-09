@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/rubric_generate_output.v1.schema.json",
+  "title": "R2.4 Live Rubric Generate Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instruction_spans", "milestones", "gates", "common_root", "paths"],
+  "properties": {
+    "instruction_spans": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {"$ref": "#/$defs/instructionSpan"}
+    },
+    "milestones": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {"$ref": "#/$defs/milestone"}
+    },
+    "gates": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {"$ref": "#/$defs/gate"}
+    },
+    "common_root": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/graphRef"}]
+    },
+    "paths": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/path"}
+    }
+  },
+  "$defs": {
+    "semanticId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "instructionSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["span_id", "role", "char_start", "exact_text"],
+      "properties": {
+        "span_id": {"$ref": "#/$defs/semanticId"},
+        "role": {"enum": ["HARD_REQUIREMENT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
+        "char_start": {"type": "integer", "minimum": 0},
+        "exact_text": {"type": "string", "minLength": 1, "maxLength": 32768}
+      }
+    },
+    "milestone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["milestone_id", "kind", "predicate_kind", "state_description", "instruction_span_id"],
+      "properties": {
+        "milestone_id": {"$ref": "#/$defs/semanticId"},
+        "kind": {"enum": ["HARD_REQUIREMENT", "DERIVED_CHECKPOINT", "OPTIONAL_CHECKPOINT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
+        "predicate_kind": {"enum": ["INSTRUCTION_REQUIREMENT", "GUI_STATE", "COMPLETED_TRANSITION", "USER_VISIBLE_RESULT", "DERIVED_STATE", "UNKNOWN"]},
+        "state_description": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "instruction_span_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/semanticId"}]}
+      }
+    },
+    "graphRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref_kind", "ref_id"],
+      "properties": {
+        "ref_kind": {"enum": ["MILESTONE", "GATE"]},
+        "ref_id": {"$ref": "#/$defs/semanticId"}
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate_id", "operator", "children"],
+      "properties": {
+        "gate_id": {"$ref": "#/$defs/semanticId"},
+        "operator": {"enum": ["AND", "OR"]},
+        "children": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 128,
+          "items": {"$ref": "#/$defs/graphRef"}
+        }
+      }
+    },
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path_id", "kind", "root"],
+      "properties": {
+        "path_id": {"$ref": "#/$defs/semanticId"},
+        "kind": {"enum": ["LEGAL_ALTERNATIVE", "OTHER_UNKNOWN"]},
+        "root": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/graphRef"}]}
+      }
+    }
+  }
+}

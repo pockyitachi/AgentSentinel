@@ -24,7 +24,6 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
 from typing import Final, cast
 
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
@@ -79,6 +78,7 @@ from mobile_world.runtime.sentinel.r2_4.contracts import canonical_sha256
 from mobile_world.runtime.sentinel.r2_4.evidence import (
     rubric_evidence_snapshot_sha256,
 )
+from mobile_world.runtime.sentinel.schemas import read_sentinel_schema_bytes
 
 LEAN_RUBRIC_BACKEND_VERSION = "r2.4-v1"
 LEAN_RUBRIC_MODEL = "gpt-5.6-luna"
@@ -210,10 +210,10 @@ class LeanRubricSchemaSnapshotV1:
         _require_closed_object_schemas(schema)
 
     @classmethod
-    def from_path(cls, *, name: str, path: Path) -> LeanRubricSchemaSnapshotV1:
-        if not path.is_absolute():
-            raise LeanRubricError("UNTRUSTED_SCHEMA", "schema path must be absolute")
-        value = _strict_json_object(path.read_bytes())
+    def from_bytes(cls, *, name: str, raw: bytes) -> LeanRubricSchemaSnapshotV1:
+        if type(raw) is not bytes:
+            raise LeanRubricError("UNTRUSTED_SCHEMA", "schema source must use immutable bytes")
+        value = _strict_json_object(raw)
         canonical = canonical_json_bytes(cast(JsonValue, value))
         return cls(
             name=name,
@@ -225,27 +225,17 @@ class LeanRubricSchemaSnapshotV1:
         return _strict_json_object(bytes(self.canonical_bytes))
 
 
-def _schema_path(filename: str) -> Path:
-    return (
-        Path(__file__).resolve().parents[6]
-        / "mobileworld_audit_handoff"
-        / "schemas"
-        / "r2_4"
-        / filename
-    )
-
-
 def lean_rubric_generate_schema() -> LeanRubricSchemaSnapshotV1:
-    return LeanRubricSchemaSnapshotV1.from_path(
+    return LeanRubricSchemaSnapshotV1.from_bytes(
         name="r24_live_rubric_generate_v1",
-        path=_schema_path("rubric_generate_output.v1.schema.json"),
+        raw=read_sentinel_schema_bytes("r2_4", "rubric_generate_output.v1.schema.json"),
     )
 
 
 def lean_rubric_track_schema() -> LeanRubricSchemaSnapshotV1:
-    return LeanRubricSchemaSnapshotV1.from_path(
+    return LeanRubricSchemaSnapshotV1.from_bytes(
         name="r24_live_rubric_track_v1",
-        path=_schema_path("rubric_track_output.v1.schema.json"),
+        raw=read_sentinel_schema_bytes("r2_4", "rubric_track_output.v1.schema.json"),
     )
 
 
@@ -577,19 +567,14 @@ class LeanOpenAIRubricBackendV1:
         self._provider = provider
         self._generate_schema = lean_rubric_generate_schema()
         self._track_schema = lean_rubric_track_schema()
-        root = Path(__file__).resolve().parents[6]
         rubric_schema_sha256 = hashlib.sha256(
-            (root / "mobileworld_audit_handoff/schemas/r2_3/rubric.v1.schema.json").read_bytes()
+            read_sentinel_schema_bytes("r2_3", "rubric.v1.schema.json")
         ).hexdigest()
         tracking_packet_schema_sha256 = hashlib.sha256(
-            (
-                root / "mobileworld_audit_handoff/schemas/r2_3/tracking_packet.v1.schema.json"
-            ).read_bytes()
+            read_sentinel_schema_bytes("r2_3", "tracking_packet.v1.schema.json")
         ).hexdigest()
         tracker_schema_sha256 = hashlib.sha256(
-            (
-                root / "mobileworld_audit_handoff/schemas/r2_3/tracker_output.v1.schema.json"
-            ).read_bytes()
+            read_sentinel_schema_bytes("r2_3", "tracker_output.v1.schema.json")
         ).hexdigest()
         self._descriptor = RubricBackendDescriptorV1(
             backend_id="r24-r23-lean-rubric-admission-bridge",

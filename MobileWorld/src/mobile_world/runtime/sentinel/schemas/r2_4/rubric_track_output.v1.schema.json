@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_4/rubric_track_output.v1.schema.json",
+  "title": "R2.4 Live Rubric Track Output v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["proposal_status", "milestone_states"],
+  "properties": {
+    "proposal_status": {"enum": ["COMPLETE", "ABSTAIN"]},
+    "milestone_states": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {"$ref": "#/$defs/milestoneState"}
+    }
+  },
+  "$defs": {
+    "semanticId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "relation"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/semanticId"},
+        "relation": {"enum": ["SUPPORTS_STATE", "REFUTES_STATE", "OBSERVES_PROGRESS"]}
+      }
+    },
+    "milestoneState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["milestone_id", "state", "evidence_refs", "reason_code"],
+      "properties": {
+        "milestone_id": {"$ref": "#/$defs/semanticId"},
+        "state": {"enum": ["pending", "in_progress", "satisfied", "violated", "unknown"]},
+        "evidence_refs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/evidenceRef"}
+        },
+        "reason_code": {"enum": ["NOT_STARTED", "CURRENT_GUI_SUPPORT", "COMPLETED_TRANSITION_SUPPORT", "CURRENT_GUI_REFUTATION", "COMPLETED_TRANSITION_REFUTATION", "PROGRESS_OBSERVED", "PRESERVE_PRIOR_STATE", "AMBIGUOUS_GUI", "INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"]}
+      }
+    }
+  }
+}

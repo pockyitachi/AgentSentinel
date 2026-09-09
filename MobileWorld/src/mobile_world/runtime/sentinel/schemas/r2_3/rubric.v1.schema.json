@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsentinel.local/schemas/r2_3/rubric.v1.schema.json",
+  "title": "R2.3 Multi-Path Rubric v1",
+  "description": "Closed instruction-grounded AND/OR graph. It has no factual, history-edit, action/tool, or ARCHIVE-execution authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rubric_id", "task_run_id", "rubric_version", "task", "revision",
+    "instruction_spans", "milestones", "gates", "common_root", "paths",
+    "backend", "authority", "schema_version"
+  ],
+  "properties": {
+    "rubric_id": {"$ref": "#/$defs/semanticId"},
+    "task_run_id": {"$ref": "#/$defs/runtimeId"},
+    "rubric_version": {"type": "integer", "minimum": 1},
+    "task": {"$ref": "#/$defs/task"},
+    "revision": {"$ref": "#/$defs/revision"},
+    "instruction_spans": {
+      "type": "array", "maxItems": 512,
+      "items": {"$ref": "#/$defs/instructionSpan"}
+    },
+    "milestones": {
+      "type": "array", "minItems": 1, "maxItems": 512,
+      "items": {"$ref": "#/$defs/milestone"}
+    },
+    "gates": {
+      "type": "array", "maxItems": 512,
+      "items": {"$ref": "#/$defs/gate"}
+    },
+    "common_root": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/graphRef"}]
+    },
+    "paths": {
+      "type": "array", "minItems": 2, "maxItems": 128,
+      "contains": {
+        "type": "object",
+        "properties": {"kind": {"const": "OTHER_UNKNOWN"}},
+        "required": ["kind"]
+      },
+      "minContains": 1,
+      "maxContains": 1,
+      "items": {"$ref": "#/$defs/path"}
+    },
+    "backend": {"$ref": "#/$defs/backend"},
+    "authority": {"$ref": "#/$defs/authority"},
+    "schema_version": {"const": "mobileworld.runtime.multi-path-rubric/v1"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "runtimeId": {
+      "type": "string", "minLength": 1, "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "semanticId": {
+      "type": "string", "minLength": 1, "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "contractVersion": {
+      "type": "string", "minLength": 1, "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "task": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_event_id", "source_event_seq", "exact_text", "text_sha256", "source_event_type"],
+      "properties": {
+        "source_event_id": {"$ref": "#/$defs/semanticId"},
+        "source_event_seq": {"type": "integer", "minimum": 1},
+        "exact_text": {"type": "string", "minLength": 1, "maxLength": 32768},
+        "text_sha256": {"$ref": "#/$defs/sha256"},
+        "source_event_type": {"const": "task_started"}
+      }
+    },
+    "instructionSpan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["span_id", "role", "char_start", "char_end", "utf8_byte_start", "utf8_byte_end", "exact_text", "span_sha256"],
+      "properties": {
+        "span_id": {"$ref": "#/$defs/semanticId"},
+        "role": {"enum": ["HARD_REQUIREMENT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
+        "char_start": {"type": "integer", "minimum": 0},
+        "char_end": {"type": "integer", "minimum": 1},
+        "utf8_byte_start": {"type": "integer", "minimum": 0},
+        "utf8_byte_end": {"type": "integer", "minimum": 1},
+        "exact_text": {"type": "string", "minLength": 1, "maxLength": 32768},
+        "span_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "milestone": {
+      "type": "object", "additionalProperties": false,
+      "required": ["milestone_id", "kind", "predicate_kind", "state_description", "description_sha256", "instruction_span_id"],
+      "properties": {
+        "milestone_id": {"$ref": "#/$defs/semanticId"},
+        "kind": {"enum": ["HARD_REQUIREMENT", "DERIVED_CHECKPOINT", "OPTIONAL_CHECKPOINT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]},
+        "predicate_kind": {"enum": ["INSTRUCTION_REQUIREMENT", "GUI_STATE", "COMPLETED_TRANSITION", "USER_VISIBLE_RESULT", "DERIVED_STATE", "UNKNOWN"]},
+        "state_description": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "description_sha256": {"$ref": "#/$defs/sha256"},
+        "instruction_span_id": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/semanticId"}]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"enum": ["HARD_REQUIREMENT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]}}, "required": ["kind"]},
+          "then": {"properties": {"predicate_kind": {"const": "INSTRUCTION_REQUIREMENT"}, "instruction_span_id": {"$ref": "#/$defs/semanticId"}}},
+          "else": {"properties": {"predicate_kind": {"not": {"const": "INSTRUCTION_REQUIREMENT"}}, "instruction_span_id": {"type": "null"}}}
+        }
+      ]
+    },
+    "graphRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ref_kind", "ref_id"],
+      "properties": {
+        "ref_kind": {"enum": ["MILESTONE", "GATE"]},
+        "ref_id": {"$ref": "#/$defs/semanticId"}
+      }
+    },
+    "gate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gate_id", "operator", "children"],
+      "properties": {
+        "gate_id": {"$ref": "#/$defs/semanticId"},
+        "operator": {"enum": ["AND", "OR"]},
+        "children": {
+          "type": "array", "minItems": 2, "maxItems": 128,
+          "items": {"$ref": "#/$defs/graphRef"}
+        }
+      }
+    },
+    "path": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path_id", "kind", "root"],
+      "properties": {
+        "path_id": {"$ref": "#/$defs/semanticId"},
+        "kind": {"enum": ["LEGAL_ALTERNATIVE", "OTHER_UNKNOWN"]},
+        "root": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/graphRef"}]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "OTHER_UNKNOWN"}}, "required": ["kind"]},
+          "then": {"properties": {"root": {"type": "null"}}},
+          "else": {"properties": {"root": {"$ref": "#/$defs/graphRef"}}}
+        }
+      ]
+    },
+    "requirementDelta": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "requirement_key", "span_id", "span_role"],
+      "properties": {
+        "kind": {"enum": ["ADDED", "REMOVED"]},
+        "requirement_key": {"$ref": "#/$defs/sha256"},
+        "span_id": {"$ref": "#/$defs/semanticId"},
+        "span_role": {"enum": ["HARD_REQUIREMENT", "CONSTRAINT", "TERMINAL_REQUIREMENT"]}
+      }
+    },
+    "revision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision_id", "revision_event_id", "kind", "reason", "previous_rubric_version", "previous_rubric_sha256", "hard_requirement_deltas", "changed_node_ids"],
+      "properties": {
+        "revision_id": {"$ref": "#/$defs/runtimeId"},
+        "revision_event_id": {"$ref": "#/$defs/semanticId"},
+        "kind": {"enum": ["INITIAL", "EXPLICIT_REVISION"]},
+        "reason": {"enum": ["TASK_START", "TASK_INSTRUCTION_CHANGED", "GRAPH_DEFECT_CORRECTION", "AUTHORIZED_CONFIG_CHANGE"]},
+        "previous_rubric_version": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]},
+        "previous_rubric_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+        "hard_requirement_deltas": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/requirementDelta"}},
+        "changed_node_ids": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/semanticId"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "INITIAL"}}, "required": ["kind"]},
+          "then": {"properties": {"reason": {"const": "TASK_START"}, "previous_rubric_version": {"type": "null"}, "previous_rubric_sha256": {"type": "null"}, "hard_requirement_deltas": {"maxItems": 0}, "changed_node_ids": {"maxItems": 0}}},
+          "else": {"properties": {"reason": {"not": {"const": "TASK_START"}}, "previous_rubric_version": {"type": "integer", "minimum": 1}, "previous_rubric_sha256": {"$ref": "#/$defs/sha256"}}}
+        }
+      ]
+    },
+    "backend": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend_id", "backend_version", "prompt_sha256", "rubric_schema_sha256", "tracking_packet_schema_sha256", "tracker_schema_sha256", "config_sha256", "backend_kind", "transport_authority", "external_network_attempted", "model_call_attempted", "local_gpu_used"],
+      "properties": {
+        "backend_id": {"$ref": "#/$defs/semanticId"},
+        "backend_version": {"$ref": "#/$defs/contractVersion"},
+        "prompt_sha256": {"$ref": "#/$defs/sha256"},
+        "rubric_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "tracking_packet_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "tracker_schema_sha256": {"$ref": "#/$defs/sha256"},
+        "config_sha256": {"$ref": "#/$defs/sha256"},
+        "backend_kind": {"const": "INJECTED_FAKE"},
+        "transport_authority": {"const": "CPU_OFFLINE_FAKE"},
+        "external_network_attempted": {"const": false},
+        "model_call_attempted": {"const": false},
+        "local_gpu_used": {"const": false}
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["factual_truth_authority", "history_edit_authority", "action_or_tool_authority", "archive_execution_authority"],
+      "properties": {
+        "factual_truth_authority": {"const": false},
+        "history_edit_authority": {"const": false},
+        "action_or_tool_authority": {"const": false},
+        "archive_execution_authority": {"const": false}
+      }
+    }
+  }
+}
