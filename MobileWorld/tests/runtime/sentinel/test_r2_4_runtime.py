@@ -48,11 +48,17 @@ from mobile_world.runtime.sentinel import (
     SentinelPolicyOutput,
 )
 from mobile_world.runtime.sentinel import seam as sentinel_seam_module
-from mobile_world.runtime.sentinel.contracts import SentinelCallRole
+from mobile_world.runtime.sentinel.contracts import SentinelCallRole, SentinelResult
+from mobile_world.runtime.sentinel.execution_state_channel import (
+    ExecutionStateChannelReceiptV1,
+    ExecutionStateChannelStatusV1,
+    ExecutionStateCompositeResultV1,
+    ExecutionStateFallbackReasonV1,
+    MemoryExecutionStateReceiptSinkV1,
+)
 from mobile_world.runtime.sentinel.lean_runtime import LeanSentinelRunFactoryV1
 from mobile_world.runtime.sentinel.prompt_view import (
     build_prompt_view_adapter_registry,
-    prompt_view_render_result_sha256,
 )
 from mobile_world.runtime.sentinel.r2_2.contracts import (
     POLICY_PROPOSAL_SCHEMA_VERSION,
@@ -702,6 +708,23 @@ class _R22FakeTransport:
         )
 
 
+class _FailingExecutionStateReceiptTransaction:
+    def commit(self, _receipt: ExecutionStateChannelReceiptV1) -> None:
+        raise OSError("injected execution-state receipt commit failure")
+
+    def abort(self) -> None:
+        return
+
+
+class _FailingExecutionStateReceiptSink:
+    @property
+    def receipts(self) -> tuple[ExecutionStateChannelReceiptV1, ...]:
+        return ()
+
+    def begin(self, _logical_call_id: str) -> _FailingExecutionStateReceiptTransaction:
+        return _FailingExecutionStateReceiptTransaction()
+
+
 def _source_policy(
     built: _AdapterCase,
     transport: _R22FakeTransport,
@@ -1020,25 +1043,62 @@ def test_lean_active_seam_keeps_r23_duplicate_prune(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("host", "renderer_fails", "ledger_binding_fails"),
     (
-        ("qwen", False, False),
-        ("mai", False, False),
-        ("qwen", True, False),
-        ("qwen", False, True),
+        "host",
+        "renderer_fails",
+        "ledger_binding_fails",
+        "history_policy_failure",
+        "state_commit_fails",
+        "kill_switch_pulses",
+        "state_view_missing_kill_pulse",
+    ),
+    (
+        ("qwen", False, False, None, False, False, False),
+        ("mai", False, False, None, False, False, False),
+        ("qwen", True, False, None, False, False, False),
+        ("qwen", False, True, None, False, False, False),
+        ("qwen", False, False, "proposal_admission", False, False, False),
+        ("qwen", False, False, "receipt_admission", False, False, False),
+        ("qwen", False, False, "transport_timeout", False, False, False),
+        ("qwen", False, False, "proposal_admission", True, False, False),
+        ("qwen", False, False, None, True, False, False),
+        ("qwen", False, False, None, False, True, False),
+        ("qwen", False, False, None, False, False, True),
     ),
 )
 def test_lean_active_seam_adds_bound_execution_state_before_current_image(
     host: str,
     renderer_fails: bool,
     ledger_binding_fails: bool,
+    history_policy_failure: str | None,
+    state_commit_fails: bool,
+    kill_switch_pulses: bool,
+    state_view_missing_kill_pulse: bool,
     monkeypatch,
 ) -> None:
     built = _build_adapter_case(host)
-    source, _receipts = _source_policy(
+    proposal = _r22_proposal(built.packet)
+    if history_policy_failure == "proposal_admission":
+        first_decision = cast(dict[str, JsonValue], cast(list[JsonValue], proposal["decisions"])[0])
+        first_decision["target_id"] = "r24-target-not-in-evidence"
+    transport_entered = Event() if history_policy_failure == "transport_timeout" else None
+    transport_release = Event() if history_policy_failure == "transport_timeout" else None
+    source, policy_receipts = _source_policy(
         built,
-        _R22FakeTransport(json.dumps(_r22_proposal(built.packet))),
+        _R22FakeTransport(
+            json.dumps(proposal),
+            entered=transport_entered,
+            release=transport_release,
+        ),
     )
+    if history_policy_failure == "receipt_admission":
+        monkeypatch.setattr(
+            policy_receipts,
+            "begin",
+            lambda _logical_call_id: (_ for _ in ()).throw(
+                OSError("injected history receipt admission failure")
+            ),
+        )
     coordinator = R24RuntimeCoordinatorV1(
         collector=CollectorEvidenceFactoryV1(),
         session_factory=lambda _task_run_id, _task: None,
@@ -1114,6 +1174,11 @@ def test_lean_active_seam_adds_bound_execution_state_before_current_image(
     )
     monkeypatch.setattr(
         coordinator,
+        "prepare_execution_state",
+        lambda _request, _context, _history_ir: deepcopy(ledger),
+    )
+    monkeypatch.setattr(
+        coordinator,
         "rubric_state_changed_for",
         lambda logical_call_id: (
             False if logical_call_id == built.context.logical_call_id else None
@@ -1130,9 +1195,32 @@ def test_lean_active_seam_adds_bound_execution_state_before_current_image(
             deepcopy(evidence_input) if logical_call_id == built.context.logical_call_id else None
         ),
     )
-    policy = LeanActiveRuntimePolicyV1(source, coordinator=coordinator)
+    policy = LeanActiveRuntimePolicyV1(
+        source,
+        coordinator=coordinator,
+        execution_state_enabled=True,
+    )
     vertical_results: list[Any] = []
     prompt_results: list[Any] = []
+    switch = SentinelGlobalSwitch()
+    if state_view_missing_kill_pulse:
+        original_state_view_for = policy.execution_state_view_for
+        state_view_calls = 0
+
+        def state_view_missing_after_history(logical_call_id: str) -> Any:
+            nonlocal state_view_calls
+            state_view_calls += 1
+            if state_view_calls == 2:
+                switch.set_active(True)
+                switch.set_active(False)
+                return None
+            return original_state_view_for(logical_call_id)
+
+        monkeypatch.setattr(
+            policy,
+            "execution_state_view_for",
+            state_view_missing_after_history,
+        )
     original_vertical_render = sentinel_seam_module.render_vertical_admitted_plan
     original_prompt_render = sentinel_seam_module.render_execution_state_view
 
@@ -1146,6 +1234,9 @@ def test_lean_active_seam_adds_bound_execution_state_before_current_image(
         prompt_results.append(result)
         if renderer_fails:
             raise RuntimeError("injected post-render prompt-view failure")
+        if kill_switch_pulses:
+            switch.set_active(True)
+            switch.set_active(False)
         return result
 
     monkeypatch.setattr(
@@ -1158,47 +1249,145 @@ def test_lean_active_seam_adds_bound_execution_state_before_current_image(
         "render_execution_state_view",
         capture_prompt,
     )
+    state_sink = (
+        _FailingExecutionStateReceiptSink()
+        if state_commit_fails
+        else MemoryExecutionStateReceiptSinkV1()
+    )
     sentinel = PromptSentinel(
         policy=policy,
         codec_registry=build_runtime_history_codec_resolver(),
         host_configs={
             built.context.host_id: SentinelHostConfig(
                 mode=SentinelMode.ACTIVE,
-                policy_timeout_ms=1_000,
+                policy_timeout_ms=(200 if history_policy_failure == "transport_timeout" else 1_000),
             )
         },
         receipt_sink=MemorySentinelReceiptSink(),
+        execution_state_receipt_sink=state_sink,
         prompt_view_adapter_registry=build_prompt_view_adapter_registry(),
-        global_switch=SentinelGlobalSwitch(),
+        global_switch=switch,
+        logical_call_id_factory=lambda: built.context.logical_call_id,
     )
     original = deepcopy(built.request)
 
-    result = sentinel.before_model_call(
-        cast(JsonValue, built.request),
-        built.context,
-        QWEN_CODEC_ID if host == "qwen" else MAI_CODEC_ID,
-        SentinelCallRole.ACTOR,
+    logical_call = sentinel.logical_call(
+        host_id=built.context.host_id,
+        history_codec_id=QWEN_CODEC_ID if host == "qwen" else MAI_CODEC_ID,
+        attributes=deepcopy(built.context.attributes),
     )
+    try:
+        result = logical_call.before_model_call(cast(JsonValue, built.request))
+        cached_result = logical_call.before_model_call(cast(JsonValue, built.request))
+    finally:
+        if transport_release is not None:
+            transport_release.set()
+    if transport_release is not None:
+        time.sleep(0.05)
 
+    assert cached_result.final_request == result.final_request
+    assert source.evaluate_count == 1
     assert built.request == original
     if ledger_binding_fails:
-        assert vertical_results == []
+        assert len(vertical_results) == 1
         assert prompt_results == []
-        assert result.final_request == original
-        assert not result.receipt.edit_applied
-        assert result.receipt.fallback_reason is SentinelFallbackReason.POLICY_EXCEPTION
+        assert type(result) is RuntimeVerticalSentinelResultV1
+        assert type(cached_result) is RuntimeVerticalSentinelResultV1
+        assert result.final_request != original
+        assert result.receipt.edit_applied
+        assert state_sink.receipts == ()
+        return
+
+    if history_policy_failure is not None:
+        assert vertical_results == []
+        assert len(prompt_results) == 1
+        if state_commit_fails:
+            assert type(result) is SentinelResult
+            assert type(cached_result) is SentinelResult
+            assert result.final_request == original
+            assert result.receipt.fallback_reason is SentinelFallbackReason.POLICY_EXCEPTION
+            assert state_sink.receipts == ()
+            return
+        assert type(result) is ExecutionStateCompositeResultV1
+        assert type(cached_result) is ExecutionStateCompositeResultV1
+        assert cached_result.execution_state_receipt == result.execution_state_receipt
+        assert result.history_result.final_request == original
+        assert result.final_request != original
+        assert result.history_receipt.fallback_reason is (
+            SentinelFallbackReason.POLICY_TIMEOUT
+            if history_policy_failure == "transport_timeout"
+            else SentinelFallbackReason.POLICY_EXCEPTION
+        )
+        assert result.execution_state_receipt.status is ExecutionStateChannelStatusV1.APPLIED
+        assert result.execution_state_receipt.history_policy_admission_claimed is False
+        if history_policy_failure == "proposal_admission":
+            assert len(policy_receipts.receipts) == 1
+            assert (
+                policy_receipts.receipts[0].evaluation_status
+                is PolicyEvaluationStatus.ADMISSION_REJECTED
+            )
+            assert policy_receipts.receipts[0].failure_code == "POLICY_PROPOSAL_NOT_ADMITTED"
+        elif history_policy_failure == "receipt_admission":
+            assert policy_receipts.receipts == ()
+        else:
+            assert transport_entered is not None and transport_entered.is_set()
+            assert policy_receipts.receipts == ()
+        assert state_sink.receipts == (result.execution_state_receipt,)
+        anchor = built.history_ir.records[0].correction_anchors[0]
+        final_container = get_at_path(result.final_request, anchor.container_path)
+        assert type(final_container) is list
+        assert "same exact executor-dispatched action occurred at least 2 times" in cast(
+            str, cast(dict[str, JsonValue], final_container[anchor.insert_index])["text"]
+        )
         return
 
     assert len(vertical_results) == 1
-    assert len(prompt_results) == 1
-    if renderer_fails:
+    if state_view_missing_kill_pulse:
+        assert prompt_results == []
+        assert type(result) is ExecutionStateCompositeResultV1
         assert result.final_request == original
-        assert not result.receipt.edit_applied
-        assert result.receipt.fallback_reason is SentinelFallbackReason.INVALID_POLICY_OUTPUT
+        assert result.history_receipt.edit_applied
+        assert result.execution_state_receipt.status is ExecutionStateChannelStatusV1.CANCELLED
+        assert (
+            result.execution_state_receipt.fallback_reason
+            is ExecutionStateFallbackReasonV1.GLOBAL_KILL_SWITCH_CHANGED
+        )
+        assert state_sink.receipts == (result.execution_state_receipt,)
+        return
+    assert len(prompt_results) == 1
+    if kill_switch_pulses:
+        assert type(result) is ExecutionStateCompositeResultV1
+        assert result.final_request == original
+        assert result.history_receipt.edit_applied
+        assert result.execution_state_receipt.status is ExecutionStateChannelStatusV1.CANCELLED
+        assert (
+            result.execution_state_receipt.fallback_reason
+            is ExecutionStateFallbackReasonV1.GLOBAL_KILL_SWITCH_CHANGED
+        )
+        assert state_sink.receipts == (result.execution_state_receipt,)
+        return
+    if state_commit_fails:
+        assert type(result) is RuntimeVerticalSentinelResultV1
+        assert result.final_request != original
+        assert result.receipt.edit_applied
+        assert state_sink.receipts == ()
+        return
+    if renderer_fails:
+        assert type(result) is ExecutionStateCompositeResultV1
+        assert result.final_request == result.history_result.final_request
+        assert result.history_receipt.edit_applied
+        assert result.execution_state_receipt.status is ExecutionStateChannelStatusV1.FAILED
+        assert state_sink.receipts == (result.execution_state_receipt,)
         return
 
-    assert type(result) is RuntimeVerticalSentinelResultV1
-    assert result.receipt.edit_applied
+    assert type(result) is ExecutionStateCompositeResultV1
+    assert type(cached_result) is ExecutionStateCompositeResultV1
+    assert cached_result.execution_state_receipt == result.execution_state_receipt
+    assert type(result.history_result) is RuntimeVerticalSentinelResultV1
+    assert result.history_receipt.edit_applied
+    assert result.execution_state_receipt.status is ExecutionStateChannelStatusV1.APPLIED
+    assert result.execution_state_receipt.augmentation_applied
+    assert state_sink.receipts == (result.execution_state_receipt,)
     state_view = policy.execution_state_view_for(built.context.logical_call_id)
     assert state_view is not None
     assert state_view.repeat_clusters[0].lower_bound == 2
@@ -1215,21 +1404,9 @@ def test_lean_active_seam_adds_bound_execution_state_before_current_image(
     assert final_container[anchor.insert_index + 1] == get_at_path(
         cast(JsonValue, original), anchor.reference_path
     )
-    expected_diff_sha256 = canonical_sha256(
-        cast(
-            JsonValue,
-            {
-                "schema_version": "mobileworld.runtime.sentinel.composite-exact-diff/v1",
-                "history_exact_diff_sha256": vertical_results[0].exact_diff_sha256,
-                "prompt_view_exact_diff_sha256": prompt_results[0].exact_diff_sha256,
-                "prompt_view_render_result_sha256": prompt_view_render_result_sha256(
-                    prompt_results[0]
-                ),
-            },
-        )
-    )
-    assert result.receipt.exact_diff_sha256 == expected_diff_sha256
-    assert "r2_4_prompt_view_composite_diff_bound" in result.receipt.validation_checks
+    assert result.history_receipt.exact_diff_sha256 == vertical_results[0].exact_diff_sha256
+    assert result.execution_state_receipt.exact_diff_sha256 == prompt_results[0].exact_diff_sha256
+    assert "r2_4_prompt_view_composite_diff_bound" not in (result.history_receipt.validation_checks)
 
 
 def test_lean_timeout_is_bounded_and_poison_prevents_a_second_provider(monkeypatch) -> None:
@@ -1342,6 +1519,63 @@ def test_lean_timeout_is_bounded_and_poison_prevents_a_second_provider(monkeypat
 
     release.set()
     assert worker_exited.wait(1)
+
+
+def test_lean_timeout_cleanup_never_waits_for_blocked_collector_lock(monkeypatch) -> None:
+    built = _build_adapter_case("qwen")
+    source, _receipts = _source_policy(
+        built,
+        _R22FakeTransport(json.dumps(_r22_proposal(built.packet))),
+    )
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=CollectorEvidenceFactoryV1(),
+        session_factory=lambda _task_run_id, _task: None,
+    )
+    entered = Event()
+    release = Event()
+
+    def blocked_prepare(_request: JsonValue, _context: SentinelContext, _history_ir: HistoryIR):
+        with coordinator._lock:
+            entered.set()
+            release.wait(timeout=2.0)
+
+    monkeypatch.setattr(coordinator, "prepare_execution_state", blocked_prepare)
+    policy = LeanActiveRuntimePolicyV1(
+        source,
+        coordinator=coordinator,
+        execution_state_enabled=True,
+    )
+    sentinel = PromptSentinel(
+        policy=policy,
+        codec_registry=build_runtime_history_codec_resolver(),
+        host_configs={
+            built.context.host_id: SentinelHostConfig(
+                mode=SentinelMode.ACTIVE,
+                policy_timeout_ms=20,
+            )
+        },
+        receipt_sink=MemorySentinelReceiptSink(),
+        execution_state_receipt_sink=MemoryExecutionStateReceiptSinkV1(),
+        prompt_view_adapter_registry=build_prompt_view_adapter_registry(),
+        global_switch=SentinelGlobalSwitch(),
+    )
+
+    started = time.monotonic()
+    try:
+        result = sentinel.before_model_call(
+            cast(JsonValue, built.request),
+            built.context,
+            QWEN_CODEC_ID,
+            SentinelCallRole.ACTOR,
+        )
+    finally:
+        release.set()
+    elapsed = time.monotonic() - started
+
+    assert entered.is_set()
+    assert elapsed < 0.5
+    assert result.final_request == built.request
+    assert result.receipt.fallback_reason is SentinelFallbackReason.POLICY_TIMEOUT
 
 
 def test_lean_rubric_then_history_transport_uses_one_remaining_deadline(monkeypatch) -> None:

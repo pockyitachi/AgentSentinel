@@ -85,11 +85,20 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelResult,
     SentinelValidationStatus,
 )
+from mobile_world.runtime.sentinel.execution_state_channel import (
+    ExecutionStateChannelStatusV1,
+    ExecutionStateCompositeResultV1,
+    ExecutionStateFallbackReasonV1,
+    ExecutionStateReceiptSinkV1,
+    ExecutionStateReceiptTransactionV1,
+    build_execution_state_composite_result,
+    snapshot_execution_state_composite_result,
+)
 from mobile_world.runtime.sentinel.prompt_view import (
+    ExecutionStateViewV1,
     PromptViewAdapterRegistryV1,
-    PromptViewRenderResultV1,
+    bind_original_validated_history_candidate,
     bind_r2_4_validated_history_candidate,
-    prompt_view_render_result_sha256,
     render_execution_state_view,
     validate_prompt_view_render_result,
 )
@@ -905,6 +914,7 @@ class PromptSentinel:
         host_configs: dict[str, SentinelHostConfig] | None = None,
         default_host_config: SentinelHostConfig | None = None,
         receipt_sink: SentinelReceiptSink | None = None,
+        execution_state_receipt_sink: ExecutionStateReceiptSinkV1 | None = None,
         prompt_view_adapter_registry: PromptViewAdapterRegistryV1 | None = None,
         global_switch: SentinelGlobalSwitch = GLOBAL_SENTINEL_KILL_SWITCH,
         logical_call_id_factory: Any = new_ulid,
@@ -922,6 +932,10 @@ class PromptSentinel:
             and type(prompt_view_adapter_registry) is not PromptViewAdapterRegistryV1
         ):
             raise TypeError("prompt_view_adapter_registry must use the exact v1 registry")
+        if execution_state_receipt_sink is not None and not isinstance(
+            execution_state_receipt_sink, ExecutionStateReceiptSinkV1
+        ):
+            raise TypeError("execution_state_receipt_sink must implement its v1 protocol")
         configs = dict(host_configs or {})
         if any(
             not key or not isinstance(value, SentinelHostConfig) for key, value in configs.items()
@@ -964,6 +978,7 @@ class PromptSentinel:
         self._host_configs = configs
         self._default_host_config = default_host_config or SentinelHostConfig()
         self._receipt_sink = receipt_sink
+        self._execution_state_receipt_sink = execution_state_receipt_sink
         self._prompt_view_adapter_registry = (
             None
             if prompt_view_adapter_registry is None
@@ -1017,13 +1032,14 @@ class PromptSentinel:
         context: SentinelContext,
         history_codec_id: str | None,
         call_role: SentinelCallRole | str,
-    ) -> SentinelResult | RuntimeVerticalSentinelResultV1:
+    ) -> SentinelResult | RuntimeVerticalSentinelResultV1 | ExecutionStateCompositeResultV1:
         """Evaluate one actor request and return an immutable separate final object."""
 
         started = self._clock_ns()
         policy_output_sha256 = _EMPTY_POLICY_OUTPUT_SHA256
         policy_evaluation_started = Event()
         overlay_declaration_sha256: str | None = None
+        history_ir_for_state: HistoryIR | None = None
         try:
             role = SentinelCallRole(call_role)
         except ValueError as exc:
@@ -1221,6 +1237,7 @@ class PromptSentinel:
                 ) from exc
             try:
                 ir = _snapshot_history_ir(ir)
+                history_ir_for_state = ir
             except _EvaluationFailure:
                 raise
             except Exception as exc:
@@ -1258,7 +1275,6 @@ class PromptSentinel:
             legacy_render_result: RenderResult | None = None
             runtime_render_result: RuntimeRenderResultV1 | None = None
             vertical_render_result: RuntimeVerticalRenderResultV1 | None = None
-            prompt_view_render_result: PromptViewRenderResultV1 | None = None
             vertical_output: RuntimeVerticalPolicyOutputV1 | None = None
             decision_kinds: tuple[SentinelDecisionKind, ...]
             checks = ["request_schema", "codec_extract"]
@@ -1288,34 +1304,6 @@ class PromptSentinel:
                         vertical_output.admitted_plan,
                         vertical_render_result,
                     )
-                    if (
-                        type(self._policy) is LeanActiveRuntimePolicyV1
-                        and self._prompt_view_adapter_registry is not None
-                    ):
-                        state_view = self._policy.execution_state_view_for(context.logical_call_id)
-                        if state_view is not None:
-                            history_candidate = bind_r2_4_validated_history_candidate(
-                                raw,
-                                ir,
-                                vertical_output.admitted_plan,
-                                vertical_render_result,
-                            )
-                            rendered_prompt_view = render_execution_state_view(
-                                raw,
-                                ir,
-                                history_candidate,
-                                state_view,
-                                adapter_registry=self._prompt_view_adapter_registry,
-                            )
-                            validate_prompt_view_render_result(
-                                raw,
-                                ir,
-                                history_candidate,
-                                state_view,
-                                rendered_prompt_view,
-                                adapter_registry=self._prompt_view_adapter_registry,
-                            )
-                            prompt_view_render_result = rendered_prompt_view
                 except _EvaluationFailure:
                     raise
                 except Exception as exc:
@@ -1323,11 +1311,7 @@ class PromptSentinel:
                         SentinelFallbackReason.INVALID_POLICY_OUTPUT,
                         "r2_4_runtime_output_or_render_invalid",
                     ) from exc
-                candidate = (
-                    vertical_render_result.candidate_request
-                    if prompt_view_render_result is None
-                    else prompt_view_render_result.candidate_request
-                )
+                candidate = vertical_render_result.candidate_request
                 decision_kinds = vertical_output.receipt_decision_kinds
                 if not decision_kinds:
                     base_result = self._fallback_result(
@@ -1345,7 +1329,7 @@ class PromptSentinel:
                         transaction=receipt_transaction,
                         policy_evaluated=True,
                     )
-                    return RuntimeVerticalSentinelResultV1(
+                    history_result = RuntimeVerticalSentinelResultV1(
                         base_result=base_result,
                         bridge=RuntimeVerticalReceiptBridgeV1.from_policy_output(
                             context.logical_call_id,
@@ -1353,20 +1337,22 @@ class PromptSentinel:
                         ),
                         overlay_declaration_sha256=overlay_declaration_sha256,
                     )
+                    return self._apply_execution_state_channel(
+                        raw=raw,
+                        history_ir=ir,
+                        context=context,
+                        config=config,
+                        kill_switch_generation=kill_switch_generation,
+                        history_result=history_result,
+                        vertical_output=vertical_output,
+                        vertical_render_result=vertical_render_result,
+                    )
                 checks.extend(
                     dict.fromkeys(
                         (
                             "r2_4_runtime_output_schema",
                             *vertical_output.validation_checks,
                             *vertical_render_result.validation_checks,
-                            *(
-                                ()
-                                if prompt_view_render_result is None
-                                else (
-                                    *prompt_view_render_result.validation_checks,
-                                    "r2_4_prompt_view_composite_diff_bound",
-                                )
-                            ),
                             "r2_4_execution_authority_bound",
                             "r2_4_runtime_codec_overlay_bound",
                             "caller_input_immutable",
@@ -1538,32 +1524,12 @@ class PromptSentinel:
             final = candidate if edit_applied else raw
             final_json = canonical_json_bytes(final)
             diff_sha256 = (
-                canonical_sha256(
-                    cast(
-                        JsonValue,
-                        {
-                            "schema_version": (
-                                "mobileworld.runtime.sentinel.composite-exact-diff/v1"
-                            ),
-                            "history_exact_diff_sha256": (vertical_render_result.exact_diff_sha256),
-                            "prompt_view_exact_diff_sha256": (
-                                prompt_view_render_result.exact_diff_sha256
-                            ),
-                            "prompt_view_render_result_sha256": (
-                                prompt_view_render_result_sha256(prompt_view_render_result)
-                            ),
-                        },
-                    )
-                )
-                if (vertical_render_result is not None and prompt_view_render_result is not None)
+                vertical_render_result.exact_diff_sha256
+                if vertical_render_result is not None
                 else (
-                    vertical_render_result.exact_diff_sha256
-                    if vertical_render_result is not None
-                    else (
-                        runtime_render_result.exact_diff_sha256
-                        if runtime_render_result is not None
-                        else self._diff_sha256(legacy_render_result)
-                    )
+                    runtime_render_result.exact_diff_sha256
+                    if runtime_render_result is not None
+                    else self._diff_sha256(legacy_render_result)
                 )
             )
             receipt = SentinelReceipt(
@@ -1601,7 +1567,7 @@ class PromptSentinel:
             )
             if self._runtime_vertical_policy:
                 assert vertical_output is not None
-                return RuntimeVerticalSentinelResultV1(
+                vertical_history_result = RuntimeVerticalSentinelResultV1(
                     base_result=base_result,
                     bridge=RuntimeVerticalReceiptBridgeV1.from_policy_output(
                         context.logical_call_id,
@@ -1609,9 +1575,19 @@ class PromptSentinel:
                     ),
                     overlay_declaration_sha256=overlay_declaration_sha256,
                 )
+                return self._apply_execution_state_channel(
+                    raw=raw,
+                    history_ir=ir,
+                    context=context,
+                    config=config,
+                    kill_switch_generation=kill_switch_generation,
+                    history_result=vertical_history_result,
+                    vertical_output=vertical_output,
+                    vertical_render_result=vertical_render_result,
+                )
             return base_result
         except _EvaluationFailure as failure:
-            return self._fallback_result(
+            fallback_history_result = self._fallback_result(
                 raw=raw,
                 raw_json=raw_json,
                 raw_sha256=raw_sha256,
@@ -1626,8 +1602,20 @@ class PromptSentinel:
                 transaction=receipt_transaction,
                 policy_evaluated=policy_evaluation_started.is_set(),
             )
+            if history_ir_for_state is None:
+                return fallback_history_result
+            return self._apply_execution_state_channel(
+                raw=raw,
+                history_ir=history_ir_for_state,
+                context=context,
+                config=config,
+                kill_switch_generation=kill_switch_generation,
+                history_result=fallback_history_result,
+                vertical_output=None,
+                vertical_render_result=None,
+            )
         except Exception:
-            return self._fallback_result(
+            fallback_history_result = self._fallback_result(
                 raw=raw,
                 raw_json=raw_json,
                 raw_sha256=raw_sha256,
@@ -1642,6 +1630,198 @@ class PromptSentinel:
                 transaction=receipt_transaction,
                 policy_evaluated=policy_evaluation_started.is_set(),
             )
+            if history_ir_for_state is None:
+                return fallback_history_result
+            return self._apply_execution_state_channel(
+                raw=raw,
+                history_ir=history_ir_for_state,
+                context=context,
+                config=config,
+                kill_switch_generation=kill_switch_generation,
+                history_result=fallback_history_result,
+                vertical_output=None,
+                vertical_render_result=None,
+            )
+
+    def _apply_execution_state_channel(
+        self,
+        *,
+        raw: JsonValue,
+        history_ir: HistoryIR,
+        context: SentinelContext,
+        config: SentinelHostConfig,
+        kill_switch_generation: int,
+        history_result: SentinelResult | RuntimeVerticalSentinelResultV1,
+        vertical_output: RuntimeVerticalPolicyOutputV1 | None,
+        vertical_render_result: RuntimeVerticalRenderResultV1 | None,
+    ) -> SentinelResult | RuntimeVerticalSentinelResultV1 | ExecutionStateCompositeResultV1:
+        """Compose local execution facts after the history channel has finalized."""
+
+        if (
+            type(self._policy) is not LeanActiveRuntimePolicyV1
+            or self._prompt_view_adapter_registry is None
+            or self._execution_state_receipt_sink is None
+            or history_result.receipt.fallback_reason is SentinelFallbackReason.SIDECAR_FAILURE
+        ):
+            return history_result
+
+        def kill_switch_cancelled_result(
+            state_view: ExecutionStateViewV1 | None,
+            transaction: ExecutionStateReceiptTransactionV1 | None,
+        ) -> ExecutionStateCompositeResultV1:
+            cancelled = build_execution_state_composite_result(
+                history_result=history_result,
+                status=ExecutionStateChannelStatusV1.CANCELLED,
+                execution_state_view=state_view,
+                fallback_reason=ExecutionStateFallbackReasonV1.GLOBAL_KILL_SWITCH_CHANGED,
+            )
+            published = snapshot_execution_state_composite_result(cancelled)
+            if transaction is not None:
+                try:
+                    transaction.commit(cancelled.execution_state_receipt)
+                except Exception:
+                    try:
+                        transaction.abort()
+                    except Exception:
+                        pass
+            return published
+
+        try:
+            state_view = self._policy.execution_state_view_for(context.logical_call_id)
+        except Exception:
+            state_view = None
+
+        current_kill_switch_active, current_kill_switch_generation = self._global_switch.snapshot()
+        kill_switch_changed = (
+            current_kill_switch_active or current_kill_switch_generation != kill_switch_generation
+        )
+        if state_view is None:
+            if not kill_switch_changed:
+                return history_result
+            try:
+                cancellation_transaction: object = self._execution_state_receipt_sink.begin(
+                    context.logical_call_id
+                )
+            except Exception:
+                return kill_switch_cancelled_result(None, None)
+            if not isinstance(cancellation_transaction, ExecutionStateReceiptTransactionV1):
+                try:
+                    abort = getattr(cancellation_transaction, "abort", None)
+                    if callable(abort):
+                        abort()
+                except Exception:
+                    pass
+                return kill_switch_cancelled_result(None, None)
+            return kill_switch_cancelled_result(None, cancellation_transaction)
+        try:
+            transaction_candidate: object = self._execution_state_receipt_sink.begin(
+                context.logical_call_id
+            )
+        except Exception:
+            if kill_switch_changed:
+                return kill_switch_cancelled_result(state_view, None)
+            return history_result
+        if not isinstance(transaction_candidate, ExecutionStateReceiptTransactionV1):
+            try:
+                abort = getattr(transaction_candidate, "abort", None)
+                if callable(abort):
+                    abort()
+            except Exception:
+                pass
+            if kill_switch_changed:
+                return kill_switch_cancelled_result(state_view, None)
+            return history_result
+        transaction = transaction_candidate
+        if kill_switch_changed:
+            return kill_switch_cancelled_result(state_view, transaction)
+
+        fallback_reason = ExecutionStateFallbackReasonV1.HISTORY_BIND_FAILED
+        try:
+            history_final = history_result.final_request
+            if (
+                vertical_output is not None
+                and vertical_render_result is not None
+                and canonical_json_bytes(history_final)
+                == vertical_render_result.candidate_request_canonical_bytes
+            ):
+                history_candidate = bind_r2_4_validated_history_candidate(
+                    raw,
+                    history_ir,
+                    vertical_output.admitted_plan,
+                    vertical_render_result,
+                )
+            elif canonical_json_bytes(history_final) == canonical_json_bytes(raw):
+                history_candidate = bind_original_validated_history_candidate(
+                    raw,
+                    history_ir,
+                    context.logical_call_id,
+                )
+            else:
+                raise SentinelContractError(
+                    "execution-state history base is neither admitted history nor Original"
+                )
+            fallback_reason = ExecutionStateFallbackReasonV1.RENDER_FAILED
+            rendered = render_execution_state_view(
+                raw,
+                history_ir,
+                history_candidate,
+                state_view,
+                adapter_registry=self._prompt_view_adapter_registry,
+            )
+            fallback_reason = ExecutionStateFallbackReasonV1.VALIDATION_FAILED
+            validate_prompt_view_render_result(
+                raw,
+                history_ir,
+                history_candidate,
+                state_view,
+                rendered,
+                adapter_registry=self._prompt_view_adapter_registry,
+            )
+            current_kill_switch_active, current_kill_switch_generation = (
+                self._global_switch.snapshot()
+            )
+            if (
+                current_kill_switch_active
+                or current_kill_switch_generation != kill_switch_generation
+                or canonical_json_bytes(raw) != canonical_json_bytes(history_result.raw_request)
+            ):
+                if (
+                    current_kill_switch_active
+                    or current_kill_switch_generation != kill_switch_generation
+                ):
+                    return kill_switch_cancelled_result(state_view, transaction)
+                raise SentinelContractError("execution-state final selection lost its binding")
+            status = (
+                ExecutionStateChannelStatusV1.APPLIED
+                if config.mode is SentinelMode.ACTIVE
+                else ExecutionStateChannelStatusV1.SHADOW
+            )
+            composite = build_execution_state_composite_result(
+                history_result=history_result,
+                status=status,
+                execution_state_view=state_view,
+                render_result=rendered,
+            )
+            published_result = snapshot_execution_state_composite_result(composite)
+            transaction.commit(composite.execution_state_receipt)
+            return published_result
+        except Exception:
+            try:
+                failed = build_execution_state_composite_result(
+                    history_result=history_result,
+                    status=ExecutionStateChannelStatusV1.FAILED,
+                    execution_state_view=state_view,
+                    fallback_reason=fallback_reason,
+                )
+                published_failure = snapshot_execution_state_composite_result(failed)
+                transaction.commit(failed.execution_state_receipt)
+                return published_failure
+            except Exception:
+                try:
+                    transaction.abort()
+                except Exception:
+                    pass
+                return history_result
 
     def _evaluate_policy_with_timeout(
         self,
@@ -1802,6 +1982,7 @@ class PromptSentinel:
                 # budget. If it does not, poison this task-local state machine so
                 # later calls fail open without starting another worker/provider.
                 self._policy.poison()
+                self._policy.discard_history_call(context.logical_call_id)
                 worker.join(
                     timeout=min(
                         _LEAN_TIMEOUT_JOIN_GRACE_SECONDS,
@@ -2328,7 +2509,12 @@ class SentinelLogicalCall:
         self._context = context
         self._history_codec_id = history_codec_id
         self._call_role = call_role
-        self._result: SentinelResult | RuntimeVerticalSentinelResultV1 | None = None
+        self._result: (
+            SentinelResult
+            | RuntimeVerticalSentinelResultV1
+            | ExecutionStateCompositeResultV1
+            | None
+        ) = None
         self._lock = Lock()
 
     @property
@@ -2348,38 +2534,55 @@ class SentinelLogicalCall:
         return self._call_role
 
     @property
-    def result(self) -> SentinelResult | RuntimeVerticalSentinelResultV1 | None:
+    def result(
+        self,
+    ) -> SentinelResult | RuntimeVerticalSentinelResultV1 | ExecutionStateCompositeResultV1 | None:
         with self._lock:
+            if type(self._result) is ExecutionStateCompositeResultV1:
+                return snapshot_execution_state_composite_result(self._result)
             if type(self._result) is RuntimeVerticalSentinelResultV1:
                 return snapshot_vertical_sentinel_result(self._result)
             return self._result
 
     def before_model_call(
         self, request: JsonValue
-    ) -> SentinelResult | RuntimeVerticalSentinelResultV1:
+    ) -> SentinelResult | RuntimeVerticalSentinelResultV1 | ExecutionStateCompositeResultV1:
         _require_canonical_json_domain(request)
         request_sha256 = canonical_sha256(request)
         with self._lock:
             if self._result is not None:
-                if self._result.receipt.raw_request_sha256 == request_sha256:
+                if type(self._result) is ExecutionStateCompositeResultV1:
+                    prior_composite = self._result
+                    prior_receipt = prior_composite.history_receipt
+                    prior_raw_sha256 = prior_composite.raw_request_sha256
+                else:
+                    prior_history_result = cast(
+                        SentinelResult | RuntimeVerticalSentinelResultV1,
+                        self._result,
+                    )
+                    prior_receipt = prior_history_result.receipt
+                    prior_raw_sha256 = prior_receipt.raw_request_sha256
+                if prior_raw_sha256 == request_sha256:
+                    if type(self._result) is ExecutionStateCompositeResultV1:
+                        return snapshot_execution_state_composite_result(self._result)
                     if type(self._result) is RuntimeVerticalSentinelResultV1:
                         return snapshot_vertical_sentinel_result(self._result)
                     return self._result
-                if self._result.receipt.validation_status is SentinelValidationStatus.BYPASSED:
+                if prior_receipt.validation_status is SentinelValidationStatus.BYPASSED:
                     return self._sentinel.bypass_reuse(
                         request=request,
                         context=self._context,
                         history_codec_id=self._history_codec_id,
                         call_role=self._call_role,
-                        prior_receipt=self._result.receipt,
+                        prior_receipt=prior_receipt,
                     )
                 return self._sentinel.request_drift_fallback(
                     request=request,
                     context=self._context,
                     history_codec_id=self._history_codec_id,
                     call_role=self._call_role,
-                    policy_evaluated=self._result.receipt.policy_evaluated,
-                    policy_output_sha256=self._result.receipt.policy_output_sha256,
+                    policy_evaluated=prior_receipt.policy_evaluated,
+                    policy_output_sha256=prior_receipt.policy_output_sha256,
                 )
             result = self._sentinel.before_model_call(
                 request,
@@ -2390,6 +2593,9 @@ class SentinelLogicalCall:
             if type(result) is RuntimeVerticalSentinelResultV1:
                 self._result = snapshot_vertical_sentinel_result(result)
                 return snapshot_vertical_sentinel_result(self._result)
+            if type(result) is ExecutionStateCompositeResultV1:
+                self._result = snapshot_execution_state_composite_result(result)
+                return snapshot_execution_state_composite_result(self._result)
             self._result = result
             return result
 

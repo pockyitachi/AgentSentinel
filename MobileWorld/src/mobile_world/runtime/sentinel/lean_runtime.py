@@ -31,6 +31,9 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelHostConfig,
     SentinelMode,
 )
+from mobile_world.runtime.sentinel.execution_state_channel import (
+    ExternalExecutionStateReceiptSinkV1,
+)
 from mobile_world.runtime.sentinel.prompt_view import build_prompt_view_adapter_registry
 from mobile_world.runtime.sentinel.r2_2.contracts import (
     EvidencePacketV1,
@@ -126,6 +129,18 @@ class _AdmissionBridgeV1:
             source_request=copy_json(request),
             history_ir=deepcopy(history_ir),
         )
+
+    def discard(self, logical_call_id: str) -> None:
+        """Best-effort release without extending a seam timeout."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise TypeError("logical_call_id must be non-empty exact text")
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
+            self._pending.pop(logical_call_id, None)
+        finally:
+            self._lock.release()
 
 
 class LeanSentinelTaskRuntimeV1:
@@ -255,6 +270,8 @@ class LeanSentinelRunFactoryV1:
             policy = LeanActiveRuntimePolicyV1(
                 cast(GPT56SentinelPolicy[object, object], source_policy),
                 coordinator=coordinator,
+                history_failure_cleanup=bridge.discard,
+                execution_state_enabled=True,
             )
             host_config = SentinelHostConfig(
                 mode=self._mode,
@@ -268,6 +285,10 @@ class LeanSentinelRunFactoryV1:
                     _MAI_HOST_ID: host_config,
                 },
                 receipt_sink=ExternalSentinelReceiptSink(
+                    self._receipt_root,
+                    repository_root=self._repository_root,
+                ),
+                execution_state_receipt_sink=ExternalExecutionStateReceiptSinkV1(
                     self._receipt_root,
                     repository_root=self._repository_root,
                 ),

@@ -20,6 +20,14 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelResult,
     SentinelValidationStatus,
 )
+from mobile_world.runtime.sentinel.execution_state_channel import (
+    ExecutionStateChannelReceiptV1,
+    ExecutionStateChannelStatusV1,
+    ExecutionStateCompositeResultV1,
+    ExecutionStateFallbackReasonV1,
+    ExternalExecutionStateReceiptSinkV1,
+    MemoryExecutionStateReceiptSinkV1,
+)
 from mobile_world.runtime.sentinel.policies import (
     DeterministicFakeSentinelPolicy,
     NoOpSentinelPolicy,
@@ -44,8 +52,14 @@ __all__ = [
     "SENTINEL_RECEIPT_SCHEMA_VERSION",
     "SENTINEL_RUNTIME_CONTRACT_VERSION",
     "DeterministicFakeSentinelPolicy",
+    "ExecutionStateChannelReceiptV1",
+    "ExecutionStateChannelStatusV1",
+    "ExecutionStateCompositeResultV1",
+    "ExecutionStateFallbackReasonV1",
+    "ExternalExecutionStateReceiptSinkV1",
     "ExternalSentinelReceiptSink",
     "MemorySentinelReceiptSink",
+    "MemoryExecutionStateReceiptSinkV1",
     "NoOpSentinelPolicy",
     "PromptSentinel",
     "SentinelBypassReason",

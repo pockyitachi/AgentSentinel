@@ -596,6 +596,34 @@ class _CachedCall:
     failure_code: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedCollectorCall:
+    """Provider-free Collector bundle frozen before either semantic axis runs."""
+
+    call_input_sha256: str
+    evidence_snapshot_latency_ns: int
+    bundle: CollectorEvidenceBundleV1
+
+
+def _snapshot_collector_bundle(value: CollectorEvidenceBundleV1) -> CollectorEvidenceBundleV1:
+    if type(value) is not CollectorEvidenceBundleV1:
+        raise R24OrchestrationError(
+            "UNTRUSTED_COLLECTOR_BUNDLE", "Collector returned an untrusted bundle"
+        )
+    try:
+        return CollectorEvidenceBundleV1(
+            r22_snapshot=deepcopy(value.r22_snapshot),
+            r22_packet=deepcopy(value.r22_packet),
+            gpt56_input=_snapshot_gpt56_input(value.gpt56_input),
+            r23_snapshot=_snapshot_rubric_evidence(value.r23_snapshot),
+            execution_ledger=snapshot_execution_ledger(value.execution_ledger),
+        )
+    except Exception as exc:
+        raise R24OrchestrationError(
+            "UNTRUSTED_COLLECTOR_BUNDLE", "Collector bundle detachment failed"
+        ) from exc
+
+
 class R24RuntimeCoordinatorV1:
     """One-read, rubric-first evidence factory for the common policy seam."""
 
@@ -634,6 +662,7 @@ class R24RuntimeCoordinatorV1:
         self._execution_ledgers: dict[str, MobileExecutionLedgerV1] = {}
         self._rubric_state_changed: dict[str, bool] = {}
         self._rubric_failure_codes: dict[str, str] = {}
+        self._prepared_collector_calls: dict[str, _PreparedCollectorCall] = {}
         self._collector_bundle_calls = 0
 
     def _history_input_without_rubric(
@@ -880,6 +909,78 @@ class R24RuntimeCoordinatorV1:
         )
         return _snapshot_call_record(record)
 
+    def prepare_execution_state(
+        self,
+        request: JsonValue,
+        context: SentinelContext,
+        history_ir: HistoryIR,
+    ) -> MobileExecutionLedgerV1:
+        """Freeze provider-free execution facts before history/rubric model work.
+
+        The subsequent history evidence call consumes this exact detached
+        Collector bundle instead of rereading the append-only stream.
+        """
+
+        call_input_sha256 = self._call_input_sha256(request, context, history_ir)
+        with self._lock:
+            cached = self._calls.get(context.logical_call_id)
+            if cached is not None:
+                if cached.call_input_sha256 != call_input_sha256:
+                    raise R24OrchestrationError(
+                        "LOGICAL_CALL_INPUT_DRIFT",
+                        "one logical call was reused with different authority inputs",
+                    )
+                ledger = self._execution_ledgers.get(context.logical_call_id)
+                if ledger is None:
+                    raise R24OrchestrationError(
+                        "EXECUTION_LEDGER_UNAVAILABLE",
+                        "cached logical call has no execution ledger",
+                    )
+                return snapshot_execution_ledger(ledger)
+
+            prepared = self._prepared_collector_calls.get(context.logical_call_id)
+            if prepared is not None:
+                if prepared.call_input_sha256 != call_input_sha256:
+                    raise R24OrchestrationError(
+                        "LOGICAL_CALL_INPUT_DRIFT",
+                        "one logical call was reused with different authority inputs",
+                    )
+                return snapshot_execution_ledger(prepared.bundle.execution_ledger)
+
+            started_ns = monotonic_ns()
+            try:
+                self._collector_bundle_calls += 1
+                bundle = _snapshot_collector_bundle(
+                    self._bundle_for_call(
+                        request=request,
+                        context=context,
+                        history_ir=history_ir,
+                    )
+                )
+                gpt56_input = _snapshot_gpt56_input(bundle.gpt56_input)
+                stimulus = _snapshot_rubric_evidence(bundle.r23_snapshot)
+                self._validate_bundle_axis_binding(bundle, gpt56_input, stimulus)
+                ledger = snapshot_execution_ledger(bundle.execution_ledger)
+            except CollectorEvidenceError as exc:
+                raise R24OrchestrationError(
+                    "COLLECTOR_EVIDENCE_FAILED",
+                    f"Collector evidence failed with {exc.code}",
+                ) from exc
+            except R24OrchestrationError:
+                raise
+            except Exception as exc:
+                raise R24OrchestrationError(
+                    "COLLECTOR_EVIDENCE_FAILED",
+                    "Collector evidence construction failed",
+                ) from exc
+            self._execution_ledgers[context.logical_call_id] = snapshot_execution_ledger(ledger)
+            self._prepared_collector_calls[context.logical_call_id] = _PreparedCollectorCall(
+                call_input_sha256=call_input_sha256,
+                evidence_snapshot_latency_ns=monotonic_ns() - started_ns,
+                bundle=_snapshot_collector_bundle(bundle),
+            )
+            return snapshot_execution_ledger(ledger)
+
     def __call__(
         self,
         request: JsonValue,
@@ -904,37 +1005,47 @@ class R24RuntimeCoordinatorV1:
                 assert cached.gpt56_input is not None
                 return _snapshot_gpt56_input(cached.gpt56_input)
 
-            evidence_started_ns = monotonic_ns()
-            try:
-                self._collector_bundle_calls += 1
-                bundle = self._bundle_for_call(
-                    request=request,
-                    context=context,
-                    history_ir=history_ir,
-                )
-            except CollectorEvidenceError as exc:
-                failure_code = "COLLECTOR_EVIDENCE_FAILED"
-                self._calls[context.logical_call_id] = _CachedCall(
-                    call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
-                    record=None,
-                    failure_code=failure_code,
-                )
-                raise R24OrchestrationError(
-                    failure_code, f"Collector evidence failed with {exc.code}"
-                ) from exc
-            except Exception as exc:
-                failure_code = "COLLECTOR_EVIDENCE_FAILED"
-                self._calls[context.logical_call_id] = _CachedCall(
-                    call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
-                    record=None,
-                    failure_code=failure_code,
-                )
-                raise R24OrchestrationError(
-                    failure_code, "Collector evidence construction failed"
-                ) from exc
-            evidence_snapshot_latency_ns = monotonic_ns() - evidence_started_ns
+            prepared = self._prepared_collector_calls.pop(context.logical_call_id, None)
+            if prepared is None:
+                evidence_started_ns = monotonic_ns()
+                try:
+                    self._collector_bundle_calls += 1
+                    bundle = self._bundle_for_call(
+                        request=request,
+                        context=context,
+                        history_ir=history_ir,
+                    )
+                except CollectorEvidenceError as exc:
+                    failure_code = "COLLECTOR_EVIDENCE_FAILED"
+                    self._calls[context.logical_call_id] = _CachedCall(
+                        call_input_sha256=call_input_sha256,
+                        gpt56_input=None,
+                        record=None,
+                        failure_code=failure_code,
+                    )
+                    raise R24OrchestrationError(
+                        failure_code, f"Collector evidence failed with {exc.code}"
+                    ) from exc
+                except Exception as exc:
+                    failure_code = "COLLECTOR_EVIDENCE_FAILED"
+                    self._calls[context.logical_call_id] = _CachedCall(
+                        call_input_sha256=call_input_sha256,
+                        gpt56_input=None,
+                        record=None,
+                        failure_code=failure_code,
+                    )
+                    raise R24OrchestrationError(
+                        failure_code, "Collector evidence construction failed"
+                    ) from exc
+                evidence_snapshot_latency_ns = monotonic_ns() - evidence_started_ns
+            else:
+                if prepared.call_input_sha256 != call_input_sha256:
+                    raise R24OrchestrationError(
+                        "LOGICAL_CALL_INPUT_DRIFT",
+                        "prepared Collector bundle binds different inputs",
+                    )
+                bundle = _snapshot_collector_bundle(prepared.bundle)
+                evidence_snapshot_latency_ns = prepared.evidence_snapshot_latency_ns
 
             try:
                 if type(bundle) is not CollectorEvidenceBundleV1:
@@ -1521,9 +1632,24 @@ class R24RuntimeCoordinatorV1:
             raise TypeError("logical_call_id must be non-empty exact text")
         with self._lock:
             cached = self._calls.get(logical_call_id)
-            if cached is None or cached.gpt56_input is None:
+            if cached is not None and cached.gpt56_input is not None:
+                return _snapshot_gpt56_input(cached.gpt56_input)
+            prepared = self._prepared_collector_calls.get(logical_call_id)
+            if prepared is None:
                 return None
-            return _snapshot_gpt56_input(cached.gpt56_input)
+            return _snapshot_gpt56_input(prepared.bundle.gpt56_input)
+
+    def discard_prepared_call(self, logical_call_id: str) -> None:
+        """Best-effort release without extending the caller's timeout boundary."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise TypeError("logical_call_id must be non-empty exact text")
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
+            self._prepared_collector_calls.pop(logical_call_id, None)
+        finally:
+            self._lock.release()
 
     def rubric_state_changed_for(self, logical_call_id: str) -> bool | None:
         """Return whether the admitted tracker state changed, without a task verdict."""

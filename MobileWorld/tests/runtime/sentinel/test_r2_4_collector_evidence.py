@@ -494,6 +494,52 @@ def test_rubric_failure_does_not_discard_same_cutoff_history_or_execution_ledger
     assert ledger.repeat_facts[0].lower_bound == 2
 
 
+def test_execution_state_preparation_and_history_share_one_collector_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime_case(tmp_path, CASES[0], prior_action_count=2)
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=CollectorEvidenceFactoryV1(),
+        session_factory=lambda _task_run_id, _task: None,
+    )
+
+    class _FailingRubricSession:
+        @staticmethod
+        def start() -> None:
+            raise RuntimeError("injected rubric-only failure")
+
+    monkeypatch.setattr(
+        coordinator,
+        "_session_for",
+        lambda _task_run_id, _task: _FailingRubricSession(),
+    )
+    try:
+        with bind_audit_context(runtime.audit_context):
+            prepared_ledger = coordinator.prepare_execution_state(
+                cast(JsonValue, runtime.request),
+                runtime.sentinel_context,
+                runtime.history_ir,
+            )
+            prepared_history = coordinator.history_evidence_input_for(
+                runtime.sentinel_context.logical_call_id
+            )
+            history_input = coordinator(
+                cast(JsonValue, runtime.request),
+                runtime.sentinel_context,
+                runtime.history_ir,
+            )
+    finally:
+        runtime.run.close()
+
+    assert coordinator.collector_bundle_calls == 1
+    assert prepared_history is not None
+    assert history_input == prepared_history
+    assert coordinator.execution_ledger_for(runtime.sentinel_context.logical_call_id) == (
+        prepared_ledger
+    )
+
+
 @pytest.mark.parametrize(
     ("corruption", "expected_code"),
     (

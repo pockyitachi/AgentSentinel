@@ -64,6 +64,8 @@ class LeanActiveRuntimePolicyV1:
         source_policy: GPT56SentinelPolicy[Any, Any],
         *,
         coordinator: R24RuntimeCoordinatorV1,
+        history_failure_cleanup: Callable[[str], None] | None = None,
+        execution_state_enabled: bool = False,
     ) -> None:
         if type(source_policy) is not GPT56SentinelPolicy:
             raise TypeError("lean ACTIVE requires the exact admitted GPT56 policy")
@@ -71,6 +73,10 @@ class LeanActiveRuntimePolicyV1:
             raise TypeError("lean ACTIVE source must retain the R2.2 SHADOW_ONLY scope")
         if type(coordinator) is not R24RuntimeCoordinatorV1:
             raise TypeError("coordinator must use the exact R2.4 type")
+        if history_failure_cleanup is not None and not callable(history_failure_cleanup):
+            raise TypeError("history_failure_cleanup must be callable when supplied")
+        if type(execution_state_enabled) is not bool:
+            raise TypeError("execution_state_enabled must be an exact bool")
         descriptor = source_policy.transport_descriptor
         descriptor_sha256 = source_policy.transport_descriptor_sha256
         if descriptor.transport_kind == "OPENAI_RESPONSES":
@@ -94,6 +100,8 @@ class LeanActiveRuntimePolicyV1:
         self._policy_id = f"r24-lean-{hashlib.sha256(subject).hexdigest()[:32]}"
         self._source_policy = source_policy
         self._coordinator = coordinator
+        self._history_failure_cleanup = history_failure_cleanup
+        self._execution_state_enabled = execution_state_enabled
         self._source_transport_descriptor_sha256 = descriptor_sha256
         self._source_transport_binding_sha256 = binding_sha256
         self._execution_authority_sha256 = authority
@@ -174,16 +182,43 @@ class LeanActiveRuntimePolicyV1:
         promoted = (
             output if prune_plan is None else apply_r23_redundant_history_prunes(output, prune_plan)
         )
+        if self._execution_state_enabled:
+            evidence_input = self._coordinator.history_evidence_input_for(logical_call_id)
+            if evidence_input is None or (
+                evidence_input.packet_sha256 != source.admitted_plan.evidence_packet_sha256
+            ):
+                raise RuntimeError("history output differs from the prebuilt Collector packet")
+            state_view = self.execution_state_view_for(logical_call_id)
+            if state_view is not None and (
+                state_view.source_request_sha256 != promoted.admitted_plan.source_request_sha256
+            ):
+                raise RuntimeError("history output differs from the frozen execution-state request")
+        return promoted
+
+    def _capture_execution_state_view(
+        self,
+        *,
+        logical_call_id: str,
+        source_request_sha256: str,
+        expected_evidence_packet_sha256: str | None,
+    ) -> None:
+        """Store Collector-only state independently of history-policy admission."""
+
         ledger = self._coordinator.execution_ledger_for(logical_call_id)
         evidence_input = self._coordinator.history_evidence_input_for(logical_call_id)
+        with self._execution_state_view_lock:
+            self._execution_state_views.pop(logical_call_id, None)
         if ledger is not None:
             if evidence_input is None:
                 raise RuntimeError("execution ledger has no same-call evidence packet")
             packet = evidence_input.packet
             if (
-                evidence_input.packet_sha256 != source.admitted_plan.evidence_packet_sha256
+                (
+                    expected_evidence_packet_sha256 is not None
+                    and evidence_input.packet_sha256 != expected_evidence_packet_sha256
+                )
                 or packet.logical_call_id != logical_call_id
-                or packet.raw_request_sha256 != promoted.admitted_plan.source_request_sha256
+                or packet.raw_request_sha256 != source_request_sha256
                 or ledger.run_id != packet.cutoff.run_id
                 or ledger.task_run_id != packet.cutoff.task_run_id
                 or ledger.cutoff_step_id != packet.cutoff.step_id
@@ -199,19 +234,74 @@ class LeanActiveRuntimePolicyV1:
             else build_execution_state_view(
                 ledger=ledger,
                 logical_call_id=logical_call_id,
-                source_request_sha256=promoted.admitted_plan.source_request_sha256,
+                source_request_sha256=source_request_sha256,
                 rubric_state_changed=self._coordinator.rubric_state_changed_for(logical_call_id),
             )
         )
         with self._execution_state_view_lock:
-            self._execution_state_views.pop(logical_call_id, None)
             if state_view is not None:
                 snapshot = deepcopy(state_view)
                 self._execution_state_views[logical_call_id] = (
                     snapshot,
                     execution_state_view_sha256(snapshot),
                 )
-        return promoted
+
+    def _prepare_execution_state_before_policy(
+        self,
+        *,
+        request: JsonValue,
+        context: SentinelContext,
+        history_ir: HistoryIR,
+    ) -> None:
+        """Freeze local Collector facts before any history/rubric provider work."""
+
+        if not self._execution_state_enabled:
+            return
+        try:
+            self._coordinator.prepare_execution_state(request, context, history_ir)
+        except Exception:
+            # State is an independent best-effort channel.  History policy will
+            # build its normal evidence (and surface its own typed failure) below.
+            return
+        try:
+            self._capture_execution_state_view(
+                logical_call_id=context.logical_call_id,
+                source_request_sha256=canonical_sha256(request),
+                expected_evidence_packet_sha256=None,
+            )
+        except Exception:
+            # A projection failure must not prevent the history channel from
+            # consuming the already validated same-cutoff Collector bundle.
+            with self._execution_state_view_lock:
+                self._execution_state_views.pop(context.logical_call_id, None)
+
+    def _cleanup_failed_history_call(self, logical_call_id: str) -> None:
+        try:
+            self._coordinator.discard_prepared_call(logical_call_id)
+        except Exception:
+            # This is bounded task-local memory cleanup, not policy authority.
+            pass
+        cleanup = self._history_failure_cleanup
+        if cleanup is None:
+            return
+        try:
+            cleanup(logical_call_id)
+        except Exception:
+            # Cleanup is memory hygiene only and must not replace the typed
+            # history-policy failure that the caller will persist.
+            pass
+
+    def discard_history_call(self, logical_call_id: str) -> None:
+        """Non-blocking cleanup after the seam has timed out this call."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise TypeError("logical_call_id must be non-empty exact text")
+        try:
+            self._coordinator.discard_prepared_call(logical_call_id)
+        except Exception:
+            # Never invoke an arbitrary embedding callback on the timeout
+            # caller.  The worker performs full cleanup if/when it exits.
+            pass
 
     def execution_state_view_for(self, logical_call_id: str) -> ExecutionStateViewV1 | None:
         """Return an integrity-checked detached actor-visible state projection."""
@@ -240,11 +330,20 @@ class LeanActiveRuntimePolicyV1:
         request_copy, context_copy, history_copy = self._inputs(request, context, history_ir)
         with self._evaluation_lock:
             self._require_healthy()
-            source = self._source_policy.evaluate(
+            self._prepare_execution_state_before_policy(
                 request=request_copy,
                 context=context_copy,
                 history_ir=history_copy,
             )
+            try:
+                source = self._source_policy.evaluate(
+                    request=request_copy,
+                    context=context_copy,
+                    history_ir=history_copy,
+                )
+            except Exception:
+                self._cleanup_failed_history_call(context.logical_call_id)
+                raise
             return self._promote(source, context.logical_call_id)
 
     def evaluate_with_control(
@@ -258,13 +357,22 @@ class LeanActiveRuntimePolicyV1:
         request_copy, context_copy, history_copy = self._inputs(request, context, history_ir)
         with self._evaluation_lock:
             self._require_healthy()
-            with bind_policy_execution_control(execution_control):
-                source = self._source_policy.evaluate_with_control(
-                    request=request_copy,
-                    context=context_copy,
-                    history_ir=history_copy,
-                    execution_control=execution_control,
-                )
+            self._prepare_execution_state_before_policy(
+                request=request_copy,
+                context=context_copy,
+                history_ir=history_copy,
+            )
+            try:
+                with bind_policy_execution_control(execution_control):
+                    source = self._source_policy.evaluate_with_control(
+                        request=request_copy,
+                        context=context_copy,
+                        history_ir=history_copy,
+                        execution_control=execution_control,
+                    )
+            except Exception:
+                self._cleanup_failed_history_call(context.logical_call_id)
+                raise
             self._require_healthy()
             return self._promote(source, context.logical_call_id)
 

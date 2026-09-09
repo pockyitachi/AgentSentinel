@@ -39,6 +39,9 @@ PROMPT_VIEW_ADAPTER_SCHEMA_VERSION = "mobileworld.runtime.sentinel.prompt-view-a
 PROMPT_VIEW_RENDER_RESULT_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel.prompt-view-render-result/v1"
 )
+ORIGINAL_HISTORY_CANDIDATE_PROOF_SCHEMA_VERSION = (
+    "mobileworld.runtime.sentinel.original-history-candidate-proof/v1"
+)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}")
@@ -714,6 +717,68 @@ def bind_r2_4_validated_history_candidate(
     )
 
 
+def bind_original_validated_history_candidate(
+    source_request: JsonValue,
+    history_ir: HistoryIR,
+    logical_call_id: str,
+) -> ValidatedHistoryCandidateV1:
+    """Seal an unchanged history candidate without claiming policy admission.
+
+    This proof is intentionally local and policy-free.  It exists so the
+    deterministic execution-state channel can render on the exact Original
+    after an independent history-policy fallback.
+    """
+
+    if type(history_ir) is not HistoryIR:
+        _fail("UNTRUSTED_PROMPT_VIEW_TYPE", "History IR must use the exact contract")
+    call_id = _require_safe_id(logical_call_id, "logical_call_id")
+    source_bytes = canonical_json_bytes(source_request)
+    try:
+        validate_history_ir(source_request, history_ir)
+    except PortableContractError as exc:
+        raise PromptViewError(exc.code, "History IR validation failed") from exc
+    if canonical_json_bytes(source_request) != source_bytes:
+        _fail("PROMPT_VIEW_CALLER_MUTATED", "history validation mutated caller request")
+
+    history_ir_sha256 = canonical_sha256(cast(JsonValue, history_ir.to_dict()))
+    request_sha256 = canonical_sha256(source_request)
+    checks = (
+        "ORIGINAL_HISTORY_SOURCE_IR_VALIDATED",
+        "ORIGINAL_HISTORY_CANDIDATE_EQUALS_RAW",
+        "ORIGINAL_HISTORY_POLICY_ADMISSION_NOT_CLAIMED",
+        "ORIGINAL_HISTORY_CALLER_INPUT_IMMUTABLE",
+    )
+    proof_sha256 = canonical_sha256(
+        cast(
+            JsonValue,
+            {
+                "schema_version": ORIGINAL_HISTORY_CANDIDATE_PROOF_SCHEMA_VERSION,
+                "logical_call_id": call_id,
+                "raw_request_sha256": request_sha256,
+                "candidate_request_sha256": request_sha256,
+                "history_ir_sha256": history_ir_sha256,
+                "validation_checks": list(checks),
+            },
+        )
+    )
+    return ValidatedHistoryCandidateV1(
+        key=PromptViewAdapterKeyV1(
+            host_id=history_ir.host_id,
+            history_codec_id=history_ir.codec_id,
+            history_codec_contract_version=history_ir.codec_contract_version,
+        ),
+        logical_call_id=call_id,
+        raw_request_canonical_bytes=source_bytes,
+        candidate_request_canonical_bytes=source_bytes,
+        raw_request_sha256=request_sha256,
+        candidate_request_sha256=request_sha256,
+        history_ir_sha256=history_ir_sha256,
+        validation_proof_sha256=proof_sha256,
+        validation_checks=checks,
+        _seal=_HISTORY_PROOF_SEAL,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PromptViewInsertionDiffV1:
     container_path: JsonPath
@@ -1085,6 +1150,7 @@ def validate_prompt_view_render_result(
 __all__ = [
     "EXECUTION_STATE_VIEW_SCHEMA_VERSION",
     "MAI_PROMPT_VIEW_KEY_V1",
+    "ORIGINAL_HISTORY_CANDIDATE_PROOF_SCHEMA_VERSION",
     "PROMPT_VIEW_ADAPTER_SCHEMA_VERSION",
     "PROMPT_VIEW_RENDER_RESULT_SCHEMA_VERSION",
     "QWEN_PROMPT_VIEW_KEY_V1",
@@ -1110,6 +1176,7 @@ __all__ = [
     "ValidatedHistoryCandidateV1",
     "VisibleDeltaV1",
     "bind_r2_4_validated_history_candidate",
+    "bind_original_validated_history_candidate",
     "build_prompt_view_adapter_registry",
     "execution_state_view_projection",
     "execution_state_view_sha256",
