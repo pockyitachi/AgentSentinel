@@ -917,12 +917,19 @@ def _process_task_on_env(
                             raise ValueError(
                                 "prompt_sentinel and prompt_sentinel_runtime_factory conflict"
                             )
-                        sentinel_runtime = prompt_sentinel_runtime_factory()
-                        prompt_sentinel = getattr(sentinel_runtime, "sentinel", None)
-                        if prompt_sentinel is None:
-                            raise TypeError(
-                                "prompt_sentinel_runtime_factory returned no PromptSentinel"
+                        try:
+                            sentinel_runtime = prompt_sentinel_runtime_factory()
+                            prompt_sentinel = getattr(sentinel_runtime, "sentinel", None)
+                            if prompt_sentinel is None:
+                                raise TypeError(
+                                    "prompt_sentinel_runtime_factory returned no PromptSentinel"
+                                )
+                        except Exception:
+                            logger.exception(
+                                "Prompt Sentinel initialization failed; continuing with Original"
                             )
+                            sentinel_runtime = None
+                            prompt_sentinel = None
                     else:
                         prompt_sentinel = None
                     agent = create_agent(

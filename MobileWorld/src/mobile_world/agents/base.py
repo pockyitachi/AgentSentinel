@@ -83,6 +83,20 @@ class BaseAgent(ABC):
 
         time.sleep(seconds)
 
+    def _sentinel_source_step_event_id(self) -> str | None:
+        """Return the Collector step that produced a retained history item."""
+
+        if self._prompt_sentinel is None:
+            return None
+        try:
+            from mobile_world.runtime.audit.context import get_audit_context
+
+            context = get_audit_context()
+            event_id = None if context is None else context.parent_event_id
+            return event_id if isinstance(event_id, str) and event_id else None
+        except Exception:
+            return None
+
     def _wrap_stream_with_usage_logging(self, stream: Any) -> Any:
         """Wrap a streaming response to log usage when stream completes."""
         final_usage = None
@@ -285,19 +299,12 @@ class BaseAgent(ABC):
             yield None
             return
         try:
-            from mobile_world.runtime.sentinel import (
-                SentinelCallRole,
-                bind_sentinel_logical_call,
-                current_sentinel_logical_call,
-            )
-
-            role = SentinelCallRole(call_role)
-            current = current_sentinel_logical_call()
+            current = sentinel.current_logical_call()
             if current is not None and current.matches(
                 sentinel,
                 host_id=self._sentinel_host_id,
                 history_codec_id=self._sentinel_history_codec_id,
-                call_role=role,
+                call_role=call_role,
             ):
                 call = current
                 manager = None
@@ -306,10 +313,10 @@ class BaseAgent(ABC):
                 call = sentinel.logical_call(
                     host_id=self._sentinel_host_id,
                     history_codec_id=self._sentinel_history_codec_id,
-                    call_role=role,
+                    call_role=call_role,
                     attributes=trusted_attributes,
                 )
-                manager = bind_sentinel_logical_call(call)
+                manager = sentinel.bind_logical_call(call)
         except Exception:
             logger.warning("Prompt Sentinel scope setup failed open to Original")
             yield None
@@ -335,26 +342,20 @@ class BaseAgent(ABC):
         if sentinel is None:
             return model, messages, kwargs
         try:
-            from mobile_world.runtime.sentinel import (
-                SentinelCallRole,
-                current_sentinel_logical_call,
-            )
-
-            role = SentinelCallRole(call_role)
+            logical_call = sentinel.current_logical_call()
             request: dict[str, Any] = {"model": model, "messages": messages, **kwargs}
             if stream:
                 request["stream"] = True
-            logical_call = current_sentinel_logical_call()
             if logical_call is None or not logical_call.matches(
                 sentinel,
                 host_id=self._sentinel_host_id,
                 history_codec_id=self._sentinel_history_codec_id,
-                call_role=role,
+                call_role=call_role,
             ):
                 logical_call = sentinel.logical_call(
                     host_id=self._sentinel_host_id,
                     history_codec_id=self._sentinel_history_codec_id,
-                    call_role=role,
+                    call_role=call_role,
                 )
             result = logical_call.before_model_call(request)
             # OFF, SHADOW, recursion bypass, kill switch, and every fallback

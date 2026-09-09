@@ -27,7 +27,19 @@ from mobile_world.runtime.audit.context import AuditContext, bind_audit_context
 from mobile_world.runtime.audit.recorder import RunRecorder, TaskRecorder
 from mobile_world.runtime.audit.runner_capture import RunnerTaskCapture
 from mobile_world.runtime.audit.schemas import Producer
+from mobile_world.runtime.sentinel import flat_evidence as flat_evidence_module
 from mobile_world.runtime.sentinel.contracts import SentinelContext
+from mobile_world.runtime.sentinel.flat_codec import (
+    QWEN_CODEC_ID,
+    QWEN_SOURCE_BOUND_HISTORY_ENCODING,
+    build_flat_codec_registry,
+)
+from mobile_world.runtime.sentinel.flat_evidence import FlatCollectorEvidenceSource
+from mobile_world.runtime.sentinel.flat_policy import (
+    FLAT_POLICY_OUTPUT_VERSION,
+    FlatHistoryPolicy,
+    FlatPolicyRequest,
+)
 from mobile_world.runtime.sentinel.r2_2.contracts import EvidenceRole, evidence_packet_sha256
 from mobile_world.runtime.sentinel.r2_2.evidence import CausalEvidenceSnapshotV1
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import GPT56EvidenceInputV1
@@ -84,6 +96,82 @@ CASES = (
         task_goal="在设置中检查显示选项。",
     ),
 )
+
+
+def _flat_history(runtime: _RuntimeCase):
+    events = tuple(json.loads(line) for line in runtime.task.path.read_text().splitlines())
+    prior_source_steps = tuple(
+        cast(str, event["event_id"])
+        for event in events
+        if event.get("event_type") == "step_started"
+        and event.get("event_id") != runtime.audit_context.parent_event_id
+    )
+    attributes: dict[str, Any]
+    if runtime.history_ir.codec_id == QWEN_CODEC_ID:
+        text = runtime.request["messages"][1]["content"][0]["text"]
+        claims = tuple(record.editable_spans[0].exact_text for record in runtime.history_ir.records)
+        ranges: list[tuple[int, int]] = []
+        cursor = 0
+        for ordinal, claim in enumerate(claims, 1):
+            start = text.index(f"Step {ordinal}: {claim}", cursor) + len(f"Step {ordinal}: ")
+            ranges.append((start, start + len(claim)))
+            cursor = start + len(claim)
+        attributes = {
+            "history_encoding": QWEN_SOURCE_BOUND_HISTORY_ENCODING,
+            "history_step_count": len(claims),
+            "history_claim_ranges": tuple(ranges),
+            "history_source_step_event_ids": (
+                *prior_source_steps[: len(claims)],
+                *(None for _ in range(max(0, len(claims) - len(prior_source_steps)))),
+            ),
+        }
+    else:
+        count = sum(
+            type(message) is dict and message.get("role") == "assistant"
+            for message in cast(list[dict[str, JsonValue]], runtime.request["messages"])[2:-1]
+        )
+        attributes = {
+            "history_step_count": count,
+            "history_source_step_event_ids": (
+                *prior_source_steps[:count],
+                *(None for _ in range(max(0, count - len(prior_source_steps)))),
+            ),
+        }
+    return (
+        build_flat_codec_registry()
+        .by_id(runtime.history_ir.codec_id)
+        .extract(runtime.request, attributes=attributes)
+    )
+
+
+class _FlatKeepUncertainTransport:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def create(
+        self,
+        request: FlatPolicyRequest,
+        *,
+        timeout_seconds: float,
+    ) -> str:
+        assert timeout_seconds > 0
+        self.calls += 1
+        packet = cast(dict[str, JsonValue], json.loads(request.packet_json))
+        targets = cast(list[dict[str, JsonValue]], packet["targets"])
+        output = {
+            "schema_version": FLAT_POLICY_OUTPUT_VERSION,
+            "logical_call_id": packet["logical_call_id"],
+            "decisions": [
+                {
+                    "target_id": target["target_id"],
+                    "operation": "KEEP_UNCERTAIN",
+                    "evidence_refs": [],
+                    "reason_code": "INSUFFICIENT_EVIDENCE",
+                }
+                for target in targets
+            ],
+        }
+        return json.dumps(output, separators=(",", ":"))
 
 
 @dataclass(slots=True)
@@ -271,6 +359,112 @@ def _runtime_case(
             host_id=history_ir.host_id,
         ),
         audit_context=audit_context,
+    )
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda value: value.name)
+def test_flat_collector_packet_is_accepted_by_flat_history_policy(
+    tmp_path: Path, case: _Case
+) -> None:
+    runtime = _runtime_case(tmp_path, case, prior_action_count=2)
+    history = _flat_history(runtime)
+    transport = _FlatKeepUncertainTransport()
+    policy = FlatHistoryPolicy(transport, timeout_seconds=1.0)
+    try:
+        with bind_audit_context(runtime.audit_context):
+            evidence = FlatCollectorEvidenceSource().build(
+                request=cast(JsonValue, runtime.request),
+                logical_call_id=f"flat-{case.name}-collector-call",
+                host_id=history.host_id,
+                history=history,
+            )
+        outcome = policy.evaluate(
+            evidence.packet,
+            evidence.current_image_data_url,
+            timeout_seconds=0.5,
+        )
+    finally:
+        runtime.run.close()
+
+    assert evidence.packet is not None
+    packet = cast(dict[str, JsonValue], json.loads(evidence.packet))
+    targets = cast(list[dict[str, JsonValue]], packet["targets"])
+    roles = {item["role"] for item in cast(list[dict[str, JsonValue]], packet["evidence_index"])}
+    assert transport.calls == 1
+    assert outcome.decision_count == len(targets) > 0
+    assert outcome.drop_target_ids == ()
+    assert outcome.keep_count == 0
+    assert outcome.keep_uncertain_count == len(targets)
+    assert [target["source_provenance"] for target in targets[:2]] == [
+        {"status": "BOUND", "source_event_seq": 3},
+        {"status": "BOUND", "source_event_seq": 7},
+    ]
+    assert {
+        "CURRENT_UI_SCREENSHOT",
+        "CURRENT_ACCESSIBILITY",
+        "PRIOR_ACTION_ATTEMPT",
+        "PRIOR_TRANSITION_STATUS",
+        "PRIOR_POST_UI_STATE",
+        "EXECUTOR_TRANSPORT_RESULT",
+        "AGENT_VISIBLE_TOOL_RESULT",
+        "USER_RESPONSE",
+    } <= roles
+
+
+@pytest.mark.parametrize("failed_part", ("history", "image", "collector", "state"))
+def test_flat_collector_keeps_history_and_state_construction_independent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_part: str,
+) -> None:
+    runtime = _runtime_case(tmp_path, CASES[0], prior_action_count=2)
+    history = _flat_history(runtime)
+
+    def fail(*_args: object, **_kwargs: object) -> Any:
+        raise RuntimeError("injected projection failure")
+
+    if failed_part == "history":
+        monkeypatch.setattr(flat_evidence_module, "_build_packet", fail)
+    elif failed_part == "image":
+        monkeypatch.setattr(flat_evidence_module, "_bind_current_image", fail)
+    elif failed_part == "collector":
+        runtime.task.mark_incomplete("injected_missing_artifact")
+    else:
+        monkeypatch.setattr(flat_evidence_module, "build_flat_execution_state", fail)
+    try:
+        with bind_audit_context(runtime.audit_context):
+            evidence = FlatCollectorEvidenceSource().build(
+                request=cast(JsonValue, runtime.request),
+                logical_call_id=f"flat-{failed_part}-failure-call",
+                host_id=history.host_id,
+                history=history,
+            )
+    finally:
+        runtime.run.close()
+
+    if failed_part in {"history", "image", "collector"}:
+        assert evidence.packet is None
+        assert evidence.history_error == (
+            "COLLECTOR_INCOMPLETE" if failed_part == "collector" else "HISTORY_EVIDENCE_UNAVAILABLE"
+        )
+        assert evidence.execution_state.error is None
+    else:
+        assert evidence.packet is not None
+        assert evidence.history_error is None
+        assert evidence.execution_state.error == "EXECUTION_STATE_UNAVAILABLE"
+
+
+def test_flat_current_image_binding_compares_palette_pixels() -> None:
+    def png(color: tuple[int, int, int]) -> bytes:
+        image = Image.new("P", (1, 1))
+        palette = [*color, *(0 for _ in range(255 * 3))]
+        image.putpalette(palette)
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
+
+    assert flat_evidence_module._decode_pixels(png((255, 0, 0))) != (
+        flat_evidence_module._decode_pixels(png((0, 0, 255)))
     )
 
 

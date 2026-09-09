@@ -13,6 +13,7 @@ from mobile_world.agents.utils.prompts import (
     MOBILE_QWEN3VL_PROMPT_WITH_ASK_USER,
     MOBILE_QWEN3VL_USER_TEMPLATE,
 )
+from mobile_world.runtime.sentinel.flat_codec import QWEN_SOURCE_BOUND_HISTORY_ENCODING
 from mobile_world.runtime.utils.helpers import pretty_print_messages
 from mobile_world.runtime.utils.models import ENV_FAIL, MCP, JSONAction
 
@@ -211,15 +212,25 @@ class Qwen3VLAgentMCP(MCPAgent):
         self.conclusions = []
         self.history_images = []
         self.history_responses = []
+        self._sentinel_history_claims: list[str] = []
+        self._sentinel_history_source_steps: list[str | None] = []
 
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
         """
         Predict the next action(s) based on the current observation.
         """
 
-        assert len(self.actions) == len(self.thoughts) == len(self.conclusions), (
-            "The number of actions, thoughts, and conclusions should be the same."
-        )
+        if not hasattr(self, "_sentinel_history_claims"):
+            self._sentinel_history_claims = list(self.conclusions)
+        if not hasattr(self, "_sentinel_history_source_steps"):
+            self._sentinel_history_source_steps = [None] * len(self.conclusions)
+        assert (
+            len(self.actions)
+            == len(self.thoughts)
+            == len(self.conclusions)
+            == len(self._sentinel_history_claims)
+            == len(self._sentinel_history_source_steps)
+        ), "The number of actions, thoughts, and conclusions should be the same."
 
         screenshot = observation["screenshot"]
         self.history_images.append(screenshot)
@@ -234,14 +245,18 @@ class Qwen3VLAgentMCP(MCPAgent):
         if "ask_user_response" in observation and observation["ask_user_response"] is not None:
             self.conclusions[-1] += f"; Ask user response: {observation['ask_user_response']}"
         steps = ""
-        for idx, conclusion in enumerate(self.conclusions):
-            steps += (
-                "Step "
-                + str(idx + 1)
-                + ": "
-                + str(conclusion.replace("\n", "").replace('"', ""))
-                + "; "
-            )
+        relative_claim_ranges: list[tuple[int, int]] = []
+        for idx, (conclusion, source_claim) in enumerate(
+            zip(self.conclusions, self._sentinel_history_claims, strict=True)
+        ):
+            prefix = "Step " + str(idx + 1) + ": "
+            rendered = str(conclusion.replace("\n", "").replace('"', ""))
+            claim = str(source_claim.replace("\n", "").replace('"', ""))
+            if not rendered.startswith(claim):
+                raise ValueError("Qwen history claim no longer matches its host rendering")
+            start = len(steps) + len(prefix)
+            relative_claim_ranges.append((start, start + len(claim)))
+            steps += prefix + rendered + "; "
 
         system_prompt = MOBILE_QWEN3VL_PROMPT_WITH_ASK_USER.render(
             tools="\n".join([json.dumps(tool, ensure_ascii=False) for tool in self.tools])
@@ -250,15 +265,21 @@ class Qwen3VLAgentMCP(MCPAgent):
             {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
         ]
 
+        user_text = MOBILE_QWEN3VL_USER_TEMPLATE.format(
+            instruction=self.instruction,
+            steps=steps,
+        )
+        history_start = len(user_text) - len(steps) - 1
+        claim_ranges = tuple(
+            (history_start + start, history_start + end) for start, end in relative_claim_ranges
+        )
         messages.append(
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
-                        "text": MOBILE_QWEN3VL_USER_TEMPLATE.format(
-                            instruction=self.instruction, steps=steps
-                        ),
+                        "text": user_text,
                     },
                     {
                         "type": "image_url",
@@ -270,7 +291,15 @@ class Qwen3VLAgentMCP(MCPAgent):
 
         pretty_print_messages(messages)
 
-        with self._sentinel_logical_call_scope(attributes={"adapter": "qwen3vl"}):
+        with self._sentinel_logical_call_scope(
+            attributes={
+                "adapter": "qwen3vl",
+                "history_encoding": QWEN_SOURCE_BOUND_HISTORY_ENCODING,
+                "history_step_count": len(self.conclusions),
+                "history_claim_ranges": claim_ranges,
+                "history_source_step_event_ids": tuple(self._sentinel_history_source_steps),
+            }
+        ):
             audit_retry_group = self._begin_outer_model_audit_retry_group()
 
             try_times = 3
@@ -327,6 +356,8 @@ class Qwen3VLAgentMCP(MCPAgent):
         self.history_responses.append(prediction)
         self.thoughts.append(parsed_response["thinking"])
         self.conclusions.append(parsed_response["conclusion"])
+        self._sentinel_history_claims.append(parsed_response["conclusion"])
+        self._sentinel_history_source_steps.append(self._sentinel_source_step_event_id())
 
         if parsed_response["action_name"] == "mobile_use":
             json_action_dict = parsing_response_to_andoid_world_env_action(
@@ -357,3 +388,5 @@ class Qwen3VLAgentMCP(MCPAgent):
         self.history_images = []
         self.history_responses = []
         self.conclusions = []
+        self._sentinel_history_claims = []
+        self._sentinel_history_source_steps = []

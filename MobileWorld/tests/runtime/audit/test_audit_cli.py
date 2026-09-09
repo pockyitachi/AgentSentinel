@@ -126,12 +126,12 @@ def test_run_wrapper_bootstrap_failure_preserves_runner_result(
     )
 
 
-def test_active_sentinel_builds_lean_factory_and_passes_it_to_plain_eval(
+def test_active_sentinel_builds_flat_factory_and_passes_it_to_plain_eval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from mobile_world.runtime.sentinel import lean_runtime
-    from mobile_world.runtime.sentinel.contracts import SentinelMode
+    from mobile_world.runtime.sentinel.flat_contracts import FlatSentinelMode
 
     sentinel_key = "fixture-sentinel-key"
     audit_root = tmp_path / "audit"
@@ -163,7 +163,7 @@ def test_active_sentinel_builds_lean_factory_and_passes_it_to_plain_eval(
         return [], []
 
     monkeypatch.setenv("FIXTURE_SENTINEL_KEY", sentinel_key)
-    monkeypatch.setattr(lean_runtime, "LeanSentinelRunFactoryV1", Factory)
+    monkeypatch.setattr(lean_runtime, "FlatSentinelRunFactory", Factory)
     monkeypatch.setattr(eval_module, "_start_eval_audit", fake_start_audit)
     monkeypatch.setattr(eval_module, "run_agent_with_evaluation", fake_runner)
     args = _parse(
@@ -179,14 +179,50 @@ def test_active_sentinel_builds_lean_factory_and_passes_it_to_plain_eval(
 
     assert eval_module._run_evaluation_once(args=args, api_key="actor-key") == ([], [])
     assert captured["factory_kwargs"] == {
-        "mode": SentinelMode.ACTIVE,
+        "mode": FlatSentinelMode.ACTIVE,
         "api_key": sentinel_key,
-        "receipt_root": audit_root.resolve() / "sentinel_receipts",
+        "log_root": audit_root.resolve() / "sentinel",
         "base_url": "https://api.openai.com/v1",
     }
     assert isinstance(captured["runner_factory"], Factory)
     assert captured["audit_keys"] == ("actor-key", sentinel_key)
     assert finalized == ["completed"]
+
+
+def test_active_sentinel_audit_bootstrap_failure_continues_without_sentinel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mobile_world.runtime.sentinel import lean_runtime
+
+    class Factory:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+    def fail_bootstrap(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("injected audit bootstrap failure")
+
+    def fake_runner(**kwargs: Any) -> tuple[list[Any], list[Any]]:
+        assert kwargs["audit_lifecycle"] is None
+        assert kwargs["prompt_sentinel_runtime_factory"] is None
+        return [], []
+
+    monkeypatch.setenv("FIXTURE_SENTINEL_KEY", "fixture-sentinel-key")
+    monkeypatch.setattr(lean_runtime, "FlatSentinelRunFactory", Factory)
+    monkeypatch.setattr(eval_module, "_start_eval_audit", fail_bootstrap)
+    monkeypatch.setattr(eval_module, "run_agent_with_evaluation", fake_runner)
+    args = _parse(
+        "--agent-type",
+        "qwen3vl",
+        "--sentinel",
+        "active",
+        "--sentinel-api-key-env",
+        "FIXTURE_SENTINEL_KEY",
+        "--audit-log-root",
+        str(tmp_path / "audit"),
+    )
+
+    assert eval_module._run_evaluation_once(args=args, api_key="actor-key") == ([], [])
 
 
 @pytest.mark.asyncio

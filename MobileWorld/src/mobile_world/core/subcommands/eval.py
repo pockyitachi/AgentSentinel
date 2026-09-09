@@ -474,13 +474,13 @@ def _run_evaluation_once(
             raise ValueError(f"Sentinel API key environment variable is empty: {key_env}")
         audit_root = Path(args.audit_log_root).expanduser().resolve(strict=False)
         args.audit_log_root = str(audit_root)
-        from mobile_world.runtime.sentinel.contracts import SentinelMode
-        from mobile_world.runtime.sentinel.lean_runtime import LeanSentinelRunFactoryV1
+        from mobile_world.runtime.sentinel.flat_contracts import FlatSentinelMode
+        from mobile_world.runtime.sentinel.lean_runtime import FlatSentinelRunFactory
 
-        prompt_sentinel_runtime_factory = LeanSentinelRunFactoryV1(
-            mode=SentinelMode(sentinel_mode.upper()),
+        prompt_sentinel_runtime_factory = FlatSentinelRunFactory(
+            mode=FlatSentinelMode(sentinel_mode.upper()),
             api_key=sentinel_api_key,
-            receipt_root=audit_root / "sentinel_receipts",
+            log_root=audit_root / "sentinel",
             base_url=getattr(args, "sentinel_base_url", "https://api.openai.com/v1"),
         )
 
@@ -491,19 +491,17 @@ def _run_evaluation_once(
             sentinel_api_key=sentinel_api_key,
         )
     except Exception:
-        if sentinel_enabled:
-            raise
         logger.exception(
             "Audit bootstrap failed before a durable run could be created; "
-            "continuing this evaluation without audit artifacts"
+            "continuing this evaluation without audit artifacts or Sentinel edits"
         )
         lifecycle = DEGRADED_AUDIT_LIFECYCLE
     if getattr(lifecycle, "degraded", False):
-        if sentinel_enabled:
-            raise RuntimeError("Prompt Sentinel requires a working Collector audit lifecycle")
         logger.error(
-            "Audit storage could not initialize; continuing this evaluation without audit artifacts"
+            "Audit storage could not initialize; continuing without audit artifacts. "
+            "Prompt Sentinel will fail open to the Original request."
         )
+        prompt_sentinel_runtime_factory = None
     try:
         result = run_agent_with_evaluation(
             api_key=api_key,

@@ -1223,6 +1223,60 @@ def test_enabled_runner_injects_and_closes_one_prompt_sentinel_runtime_per_task(
     assert env_queue.get_nowait() == (env, "fixture-container")
 
 
+def test_sentinel_runtime_factory_failure_continues_with_original_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Any] = []
+
+    class FakeProcessEnv:
+        base_url = "http://fixture.invalid"
+
+    class FakeProcessTraj:
+        def __init__(self, *_: Any) -> None:
+            pass
+
+    def fail_runtime_factory() -> Any:
+        calls.append("runtime.create")
+        raise OSError("injected Sentinel initialization failure")
+
+    def create_agent(*_: Any, **kwargs: Any) -> object:
+        calls.append(("agent.create", kwargs.get("prompt_sentinel")))
+        return object()
+
+    def execute_once(*_: Any, **kwargs: Any) -> tuple[int, float]:
+        kwargs["audit_runtime_status_callback"]("completed")
+        return 1, 1.0
+
+    monkeypatch.setattr(runner_module, "TrajLogger", FakeProcessTraj)
+    monkeypatch.setattr(runner_module, "create_agent", create_agent)
+    monkeypatch.setattr(runner_module, "_execute_single_task", execute_once)
+    monkeypatch.setattr(runner_module.logger, "add", lambda *args, **kwargs: 101)
+    monkeypatch.setattr(runner_module.logger, "remove", lambda handler: None)
+
+    lifecycle = _audit_lifecycle(tmp_path)
+    env = FakeProcessEnv()
+    env_queue: Queue[tuple[Any, str]] = Queue()
+    env_queue.put((env, "fixture-container"))
+
+    result = _process_task_on_env(
+        task_name="FixtureTask",
+        env_queue=env_queue,
+        agent_type="fixture-agent",
+        model_name="fixture-model",
+        llm_base_url="http://model.invalid",
+        api_key=None,
+        log_file_root=str(tmp_path / "traj"),
+        max_step=1,
+        audit_lifecycle=lifecycle,
+        prompt_sentinel_runtime_factory=fail_runtime_factory,
+    )
+
+    assert result == {"task_name": "FixtureTask", "score": 1.0}
+    assert calls == ["runtime.create", ("agent.create", None)]
+    assert env_queue.get_nowait() == (env, "fixture-container")
+
+
 def test_enabled_tool_logging_failure_gets_closed_task_stream(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

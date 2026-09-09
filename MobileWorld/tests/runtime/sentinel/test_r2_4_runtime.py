@@ -56,7 +56,11 @@ from mobile_world.runtime.sentinel.execution_state_channel import (
     ExecutionStateFallbackReasonV1,
     MemoryExecutionStateReceiptSinkV1,
 )
-from mobile_world.runtime.sentinel.lean_runtime import LeanSentinelRunFactoryV1
+from mobile_world.runtime.sentinel.flat_contracts import FlatSentinelMode
+from mobile_world.runtime.sentinel.lean_runtime import (
+    FlatPromptSentinel,
+    FlatSentinelRunFactory,
+)
 from mobile_world.runtime.sentinel.prompt_view import (
     build_prompt_view_adapter_registry,
 )
@@ -944,21 +948,15 @@ def test_r23_duplicate_bridge_prunes_only_uncertain_history() -> None:
     assert "R24_R23_STABLE_EXACT_DUPLICATE_PRUNE" in revised.validation_checks
 
 
-def test_lean_factory_builds_task_runtime_without_dispatch(tmp_path) -> None:
-    runtime = LeanSentinelRunFactoryV1(
-        mode=SentinelMode.ACTIVE,
+def test_flat_factory_builds_task_runtime_without_dispatch(tmp_path) -> None:
+    runtime = FlatSentinelRunFactory(
+        mode=FlatSentinelMode.ACTIVE,
         api_key="cpu-test-key",
-        receipt_root=tmp_path / "sentinel-receipts",
+        log_root=tmp_path / "sentinel",
     )()
 
-    assert type(runtime.sentinel.policy) is LeanActiveRuntimePolicyV1
-    registry = runtime.sentinel._prompt_view_adapter_registry
-    assert registry is not None
-    assert {item.key.host_id for item in registry.declarations} == {
-        QWEN_HOST_ID,
-        MAI_HOST_ID,
-    }
-    assert not tuple((tmp_path / "sentinel-receipts").iterdir())
+    assert type(runtime.sentinel) is FlatPromptSentinel
+    assert not tuple((tmp_path / "sentinel").iterdir())
     runtime.close()
     runtime.close()
 

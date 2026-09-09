@@ -999,18 +999,32 @@ class PromptSentinel:
     def host_config(self, host_id: str) -> SentinelHostConfig:
         return self._host_configs.get(host_id, self._default_host_config)
 
+    def current_logical_call(self) -> SentinelLogicalCall | None:
+        """Legacy seam-local access used only by explicitly constructed old runtimes."""
+
+        return current_sentinel_logical_call()
+
+    def bind_logical_call(self, call: SentinelLogicalCall):
+        """Legacy seam-local binder; ordinary eval uses the flat implementation."""
+
+        return bind_sentinel_logical_call(call)
+
     def logical_call(
         self,
         *,
         host_id: str,
         history_codec_id: str | None,
-        call_role: SentinelCallRole = SentinelCallRole.ACTOR,
+        call_role: SentinelCallRole | str = SentinelCallRole.ACTOR,
         attributes: dict[str, JsonValue] | None = None,
     ) -> SentinelLogicalCall:
         if not host_id:
             raise ValueError("host_id is required")
         if history_codec_id is not None and _SEMANTIC_ID.fullmatch(history_codec_id) is None:
             raise ValueError("history_codec_id must be a bounded safe identifier")
+        try:
+            role = SentinelCallRole(call_role)
+        except ValueError as exc:
+            raise ValueError("call_role is invalid") from exc
         logical_call_id = self._logical_call_id_factory()
         if not isinstance(logical_call_id, str) or not logical_call_id:
             raise SentinelContractError("logical-call ID factory returned an invalid value")
@@ -1023,7 +1037,7 @@ class PromptSentinel:
             sentinel=self,
             context=context,
             history_codec_id=history_codec_id,
-            call_role=call_role,
+            call_role=role,
         )
 
     def before_model_call(
@@ -2605,13 +2619,17 @@ class SentinelLogicalCall:
         *,
         host_id: str,
         history_codec_id: str | None,
-        call_role: SentinelCallRole,
+        call_role: SentinelCallRole | str,
     ) -> bool:
+        try:
+            role = SentinelCallRole(call_role)
+        except ValueError:
+            return False
         return (
             self._sentinel is sentinel
             and self._context.host_id == host_id
             and self._history_codec_id == history_codec_id
-            and self._call_role is call_role
+            and self._call_role is role
         )
 
 
