@@ -145,16 +145,16 @@ class R22PolicyReceiptV1:
             raise ValueError("transport_kind must be a closed R2.2 transport label")
         if self.transport_authority not in {
             "CPU_OFFLINE_FAKE",
-            "EXPLICIT_OWNER_AUTHORIZATION",
+            "DIRECT_RUNTIME_CONFIG",
         }:
-            raise ValueError("transport_authority must be a closed R2.2 authority label")
+            raise ValueError("transport_authority must be a closed R2.2 configuration label")
         if self.transport_kind == "FAKE" and self.transport_authority != "CPU_OFFLINE_FAKE":
             raise ValueError("fake transport must use CPU_OFFLINE_FAKE authority")
         if (
             self.transport_kind == "OPENAI_RESPONSES"
-            and self.transport_authority != "EXPLICIT_OWNER_AUTHORIZATION"
+            and self.transport_authority != "DIRECT_RUNTIME_CONFIG"
         ):
-            raise ValueError("OpenAI transport requires explicit owner authorization")
+            raise ValueError("OpenAI transport requires direct runtime configuration")
         for required_name, required_digest in (
             ("prompt_sha256", self.prompt_sha256),
             ("output_schema_sha256", self.output_schema_sha256),

@@ -1,9 +1,9 @@
 """GPT-5.6 Luna semantic-policy boundary for R2.2.
 
-The module defines a production-shaped OpenAI Responses adapter, but it never
-constructs a client or performs a call on import.  Tests inject a fake
-``ResponsesTransportV1``.  A real adapter requires an already configured,
-retry-disabled client plus an explicit live-call authorization at construction.
+The module defines a direct OpenAI Responses adapter, but it never constructs a
+client or performs a call on import. Tests inject a fake ``ResponsesTransportV1``;
+ordinary runtime configuration supplies an already configured, retry-disabled
+client when direct OpenAI evaluation is enabled.
 """
 
 from __future__ import annotations
@@ -83,7 +83,6 @@ SUPPORTED_OPENAI_SDK_VERSION = "1.106.1"
 OPENAI_RESPONSES_TRANSPORT_BINDING_SCHEMA_VERSION = (
     "mobileworld.runtime.sentinel-openai-responses-transport-binding/v1"
 )
-OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses"
 
 GPT56_POLICY_INSTRUCTIONS = """You are the bounded semantic validity classifier inside the Runtime Sentinel.
 
@@ -586,9 +585,9 @@ class TransportDescriptorV1:
             raise ValueError("unknown R2.2 transport kind")
         if self.transport_authority not in {
             "CPU_OFFLINE_FAKE",
-            "EXPLICIT_OWNER_AUTHORIZATION",
+            "DIRECT_RUNTIME_CONFIG",
         }:
-            raise ValueError("unknown R2.2 transport authority")
+            raise ValueError("unknown R2.2 transport configuration label")
         if (
             type(self.openai_sdk_version) is not str
             or _SDK_VERSION.fullmatch(self.openai_sdk_version) is None
@@ -608,11 +607,11 @@ class TransportDescriptorV1:
         ):
             raise ValueError("fake transport resource/authority declaration is invalid")
         if self.transport_kind == "OPENAI_RESPONSES" and (
-            self.transport_authority != "EXPLICIT_OWNER_AUTHORIZATION"
+            self.transport_authority != "DIRECT_RUNTIME_CONFIG"
             or not self.external_network_on_call
             or not self.model_on_call
         ):
-            raise ValueError("OpenAI transport resource/authority declaration is invalid")
+            raise ValueError("OpenAI transport resource/configuration declaration is invalid")
 
     @classmethod
     def cpu_fake(cls) -> TransportDescriptorV1:
@@ -629,7 +628,7 @@ class TransportDescriptorV1:
 def transport_descriptor_projection(
     descriptor: TransportDescriptorV1,
 ) -> dict[str, JsonValue]:
-    """Project the construction-bound transport authority without virtual dispatch."""
+    """Project the construction-bound transport configuration without virtual dispatch."""
 
     trusted = _detach_transport_descriptor(descriptor)
     return {
@@ -648,7 +647,7 @@ def transport_descriptor_sha256(descriptor: TransportDescriptorV1) -> str:
 
 @dataclass(frozen=True, slots=True)
 class OpenAIResponsesTransportBindingV1:
-    """Construction-bound live transport configuration, excluding credentials."""
+    """Construction-bound direct transport configuration, excluding credentials."""
 
     schema_version: str
     descriptor_sha256: str
@@ -660,14 +659,6 @@ class OpenAIResponsesTransportBindingV1:
     seam_policy_deadline_ns: int
     client_timeout_ceiling_ns: int
     client_origin: str
-    authority_manifest_sha256: str | None
-    preflight_report_sha256: str | None
-    factory_binding_sha256: str | None
-    case_execution_lease_sha256: str | None
-    history_policy_stage_sha256: str | None
-    actor_request_sha256: str | None
-    pricing_binding_sha256: str | None
-    child_process_isolated: bool
     environment_proxy_disabled: bool
 
     def __post_init__(self) -> None:
@@ -685,12 +676,12 @@ class OpenAIResponsesTransportBindingV1:
         if hashlib.sha256(endpoint.encode("utf-8")).hexdigest() != self.responses_endpoint_sha256:
             raise ValueError("Responses endpoint hash does not match the endpoint")
         if self.requested_model != GPT56_REQUESTED_MODEL:
-            raise ValueError("live binding requested model differs from the policy")
+            raise ValueError("direct binding requested model differs from the policy")
         if (
             type(self.max_output_tokens) is not int
             or self.max_output_tokens not in GPT56_ALLOWED_MAX_OUTPUT_TOKENS
         ):
-            raise ValueError("live binding output-token bound differs from the policy")
+            raise ValueError("direct binding output-token bound differs from the policy")
         for duration_ns, label in (
             (self.transport_timeout_ns, "transport_timeout_ns"),
             (self.seam_policy_deadline_ns, "seam_policy_deadline_ns"),
@@ -702,56 +693,17 @@ class OpenAIResponsesTransportBindingV1:
             raise ValueError("transport timeout must be below the seam deadline")
         if self.client_timeout_ceiling_ns >= self.seam_policy_deadline_ns:
             raise ValueError("client timeout ceiling must be below the seam deadline")
-        if self.client_origin not in {"CALLER_INJECTED_TEST", "MODULE_OWNED_PRODUCTION"}:
-            raise ValueError("unknown OpenAI client origin")
+        if self.client_origin != "DIRECT_OPENAI":
+            raise ValueError("OpenAI client origin must be DIRECT_OPENAI")
         if type(self.environment_proxy_disabled) is not bool:
             raise TypeError("environment proxy declaration must be an exact boolean")
-        if type(self.child_process_isolated) is not bool:
-            raise TypeError("child-process isolation declaration must be an exact boolean")
-        if self.client_origin == "MODULE_OWNED_PRODUCTION":
-            if (
-                type(self.authority_manifest_sha256) is not str
-                or _SHA256.fullmatch(self.authority_manifest_sha256) is None
-                or any(
-                    type(value) is not str or _SHA256.fullmatch(value) is None
-                    for value in (
-                        self.preflight_report_sha256,
-                        self.factory_binding_sha256,
-                        self.case_execution_lease_sha256,
-                        self.history_policy_stage_sha256,
-                        self.actor_request_sha256,
-                        self.pricing_binding_sha256,
-                    )
-                )
-                or self.responses_endpoint != OPENAI_RESPONSES_ENDPOINT
-                or not self.child_process_isolated
-                or not self.environment_proxy_disabled
-            ):
-                raise ValueError("module-owned production transport binding is incomplete")
-        elif (
-            any(
-                value is not None
-                for value in (
-                    self.authority_manifest_sha256,
-                    self.preflight_report_sha256,
-                    self.factory_binding_sha256,
-                    self.case_execution_lease_sha256,
-                    self.history_policy_stage_sha256,
-                    self.actor_request_sha256,
-                    self.pricing_binding_sha256,
-                )
-            )
-            or self.child_process_isolated
-            or self.environment_proxy_disabled
-        ):
-            raise ValueError("caller-injected test transport cannot claim production authority")
 
 
 def openai_responses_transport_binding_projection(
     binding: OpenAIResponsesTransportBindingV1,
 ) -> dict[str, JsonValue]:
     if type(binding) is not OpenAIResponsesTransportBindingV1:
-        raise TypeError("live transport binding projection requires the exact trusted type")
+        raise TypeError("direct transport binding projection requires the exact trusted type")
     trusted = OpenAIResponsesTransportBindingV1(
         schema_version=binding.schema_version,
         descriptor_sha256=binding.descriptor_sha256,
@@ -763,14 +715,6 @@ def openai_responses_transport_binding_projection(
         seam_policy_deadline_ns=binding.seam_policy_deadline_ns,
         client_timeout_ceiling_ns=binding.client_timeout_ceiling_ns,
         client_origin=binding.client_origin,
-        authority_manifest_sha256=binding.authority_manifest_sha256,
-        preflight_report_sha256=binding.preflight_report_sha256,
-        factory_binding_sha256=binding.factory_binding_sha256,
-        case_execution_lease_sha256=binding.case_execution_lease_sha256,
-        history_policy_stage_sha256=binding.history_policy_stage_sha256,
-        actor_request_sha256=binding.actor_request_sha256,
-        pricing_binding_sha256=binding.pricing_binding_sha256,
-        child_process_isolated=binding.child_process_isolated,
         environment_proxy_disabled=binding.environment_proxy_disabled,
     )
     return {
@@ -784,14 +728,6 @@ def openai_responses_transport_binding_projection(
         "seam_policy_deadline_ns": trusted.seam_policy_deadline_ns,
         "client_timeout_ceiling_ns": trusted.client_timeout_ceiling_ns,
         "client_origin": trusted.client_origin,
-        "authority_manifest_sha256": trusted.authority_manifest_sha256,
-        "preflight_report_sha256": trusted.preflight_report_sha256,
-        "factory_binding_sha256": trusted.factory_binding_sha256,
-        "case_execution_lease_sha256": trusted.case_execution_lease_sha256,
-        "history_policy_stage_sha256": trusted.history_policy_stage_sha256,
-        "actor_request_sha256": trusted.actor_request_sha256,
-        "pricing_binding_sha256": trusted.pricing_binding_sha256,
-        "child_process_isolated": trusted.child_process_isolated,
         "environment_proxy_disabled": trusted.environment_proxy_disabled,
     }
 
@@ -806,7 +742,7 @@ def _detach_openai_responses_transport_binding(
     binding: OpenAIResponsesTransportBindingV1,
 ) -> OpenAIResponsesTransportBindingV1:
     if type(binding) is not OpenAIResponsesTransportBindingV1:
-        raise TypeError("live transport binding requires the exact trusted type")
+        raise TypeError("direct transport binding requires the exact trusted type")
     return OpenAIResponsesTransportBindingV1(
         schema_version=binding.schema_version,
         descriptor_sha256=binding.descriptor_sha256,
@@ -818,14 +754,6 @@ def _detach_openai_responses_transport_binding(
         seam_policy_deadline_ns=binding.seam_policy_deadline_ns,
         client_timeout_ceiling_ns=binding.client_timeout_ceiling_ns,
         client_origin=binding.client_origin,
-        authority_manifest_sha256=binding.authority_manifest_sha256,
-        preflight_report_sha256=binding.preflight_report_sha256,
-        factory_binding_sha256=binding.factory_binding_sha256,
-        case_execution_lease_sha256=binding.case_execution_lease_sha256,
-        history_policy_stage_sha256=binding.history_policy_stage_sha256,
-        actor_request_sha256=binding.actor_request_sha256,
-        pricing_binding_sha256=binding.pricing_binding_sha256,
-        child_process_isolated=binding.child_process_isolated,
         environment_proxy_disabled=binding.environment_proxy_disabled,
     )
 
@@ -858,7 +786,7 @@ def _canonical_responses_endpoint(value: object) -> str:
 
 def _client_responses_endpoint(client: OpenAI) -> str:
     if type(client) is not OpenAI:
-        raise TypeError("live transport requires the exact supported OpenAI client")
+        raise TypeError("direct transport requires the exact supported OpenAI client")
     raw_base_url = str(client.base_url)
     try:
         parsed = urlsplit(raw_base_url)
@@ -900,11 +828,7 @@ class ResponsesTransportV1(Protocol):
 
 
 class OpenAIResponsesTransport:
-    """Direct retry-disabled OpenAI Responses adapter.
-
-    Runtime/process authority and child-process lifecycle belong to the removed
-    pilot runner, not to the reusable semantic-policy transport.
-    """
+    """Direct retry-disabled OpenAI Responses adapter."""
 
     _client: OpenAI
 
@@ -913,12 +837,9 @@ class OpenAIResponsesTransport:
         client: OpenAI,
         *,
         seam_policy_deadline_seconds: float,
-        live_call_authorized: bool = False,
     ) -> None:
         if type(client) is not OpenAI:
             raise TypeError("client must be the exact supported OpenAI SDK client")
-        if live_call_authorized is not True:
-            raise PermissionError("OpenAI policy transport needs explicit live-call authorization")
         if openai.__version__ != SUPPORTED_OPENAI_SDK_VERSION:
             raise RuntimeError("unsupported OpenAI SDK version for the frozen R2.2 adapter")
         if type(client.max_retries) is not int or client.max_retries != 0:
@@ -933,7 +854,7 @@ class OpenAIResponsesTransport:
         self._responses_endpoint = responses_endpoint
         self._descriptor = TransportDescriptorV1(
             transport_kind="OPENAI_RESPONSES",
-            transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+            transport_authority="DIRECT_RUNTIME_CONFIG",
             openai_sdk_version=openai.__version__,
             sdk_max_retries=client.max_retries,
             external_network_on_call=True,
@@ -950,7 +871,7 @@ class OpenAIResponsesTransport:
         if transport_descriptor_sha256(self._descriptor) != transport_descriptor_sha256(
             TransportDescriptorV1(
                 transport_kind="OPENAI_RESPONSES",
-                transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+                transport_authority="DIRECT_RUNTIME_CONFIG",
                 openai_sdk_version=SUPPORTED_OPENAI_SDK_VERSION,
                 sdk_max_retries=0,
                 external_network_on_call=True,
@@ -989,15 +910,7 @@ class OpenAIResponsesTransport:
             transport_timeout_ns=round(transport_timeout_seconds * 1_000_000_000),
             seam_policy_deadline_ns=round(self._seam_policy_deadline_seconds * 1_000_000_000),
             client_timeout_ceiling_ns=round(self._client_timeout_ceiling * 1_000_000_000),
-            client_origin="CALLER_INJECTED_TEST",
-            authority_manifest_sha256=None,
-            preflight_report_sha256=None,
-            factory_binding_sha256=None,
-            case_execution_lease_sha256=None,
-            history_policy_stage_sha256=None,
-            actor_request_sha256=None,
-            pricing_binding_sha256=None,
-            child_process_isolated=False,
+            client_origin="DIRECT_OPENAI",
             environment_proxy_disabled=False,
         )
         return _detach_openai_responses_transport_binding(binding)
@@ -1490,7 +1403,7 @@ class GPT56SentinelPolicy[AdmissionBundleT, PolicyOutputT]:
 
     @property
     def transport_descriptor_sha256(self) -> str:
-        """Bind the fixed transport/resource authority through a module-owned projection."""
+        """Bind the fixed transport/resource configuration through a local projection."""
 
         return transport_descriptor_sha256(self._descriptor)
 
@@ -2098,7 +2011,6 @@ __all__ = [
     "GPT56_POLICY_INSTRUCTIONS",
     "GPT56_REASONING_EFFORT",
     "GPT56_REQUESTED_MODEL",
-    "OPENAI_RESPONSES_ENDPOINT",
     "OPENAI_RESPONSES_TRANSPORT_BINDING_SCHEMA_VERSION",
     "OpenAIResponsesTransportBindingV1",
     "OpenAIResponsesTransport",

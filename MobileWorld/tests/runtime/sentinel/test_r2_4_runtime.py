@@ -1524,7 +1524,7 @@ def test_r22_adapter_rejects_openai_descriptor_before_any_call() -> None:
         json.dumps(_r22_proposal(built.packet)),
         descriptor=TransportDescriptorV1(
             transport_kind="OPENAI_RESPONSES",
-            transport_authority="EXPLICIT_OWNER_AUTHORIZATION",
+            transport_authority="DIRECT_RUNTIME_CONFIG",
             openai_sdk_version=SUPPORTED_OPENAI_SDK_VERSION,
             sdk_max_retries=0,
             external_network_on_call=True,

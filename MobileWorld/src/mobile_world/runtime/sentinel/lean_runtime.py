@@ -213,7 +213,6 @@ class LeanSentinelRunFactoryV1:
         history_transport = OpenAIResponsesTransport(
             client,
             seam_policy_deadline_seconds=self._policy_timeout_seconds,
-            live_call_authorized=True,
         )
         try:
             rubric_provider = DirectOpenAIRubricProviderV1(
