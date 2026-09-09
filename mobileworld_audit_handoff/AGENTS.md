@@ -3,6 +3,24 @@
 Last synchronized with the owner-facing repository state: **2026-09-05 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
+## 2026-09-09 owner override: lean MobileWorld runtime
+
+The owner has retired the executable authority/promotion/preflight,
+production-driver, process-census, snapshot-hash, and R2.5 pilot machinery.
+The files and narrative below document historical checkpoints and scientific
+provenance; they no longer define prerequisites for the active runtime.
+
+The active implementation is the in-process Prompt Sentinel attached to the
+ordinary audited MobileWorld runner for Qwen and MAI.  The supported launch
+shape is `mw eval --sentinel active` after the operator selects tasks, checks
+GPU capacity, and starts the actor endpoint and MobileWorld environment.  No
+authority manifest, promotion, Git/source binding, root-derived cleanup hash,
+or model-snapshot content rehash belongs on that path.
+
+This override does not itself authorize or start live provider, GPU, Docker,
+emulator, GUI, or task work.  Such work still needs an explicit owner request;
+the current task is code-only.
+
 This directory preserves the scientific contracts and provenance for the
 MobileWorld history-integrity project. The implementation tree is
 `../MobileWorld/`.

@@ -126,82 +126,67 @@ def test_run_wrapper_bootstrap_failure_preserves_runner_result(
     )
 
 
-@pytest.mark.parametrize("dirty_state", [True, False, None])
-def test_enabled_cli_passes_detected_repository_dirty_state(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    dirty_state: bool | None,
-) -> None:
-    captured: dict[str, Any] = {}
-    lifecycle = object()
-    args = argparse.Namespace(
-        enable_audit=True,
-        audit_log_root=str(tmp_path / "audit"),
-        audit_store_stream_chunks=True,
-        agent_type="fixture",
-        model_name="fixture-model",
-        suite_family="mobile_world",
-        env_image="fixture-image",
-    )
-
-    monkeypatch.setattr(eval_module, "detect_repository_dirty", lambda: dirty_state)
-
-    def fake_bootstrap(config: Any, **kwargs: Any) -> object:
-        captured.update(kwargs)
-        return lifecycle
-
-    monkeypatch.setattr(eval_module, "bootstrap_audit_run", fake_bootstrap)
-
-    assert eval_module._start_eval_audit(args, effective_api_key=None) is lifecycle
-    assert captured["repository_dirty"] is dirty_state
-
-
-def test_enabled_cli_git_detection_exception_becomes_unknown(
+def test_active_sentinel_builds_lean_factory_and_passes_it_to_plain_eval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from mobile_world.runtime.sentinel import lean_runtime
+    from mobile_world.runtime.sentinel.contracts import SentinelMode
+
+    sentinel_key = "fixture-sentinel-key"
+    audit_root = tmp_path / "audit"
     captured: dict[str, Any] = {}
-    lifecycle = object()
-    args = argparse.Namespace(
-        enable_audit=True,
-        audit_log_root=str(tmp_path / "audit"),
-        audit_store_stream_chunks=True,
-        agent_type="fixture",
-        model_name="fixture-model",
-        suite_family="mobile_world",
-        env_image="fixture-image",
+    finalized: list[str] = []
+
+    class Lifecycle:
+        enabled = True
+        degraded = False
+
+        def finalize(self, *, runtime_status: str) -> None:
+            finalized.append(runtime_status)
+
+    class Factory:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["factory_kwargs"] = kwargs
+
+    def fake_start_audit(
+        _args: argparse.Namespace,
+        *,
+        effective_api_key: str | None,
+        sentinel_api_key: str | None,
+    ) -> Lifecycle:
+        captured["audit_keys"] = (effective_api_key, sentinel_api_key)
+        return Lifecycle()
+
+    def fake_runner(**kwargs: Any) -> tuple[list[Any], list[Any]]:
+        captured["runner_factory"] = kwargs["prompt_sentinel_runtime_factory"]
+        return [], []
+
+    monkeypatch.setenv("FIXTURE_SENTINEL_KEY", sentinel_key)
+    monkeypatch.setattr(lean_runtime, "LeanSentinelRunFactoryV1", Factory)
+    monkeypatch.setattr(eval_module, "_start_eval_audit", fake_start_audit)
+    monkeypatch.setattr(eval_module, "run_agent_with_evaluation", fake_runner)
+    args = _parse(
+        "--agent-type",
+        "qwen3vl",
+        "--sentinel",
+        "active",
+        "--sentinel-api-key-env",
+        "FIXTURE_SENTINEL_KEY",
+        "--audit-log-root",
+        str(audit_root),
     )
 
-    def fail_detection() -> bool:
-        raise OSError("fixture repository inspection failure")
-
-    monkeypatch.setattr(eval_module, "detect_repository_dirty", fail_detection)
-
-    def fake_bootstrap(config: Any, **kwargs: Any) -> object:
-        captured.update(kwargs)
-        return lifecycle
-
-    monkeypatch.setattr(eval_module, "bootstrap_audit_run", fake_bootstrap)
-
-    assert eval_module._start_eval_audit(args, effective_api_key=None) is lifecycle
-    assert captured["repository_dirty"] is None
-
-
-def test_disabled_cli_does_not_inspect_repository(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    args = argparse.Namespace(
-        enable_audit=False,
-        audit_log_root=None,
-        audit_store_stream_chunks=True,
-    )
-
-    def fail_if_called() -> None:
-        raise AssertionError("disabled audit inspected the repository")
-
-    monkeypatch.setattr(eval_module, "detect_repository_dirty", fail_if_called)
-
-    assert eval_module._start_eval_audit(args, effective_api_key=None).enabled is False
+    assert eval_module._run_evaluation_once(args=args, api_key="actor-key") == ([], [])
+    assert captured["factory_kwargs"] == {
+        "mode": SentinelMode.ACTIVE,
+        "api_key": sentinel_key,
+        "receipt_root": audit_root.resolve() / "sentinel_receipts",
+        "base_url": "https://api.openai.com/v1",
+    }
+    assert isinstance(captured["runner_factory"], Factory)
+    assert captured["audit_keys"] == ("actor-key", sentinel_key)
+    assert finalized == ["completed"]
 
 
 @pytest.mark.asyncio

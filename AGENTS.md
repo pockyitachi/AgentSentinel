@@ -3,6 +3,27 @@
 Last synchronized with the owner-facing repository state: **2026-09-05 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
+## 2026-09-09 operational simplification
+
+The owner has retired the executable R2.4/R2.5 authority, promotion,
+preflight, production-driver, process-census, snapshot-hash, and pilot stack.
+Those mechanisms remain historical provenance only; they are not runtime
+prerequisites and must not be recreated as launch gates.
+
+The current executable route is ordinary audited MobileWorld evaluation:
+assemble the Qwen or MAI actor request, run the in-process Prompt Sentinel,
+then call the unchanged actor/provider/parser/action path.  Operational startup
+is intentionally limited to selecting the task list, checking usable GPU
+capacity, starting the actor model and MobileWorld environment, and invoking
+`mw eval --sentinel active`.  It does not require an authority manifest,
+promotion, source-commit binding, root-derived cleanup hash, or model-snapshot
+content rehash.
+
+This repository instruction does not itself start or authorize live resources.
+Provider, GPU, Docker, emulator, GUI, or task execution still requires the
+owner's explicit request for that run.  The current task is code-only; do not
+run it live.
+
 This is the AgentSentinel monorepo. `MobileWorld/` is the active implementation
 tree. `mobileworld_audit_handoff/` contains the historical contracts, evidence
 provenance, and the detailed task instructions.

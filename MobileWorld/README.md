@@ -293,6 +293,26 @@ sudo uv run mw eval \
 > - `--enable_mcp`: Include MCP-augmented tasks in evaluation
 > - `--enable_user_interaction`: Include agent-user interaction tasks. Without this flag, only GUI-only tasks are evaluated.
 
+#### Run with Prompt Sentinel
+
+Qwen and MAI can use the in-process history Sentinel through the same ordinary
+evaluation command. Set `OPENAI_API_KEY` for the Sentinel's Luna calls and add:
+
+```bash
+--sentinel active
+```
+
+Sentinel automatically enables the passive Collector and writes its audit and
+hash-only receipt data outside the repository. Use `--audit-log-root` to select
+that external directory. This path does not use an authority manifest,
+promotion, production preflight, source-commit gate, cleanup hash, or model
+snapshot rehash. `--sentinel shadow` evaluates without changing the actor
+request, and the default `--sentinel off` preserves the ordinary eval path.
+
+`scripts/run_qwen3vl.sh` is a one-command example once the actor model endpoint
+is ready; set `AGENT_TYPE=mai_ui_agent` and the matching model endpoint to use
+MAI.
+
 ### 4. View Results
 
 ```bash
