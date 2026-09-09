@@ -340,10 +340,12 @@ class IntegrityChecker:
                 fields=missing,
             )
         commit = start.get("git_commit")
-        if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        if commit is not None and (
+            not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None
+        ):
             self._error(
                 "manifest_git_commit",
-                "manifest git_commit must be 40 lowercase hexadecimal characters",
+                "manifest git_commit must be null or 40 lowercase hexadecimal characters",
                 source=self.run_root / "manifest.start.json",
             )
         policy = start.get("collection_policy")

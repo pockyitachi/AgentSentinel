@@ -75,12 +75,13 @@ class AuditConfig:
             return self.log_root
         return Path(log_file_root) / "audit_raw"
 
-    def validated_external_log_root(self, repository_root: str | Path) -> Path:
-        """Return the resolved audit root after proving it is outside the repository.
+    def validated_external_log_root(self, source_root: str | Path) -> Path:
+        """Return the resolved audit root after proving it is outside source code.
 
         This method is intended only for the enabled bootstrap path.  It also
-        rejects a broad ancestor of the repository, so a configuration typo
-        cannot select a workspace-owning directory as the raw evidence root.
+        rejects a broad ancestor of the source tree, so a configuration typo
+        cannot select a source-owning directory as the raw evidence root. Git
+        metadata is deliberately irrelevant to this path-safety check.
         """
 
         if not self.enabled:
@@ -89,11 +90,11 @@ class AuditConfig:
             raise ValueError("audit_log_root must be explicit when audit collection is enabled")
 
         candidate = self.log_root.expanduser().resolve(strict=False)
-        repository = Path(repository_root).expanduser().resolve(strict=False)
-        if candidate == repository or _is_relative_to(candidate, repository):
-            raise ValueError("audit_log_root must be outside the Git repository")
-        if _is_relative_to(repository, candidate):
-            raise ValueError("audit_log_root must not contain the Git repository")
+        source = Path(source_root).expanduser().resolve(strict=False)
+        if candidate == source or _is_relative_to(candidate, source):
+            raise ValueError("audit_log_root must be outside the source tree")
+        if _is_relative_to(source, candidate):
+            raise ValueError("audit_log_root must not contain the source tree")
         return candidate
 
     def to_manifest_config(self) -> dict[str, bool | str | None]:

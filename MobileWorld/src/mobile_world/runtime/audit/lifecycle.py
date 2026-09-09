@@ -1,9 +1,10 @@
 """Feature-gated run and task-attempt lifecycle for raw audit collection.
 
-The disabled path returns before repository inspection, ID allocation, secret
-normalization, serialization, or filesystem access.  The enabled path owns one
+The disabled path returns before source-path inspection, ID allocation, secret
+normalization, serialization, or filesystem access. The enabled path owns one
 ``RunRecorder`` and hands runner code one independently-scoped task recorder
-for every physical whole-task attempt.
+for every physical whole-task attempt. Source provenance is optional metadata,
+never an execution prerequisite.
 """
 
 from __future__ import annotations
@@ -11,10 +12,8 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import math
-import os
 import platform
 import re
-import subprocess
 import sys
 import threading
 from collections.abc import Iterable, Mapping, Sequence
@@ -549,21 +548,23 @@ def _bootstrap_enabled_audit_run(
     if not config.enabled:
         return NULL_AUDIT_LIFECYCLE
 
-    repo_root = (
+    source_root = (
         Path(repository_root).expanduser().resolve(strict=False)
         if repository_root is not None
-        else _find_repository_root(Path(__file__))
+        else _default_source_root()
     )
-    audit_root = config.validated_external_log_root(repo_root)
-    commit = (repository_commit or _read_git_commit(repo_root)).lower()
-    if _COMMIT_RE.fullmatch(commit) is None:
-        raise ValueError("repository commit must be 40 lowercase hexadecimal characters")
+    audit_root = config.validated_external_log_root(source_root)
+    commit = None if repository_commit is None else _validated_commit(repository_commit)
     if repository_dirty is not None and not isinstance(repository_dirty, bool):
         raise TypeError("repository_dirty must be a bool or None")
     if (mobile_world_upstream_url is None) != (mobile_world_upstream_commit is None):
         raise ValueError("MobileWorld upstream URL and commit must be supplied together")
     if mobile_world_upstream_url is None:
-        upstream = _read_mobileworld_upstream(repo_root)
+        upstream: dict[str, str | None] = {
+            "repository_url": None,
+            "commit": None,
+            "provenance_file": None,
+        }
     else:
         upstream = {
             "repository_url": _validated_provenance_url(mobile_world_upstream_url),
@@ -709,9 +710,6 @@ def _bootstrap_enabled_audit_run(
         configured_secrets=all_secrets,
         run_started_event_id=run_started["event_id"],
         store_stream_chunks=config.store_stream_chunks,
-        initial_missing_artifacts=(
-            () if repository_dirty is not None else ("repository_dirty_state",)
-        ),
     )
 
 
@@ -939,75 +937,10 @@ def _environment_metadata(
     return value
 
 
-def _find_repository_root(start: Path) -> Path:
-    for candidate in (start, *start.parents):
-        if (candidate / ".git").exists():
-            return candidate.resolve(strict=False)
-    raise RuntimeError("could not locate the Git repository root")
+def _default_source_root() -> Path:
+    """Return the installed source tree used only for audit-root path safety."""
 
-
-def detect_repository_dirty(
-    repository_root: str | Path | None = None,
-    *,
-    timeout_seconds: float = 5.0,
-) -> bool | None:
-    """Return the read-only Git worktree state, or ``None`` when unavailable."""
-
-    try:
-        root = (
-            Path(repository_root).expanduser().resolve(strict=False)
-            if repository_root is not None
-            else _find_repository_root(Path(__file__))
-        )
-        result = subprocess.run(
-            [
-                "git",
-                "--no-optional-locks",
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=normal",
-            ],
-            cwd=root,
-            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=timeout_seconds,
-        )
-    except Exception:
-        return None
-    if result.returncode != 0:
-        return None
-    return bool(result.stdout)
-
-
-def _read_mobileworld_upstream(repository_root: Path) -> dict[str, str]:
-    candidates = (
-        repository_root / "MobileWorld" / "UPSTREAM.md",
-        repository_root / "UPSTREAM.md",
-    )
-    provenance_path = next((path for path in candidates if path.is_file()), None)
-    if provenance_path is None:
-        raise RuntimeError("MobileWorld upstream provenance file is missing")
-    document = provenance_path.read_text(encoding="utf-8")
-    section_match = re.search(
-        r"(?ms)^## MobileWorld\s*$\n(?P<body>.*?)(?=^##\s|\Z)",
-        document,
-    )
-    if section_match is None:
-        raise RuntimeError("MobileWorld upstream provenance section is missing")
-    body = section_match.group("body")
-    url_match = re.search(r"Upstream repository:\s*`([^`]+)`", body)
-    commit_match = re.search(r"Imported commit:\s*`([0-9A-Fa-f]{40})`", body)
-    if url_match is None or commit_match is None:
-        raise RuntimeError("MobileWorld upstream URL or commit is missing")
-    return {
-        "repository_url": _validated_provenance_url(url_match.group(1)),
-        "commit": _validated_commit(commit_match.group(1)),
-        "provenance_file": provenance_path.relative_to(repository_root).as_posix(),
-    }
+    return Path(__file__).resolve().parents[3]
 
 
 def _validated_provenance_url(value: str) -> str:
@@ -1028,49 +961,6 @@ def _validated_commit(value: str | None) -> str:
     if not isinstance(value, str) or _COMMIT_RE.fullmatch(value.lower()) is None:
         raise ValueError("MobileWorld upstream commit must be 40 hexadecimal characters")
     return value.lower()
-
-
-def _read_git_commit(repository_root: Path) -> str:
-    dot_git = repository_root / ".git"
-    if dot_git.is_dir():
-        git_dir = dot_git
-    elif dot_git.is_file():
-        marker = dot_git.read_text(encoding="utf-8").strip()
-        if not marker.startswith("gitdir:"):
-            raise RuntimeError("unsupported .git indirection file")
-        git_dir = (repository_root / marker.partition(":")[2].strip()).resolve()
-    else:
-        raise RuntimeError("repository root does not contain .git metadata")
-
-    head = (git_dir / "HEAD").read_text(encoding="ascii").strip()
-    if not head.startswith("ref:"):
-        if _COMMIT_RE.fullmatch(head.lower()) is None:
-            raise RuntimeError("Git HEAD does not contain a valid commit")
-        return head.lower()
-    reference = head.partition(":")[2].strip()
-    if not reference.startswith("refs/") or ".." in Path(reference).parts:
-        raise RuntimeError("Git HEAD contains an invalid reference")
-
-    search_roots = [git_dir]
-    common_dir_path = git_dir / "commondir"
-    if common_dir_path.is_file():
-        common_value = common_dir_path.read_text(encoding="utf-8").strip()
-        search_roots.append((git_dir / common_value).resolve())
-    for root in search_roots:
-        loose = root / reference
-        if loose.is_file():
-            commit = loose.read_text(encoding="ascii").strip().lower()
-            if _COMMIT_RE.fullmatch(commit):
-                return commit
-        packed = root / "packed-refs"
-        if packed.is_file():
-            for line in packed.read_text(encoding="ascii").splitlines():
-                if not line or line.startswith(("#", "^")):
-                    continue
-                commit, _, name = line.partition(" ")
-                if name == reference and _COMMIT_RE.fullmatch(commit.lower()):
-                    return commit.lower()
-    raise RuntimeError(f"could not resolve Git reference {reference!r}")
 
 
 def _file_summary(path: Path) -> dict[str, Any]:
@@ -1240,6 +1130,5 @@ __all__ = [
     "NullAuditLifecycle",
     "TaskAuditBinding",
     "bootstrap_audit_run",
-    "detect_repository_dirty",
     "sanitize_collector_config",
 ]

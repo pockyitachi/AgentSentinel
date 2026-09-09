@@ -18,7 +18,6 @@ from mobile_world.runtime.audit.config import AuditConfig
 from mobile_world.runtime.audit.lifecycle import (
     DEGRADED_AUDIT_LIFECYCLE,
     bootstrap_audit_run,
-    detect_repository_dirty,
 )
 from mobile_world.runtime.client import scan_finished_tasks
 
@@ -211,7 +210,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--audit-log-root",
         "--audit_log_root",
         dest="audit_log_root",
-        help="Explicit raw audit data root; when enabled it must be outside the Git repository",
+        help="Explicit raw audit data root; when enabled it must be outside the source tree",
     )
     parser.add_argument(
         "--sentinel-mode",
@@ -436,13 +435,8 @@ def _start_eval_audit(
         "executor_agent_class": getattr(args, "executor_agent_class", None),
         "scale_factor": getattr(args, "scale_factor", 1000),
     }
-    try:
-        repository_dirty = detect_repository_dirty()
-    except Exception:
-        repository_dirty = None
     return bootstrap_audit_run(
         config,
-        repository_dirty=repository_dirty,
         resolved_cli_config=resolved_cli_config,
         resolved_agent_runtime_config=resolved_agent_runtime_config,
         agent_type=args.agent_type,

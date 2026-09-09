@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -18,7 +17,6 @@ from mobile_world.runtime.audit.lifecycle import (
     AuditLifecycle,
     TaskAuditBinding,
     bootstrap_audit_run,
-    detect_repository_dirty,
 )
 
 _MONOREPO_COMMIT = "b" * 40
@@ -47,98 +45,8 @@ class _PoisonMapping(Mapping[str, Any]):
 
 def _repository(tmp_path: Path) -> Path:
     repository = tmp_path / "checkout"
-    git_dir = repository / ".git"
-    ref = git_dir / "refs" / "heads" / "main"
-    ref.parent.mkdir(parents=True)
-    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
-    ref.write_text(f"{_MONOREPO_COMMIT}\n", encoding="ascii")
-    (repository / "UPSTREAM.md").write_text(
-        "\n".join(
-            [
-                "# Upstream source provenance",
-                "",
-                "## MobileWorld",
-                "",
-                "- Upstream repository: `https://github.com/Tongyi-MAI/MobileWorld.git`",
-                f"- Imported commit: `{_UPSTREAM_COMMIT}`",
-                "",
-                "## Another snapshot",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    repository.mkdir(parents=True)
     return repository
-
-
-@pytest.mark.parametrize(
-    ("stdout", "expected"),
-    [(b"", False), (b" M MobileWorld/example.py\0", True)],
-)
-def test_detect_repository_dirty_uses_read_only_git_status(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    stdout: bytes,
-    expected: bool,
-) -> None:
-    repository = _repository(tmp_path)
-
-    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        assert command == [
-            "git",
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=normal",
-        ]
-        assert kwargs["cwd"] == repository
-        assert kwargs["env"]["GIT_OPTIONAL_LOCKS"] == "0"
-        assert kwargs["stdin"] is subprocess.DEVNULL
-        assert kwargs["stdout"] is subprocess.PIPE
-        assert kwargs["stderr"] is subprocess.DEVNULL
-        assert kwargs["check"] is False
-        assert kwargs["timeout"] == 5.0
-        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr=b"")
-
-    monkeypatch.setattr(lifecycle_module.subprocess, "run", fake_run)
-
-    assert detect_repository_dirty(repository) is expected
-
-
-@pytest.mark.parametrize(
-    "failure",
-    [
-        subprocess.TimeoutExpired(cmd="git status", timeout=5.0),
-        OSError("fixture git executable failure"),
-    ],
-)
-def test_detect_repository_dirty_faults_are_unknown(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    failure: Exception,
-) -> None:
-    repository = _repository(tmp_path)
-
-    def fail_run(*args: Any, **kwargs: Any) -> Any:
-        raise failure
-
-    monkeypatch.setattr(lifecycle_module.subprocess, "run", fail_run)
-
-    assert detect_repository_dirty(repository) is None
-
-
-def test_detect_repository_dirty_nonzero_exit_is_unknown(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repository = _repository(tmp_path)
-
-    def failed_status(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.CompletedProcess(command, 128, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(lifecycle_module.subprocess, "run", failed_status)
-
-    assert detect_repository_dirty(repository) is None
 
 
 def _bootstrap(
@@ -158,7 +66,10 @@ def _bootstrap(
             store_stream_chunks=store_stream_chunks,
         ),
         repository_root=repository,
+        repository_commit=_MONOREPO_COMMIT,
         repository_dirty=repository_dirty,
+        mobile_world_upstream_url="https://github.com/Tongyi-MAI/MobileWorld.git",
+        mobile_world_upstream_commit=_UPSTREAM_COMMIT,
         resolved_cli_config=cli_config,
         resolved_agent_runtime_config=runtime_config,
         agent_type="fixture-agent",
@@ -237,7 +148,7 @@ def test_disabled_bootstrap_returns_before_metadata_ids_or_filesystem(
     def fail(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("disabled lifecycle performed enabled bootstrap work")
 
-    monkeypatch.setattr(lifecycle_module, "_find_repository_root", fail)
+    monkeypatch.setattr(lifecycle_module, "_default_source_root", fail)
     monkeypatch.setattr(lifecycle_module, "RunRecorder", fail)
     destination = tmp_path / "must-not-exist"
 
@@ -277,25 +188,29 @@ def test_fail_open_bootstrap_storage_error_degrades_without_blocking_eval(
     assert lifecycle.missing_artifacts == ("audit_bootstrap",)
 
 
-def test_preflight_failure_degrades_before_creating_audit_root(
+def test_missing_git_and_upstream_provenance_does_not_degrade_bootstrap(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _repository(tmp_path)
     audit_root = tmp_path / "audit-data"
 
-    def fail_upstream(*args: Any, **kwargs: Any) -> Any:
-        raise OSError("fixture provenance read failure")
-
-    monkeypatch.setattr(lifecycle_module, "_read_mobileworld_upstream", fail_upstream)
     lifecycle = bootstrap_audit_run(
         AuditConfig(enabled=True, log_root=audit_root),
         repository_root=repository,
-        repository_dirty=False,
     )
 
-    assert lifecycle is DEGRADED_AUDIT_LIFECYCLE
-    assert not audit_root.exists()
+    assert isinstance(lifecycle, AuditLifecycle)
+    start = _read_json(lifecycle.recorder.manifest_start_path)
+    assert start["git_commit"] is None
+    assert start["git_dirty"] is None
+    assert start["mobile_world_snapshot"] == {
+        "path": "MobileWorld",
+        "upstream_repository_url": None,
+        "upstream_commit": None,
+        "provenance_file": None,
+    }
+    assert lifecycle.finalize() is not None
+    assert check_run_integrity(lifecycle.recorder.run_root)["valid"] is True
 
 
 def test_repository_internal_audit_root_degrades_without_writing(
@@ -364,7 +279,7 @@ def test_manifest_separates_monorepo_head_from_mobileworld_upstream_and_scrubs_s
         "path": "MobileWorld",
         "upstream_repository_url": "https://github.com/Tongyi-MAI/MobileWorld.git",
         "upstream_commit": _UPSTREAM_COMMIT,
-        "provenance_file": "UPSTREAM.md",
+        "provenance_file": None,
     }
     assert start["resolved_cli_config"]["llm_base_url"] == "https://models.example"
     assert "api_key" not in start["resolved_cli_config"]
@@ -599,7 +514,7 @@ def test_run_scoped_attempt_index_remains_monotonic_when_caller_hint_resets(
     assert lifecycle.finalize() is not None
 
 
-def test_unknown_dirty_state_is_factual_and_marks_only_run_incomplete(
+def test_unknown_dirty_state_is_optional_provenance_not_missing_capture(
     tmp_path: Path,
 ) -> None:
     lifecycle = _bootstrap(tmp_path, repository_dirty=None)
@@ -611,9 +526,9 @@ def test_unknown_dirty_state_is_factual_and_marks_only_run_incomplete(
     run_ended = _events(lifecycle.recorder.run_root / "run.events.jsonl")[-1]
     assert start["git_dirty"] is None
     assert start["git_dirty_status"] == "not_checked"
-    assert final["capture_complete"] is False
-    assert final["missing_artifacts"] == ["repository_dirty_state"]
-    assert run_ended["payload"]["capture_complete"] is False
+    assert final["capture_complete"] is True
+    assert final["missing_artifacts"] == []
+    assert run_ended["payload"]["capture_complete"] is True
 
 
 def test_disabling_chunk_storage_propagates_and_marks_task_and_run_incomplete(
