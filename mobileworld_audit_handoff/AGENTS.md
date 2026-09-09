@@ -21,6 +21,50 @@ This override does not itself authorize or start live provider, GPU, Docker,
 emulator, GUI, or task work.  Such work still needs an explicit owner request;
 the current task is code-only.
 
+## 2026-09-09 non-negotiable runtime-simplicity directive
+
+This directive applies to **every repository task** and overrides all later
+historical R2.x compatibility/proof instructions when they are considered for
+the active runtime. Existing violations are migration debt, not precedent.
+
+Do not add or preserve vertical wrapper stacks, composite results, multiple
+semantic receipts/sinks/transactions for one actor call, or repeated canonical
+hashing/recursive `deepcopy`/exact-concrete-type/module-seal checks at internal
+hops. Do not route a new feature through R2.2, R2.3, and R2.4 abstractions just
+to preserve old contracts, and do not recreate retired authority, promotion,
+preflight, process-census, cleanup-proof, or snapshot-proof machinery under new
+names. Prefer a clean internal version break and caller migration over any
+compatibility wrapper.
+
+One logical actor call has one immutable Original request, one flat final
+result, and at most one best-effort, secret-free derived call record. Independent
+history-policy and execution-state statuses are fields of that result, not new
+result/receipt hierarchies. Copy and hash only at a real trust or persistence
+boundary. A logging/publication failure may make a call unusable for later
+effect analysis, but must not stop actor or task execution.
+
+The retained safety boundary is limited to immutable Original/exact fallback,
+declared history-span and non-history invariants, once-per-logical-call
+evaluation with retry reuse, causal cutoff/future non-interference, closed
+provider-output validation, independent history/state status, bounded timeout
+with late-result isolation, recursion bypass, and minimal secret-free logging.
+If work cannot fit this shape, report the mismatch instead of adding another
+wrapper, bridge, receipt, or proof layer.
+
+### Active disposition of the historical runtime layers
+
+| Layer | Active-runtime decision |
+| --- | --- |
+| R2.2 | Retain only the history-policy semantics: one bounded call, closed `KEEP`/`DROP`/`KEEP_UNCERTAIN` output, grounded references, deterministic exact-span admission, invariants, and Original fallback. Migrate them into the flat lean runtime; do not retain the old result/evidence/receipt/metrics topology as a hot-path dependency. |
+| R2.3 | Remove the model-backed AND/OR rubric tracker from the default hot path. It is optional offline/research machinery, not a prerequisite for MHR mitigation. A future online experiment must be explicit, non-blocking, and represented by one optional field, never another receipt/result stack. |
+| R2.4 | Retain thin registered history adapters, causal Collector cutoff, deterministic execution-state facts, exact renderer invariants, timeout isolation, and retry reuse. Replace vertical promotion/contracts, orchestration wrappers, composite results, and multiple receipts with one lean call path. |
+
+The historical implementations and tests may remain temporarily as provenance
+and behavioral fixtures. New active code must not extend their topology.
+Preserve behavior with focused tests, switch ordinary `mw eval` to the lean
+interface, and then remove unreachable imports/modules without compatibility
+wrappers.
+
 This directory preserves the scientific contracts and provenance for the
 MobileWorld history-integrity project. The implementation tree is
 `../MobileWorld/`.
