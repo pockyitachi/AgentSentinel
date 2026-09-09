@@ -85,7 +85,6 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelResult,
     SentinelValidationStatus,
 )
-from mobile_world.runtime.sentinel.policies import NoOpSentinelPolicy
 from mobile_world.runtime.sentinel.r2_2.contracts import (
     PolicyExecutionControlV1,
     RuntimeEvidencePolicyV1,
@@ -98,11 +97,6 @@ from mobile_world.runtime.sentinel.r2_2.runtime_overlay import (
     render_runtime_admitted_plan,
     validate_runtime_render_result,
 )
-from mobile_world.runtime.sentinel.r2_4.audit_detail import (
-    ParserResultStatusV1,
-    RuntimeAuditDetailV1,
-)
-from mobile_world.runtime.sentinel.r2_4.audit_runtime import R24RuntimeAuditV1
 from mobile_world.runtime.sentinel.r2_4.capabilities import (
     RuntimeEditableSpanCodecV1,
     RuntimeHistoryExtractionStatusV1,
@@ -116,23 +110,10 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     snapshot_vertical_output,
     snapshot_vertical_sentinel_result,
     vertical_output_projection,
-    vertical_output_sha256,
 )
 from mobile_world.runtime.sentinel.r2_4.lean_policy import LeanActiveRuntimePolicyV1
-from mobile_world.runtime.sentinel.r2_4.live_attempt import (
-    ProductionOpenAIAttemptCallV1,
-)
-from mobile_world.runtime.sentinel.r2_4.live_policy import (
-    OwnerAuthorizedLivePerCallPolicyV1,
-    R22OwnerAuthorizedLivePolicyAdapter,
-)
 from mobile_world.runtime.sentinel.r2_4.orchestration import R24CoordinatedCallRecordV1
 from mobile_world.runtime.sentinel.r2_4.policy import R22CpuFakeActivePolicyAdapter
-from mobile_world.runtime.sentinel.r2_4.production_audit import (
-    ProductionRuntimeAuditFailureReceiptV1,
-    ProductionRuntimeAuditReceiptV1,
-    ProductionRuntimeAuditV1,
-)
 from mobile_world.runtime.sentinel.r2_4.renderer import (
     RuntimeVerticalRenderResultV1,
     render_vertical_admitted_plan,
@@ -254,9 +235,7 @@ class _PolicyExecutionFence(PolicyExecutionControlV1):
         self._clock_ns = clock_ns
         self._cancelled = Event()
         self._generic_transport_started = False
-        self._production_attempt_count = 0
         self._receipt_published = False
-        self._active_cancellable_call: ProductionOpenAIAttemptCallV1 | None = None
         self._transport_lock = Lock()
         self._publication_lock = Lock()
 
@@ -267,34 +246,12 @@ class _PolicyExecutionFence(PolicyExecutionControlV1):
     def run_transport[T](self, call: Callable[[], T]) -> T:
         if not callable(call):
             raise TypeError("transport callback must be callable")
-        trusted_cancellable = call if type(call) is ProductionOpenAIAttemptCallV1 else None
-        gate_closed = False
         with self._transport_lock:
-            try:
-                self._require_open()
-            except TimeoutError:
-                gate_closed = True
-            else:
-                if trusted_cancellable is None:
-                    if self._generic_transport_started or self._production_attempt_count:
-                        raise RuntimeError("R2.2 policy transport was already started")
-                    self._generic_transport_started = True
-                else:
-                    if self._generic_transport_started or self._active_cancellable_call is not None:
-                        raise RuntimeError("production policy attempts must be sequential")
-                    self._production_attempt_count += 1
-                self._active_cancellable_call = trusted_cancellable
-        if gate_closed:
-            if trusted_cancellable is not None:
-                trusted_cancellable.cancel_and_join()
-            raise TimeoutError("R2.2 policy execution deadline has closed")
-        try:
-            return call()
-        finally:
-            if trusted_cancellable is not None:
-                with self._transport_lock:
-                    if self._active_cancellable_call is trusted_cancellable:
-                        self._active_cancellable_call = None
+            self._require_open()
+            if self._generic_transport_started:
+                raise RuntimeError("R2.2 policy transport was already started")
+            self._generic_transport_started = True
+        return call()
 
     def publish_receipt(self, publish: Callable[[], None]) -> None:
         if not callable(publish):
@@ -307,13 +264,9 @@ class _PolicyExecutionFence(PolicyExecutionControlV1):
             self._receipt_published = True
 
     def cancel(self) -> None:
-        """Close both gates and join an exact production child before fallback."""
+        """Close transport and publication gates before Original fallback."""
 
         self._cancelled.set()
-        with self._transport_lock:
-            cancellable = self._active_cancellable_call
-        if cancellable is not None:
-            cancellable.cancel_and_join()
         # Publication is a module-owned constant-time append.  Waiting for this
         # short critical section guarantees that no receipt appears after the
         # actor receives its timeout fallback, without waiting for transport.
@@ -426,20 +379,6 @@ class _VerticalPolicyOutputSnapshot:
     output: RuntimeVerticalPolicyOutputV1
     canonical_bytes: bytes
     sha256: str
-
-
-@dataclass(frozen=True)
-class _ActorProviderTraceSnapshot:
-    """Safe metadata accumulated across retries for one actor logical call."""
-
-    attempt_count: int
-    latency_ns: int
-    response_id: str | None
-    model_id: str | None
-    finish_reason: str | None
-    input_tokens: int | None
-    output_tokens: int | None
-    total_tokens: int | None
 
 
 def _untrusted_policy_output() -> _EvaluationFailure:
@@ -939,7 +878,6 @@ class PromptSentinel:
         host_configs: dict[str, SentinelHostConfig] | None = None,
         default_host_config: SentinelHostConfig | None = None,
         receipt_sink: SentinelReceiptSink | None = None,
-        runtime_audit: R24RuntimeAuditV1 | ProductionRuntimeAuditV1 | None = None,
         global_switch: SentinelGlobalSwitch = GLOBAL_SENTINEL_KILL_SWITCH,
         logical_call_id_factory: Any = new_ulid,
         clock_ns: Any = time.monotonic_ns,
@@ -956,26 +894,6 @@ class PromptSentinel:
             not key or not isinstance(value, SentinelHostConfig) for key, value in configs.items()
         ):
             raise TypeError("host_configs must map non-empty host IDs to SentinelHostConfig")
-        if runtime_audit is not None and type(runtime_audit) not in {
-            R24RuntimeAuditV1,
-            ProductionRuntimeAuditV1,
-        }:
-            raise TypeError("runtime_audit must use one exact R2.4 audit type")
-        if type(runtime_audit) is ProductionRuntimeAuditV1:
-            if type(policy_object) is NoOpSentinelPolicy:
-                if runtime_audit.live_policy is not None:
-                    raise TypeError("OFF production audit cannot bind live policy authority")
-                configured_modes = tuple(value.mode for value in configs.values())
-                effective_default = default_host_config or SentinelHostConfig()
-                if any(mode is not SentinelMode.OFF for mode in configured_modes) or (
-                    effective_default.mode is not SentinelMode.OFF
-                ):
-                    raise TypeError("NoOp production audit is restricted to exact OFF hosts")
-            elif type(policy_object) is OwnerAuthorizedLivePerCallPolicyV1:
-                if runtime_audit.live_policy is not policy_object:
-                    raise TypeError("production audit must bind the identical live policy")
-            else:
-                raise TypeError("production audit supports only exact OFF or per-call live policy")
         if not callable(logical_call_id_factory) or not callable(clock_ns):
             raise TypeError("ID factory and clock must be callable")
         policy_id = cast(SentinelPolicy, policy_object).policy_id
@@ -990,27 +908,9 @@ class PromptSentinel:
             if vertical_policy.execution_scope is RuntimeVerticalExecutionScope.CPU_FAKE_ACTIVE:
                 if type(policy_object) is not R22CpuFakeActivePolicyAdapter:
                     raise TypeError("R2.4 CPU fake ACTIVE requires the exact trusted adapter")
-                if runtime_audit is not None and type(runtime_audit) is not R24RuntimeAuditV1:
-                    raise TypeError("R2.4 CPU fake policy requires the exact CPU audit")
             elif vertical_policy.execution_scope is RuntimeVerticalExecutionScope.LEAN_EVAL_ACTIVE:
                 if type(policy_object) is not LeanActiveRuntimePolicyV1:
                     raise TypeError("lean eval ACTIVE requires the exact trusted adapter")
-                if runtime_audit is not None:
-                    raise TypeError("legacy R2.4 audit cannot attest the lean eval scope")
-            elif (
-                vertical_policy.execution_scope
-                is RuntimeVerticalExecutionScope.OWNER_AUTHORIZED_LIVE_ACTIVE
-            ):
-                if type(policy_object) not in {
-                    R22OwnerAuthorizedLivePolicyAdapter,
-                    OwnerAuthorizedLivePerCallPolicyV1,
-                }:
-                    raise TypeError("R2.4 live ACTIVE requires the exact owner-authorized adapter")
-                if type(policy_object) is OwnerAuthorizedLivePerCallPolicyV1:
-                    if type(runtime_audit) is not ProductionRuntimeAuditV1:
-                        raise TypeError("per-call live policy requires the exact production audit")
-                elif runtime_audit is not None:
-                    raise TypeError("the CPU/fake detail sink cannot attest a live policy")
             else:
                 raise TypeError("R2.4 policy declares an unsupported execution scope")
         runtime_evidence_policy = not runtime_vertical_policy and isinstance(
@@ -1031,7 +931,6 @@ class PromptSentinel:
         self._host_configs = configs
         self._default_host_config = default_host_config or SentinelHostConfig()
         self._receipt_sink = receipt_sink
-        self._runtime_audit = runtime_audit
         self._global_switch = global_switch
         self._logical_call_id_factory = logical_call_id_factory
         self._clock_ns = clock_ns
@@ -1043,12 +942,6 @@ class PromptSentinel:
     @property
     def kill_switch_active(self) -> bool:
         return self._global_switch.active
-
-    @property
-    def strict_provider_audit(self) -> bool:
-        """Whether provider dispatch requires the production audit chain."""
-
-        return type(self._runtime_audit) is ProductionRuntimeAuditV1
 
     def host_config(self, host_id: str) -> SentinelHostConfig:
         return self._host_configs.get(host_id, self._default_host_config)
@@ -1080,155 +973,6 @@ class PromptSentinel:
             call_role=call_role,
         )
 
-    def finalize_actor_output(
-        self,
-        *,
-        logical_call_id: str,
-        attempt_id: str,
-        raw_provider_response: JsonValue,
-        raw_parser_input: JsonValue,
-        parsed_action: JsonValue,
-        parser_id: str,
-        parser_status: ParserResultStatusV1,
-        parser_attempt_count: int,
-        provider_ns: int,
-        parser_ns: int,
-        response_id: str | None = None,
-        model_id: str | None = None,
-        finish_reason: str | None = None,
-        input_tokens: int | None = None,
-        output_tokens: int | None = None,
-        total_tokens: int | None = None,
-    ) -> RuntimeAuditDetailV1 | None:
-        """Complete an optional R2.4 detail after the unchanged host parser."""
-
-        if self._runtime_audit is None:
-            return None
-        return self._runtime_audit.finalize_actor_output(
-            logical_call_id=logical_call_id,
-            attempt_id=attempt_id,
-            raw_provider_response=raw_provider_response,
-            raw_parser_input=raw_parser_input,
-            parsed_action=parsed_action,
-            parser_id=parser_id,
-            parser_status=parser_status,
-            parser_attempt_count=parser_attempt_count,
-            provider_ns=provider_ns,
-            parser_ns=parser_ns,
-            response_id=response_id,
-            model_id=model_id,
-            finish_reason=finish_reason,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-        )
-
-    def bind_actor_sdk_arguments(
-        self,
-        *,
-        logical_call_id: str,
-        result: SentinelResult | RuntimeVerticalSentinelResultV1,
-        sdk_arguments: JsonValue,
-        collector_request_locator: JsonValue | None,
-        stream: bool,
-    ) -> str | None:
-        """Bind exact actor SDK arguments immediately before live dispatch."""
-
-        if type(self._runtime_audit) is not ProductionRuntimeAuditV1:
-            return None
-        return self._runtime_audit.bind_actor_sdk_arguments(
-            logical_call_id=logical_call_id,
-            result=result,
-            sdk_arguments=sdk_arguments,
-            collector_request_locator=collector_request_locator,
-            stream=stream,
-        )
-
-    def record_production_actor_provider_attempt(
-        self,
-        *,
-        logical_call_id: str,
-        succeeded: bool,
-        latency_ns: int,
-        raw_response: Any = None,
-        collector_terminal_locator: JsonValue | None = None,
-        response_id: str | None = None,
-        model_id: str | None = None,
-        finish_reason: str | None = None,
-        input_tokens: int | None = None,
-        cached_input_tokens: int | None = None,
-        output_tokens: int | None = None,
-        total_tokens: int | None = None,
-    ) -> None:
-        if type(self._runtime_audit) is not ProductionRuntimeAuditV1:
-            return
-        self._runtime_audit.record_actor_provider_attempt(
-            logical_call_id=logical_call_id,
-            succeeded=succeeded,
-            latency_ns=latency_ns,
-            raw_response=raw_response,
-            collector_terminal_locator=collector_terminal_locator,
-            response_id=response_id,
-            model_id=model_id,
-            finish_reason=finish_reason,
-            input_tokens=input_tokens,
-            cached_input_tokens=cached_input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-        )
-
-    def finalize_action_execution(
-        self,
-        *,
-        logical_call_id: str,
-        parsed_action: JsonValue,
-        action_executed: bool,
-        action_execution_ns: int = 0,
-    ) -> ProductionRuntimeAuditReceiptV1 | None:
-        if type(self._runtime_audit) is not ProductionRuntimeAuditV1:
-            return None
-        return self._runtime_audit.finalize_action_execution(
-            logical_call_id=logical_call_id,
-            parsed_action=parsed_action,
-            action_executed=action_executed,
-            action_execution_ns=action_execution_ns,
-        )
-
-    def production_runtime_audit_receipt_for(
-        self, logical_call_id: str
-    ) -> ProductionRuntimeAuditReceiptV1 | None:
-        if type(self._runtime_audit) is not ProductionRuntimeAuditV1:
-            return None
-        return self._runtime_audit.receipt_for(logical_call_id)
-
-    def finalize_production_actor_failure(
-        self,
-        *,
-        logical_call_id: str,
-        failure_phase: str,
-        failure_code: str,
-    ) -> ProductionRuntimeAuditFailureReceiptV1 | None:
-        if type(self._runtime_audit) is not ProductionRuntimeAuditV1:
-            return None
-        return self._runtime_audit.finalize_actor_failure(
-            logical_call_id=logical_call_id,
-            failure_phase=failure_phase,
-            failure_code=failure_code,
-        )
-
-    def production_runtime_audit_failure_for(
-        self, logical_call_id: str
-    ) -> ProductionRuntimeAuditFailureReceiptV1 | None:
-        if type(self._runtime_audit) is not ProductionRuntimeAuditV1:
-            return None
-        return self._runtime_audit.failure_receipt_for(logical_call_id)
-
-    def cancel_runtime_audit(self, logical_call_id: str) -> None:
-        """Discard an optional pending detail when no actor output is produced."""
-
-        if self._runtime_audit is not None:
-            self._runtime_audit.cancel(logical_call_id)
-
     def before_model_call(
         self,
         request: JsonValue,
@@ -1239,11 +983,6 @@ class PromptSentinel:
         """Evaluate one actor request and return an immutable separate final object."""
 
         started = self._clock_ns()
-        audit_started_ns = time.monotonic_ns()
-        history_extract_ns = 0
-        policy_ns = 0
-        render_ns = 0
-        validator_ns = 0
         policy_output_sha256 = _EMPTY_POLICY_OUTPUT_SHA256
         policy_evaluation_started = Event()
         overlay_declaration_sha256: str | None = None
@@ -1285,7 +1024,7 @@ class PromptSentinel:
                 started=started,
             )
         if config.mode is SentinelMode.OFF:
-            result = self._bypass_result(
+            return self._bypass_result(
                 raw=raw,
                 raw_json=raw_json,
                 raw_sha256=raw_sha256,
@@ -1297,15 +1036,6 @@ class PromptSentinel:
                 kill_switch_active=False,
                 started=started,
             )
-            if type(self._runtime_audit) is ProductionRuntimeAuditV1:
-                self._runtime_audit.begin_off_pre_provider(
-                    logical_call_id=context.logical_call_id,
-                    host_id=context.host_id,
-                    raw_request=raw,
-                    result=result,
-                    pre_provider_total_ns=time.monotonic_ns() - audit_started_ns,
-                )
-            return result
         if self._receipt_sink is None:
             return self._fallback_result(
                 raw=raw,
@@ -1363,7 +1093,6 @@ class PromptSentinel:
                     SentinelFallbackReason.UNSUPPORTED_HISTORY_FAMILY,
                     "history_codec_id_missing",
                 )
-            history_extract_started_ns = time.monotonic_ns()
             extraction = None
             try:
                 codec = self._codec_registry.by_id(
@@ -1389,11 +1118,7 @@ class PromptSentinel:
                     extraction = codec.extract_runtime(copy_json(raw))
                     overlay_declaration_sha256 = extraction.overlay.sha256
                     if extraction.status is RuntimeHistoryExtractionStatusV1.NO_HISTORY:
-                        no_history_record: R24CoordinatedCallRecordV1 | None = None
-                        if type(self._policy) in {
-                            OwnerAuthorizedLivePerCallPolicyV1,
-                            LeanActiveRuntimePolicyV1,
-                        }:
+                        if type(self._policy) is LeanActiveRuntimePolicyV1:
                             prepared = self._evaluate_policy_with_timeout(
                                 request=raw,
                                 context=context,
@@ -1406,7 +1131,6 @@ class PromptSentinel:
                                 raise SentinelContractError(
                                     "no-history rubric preparation returned an untrusted record"
                                 )
-                            no_history_record = prepared
                         base_result = self._fallback_result(
                             raw=raw,
                             raw_json=raw_json,
@@ -1420,7 +1144,6 @@ class PromptSentinel:
                             started=started,
                             transaction=receipt_transaction,
                             policy_evaluated=False,
-                            no_history_record=no_history_record,
                         )
                         return RuntimeVerticalSentinelResultV1(
                             base_result=base_result,
@@ -1486,9 +1209,6 @@ class PromptSentinel:
                     SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE,
                     "history_ir_validation_exception",
                 ) from exc
-            history_extract_ns = time.monotonic_ns() - history_extract_started_ns
-
-            policy_started_ns = time.monotonic_ns()
             output = self._evaluate_policy_with_timeout(
                 request=raw,
                 context=context,
@@ -1496,7 +1216,6 @@ class PromptSentinel:
                 timeout_ms=config.policy_timeout_ms,
                 evaluation_started=policy_evaluation_started,
             )
-            policy_ns = time.monotonic_ns() - policy_started_ns
             candidate = copy_json(raw)
             legacy_render_result: RenderResult | None = None
             runtime_render_result: RuntimeRenderResultV1 | None = None
@@ -1519,21 +1238,17 @@ class PromptSentinel:
                         history_ir=ir,
                         output=vertical_output,
                     )
-                    render_started_ns = time.monotonic_ns()
                     vertical_render_result = render_vertical_admitted_plan(
                         raw,
                         ir,
                         vertical_output.admitted_plan,
                     )
-                    render_ns = time.monotonic_ns() - render_started_ns
-                    validator_started_ns = time.monotonic_ns()
                     validate_vertical_render_result(
                         raw,
                         ir,
                         vertical_output.admitted_plan,
                         vertical_render_result,
                     )
-                    validator_ns = time.monotonic_ns() - validator_started_ns
                 except _EvaluationFailure:
                     raise
                 except Exception as exc:
@@ -1752,33 +1467,6 @@ class PromptSentinel:
                     else self._diff_sha256(legacy_render_result)
                 )
             )
-            audit_prepared = False
-            if self._runtime_vertical_policy and self._runtime_audit is not None:
-                assert extraction is not None
-                assert vertical_output is not None
-                assert vertical_render_result is not None
-                try:
-                    self._runtime_audit.begin_pre_provider(
-                        logical_call_id=context.logical_call_id,
-                        raw_request=raw,
-                        extraction=extraction,
-                        policy_output=vertical_output,
-                        render_result=vertical_render_result,
-                        configured_mode=config.mode,
-                        effective_mode=config.mode,
-                        final_request=final,
-                        history_extract_ns=history_extract_ns,
-                        policy_ns=policy_ns,
-                        render_ns=render_ns,
-                        validator_ns=validator_ns,
-                        pre_provider_total_ns=time.monotonic_ns() - audit_started_ns,
-                    )
-                    audit_prepared = True
-                except Exception as exc:
-                    raise _EvaluationFailure(
-                        SentinelFallbackReason.SIDECAR_FAILURE,
-                        "r2_4_audit_pre_provider_failed",
-                    ) from exc
             receipt = SentinelReceipt(
                 logical_call_id=context.logical_call_id,
                 host_id=context.host_id,
@@ -1812,13 +1500,6 @@ class PromptSentinel:
                 fallback_context=(raw, context, config, role, history_codec_id, started),
                 transaction=receipt_transaction,
             )
-            if (
-                audit_prepared
-                and base_result.receipt.validation_status is not SentinelValidationStatus.PASSED
-                and type(self._runtime_audit) is not ProductionRuntimeAuditV1
-            ):
-                assert self._runtime_audit is not None
-                self._runtime_audit.cancel(context.logical_call_id)
             if self._runtime_vertical_policy:
                 assert vertical_output is not None
                 return RuntimeVerticalSentinelResultV1(
@@ -1831,8 +1512,6 @@ class PromptSentinel:
                 )
             return base_result
         except _EvaluationFailure as failure:
-            if self._runtime_audit is not None:
-                self._runtime_audit.cancel(context.logical_call_id)
             return self._fallback_result(
                 raw=raw,
                 raw_json=raw_json,
@@ -1849,8 +1528,6 @@ class PromptSentinel:
                 policy_evaluated=policy_evaluation_started.is_set(),
             )
         except Exception:
-            if self._runtime_audit is not None:
-                self._runtime_audit.cancel(context.logical_call_id)
             return self._fallback_result(
                 raw=raw,
                 raw_json=raw_json,
@@ -1954,12 +1631,9 @@ class PromptSentinel:
                     | R24CoordinatedCallRecordV1
                 )
                 if no_history:
-                    if execution_fence is None or type(self._policy) not in {
-                        OwnerAuthorizedLivePerCallPolicyV1,
-                        LeanActiveRuntimePolicyV1,
-                    }:
+                    if execution_fence is None or type(self._policy) is not LeanActiveRuntimePolicyV1:
                         raise SentinelContractError(
-                            "no-history rubric execution requires the exact production policy"
+                            "no-history rubric execution requires the exact lean policy"
                         )
                     value = self._policy.prepare_no_history_with_control(
                         request=policy_request,
@@ -2010,14 +1684,11 @@ class PromptSentinel:
                 cancel_before_policy.set()
             if execution_fence is not None:
                 execution_fence.cancel()
-            if type(self._policy) in {
-                OwnerAuthorizedLivePerCallPolicyV1,
-                LeanActiveRuntimePolicyV1,
-            }:
-                # These exact module-owned policies can prepare more than one
-                # provider call (rubric then history).  Do not expose Original
-                # until the old task-local worker has observed cancellation and
-                # exited; otherwise it could overlap the next logical call.
+            if type(self._policy) is LeanActiveRuntimePolicyV1:
+                # The lean policy can prepare a rubric call followed by a history
+                # call. Do not expose Original until its task-local worker has
+                # observed cancellation and exited, or the next logical call
+                # could overlap its stateful coordinator/admission bridge.
                 worker.join()
             raise _EvaluationFailure(
                 SentinelFallbackReason.POLICY_TIMEOUT,
@@ -2112,31 +1783,14 @@ class PromptSentinel:
             raise SentinelContractError("R2.4 policy output type is untrusted")
         if type(self._policy) not in {
             R22CpuFakeActivePolicyAdapter,
-            R22OwnerAuthorizedLivePolicyAdapter,
-            OwnerAuthorizedLivePerCallPolicyV1,
             LeanActiveRuntimePolicyV1,
         }:
             raise SentinelContractError("R2.4 policy adapter type is untrusted")
         vertical_policy = cast(RuntimeVerticalPolicy, self._policy)
-        policy_object = cast(object, self._policy)
-        if type(policy_object) is OwnerAuthorizedLivePerCallPolicyV1:
-            per_call_policy = policy_object
-            call_binding = per_call_policy.call_binding(context.logical_call_id)
-            if (
-                call_binding.actor_request_sha256 != raw_sha256
-                or call_binding.output_sha256 != vertical_output_sha256(output)
-                or call_binding.policy_id != self._policy_id
-            ):
-                raise SentinelContractError("R2.4 per-call authority binds another output")
-            source_descriptor_sha256 = call_binding.source_transport_descriptor_sha256
-            source_transport_binding_sha256 = call_binding.source_transport_binding_sha256
-            execution_authority_sha256 = call_binding.execution_authority_sha256
-            execution_scope = RuntimeVerticalExecutionScope.OWNER_AUTHORIZED_LIVE_ACTIVE
-        else:
-            source_descriptor_sha256 = vertical_policy.source_transport_descriptor_sha256
-            source_transport_binding_sha256 = vertical_policy.source_transport_binding_sha256
-            execution_scope = vertical_policy.execution_scope
-            execution_authority_sha256 = vertical_policy.execution_authority_sha256
+        source_descriptor_sha256 = vertical_policy.source_transport_descriptor_sha256
+        source_transport_binding_sha256 = vertical_policy.source_transport_binding_sha256
+        execution_scope = vertical_policy.execution_scope
+        execution_authority_sha256 = vertical_policy.execution_authority_sha256
         plan = output.admitted_plan
         if (
             output.policy_id != self._policy_id
@@ -2323,18 +1977,6 @@ class PromptSentinel:
                 transaction=None,
             )
         )
-        if (
-            type(self._runtime_audit) is ProductionRuntimeAuditV1
-            and role is SentinelCallRole.ACTOR
-            and config.mode in {SentinelMode.SHADOW, SentinelMode.ACTIVE}
-        ):
-            self._runtime_audit.begin_bypass_pre_provider(
-                logical_call_id=context.logical_call_id,
-                host_id=context.host_id,
-                raw_request=raw,
-                result=finalized,
-                pre_provider_total_ns=finalized.receipt.latency_ns,
-            )
         return finalized
 
     def bypass_reuse(
@@ -2384,7 +2026,6 @@ class PromptSentinel:
         persist: bool = True,
         policy_output_sha256: str = _EMPTY_POLICY_OUTPUT_SHA256,
         transaction: SentinelReceiptTransaction | None = None,
-        no_history_record: R24CoordinatedCallRecordV1 | None = None,
     ) -> SentinelResult:
         receipt = SentinelReceipt(
             logical_call_id=context.logical_call_id,
@@ -2431,40 +2072,6 @@ class PromptSentinel:
                 transaction=transaction,
             )
         )
-        if (
-            type(self._runtime_audit) is ProductionRuntimeAuditV1
-            and role is SentinelCallRole.ACTOR
-            and config.mode in {SentinelMode.SHADOW, SentinelMode.ACTIVE}
-        ):
-            safe_check = (
-                finalized.receipt.validation_checks[0]
-                if finalized.receipt.validation_checks
-                else "fallback_check_missing"
-            )
-            if (
-                no_history_record is not None
-                and finalized.receipt.fallback_reason
-                is SentinelFallbackReason.HISTORY_EXTRACTION_FAILURE
-                and safe_check == "r2_4_no_history_r21_v1_compatibility"
-            ):
-                self._runtime_audit.begin_no_history_pre_provider(
-                    logical_call_id=context.logical_call_id,
-                    host_id=context.host_id,
-                    raw_request=raw,
-                    result=finalized,
-                    coordinated=no_history_record,
-                    fallback_check=safe_check,
-                    pre_provider_total_ns=finalized.receipt.latency_ns,
-                )
-            else:
-                self._runtime_audit.begin_fallback_pre_provider(
-                    logical_call_id=context.logical_call_id,
-                    host_id=context.host_id,
-                    raw_request=raw,
-                    result=finalized,
-                    fallback_check=safe_check,
-                    pre_provider_total_ns=finalized.receipt.latency_ns,
-                )
         return finalized
 
     def _finalize(
@@ -2604,15 +2211,6 @@ class SentinelLogicalCall:
         self._history_codec_id = history_codec_id
         self._call_role = call_role
         self._result: SentinelResult | RuntimeVerticalSentinelResultV1 | None = None
-        self._provider_attempt_count = 0
-        self._provider_latency_ns = 0
-        self._provider_response_id: str | None = None
-        self._provider_model_id: str | None = None
-        self._provider_finish_reason: str | None = None
-        self._provider_input_tokens: int | None = None
-        self._provider_output_tokens: int | None = None
-        self._provider_total_tokens: int | None = None
-        self._runtime_audit_finalized = False
         self._lock = Lock()
 
     @property
@@ -2630,10 +2228,6 @@ class SentinelLogicalCall:
     @property
     def call_role(self) -> SentinelCallRole:
         return self._call_role
-
-    @property
-    def requires_strict_provider_audit(self) -> bool:
-        return self._sentinel.strict_provider_audit
 
     @property
     def result(self) -> SentinelResult | RuntimeVerticalSentinelResultV1 | None:
@@ -2680,184 +2274,6 @@ class SentinelLogicalCall:
                 return snapshot_vertical_sentinel_result(self._result)
             self._result = result
             return result
-
-    def record_actor_provider_attempt(
-        self,
-        *,
-        latency_ns: int,
-        succeeded: bool,
-        response_id: str | None = None,
-        model_id: str | None = None,
-        finish_reason: str | None = None,
-        input_tokens: int | None = None,
-        cached_input_tokens: int | None = None,
-        output_tokens: int | None = None,
-        total_tokens: int | None = None,
-        raw_response: Any = None,
-        collector_terminal_locator: JsonValue | None = None,
-    ) -> None:
-        """Accumulate safe provider metadata without retaining provider content."""
-
-        if type(latency_ns) is not int or latency_ns < 0 or type(succeeded) is not bool:
-            raise TypeError("provider attempt metadata is invalid")
-        for text_value in (response_id, model_id, finish_reason):
-            if text_value is not None and type(text_value) is not str:
-                raise TypeError("provider text metadata must use exact strings")
-        for count_value in (input_tokens, cached_input_tokens, output_tokens, total_tokens):
-            if count_value is not None and (type(count_value) is not int or count_value < 0):
-                raise TypeError("provider token metadata must be non-negative integers")
-        self._sentinel.record_production_actor_provider_attempt(
-            logical_call_id=self._context.logical_call_id,
-            succeeded=succeeded,
-            latency_ns=latency_ns,
-            raw_response=raw_response,
-            collector_terminal_locator=collector_terminal_locator,
-            response_id=response_id,
-            model_id=model_id,
-            finish_reason=finish_reason,
-            input_tokens=input_tokens,
-            cached_input_tokens=cached_input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-        )
-        with self._lock:
-            self._provider_attempt_count += 1
-            self._provider_latency_ns += latency_ns
-            if succeeded:
-                self._provider_response_id = response_id
-                self._provider_model_id = model_id
-                self._provider_finish_reason = finish_reason
-                self._provider_input_tokens = input_tokens
-                self._provider_output_tokens = output_tokens
-                self._provider_total_tokens = total_tokens
-
-    def bind_actor_sdk_arguments(
-        self,
-        sdk_arguments: JsonValue,
-        *,
-        stream: bool,
-        collector_request_locator: JsonValue | None = None,
-    ) -> str | None:
-        """Bind one physical SDK attempt immediately before provider dispatch."""
-
-        with self._lock:
-            result = self._result
-        if result is None:
-            raise SentinelContractError("actor SDK binding ran before Sentinel evaluation")
-        if self.requires_strict_provider_audit:
-            deadline_ns = self._context.attributes.get("r24_case_deadline_monotonic_ns")
-            if deadline_ns is None:
-                policy_object = cast(object, self._sentinel.policy)
-                if type(policy_object) is OwnerAuthorizedLivePerCallPolicyV1:
-                    raise TimeoutError("production actor case deadline is absent")
-            else:
-                if type(deadline_ns) is not int or self._sentinel._clock_ns() >= deadline_ns:
-                    raise TimeoutError("production actor case deadline has closed")
-        return self._sentinel.bind_actor_sdk_arguments(
-            logical_call_id=self._context.logical_call_id,
-            result=result,
-            sdk_arguments=sdk_arguments,
-            collector_request_locator=collector_request_locator,
-            stream=stream,
-        )
-
-    def finalize_actor_output(
-        self,
-        *,
-        raw_provider_response: JsonValue,
-        raw_parser_input: JsonValue,
-        parsed_action: JsonValue,
-        parser_id: str,
-        parser_status: ParserResultStatusV1,
-        parser_attempt_count: int,
-        parser_ns: int,
-    ) -> RuntimeAuditDetailV1 | None:
-        """Complete the optional detail once the host parser returns an action."""
-
-        with self._lock:
-            production = self.requires_strict_provider_audit
-            if self._runtime_audit_finalized or (
-                not production
-                and (
-                    type(self._result) is not RuntimeVerticalSentinelResultV1
-                    or self._result.receipt.validation_status is not SentinelValidationStatus.PASSED
-                )
-            ):
-                return None
-            if production and self._result is None:
-                raise SentinelContractError("production actor output has no Sentinel result")
-            if self._provider_attempt_count < 1:
-                raise SentinelContractError("actor output has no recorded provider attempt")
-            trace = _ActorProviderTraceSnapshot(
-                attempt_count=self._provider_attempt_count,
-                latency_ns=self._provider_latency_ns,
-                response_id=self._provider_response_id,
-                model_id=self._provider_model_id,
-                finish_reason=self._provider_finish_reason,
-                input_tokens=self._provider_input_tokens,
-                output_tokens=self._provider_output_tokens,
-                total_tokens=self._provider_total_tokens,
-            )
-            self._runtime_audit_finalized = True
-        return self._sentinel.finalize_actor_output(
-            logical_call_id=self._context.logical_call_id,
-            attempt_id=f"r24-provider-attempt-{trace.attempt_count}",
-            raw_provider_response=raw_provider_response,
-            raw_parser_input=raw_parser_input,
-            parsed_action=parsed_action,
-            parser_id=parser_id,
-            parser_status=parser_status,
-            parser_attempt_count=parser_attempt_count,
-            provider_ns=trace.latency_ns,
-            parser_ns=parser_ns,
-            response_id=trace.response_id,
-            model_id=trace.model_id,
-            finish_reason=trace.finish_reason,
-            input_tokens=trace.input_tokens,
-            output_tokens=trace.output_tokens,
-            total_tokens=trace.total_tokens,
-        )
-
-    def cancel_runtime_audit(self) -> None:
-        """Discard a pending detail when the host produces no actor action."""
-
-        with self._lock:
-            if self._runtime_audit_finalized:
-                return
-            self._runtime_audit_finalized = True
-        self._sentinel.cancel_runtime_audit(self._context.logical_call_id)
-
-    def finalize_actor_failure(
-        self,
-        *,
-        failure_phase: str,
-        failure_code: str,
-    ) -> ProductionRuntimeAuditFailureReceiptV1 | None:
-        """Publish an exact failed terminal instead of deleting incurred work."""
-
-        with self._lock:
-            if self._runtime_audit_finalized:
-                return None
-            self._runtime_audit_finalized = True
-        return self._sentinel.finalize_production_actor_failure(
-            logical_call_id=self._context.logical_call_id,
-            failure_phase=failure_phase,
-            failure_code=failure_code,
-        )
-
-    def finalize_action_execution(
-        self,
-        *,
-        parsed_action: JsonValue,
-        action_executed: bool,
-        action_execution_ns: int = 0,
-    ) -> ProductionRuntimeAuditReceiptV1 | None:
-        return self._sentinel.finalize_action_execution(
-            logical_call_id=self._context.logical_call_id,
-            parsed_action=parsed_action,
-            action_executed=action_executed,
-            action_execution_ns=action_execution_ns,
-        )
 
     def matches(
         self,

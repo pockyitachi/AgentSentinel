@@ -1,6 +1,5 @@
 import json
 import re
-import time
 import traceback
 from typing import Any
 
@@ -172,10 +171,7 @@ class MAIUINaivigationAgent(MCPAgent):
 
     def initialize_hook(self, instruction: str) -> None:
         """Hook for initializing the agent with instruction."""
-        if self._production_safe_logging_active():
-            logger.info("Initializing production MAI UI agent")
-        else:
-            logger.info(f"Initializing MAI UI agent with instruction: {instruction}")
+        logger.info(f"Initializing MAI UI agent with instruction: {instruction}")
         self.reset()
 
     def _get_user_message(
@@ -288,12 +284,9 @@ class MAIUINaivigationAgent(MCPAgent):
         assert len(self.history_images) == len(self.history_responses) + 1
 
         messages = self._build_messages(obs_image, tool_call, ask_user_response)
-        if self._production_safe_logging_active():
-            logger.debug("Production MAI request assembled; raw messages suppressed")
-        else:
-            pretty_print_messages(messages, max_messages=10)
+        pretty_print_messages(messages, max_messages=10)
         logger.debug("*" * 100)
-        with self._sentinel_logical_call_scope(attributes={"adapter": "mai-ui"}) as sentinel_call:
+        with self._sentinel_logical_call_scope(attributes={"adapter": "mai-ui"}):
             prediction = self.openai_chat_completions_create(
                 model=self.model_name,
                 messages=messages,
@@ -304,69 +297,26 @@ class MAIUINaivigationAgent(MCPAgent):
             )
 
         if prediction is None:
-            self._finalize_prompt_sentinel_actor_failure(
-                sentinel_call,
-                failure_phase="ACTOR_PROVIDER",
-                failure_code="ACTOR_PROVIDER_FAILED",
-            )
             raise ValueError("Planner LLM failed")
-        if self._production_safe_logging_active():
-            logger.info("Production MAI response received; raw text suppressed")
-        else:
-            logger.info(f"Raw LLM response:\n{prediction}")
-        parser_started_ns = time.monotonic_ns()
+        logger.info(f"Raw LLM response:\n{prediction}")
         try:
             parsed_response = parse_action_to_structure_output(prediction)
             thinking = parsed_response["thinking"]
             tool_name = parsed_response.get("tool_name", "mobile_use")
             action_json = parsed_response["action_json"]
 
-            if self._production_safe_logging_active():
-                logger.info("Production MAI response parsed; semantic fields suppressed")
-            else:
-                logger.info(f"Parsed thinking: {thinking}")
-                logger.info(f"Parsed tool_name: {tool_name}")
-                logger.info(f"Parsed action: {action_json}")
+            logger.info(f"Parsed thinking: {thinking}")
+            logger.info(f"Parsed tool_name: {tool_name}")
+            logger.info(f"Parsed action: {action_json}")
 
         except Exception as e:
-            parser_ns = max(0, time.monotonic_ns() - parser_started_ns)
-            if self._production_safe_logging_active():
-                logger.error("Production MAI response parsing failed")
-            else:
-                logger.error(f"Error parsing LLM response: {e}")
-                traceback.print_exc()
+            logger.error(f"Error parsing LLM response: {e}")
+            traceback.print_exc()
             fallback_action = JSONAction(action_type=UNKNOWN, text=str(e))
-            self._finalize_prompt_sentinel_actor_output(
-                sentinel_call,
-                prediction=prediction,
-                action=fallback_action,
-                parser_id="mobileworld.mai-ui.action-parser.v1",
-                parser_succeeded=False,
-                parser_attempt_count=1,
-                parser_ns=parser_ns,
-            )
             return "Parsing error", fallback_action
         self.history_responses.append({"role": "assistant", "content": prediction})
 
-        try:
-            json_action = self._convert_to_json_action(tool_name, action_json, obs_image)
-        except Exception:
-            self._finalize_prompt_sentinel_actor_failure(
-                sentinel_call,
-                failure_phase="ACTOR_ACTION_PARSE",
-                failure_code="ACTOR_ACTION_CONVERSION_FAILED",
-            )
-            raise
-        parser_ns = max(0, time.monotonic_ns() - parser_started_ns)
-        self._finalize_prompt_sentinel_actor_output(
-            sentinel_call,
-            prediction=prediction,
-            action=json_action,
-            parser_id="mobileworld.mai-ui.action-parser.v1",
-            parser_succeeded=True,
-            parser_attempt_count=1,
-            parser_ns=parser_ns,
-        )
+        json_action = self._convert_to_json_action(tool_name, action_json, obs_image)
 
         return prediction, json_action
 
