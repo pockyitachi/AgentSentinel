@@ -85,6 +85,14 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelResult,
     SentinelValidationStatus,
 )
+from mobile_world.runtime.sentinel.prompt_view import (
+    PromptViewAdapterRegistryV1,
+    PromptViewRenderResultV1,
+    bind_r2_4_validated_history_candidate,
+    prompt_view_render_result_sha256,
+    render_execution_state_view,
+    validate_prompt_view_render_result,
+)
 from mobile_world.runtime.sentinel.r2_2.contracts import (
     PolicyExecutionControlV1,
     RuntimeEvidencePolicyV1,
@@ -897,6 +905,7 @@ class PromptSentinel:
         host_configs: dict[str, SentinelHostConfig] | None = None,
         default_host_config: SentinelHostConfig | None = None,
         receipt_sink: SentinelReceiptSink | None = None,
+        prompt_view_adapter_registry: PromptViewAdapterRegistryV1 | None = None,
         global_switch: SentinelGlobalSwitch = GLOBAL_SENTINEL_KILL_SWITCH,
         logical_call_id_factory: Any = new_ulid,
         clock_ns: Any = time.monotonic_ns,
@@ -908,6 +917,11 @@ class PromptSentinel:
             raise TypeError("codec_registry must implement HistoryCodecResolver")
         if not isinstance(global_switch, SentinelGlobalSwitch):
             raise TypeError("global_switch must be SentinelGlobalSwitch")
+        if (
+            prompt_view_adapter_registry is not None
+            and type(prompt_view_adapter_registry) is not PromptViewAdapterRegistryV1
+        ):
+            raise TypeError("prompt_view_adapter_registry must use the exact v1 registry")
         configs = dict(host_configs or {})
         if any(
             not key or not isinstance(value, SentinelHostConfig) for key, value in configs.items()
@@ -950,6 +964,11 @@ class PromptSentinel:
         self._host_configs = configs
         self._default_host_config = default_host_config or SentinelHostConfig()
         self._receipt_sink = receipt_sink
+        self._prompt_view_adapter_registry = (
+            None
+            if prompt_view_adapter_registry is None
+            else PromptViewAdapterRegistryV1(deepcopy(prompt_view_adapter_registry.declarations))
+        )
         self._global_switch = global_switch
         self._logical_call_id_factory = logical_call_id_factory
         self._clock_ns = clock_ns
@@ -1239,6 +1258,7 @@ class PromptSentinel:
             legacy_render_result: RenderResult | None = None
             runtime_render_result: RuntimeRenderResultV1 | None = None
             vertical_render_result: RuntimeVerticalRenderResultV1 | None = None
+            prompt_view_render_result: PromptViewRenderResultV1 | None = None
             vertical_output: RuntimeVerticalPolicyOutputV1 | None = None
             decision_kinds: tuple[SentinelDecisionKind, ...]
             checks = ["request_schema", "codec_extract"]
@@ -1268,6 +1288,34 @@ class PromptSentinel:
                         vertical_output.admitted_plan,
                         vertical_render_result,
                     )
+                    if (
+                        type(self._policy) is LeanActiveRuntimePolicyV1
+                        and self._prompt_view_adapter_registry is not None
+                    ):
+                        state_view = self._policy.execution_state_view_for(context.logical_call_id)
+                        if state_view is not None:
+                            history_candidate = bind_r2_4_validated_history_candidate(
+                                raw,
+                                ir,
+                                vertical_output.admitted_plan,
+                                vertical_render_result,
+                            )
+                            rendered_prompt_view = render_execution_state_view(
+                                raw,
+                                ir,
+                                history_candidate,
+                                state_view,
+                                adapter_registry=self._prompt_view_adapter_registry,
+                            )
+                            validate_prompt_view_render_result(
+                                raw,
+                                ir,
+                                history_candidate,
+                                state_view,
+                                rendered_prompt_view,
+                                adapter_registry=self._prompt_view_adapter_registry,
+                            )
+                            prompt_view_render_result = rendered_prompt_view
                 except _EvaluationFailure:
                     raise
                 except Exception as exc:
@@ -1275,7 +1323,11 @@ class PromptSentinel:
                         SentinelFallbackReason.INVALID_POLICY_OUTPUT,
                         "r2_4_runtime_output_or_render_invalid",
                     ) from exc
-                candidate = vertical_render_result.candidate_request
+                candidate = (
+                    vertical_render_result.candidate_request
+                    if prompt_view_render_result is None
+                    else prompt_view_render_result.candidate_request
+                )
                 decision_kinds = vertical_output.receipt_decision_kinds
                 if not decision_kinds:
                     base_result = self._fallback_result(
@@ -1307,6 +1359,14 @@ class PromptSentinel:
                             "r2_4_runtime_output_schema",
                             *vertical_output.validation_checks,
                             *vertical_render_result.validation_checks,
+                            *(
+                                ()
+                                if prompt_view_render_result is None
+                                else (
+                                    *prompt_view_render_result.validation_checks,
+                                    "r2_4_prompt_view_composite_diff_bound",
+                                )
+                            ),
                             "r2_4_execution_authority_bound",
                             "r2_4_runtime_codec_overlay_bound",
                             "caller_input_immutable",
@@ -1478,12 +1538,32 @@ class PromptSentinel:
             final = candidate if edit_applied else raw
             final_json = canonical_json_bytes(final)
             diff_sha256 = (
-                vertical_render_result.exact_diff_sha256
-                if vertical_render_result is not None
+                canonical_sha256(
+                    cast(
+                        JsonValue,
+                        {
+                            "schema_version": (
+                                "mobileworld.runtime.sentinel.composite-exact-diff/v1"
+                            ),
+                            "history_exact_diff_sha256": (vertical_render_result.exact_diff_sha256),
+                            "prompt_view_exact_diff_sha256": (
+                                prompt_view_render_result.exact_diff_sha256
+                            ),
+                            "prompt_view_render_result_sha256": (
+                                prompt_view_render_result_sha256(prompt_view_render_result)
+                            ),
+                        },
+                    )
+                )
+                if (vertical_render_result is not None and prompt_view_render_result is not None)
                 else (
-                    runtime_render_result.exact_diff_sha256
-                    if runtime_render_result is not None
-                    else self._diff_sha256(legacy_render_result)
+                    vertical_render_result.exact_diff_sha256
+                    if vertical_render_result is not None
+                    else (
+                        runtime_render_result.exact_diff_sha256
+                        if runtime_render_result is not None
+                        else self._diff_sha256(legacy_render_result)
+                    )
                 )
             )
             receipt = SentinelReceipt(

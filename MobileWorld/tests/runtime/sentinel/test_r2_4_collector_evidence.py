@@ -22,16 +22,18 @@ from mobile_world.offline.g1_history_codecs import (
     MaiRawReplayHistoryCodec,
     QwenFlatProgressHistoryCodec,
 )
+from mobile_world.runtime.audit.blob_store import BlobStore
 from mobile_world.runtime.audit.context import AuditContext, bind_audit_context
 from mobile_world.runtime.audit.recorder import RunRecorder, TaskRecorder
 from mobile_world.runtime.audit.runner_capture import RunnerTaskCapture
 from mobile_world.runtime.audit.schemas import Producer
 from mobile_world.runtime.sentinel.contracts import SentinelContext
-from mobile_world.runtime.sentinel.r2_2.contracts import EvidenceRole
+from mobile_world.runtime.sentinel.r2_2.contracts import EvidenceRole, evidence_packet_sha256
 from mobile_world.runtime.sentinel.r2_2.evidence import CausalEvidenceSnapshotV1
 from mobile_world.runtime.sentinel.r2_2.gpt56_policy import GPT56EvidenceInputV1
 from mobile_world.runtime.sentinel.r2_3.contracts import RubricEvidenceRole
 from mobile_world.runtime.sentinel.r2_3.packet import RubricEvidenceSnapshotV1
+from mobile_world.runtime.sentinel.r2_4 import execution_ledger as execution_ledger_module
 from mobile_world.runtime.sentinel.r2_4.evidence import (
     CollectorEvidenceBundleV1,
     CollectorEvidenceError,
@@ -42,6 +44,19 @@ from mobile_world.runtime.sentinel.r2_4.evidence import (
     rubric_evidence_snapshot_projection,
     rubric_evidence_snapshot_sha256,
 )
+from mobile_world.runtime.sentinel.r2_4.execution_ledger import (
+    ExecutionLedgerBlobCacheV1,
+    ExecutionLedgerError,
+    ExecutionSemanticOutcomeV1,
+    ExecutorTerminalStatusV1,
+    LedgerActionKindV1,
+    RepeatFactKindV1,
+    ScreenPixelRelationV1,
+    build_mobile_execution_ledger,
+    execution_ledger_projection,
+    snapshot_execution_ledger,
+)
+from mobile_world.runtime.sentinel.r2_4.orchestration import R24RuntimeCoordinatorV1
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 FIXTURE_ROOT = REPO_ROOT / "MobileWorld/tests/offline/fixtures/g1_5_history_codecs"
@@ -168,6 +183,8 @@ def _runtime_case(
     case: _Case,
     *,
     mismatch_current_image: bool = False,
+    prior_action_count: int = 1,
+    prior_action: dict[str, JsonValue] | None = None,
 ) -> _RuntimeCase:
     request, history_ir = _load_case(case)
     _data_url, current_image = _request_image(request)
@@ -190,41 +207,43 @@ def _runtime_case(
         whole_task_attempt_index=1,
     )
     assert task_started is not None
-    prior_step = capture.start_step(
-        step_index=1,
-        observation={
-            "screenshot": Image.new("RGB", current_image.size, "red"),
-            "accessibility_tree": {"screen": "prior"},
-            "tool_call": None,
-            "ask_user_response": None,
-        },
-    )
-    assert prior_step is not None
-    decision = capture.record_decision(
-        prediction="fixture prior response",
-        action={"action_type": "click", "x": 1, "y": 1},
-        step=prior_step,
-    )
-    assert decision is not None
-    execution = capture.execution_started(decision=decision)
-    assert execution is not None
-    transition = capture.transition_completed(
-        execution=execution,
-        post_observation={
-            "screenshot": Image.new("RGB", current_image.size, "green"),
-            "accessibility_tree": {"screen": "post", "enabled": True},
-            "tool_call": {"tool": "visible", "ok": True},
-            "ask_user_response": "confirmed",
-        },
-        execution_result=_transport_result(run),
-        duration_ns=1234,
-    )
-    assert transition is not None
+    for prior_index in range(1, prior_action_count + 1):
+        prior_step = capture.start_step(
+            step_index=prior_index,
+            observation={
+                "screenshot": Image.new("RGB", current_image.size, "red"),
+                "accessibility_tree": {"screen": "prior"},
+                "tool_call": None,
+                "ask_user_response": None,
+            },
+        )
+        assert prior_step is not None
+        action = prior_action or {"action_type": "click", "x": 1, "y": 1}
+        decision = capture.record_decision(
+            prediction="fixture prior response",
+            action=action,
+            step=prior_step,
+        )
+        assert decision is not None
+        execution = capture.execution_started(decision=decision)
+        assert execution is not None
+        transition = capture.transition_completed(
+            execution=execution,
+            post_observation={
+                "screenshot": Image.new("RGB", current_image.size, "green"),
+                "accessibility_tree": {"screen": "post", "enabled": True},
+                "tool_call": {"tool": "visible", "ok": True},
+                "ask_user_response": "confirmed",
+            },
+            execution_result=_transport_result(run),
+            duration_ns=1234,
+        )
+        assert transition is not None
     bound_image = (
         Image.new("RGB", current_image.size, "black") if mismatch_current_image else current_image
     )
     current_step = capture.start_step(
-        step_index=2,
+        step_index=prior_action_count + 1,
         observation={
             "screenshot": bound_image,
             "accessibility_tree": {"screen": "current", "buttons": ["OK"]},
@@ -276,6 +295,14 @@ def test_collector_factory_builds_one_read_r22_and_history_free_r23_bundle(
     assert type(bundle.r22_snapshot) is CausalEvidenceSnapshotV1
     assert type(bundle.gpt56_input) is GPT56EvidenceInputV1
     assert type(bundle.r23_snapshot) is RubricEvidenceSnapshotV1
+    assert bundle.execution_ledger.cutoff_event_id == runtime.audit_context.parent_event_id
+    assert bundle.execution_ledger.cutoff_event_seq == len(
+        runtime.task.path.read_text(encoding="utf-8").splitlines()
+    )
+    assert len(bundle.execution_ledger.attempts) == 1
+    prior_attempt = bundle.execution_ledger.attempts[0]
+    assert prior_attempt.terminal_status is ExecutorTerminalStatusV1.EXECUTOR_RETURNED
+    assert prior_attempt.semantic_outcome is ExecutionSemanticOutcomeV1.UNKNOWN
     assert bundle.gpt56_input.packet == bundle.r22_packet
     assert bundle.r22_packet.logical_call_id == runtime.sentinel_context.logical_call_id
     assert bundle.r22_packet.raw_request_sha256 == runtime.history_ir.raw_request_sha256
@@ -370,6 +397,14 @@ def test_cutoff_excludes_future_events_and_keeps_stimulus_hash_stable(tmp_path: 
             },
         )
         assert future is not None
+        ended = runtime.capture.end_task(
+            runtime_status="completed",
+            termination_source="fixture_future_suffix",
+            final_step_index=3,
+            score=1.0,
+            reason="future evaluator result must not enter an earlier cutoff",
+        )
+        assert ended is not None
         with bind_audit_context(runtime.audit_context):
             after = factory.bundle_for_call(
                 request=cast(JsonValue, runtime.request),
@@ -382,8 +417,248 @@ def test_cutoff_excludes_future_events_and_keeps_stimulus_hash_stable(tmp_path: 
     assert after.r22_packet == before.r22_packet
     assert after.r23_snapshot == before.r23_snapshot
     assert after.r23_snapshot_sha256 == before.r23_snapshot_sha256
+    assert after.execution_ledger == before.execution_ledger
+    assert after.execution_ledger.sha256 == before.execution_ledger.sha256
     cutoff = before.r22_snapshot.cutoff.cutoff_event_seq
     assert all(item.source_event_seq <= cutoff for item in after.r22_snapshot.evidence_index)
+
+
+def test_execution_ledger_reports_only_exact_repeat_and_transport_facts(tmp_path: Path) -> None:
+    runtime = _runtime_case(tmp_path, CASES[0], prior_action_count=2)
+    try:
+        with bind_audit_context(runtime.audit_context):
+            ledger = (
+                CollectorEvidenceFactoryV1()
+                .bundle_for_call(
+                    request=cast(JsonValue, runtime.request),
+                    context=runtime.sentinel_context,
+                    history_ir=runtime.history_ir,
+                )
+                .execution_ledger
+            )
+    finally:
+        runtime.run.close()
+
+    assert len(ledger.attempts) == 2
+    assert all(
+        item.terminal_status is ExecutorTerminalStatusV1.EXECUTOR_RETURNED
+        and item.semantic_outcome is ExecutionSemanticOutcomeV1.UNKNOWN
+        and item.screen_pixel_relation is ScreenPixelRelationV1.SCREEN_PIXELS_DIFFERENT
+        for item in ledger.attempts
+    )
+    assert len(ledger.repeat_facts) == 1
+    repeat = ledger.repeat_facts[0]
+    assert repeat.fact_kind is RepeatFactKindV1.EXACT_ACTION_AND_SCREEN_REPEAT
+    assert repeat.lower_bound == 2
+    projection = json.dumps(execution_ledger_projection(ledger), sort_keys=True)
+    for forbidden in ("SUCCESS", "STALLED", "STAGNATION", "NO_PROGRESS", "NEXT_ACTION"):
+        assert forbidden not in projection.upper()
+
+
+def test_rubric_failure_does_not_discard_same_cutoff_history_or_execution_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _runtime_case(tmp_path, CASES[0], prior_action_count=2)
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=CollectorEvidenceFactoryV1(),
+        session_factory=lambda _task_run_id, _task: None,
+    )
+
+    class _FailingRubricSession:
+        @staticmethod
+        def start() -> None:
+            raise RuntimeError("injected rubric-only failure")
+
+    monkeypatch.setattr(
+        coordinator,
+        "_session_for",
+        lambda _task_run_id, _task: _FailingRubricSession(),
+    )
+    try:
+        with bind_audit_context(runtime.audit_context):
+            history_input = coordinator(
+                cast(JsonValue, runtime.request),
+                runtime.sentinel_context,
+                runtime.history_ir,
+            )
+    finally:
+        runtime.run.close()
+
+    logical_call_id = runtime.sentinel_context.logical_call_id
+    ledger = coordinator.execution_ledger_for(logical_call_id)
+    assert history_input.packet_sha256 == evidence_packet_sha256(history_input.packet)
+    assert coordinator.history_evidence_input_for(logical_call_id) == history_input
+    assert coordinator.rubric_failure_code_for(logical_call_id) == "RUBRIC_TASK_START_ERROR"
+    assert coordinator.rubric_state_changed_for(logical_call_id) is None
+    assert ledger is not None
+    assert ledger.repeat_facts[0].lower_bound == 2
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_code"),
+    (
+        ("decision_parent", "DECISION_BINDING_MISMATCH"),
+        ("decision_action", "ACTION_BINDING_MISMATCH"),
+        ("terminal_parent", "TRANSITION_BINDING_MISMATCH"),
+        ("terminal_step", "TRANSITION_BINDING_MISMATCH"),
+    ),
+)
+def test_execution_ledger_rejects_broken_decision_execution_causality(
+    tmp_path: Path,
+    corruption: str,
+    expected_code: str,
+) -> None:
+    runtime = _runtime_case(tmp_path, CASES[0], prior_action_count=2)
+    events = cast(
+        list[dict[str, JsonValue]],
+        [json.loads(line) for line in runtime.task.path.read_text().splitlines()],
+    )
+    action_event = next(item for item in events if item["event_type"] == "action_execution_started")
+    decision_event = next(item for item in events if item["event_type"] == "agent_decision")
+    terminal_event = next(item for item in events if item["event_type"] == "transition_completed")
+    step_event = next(item for item in events if item["event_type"] == "step_started")
+    if corruption == "decision_parent":
+        action_event["caused_by_event_id"] = cast(str, step_event["event_id"])
+    elif corruption == "decision_action":
+        cast(dict[str, JsonValue], decision_event["payload"])["parsed_action"] = {
+            "value": {"action_type": "click", "x": 999, "y": 999}
+        }
+    elif corruption == "terminal_parent":
+        terminal_event["caused_by_event_id"] = cast(str, decision_event["event_id"])
+    else:
+        cast(dict[str, JsonValue], terminal_event["payload"])["step_id"] = "other-step"
+    try:
+        with pytest.raises(ExecutionLedgerError) as rejected:
+            build_mobile_execution_ledger(
+                events=tuple(events),
+                current_event=events[-1],
+                run_id=runtime.run.run_id,
+                task_run_id=runtime.task.task_run_id,
+                blob_store=runtime.run.blob_store,
+            )
+    finally:
+        runtime.run.close()
+    assert rejected.value.code == expected_code
+
+
+def test_execution_ledger_redacts_nested_action_values_and_detaches_snapshots(
+    tmp_path: Path,
+) -> None:
+    canary = "never-persist-this-action-value"
+    runtime = _runtime_case(
+        tmp_path,
+        CASES[0],
+        prior_action_count=2,
+        prior_action={
+            "action_type": "mcp",
+            "action_json": {"query": canary, "items": [canary]},
+        },
+    )
+    try:
+        with bind_audit_context(runtime.audit_context):
+            ledger = (
+                CollectorEvidenceFactoryV1()
+                .bundle_for_call(
+                    request=cast(JsonValue, runtime.request),
+                    context=runtime.sentinel_context,
+                    history_ir=runtime.history_ir,
+                )
+                .execution_ledger
+            )
+    finally:
+        runtime.run.close()
+
+    projection = json.dumps(execution_ledger_projection(ledger), sort_keys=True)
+    assert canary not in projection
+    assert "action_json" not in projection
+    assert all(
+        item.action_projection.action_kind is LedgerActionKindV1.MCP
+        and item.action_projection.sensitive_value_present
+        for item in ledger.attempts
+    )
+    detached = snapshot_execution_ledger(ledger)
+    object.__setattr__(detached.attempts[0].pre_observation, "mode", "mutated")
+    object.__setattr__(detached.repeat_facts[0], "lower_bound", 63)
+    assert ledger.attempts[0].pre_observation.mode == "RGB"
+    assert ledger.repeat_facts[0].lower_bound == 2
+    with pytest.raises(ExecutionLedgerError):
+        snapshot_execution_ledger(detached)
+
+
+def test_execution_ledger_reuses_verified_immutable_pixel_blobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _runtime_case(tmp_path, CASES[0], prior_action_count=2)
+    factory = CollectorEvidenceFactoryV1()
+    read_count = 0
+    original_read_bytes = BlobStore.read_bytes
+
+    def counted_read_bytes(self: BlobStore, reference: Any) -> bytes:
+        nonlocal read_count
+        read_count += 1
+        return original_read_bytes(self, reference)
+
+    monkeypatch.setattr(BlobStore, "read_bytes", counted_read_bytes)
+    try:
+        with bind_audit_context(runtime.audit_context):
+            factory.bundle_for_call(
+                request=cast(JsonValue, runtime.request),
+                context=runtime.sentinel_context,
+                history_ir=runtime.history_ir,
+            )
+        first_read_count = read_count
+        with bind_audit_context(runtime.audit_context):
+            factory.bundle_for_call(
+                request=cast(JsonValue, runtime.request),
+                context=runtime.sentinel_context,
+                history_ir=runtime.history_ir,
+            )
+        second_read_count = read_count - first_read_count
+    finally:
+        runtime.run.close()
+
+    assert first_read_count >= 3
+    # The ordinary current-image binding is deliberately re-read. Historical
+    # canonical pixel blobs are verified once and then guarded by file identity.
+    assert second_read_count == 1
+
+
+def test_execution_ledger_rejects_png_header_drift_before_pixel_decode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = BlobStore(tmp_path / "blob-root")
+    reference = store.put_bytes(b"bounded-fixture", "image/png")
+
+    class _Opened:
+        format = "PNG"
+        size = (50_000, 50_000)
+        mode = "RGB"
+        loaded = False
+
+        def __enter__(self) -> _Opened:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def load(self) -> None:
+            self.loaded = True
+            raise AssertionError("unbounded pixels must not be decoded")
+
+    opened = _Opened()
+    monkeypatch.setattr(execution_ledger_module.Image, "open", lambda _stream: opened)
+    with pytest.raises(ExecutionLedgerError) as rejected:
+        ExecutionLedgerBlobCacheV1().verified_pixel_identity(
+            blob_store=store,
+            reference=reference,
+            width=1,
+            height=1,
+            mode="RGB",
+            max_image_bytes=1024,
+            max_image_pixels=1024,
+        )
+    assert rejected.value.code == "PIXEL_METADATA_DRIFT"
+    assert not opened.loaded
 
 
 def test_missing_context_and_resource_bound_fail_with_typed_codes(tmp_path: Path) -> None:

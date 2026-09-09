@@ -10,6 +10,10 @@ from typing import Any, cast
 
 from mobile_world.offline.causal_replay.contracts import HistoryIR, JsonValue
 from mobile_world.runtime.sentinel.contracts import SentinelContext
+from mobile_world.runtime.sentinel.prompt_view import (
+    ExecutionStateViewV1,
+    execution_state_view_sha256,
+)
 from mobile_world.runtime.sentinel.r2_2.contracts import (
     PolicyExecutionControlV1,
     RuntimeExecutionScope,
@@ -24,6 +28,9 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     RuntimeVerticalExecutionScope,
     RuntimeVerticalPolicyOutputV1,
     canonical_sha256,
+)
+from mobile_world.runtime.sentinel.r2_4.execution_state import (
+    build_execution_state_view,
 )
 from mobile_world.runtime.sentinel.r2_4.orchestration import (
     R24CoordinatedCallRecordV1,
@@ -100,6 +107,8 @@ class LeanActiveRuntimePolicyV1:
         self._logical_call_gate = Lock()
         self._poison_lock = Lock()
         self._poisoned = False
+        self._execution_state_view_lock = Lock()
+        self._execution_state_views: dict[str, tuple[ExecutionStateViewV1, str]] = {}
 
     def _require_healthy(self) -> None:
         with self._poison_lock:
@@ -162,9 +171,64 @@ class LeanActiveRuntimePolicyV1:
             validation_checks=_LEAN_PROMOTION_CHECKS,
         )
         prune_plan = self._coordinator.rubric_history_prune_plan_for(logical_call_id)
-        return (
+        promoted = (
             output if prune_plan is None else apply_r23_redundant_history_prunes(output, prune_plan)
         )
+        ledger = self._coordinator.execution_ledger_for(logical_call_id)
+        evidence_input = self._coordinator.history_evidence_input_for(logical_call_id)
+        if ledger is not None:
+            if evidence_input is None:
+                raise RuntimeError("execution ledger has no same-call evidence packet")
+            packet = evidence_input.packet
+            if (
+                evidence_input.packet_sha256 != source.admitted_plan.evidence_packet_sha256
+                or packet.logical_call_id != logical_call_id
+                or packet.raw_request_sha256 != promoted.admitted_plan.source_request_sha256
+                or ledger.run_id != packet.cutoff.run_id
+                or ledger.task_run_id != packet.cutoff.task_run_id
+                or ledger.cutoff_step_id != packet.cutoff.step_id
+                or ledger.cutoff_event_id != packet.cutoff.current_observation_event_id
+                or ledger.cutoff_event_seq != packet.cutoff.cutoff_event_seq
+            ):
+                raise RuntimeError(
+                    "execution ledger differs from the admitted same-call evidence packet"
+                )
+        state_view = (
+            None
+            if ledger is None
+            else build_execution_state_view(
+                ledger=ledger,
+                logical_call_id=logical_call_id,
+                source_request_sha256=promoted.admitted_plan.source_request_sha256,
+                rubric_state_changed=self._coordinator.rubric_state_changed_for(logical_call_id),
+            )
+        )
+        with self._execution_state_view_lock:
+            self._execution_state_views.pop(logical_call_id, None)
+            if state_view is not None:
+                snapshot = deepcopy(state_view)
+                self._execution_state_views[logical_call_id] = (
+                    snapshot,
+                    execution_state_view_sha256(snapshot),
+                )
+        return promoted
+
+    def execution_state_view_for(self, logical_call_id: str) -> ExecutionStateViewV1 | None:
+        """Return an integrity-checked detached actor-visible state projection."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise TypeError("logical_call_id must be non-empty exact text")
+        with self._execution_state_view_lock:
+            stored = self._execution_state_views.get(logical_call_id)
+            if stored is None:
+                return None
+            value, expected_sha256 = stored
+            if execution_state_view_sha256(value) != expected_sha256:
+                raise RuntimeError("stored execution-state view failed its integrity check")
+            snapshot = deepcopy(value)
+        if execution_state_view_sha256(snapshot) != expected_sha256:
+            raise RuntimeError("detached execution-state view failed its integrity check")
+        return snapshot
 
     def evaluate(
         self,

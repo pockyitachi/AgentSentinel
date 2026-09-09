@@ -31,6 +31,7 @@ from mobile_world.runtime.sentinel.contracts import (
     SentinelHostConfig,
     SentinelMode,
 )
+from mobile_world.runtime.sentinel.prompt_view import build_prompt_view_adapter_registry
 from mobile_world.runtime.sentinel.r2_2.contracts import (
     EvidencePacketV1,
     RuntimeAdmissionBundleV1,
@@ -171,7 +172,8 @@ class LeanSentinelRunFactoryV1:
             raise ValueError("lean Sentinel factory mode must be SHADOW or ACTIVE")
         if type(api_key) is not str or not api_key:
             raise ValueError("lean Sentinel needs a non-empty API key")
-        if not isinstance(receipt_root, Path) or not receipt_root.is_absolute():
+        receipt_root_object: object = receipt_root
+        if not isinstance(receipt_root_object, Path) or not receipt_root.is_absolute():
             raise ValueError("receipt_root must be an absolute Path")
         if repository_root is not None and not isinstance(repository_root, Path):
             raise TypeError("repository_root must be a Path when supplied")
@@ -269,6 +271,7 @@ class LeanSentinelRunFactoryV1:
                     self._receipt_root,
                     repository_root=self._repository_root,
                 ),
+                prompt_view_adapter_registry=build_prompt_view_adapter_registry(),
                 global_switch=SentinelGlobalSwitch(),
             )
             return LeanSentinelTaskRuntimeV1(

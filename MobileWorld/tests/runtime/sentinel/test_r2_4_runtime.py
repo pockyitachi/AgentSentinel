@@ -50,6 +50,10 @@ from mobile_world.runtime.sentinel import (
 from mobile_world.runtime.sentinel import seam as sentinel_seam_module
 from mobile_world.runtime.sentinel.contracts import SentinelCallRole
 from mobile_world.runtime.sentinel.lean_runtime import LeanSentinelRunFactoryV1
+from mobile_world.runtime.sentinel.prompt_view import (
+    build_prompt_view_adapter_registry,
+    prompt_view_render_result_sha256,
+)
 from mobile_world.runtime.sentinel.r2_2.contracts import (
     POLICY_PROPOSAL_SCHEMA_VERSION,
     CurrentObservationV1,
@@ -119,6 +123,19 @@ from mobile_world.runtime.sentinel.r2_4.contracts import (
     replacement_text_for_template,
 )
 from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
+from mobile_world.runtime.sentinel.r2_4.execution_ledger import (
+    ExecutionAttemptV1,
+    ExecutionRepeatFactV1,
+    ExecutionSemanticOutcomeV1,
+    ExecutorTerminalStatusV1,
+    LedgerActionKindV1,
+    LedgerActionProjectionV1,
+    LedgerExecutionKindV1,
+    MobileExecutionLedgerV1,
+    ObservationRefV1,
+    RepeatFactKindV1,
+    ScreenPixelRelationV1,
+)
 from mobile_world.runtime.sentinel.r2_4.lean_policy import LeanActiveRuntimePolicyV1
 from mobile_world.runtime.sentinel.r2_4.orchestration import R24RuntimeCoordinatorV1
 from mobile_world.runtime.sentinel.r2_4.policy import apply_r23_redundant_history_prunes
@@ -912,6 +929,12 @@ def test_lean_factory_builds_task_runtime_without_dispatch(tmp_path) -> None:
     )()
 
     assert type(runtime.sentinel.policy) is LeanActiveRuntimePolicyV1
+    registry = runtime.sentinel._prompt_view_adapter_registry
+    assert registry is not None
+    assert {item.key.host_id for item in registry.declarations} == {
+        QWEN_HOST_ID,
+        MAI_HOST_ID,
+    }
     assert not tuple((tmp_path / "sentinel-receipts").iterdir())
     runtime.close()
     runtime.close()
@@ -994,6 +1017,219 @@ def test_lean_active_seam_keeps_r23_duplicate_prune(monkeypatch) -> None:
     assert result.receipt.edit_applied
     assert result.final_request != built.request
     assert result.bridge.decision_kinds == (SentinelDecisionKind.DROP,)
+
+
+@pytest.mark.parametrize(
+    ("host", "renderer_fails", "ledger_binding_fails"),
+    (
+        ("qwen", False, False),
+        ("mai", False, False),
+        ("qwen", True, False),
+        ("qwen", False, True),
+    ),
+)
+def test_lean_active_seam_adds_bound_execution_state_before_current_image(
+    host: str,
+    renderer_fails: bool,
+    ledger_binding_fails: bool,
+    monkeypatch,
+) -> None:
+    built = _build_adapter_case(host)
+    source, _receipts = _source_policy(
+        built,
+        _R22FakeTransport(json.dumps(_r22_proposal(built.packet))),
+    )
+    coordinator = R24RuntimeCoordinatorV1(
+        collector=CollectorEvidenceFactoryV1(),
+        session_factory=lambda _task_run_id, _task: None,
+    )
+    action = cast(JsonValue, {"action_type": "click", "coordinate": [120, 240]})
+    action_sha256 = canonical_sha256(action)
+    observation = ObservationRefV1(
+        source_event_id="event-observation-1",
+        source_event_seq=1,
+        pixel_blob_sha256="1" * 64,
+        pixel_identity_sha256="2" * 64,
+        width=100,
+        height=200,
+        mode="RGB",
+    )
+    attempts = tuple(
+        ExecutionAttemptV1(
+            execution_id=f"execution-{index}",
+            step_id=f"step-{index}",
+            step_index=index,
+            decision_id=f"decision-{index}",
+            decision_event_id=f"event-decision-{index}",
+            decision_event_seq=index * 3 - 1,
+            attempt_id=f"execution-{index}",
+            action_event_id=f"event-action-{index}",
+            action_event_seq=index * 3,
+            execution_kind=LedgerExecutionKindV1.MOBILE_ACTION,
+            action_sha256=action_sha256,
+            action_projection=LedgerActionProjectionV1(
+                action_kind=LedgerActionKindV1.CLICK,
+                coordinate=(120, 240),
+            ),
+            terminal_event_id=f"event-terminal-{index}",
+            terminal_event_seq=index * 3 + 1,
+            terminal_status=ExecutorTerminalStatusV1.EXECUTOR_RETURNED,
+            pre_observation=observation,
+            post_observation=observation,
+            screen_pixel_relation=ScreenPixelRelationV1.SCREEN_PIXELS_EXACTLY_SAME,
+            semantic_outcome=ExecutionSemanticOutcomeV1.UNKNOWN,
+        )
+        for index in (1, 2)
+    )
+    ledger = MobileExecutionLedgerV1(
+        run_id=("cross-wired-run" if ledger_binding_fails else built.packet.cutoff.run_id),
+        task_run_id=built.packet.cutoff.task_run_id,
+        cutoff_event_id=built.packet.cutoff.current_observation_event_id,
+        cutoff_step_id=built.packet.cutoff.step_id,
+        cutoff_step_index=3,
+        cutoff_event_seq=built.packet.cutoff.cutoff_event_seq,
+        source_event_count=built.packet.cutoff.cutoff_event_seq,
+        source_event_ids_sha256="3" * 64,
+        source_prefix_sha256="4" * 64,
+        attempts=attempts,
+        repeat_facts=(
+            ExecutionRepeatFactV1(
+                repeat_id="repeat-click",
+                fact_kind=RepeatFactKindV1.EXACT_ACTION_AND_SCREEN_REPEAT,
+                action_sha256=action_sha256,
+                member_attempt_ids=("execution-1", "execution-2"),
+                lower_bound=2,
+                evidence_event_ids=("event-action-1", "event-action-2"),
+            ),
+        ),
+        complete=True,
+        evidence_gaps=("TASK_SEMANTIC_OUTCOME_UNVERIFIED",),
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "execution_ledger_for",
+        lambda logical_call_id: (
+            deepcopy(ledger) if logical_call_id == built.context.logical_call_id else None
+        ),
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "rubric_state_changed_for",
+        lambda logical_call_id: (
+            False if logical_call_id == built.context.logical_call_id else None
+        ),
+    )
+    evidence_input = make_gpt_evidence_input(
+        built.packet,
+        current_image_data_url=built.current_image_data_url,
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "history_evidence_input_for",
+        lambda logical_call_id: (
+            deepcopy(evidence_input) if logical_call_id == built.context.logical_call_id else None
+        ),
+    )
+    policy = LeanActiveRuntimePolicyV1(source, coordinator=coordinator)
+    vertical_results: list[Any] = []
+    prompt_results: list[Any] = []
+    original_vertical_render = sentinel_seam_module.render_vertical_admitted_plan
+    original_prompt_render = sentinel_seam_module.render_execution_state_view
+
+    def capture_vertical(*args: Any, **kwargs: Any) -> Any:
+        result = original_vertical_render(*args, **kwargs)
+        vertical_results.append(result)
+        return result
+
+    def capture_prompt(*args: Any, **kwargs: Any) -> Any:
+        result = original_prompt_render(*args, **kwargs)
+        prompt_results.append(result)
+        if renderer_fails:
+            raise RuntimeError("injected post-render prompt-view failure")
+        return result
+
+    monkeypatch.setattr(
+        sentinel_seam_module,
+        "render_vertical_admitted_plan",
+        capture_vertical,
+    )
+    monkeypatch.setattr(
+        sentinel_seam_module,
+        "render_execution_state_view",
+        capture_prompt,
+    )
+    sentinel = PromptSentinel(
+        policy=policy,
+        codec_registry=build_runtime_history_codec_resolver(),
+        host_configs={
+            built.context.host_id: SentinelHostConfig(
+                mode=SentinelMode.ACTIVE,
+                policy_timeout_ms=1_000,
+            )
+        },
+        receipt_sink=MemorySentinelReceiptSink(),
+        prompt_view_adapter_registry=build_prompt_view_adapter_registry(),
+        global_switch=SentinelGlobalSwitch(),
+    )
+    original = deepcopy(built.request)
+
+    result = sentinel.before_model_call(
+        cast(JsonValue, built.request),
+        built.context,
+        QWEN_CODEC_ID if host == "qwen" else MAI_CODEC_ID,
+        SentinelCallRole.ACTOR,
+    )
+
+    assert built.request == original
+    if ledger_binding_fails:
+        assert vertical_results == []
+        assert prompt_results == []
+        assert result.final_request == original
+        assert not result.receipt.edit_applied
+        assert result.receipt.fallback_reason is SentinelFallbackReason.POLICY_EXCEPTION
+        return
+
+    assert len(vertical_results) == 1
+    assert len(prompt_results) == 1
+    if renderer_fails:
+        assert result.final_request == original
+        assert not result.receipt.edit_applied
+        assert result.receipt.fallback_reason is SentinelFallbackReason.INVALID_POLICY_OUTPUT
+        return
+
+    assert type(result) is RuntimeVerticalSentinelResultV1
+    assert result.receipt.edit_applied
+    state_view = policy.execution_state_view_for(built.context.logical_call_id)
+    assert state_view is not None
+    assert state_view.repeat_clusters[0].lower_bound == 2
+    anchor = built.history_ir.records[0].correction_anchors[0]
+    final_container = get_at_path(result.final_request, anchor.container_path)
+    assert type(final_container) is list
+    inserted = final_container[anchor.insert_index]
+    assert type(inserted) is dict
+    assert inserted["type"] == "text"
+    assert "same exact executor-dispatched action occurred at least 2 times" in cast(
+        str, inserted["text"]
+    )
+    assert "starting screen pixels were exactly equal" in cast(str, inserted["text"])
+    assert final_container[anchor.insert_index + 1] == get_at_path(
+        cast(JsonValue, original), anchor.reference_path
+    )
+    expected_diff_sha256 = canonical_sha256(
+        cast(
+            JsonValue,
+            {
+                "schema_version": "mobileworld.runtime.sentinel.composite-exact-diff/v1",
+                "history_exact_diff_sha256": vertical_results[0].exact_diff_sha256,
+                "prompt_view_exact_diff_sha256": prompt_results[0].exact_diff_sha256,
+                "prompt_view_render_result_sha256": prompt_view_render_result_sha256(
+                    prompt_results[0]
+                ),
+            },
+        )
+    )
+    assert result.receipt.exact_diff_sha256 == expected_diff_sha256
+    assert "r2_4_prompt_view_composite_diff_bound" in result.receipt.validation_checks
 
 
 def test_lean_timeout_is_bounded_and_poison_prevents_a_second_provider(monkeypatch) -> None:

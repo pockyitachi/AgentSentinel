@@ -86,6 +86,12 @@ from mobile_world.runtime.sentinel.r2_3.contracts import (
     TextEvidenceProjectionV1 as RubricTextEvidenceProjectionV1,
 )
 from mobile_world.runtime.sentinel.r2_3.packet import RubricEvidenceSnapshotV1
+from mobile_world.runtime.sentinel.r2_4.execution_ledger import (
+    ExecutionLedgerBlobCacheV1,
+    MobileExecutionLedgerV1,
+    build_mobile_execution_ledger,
+    validate_execution_ledger,
+)
 
 _DATA_IMAGE = re.compile(r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]*={0,2})")
 _ARTIFACT_SNAPSHOT_KEY = "$artifact_snapshot"
@@ -109,6 +115,7 @@ class CollectorEvidenceLimitsV1:
     max_events: int = 8192
     max_image_bytes: int = 40 * 1024 * 1024
     max_image_pixels: int = 32 * 1024 * 1024
+    max_ledger_image_bytes: int = 512 * 1024 * 1024
     max_packet_evidence: int = 512
     max_request_nodes: int = 262_144
     max_request_depth: int = 64
@@ -120,6 +127,7 @@ class CollectorEvidenceLimitsV1:
             "max_events",
             "max_image_bytes",
             "max_image_pixels",
+            "max_ledger_image_bytes",
             "max_packet_evidence",
             "max_request_nodes",
             "max_request_depth",
@@ -148,6 +156,7 @@ class _CurrentImage:
 class _BuiltSnapshot:
     snapshot: CausalEvidenceSnapshotV1
     rubric_snapshot: RubricEvidenceSnapshotV1
+    execution_ledger: MobileExecutionLedgerV1
     current_image_data_url: str
 
 
@@ -159,6 +168,7 @@ class CollectorEvidenceBundleV1:
     r22_packet: EvidencePacketV1
     gpt56_input: GPT56EvidenceInputV1
     r23_snapshot: RubricEvidenceSnapshotV1
+    execution_ledger: MobileExecutionLedgerV1
 
     def __post_init__(self) -> None:
         for value, expected, name in (
@@ -166,6 +176,7 @@ class CollectorEvidenceBundleV1:
             (self.r22_packet, EvidencePacketV1, "r22_packet"),
             (self.gpt56_input, GPT56EvidenceInputV1, "gpt56_input"),
             (self.r23_snapshot, RubricEvidenceSnapshotV1, "r23_snapshot"),
+            (self.execution_ledger, MobileExecutionLedgerV1, "execution_ledger"),
         ):
             if type(value) is not expected:
                 raise TypeError(f"{name} must use its exact trusted contract type")
@@ -191,6 +202,16 @@ class CollectorEvidenceBundleV1:
             != self.r22_snapshot.current_observation.screenshot_content_sha256
         ):
             raise ValueError("R2.3 bundle component does not bind the R2.2 causal cutoff")
+        ledger = self.execution_ledger
+        validate_execution_ledger(ledger)
+        if (
+            ledger.run_id != self.r22_snapshot.cutoff.run_id
+            or ledger.task_run_id != self.r22_snapshot.cutoff.task_run_id
+            or ledger.cutoff_event_id != self.r22_snapshot.cutoff.current_observation_event_id
+            or ledger.cutoff_event_seq != self.r22_snapshot.cutoff.cutoff_event_seq
+            or ledger.cutoff_step_id != self.r22_snapshot.cutoff.step_id
+        ):
+            raise ValueError("execution ledger does not bind the shared causal cutoff")
 
     @property
     def r23_snapshot_sha256(self) -> str:
@@ -244,6 +265,7 @@ class CollectorEvidenceFactoryV1:
         if limits is not None and type(limits) is not CollectorEvidenceLimitsV1:
             raise TypeError("limits must use exact CollectorEvidenceLimitsV1")
         self._limits = limits or CollectorEvidenceLimitsV1()
+        self._ledger_blob_cache = ExecutionLedgerBlobCacheV1()
 
     @property
     def limits(self) -> CollectorEvidenceLimitsV1:
@@ -256,6 +278,7 @@ class CollectorEvidenceFactoryV1:
             max_events=value.max_events,
             max_image_bytes=value.max_image_bytes,
             max_image_pixels=value.max_image_pixels,
+            max_ledger_image_bytes=value.max_ledger_image_bytes,
             max_packet_evidence=value.max_packet_evidence,
             max_request_nodes=value.max_request_nodes,
             max_request_depth=value.max_request_depth,
@@ -349,6 +372,7 @@ class CollectorEvidenceFactoryV1:
             r22_packet=packet,
             gpt56_input=gpt56_input,
             r23_snapshot=built.rubric_snapshot,
+            execution_ledger=built.execution_ledger,
         )
 
     def rubric_only_bundle_for_no_history_call(
@@ -376,16 +400,23 @@ class CollectorEvidenceFactoryV1:
                 "NON_CANONICAL_ACTOR_REQUEST", "actor request is outside exact JSON"
             ) from exc
         current_roots = _no_history_current_roots(request, context.host_id)
-        audit_context = get_audit_context()
-        recorder = _trusted_task_recorder(audit_context)
+        observed_audit_context = get_audit_context()
+        recorder = _trusted_task_recorder(observed_audit_context)
+        if observed_audit_context is None:  # pragma: no cover - rejected above.
+            raise CollectorEvidenceError("NO_AUDIT_CONTEXT", "no Collector context is bound")
+        audit_context = observed_audit_context
+        cutoff_event_id = audit_context.parent_event_id
+        if cutoff_event_id is None:  # pragma: no cover - rejected above.
+            raise CollectorEvidenceError("INVALID_CUTOFF", "cutoff event ID is unavailable")
         events = _read_task_events(
             recorder=recorder,
-            audit_context=cast(AuditContext, audit_context),
+            audit_context=audit_context,
             limits=self._limits,
+            cutoff_event_id=cutoff_event_id,
         )
         current_event, task_event = _resolve_cutoff_events(
             events=events,
-            audit_context=cast(AuditContext, audit_context),
+            audit_context=audit_context,
         )
         current_image = _bind_current_image_at_roots(
             request=request,
@@ -399,7 +430,7 @@ class CollectorEvidenceFactoryV1:
                 events=events,
                 current_event=current_event,
                 task_event=task_event,
-                audit_context=cast(AuditContext, audit_context),
+                audit_context=audit_context,
                 request_sha256=request_sha256,
                 current_image=current_image,
                 limits=self._limits,
@@ -462,16 +493,26 @@ class CollectorEvidenceFactoryV1:
                 "HISTORY_IR_REQUEST_DRIFT", "History IR binds a different actor request"
             )
 
-        audit_context = get_audit_context()
-        recorder = _trusted_task_recorder(audit_context)
+        observed_audit_context = get_audit_context()
+        recorder = _trusted_task_recorder(observed_audit_context)
+        if observed_audit_context is None:  # pragma: no cover - rejected above.
+            raise CollectorEvidenceError("NO_AUDIT_CONTEXT", "no Collector context is bound")
+        audit_context = observed_audit_context
+        cutoff_event_id = audit_context.parent_event_id
+        task_run_id = audit_context.task_run_id
+        if cutoff_event_id is None or task_run_id is None:  # pragma: no cover - rejected above.
+            raise CollectorEvidenceError(
+                "INCOMPLETE_AUDIT_CONTEXT", "task and cutoff IDs are required"
+            )
         events = _read_task_events(
             recorder=recorder,
-            audit_context=cast(AuditContext, audit_context),
+            audit_context=audit_context,
             limits=self._limits,
+            cutoff_event_id=cutoff_event_id,
         )
         current_event, task_event = _resolve_cutoff_events(
             events=events,
-            audit_context=cast(AuditContext, audit_context),
+            audit_context=audit_context,
         )
         current_image = _bind_current_image(
             request=request,
@@ -485,7 +526,7 @@ class CollectorEvidenceFactoryV1:
                 events=events,
                 current_event=current_event,
                 task_event=task_event,
-                audit_context=cast(AuditContext, audit_context),
+                audit_context=audit_context,
                 request_sha256=request_sha256,
                 current_image=current_image,
                 limits=self._limits,
@@ -500,6 +541,17 @@ class CollectorEvidenceFactoryV1:
         return _BuiltSnapshot(
             snapshot=snapshot,
             rubric_snapshot=_rubric_snapshot_from_r22(snapshot),
+            execution_ledger=build_mobile_execution_ledger(
+                events=events,
+                current_event=current_event,
+                run_id=audit_context.run_id,
+                task_run_id=task_run_id,
+                blob_store=recorder.blob_store,
+                blob_cache=self._ledger_blob_cache,
+                max_image_bytes=self._limits.max_image_bytes,
+                max_image_pixels=self._limits.max_image_pixels,
+                max_verified_image_bytes=self._limits.max_ledger_image_bytes,
+            ),
             current_image_data_url=current_image.data_url,
         )
 
@@ -708,7 +760,10 @@ def _read_task_events(
     recorder: TaskRecorder,
     audit_context: AuditContext,
     limits: CollectorEvidenceLimitsV1,
+    cutoff_event_id: str,
 ) -> tuple[dict[str, JsonValue], ...]:
+    if type(cutoff_event_id) is not str or not cutoff_event_id:
+        raise CollectorEvidenceError("INVALID_CUTOFF", "cutoff event ID is unavailable")
     path = recorder.path
     if not isinstance(path, Path):
         raise CollectorEvidenceError("INVALID_STREAM_PATH", "task stream path is untrusted")
@@ -742,12 +797,12 @@ def _read_task_events(
             raise CollectorEvidenceError(
                 "INVALID_STREAM_PATH", "task stream must be a regular file"
             )
-        if metadata.st_size < 1 or metadata.st_size > limits.max_stream_bytes:
-            raise CollectorEvidenceError(
-                "TASK_STREAM_SIZE_REJECTED", "task stream is empty or exceeds its byte bound"
-            )
+        if metadata.st_size < 1:
+            raise CollectorEvidenceError("TASK_STREAM_SIZE_REJECTED", "task stream is empty")
         data = bytearray()
-        remaining = metadata.st_size
+        # Read only the bounded causal prefix.  Bytes appended after the exact
+        # current step must not affect an earlier actor-call projection.
+        remaining = min(metadata.st_size, limits.max_stream_bytes)
         while remaining:
             chunk = os.read(descriptor, min(remaining, 64 * 1024))
             if not chunk:
@@ -756,9 +811,18 @@ def _read_task_events(
                 )
             data.extend(chunk)
             remaining -= len(chunk)
-        if os.fstat(descriptor).st_size != metadata.st_size:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        verified = bytearray()
+        remaining = len(data)
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            verified.extend(chunk)
+            remaining -= len(chunk)
+        if verified != data:
             raise CollectorEvidenceError(
-                "TASK_STREAM_CHANGED", "task stream changed during its evidence snapshot"
+                "TASK_STREAM_CHANGED", "task-stream prefix changed during bounded read"
             )
     except CollectorEvidenceError:
         raise
@@ -775,19 +839,26 @@ def _read_task_events(
         os.close(descriptor)
 
     raw = bytes(data)
-    if not raw.endswith(b"\n"):
+    # Only complete canonical records are eligible.  The last split item is
+    # either the expected empty tail or a bounded incomplete suffix.
+    lines = raw.split(b"\n")[:-1]
+    if not lines and metadata.st_size >= limits.max_stream_bytes:
         raise CollectorEvidenceError(
-            "INCOMPLETE_TASK_STREAM", "task stream has an incomplete JSONL tail"
+            "TASK_STREAM_SIZE_REJECTED", "causal prefix exceeds its byte bound"
         )
-    lines = raw[:-1].split(b"\n")
-    if not lines or len(lines) > limits.max_events:
-        raise CollectorEvidenceError(
-            "EVENT_COUNT_REJECTED", "task stream event count exceeds its bound"
-        )
+    if not lines:
+        raise CollectorEvidenceError("EVENT_COUNT_REJECTED", "task stream has no events")
 
     events: list[dict[str, JsonValue]] = []
     seen_ids: set[str] = set()
+    cutoff_found = False
     for index, line in enumerate(lines, start=1):
+        if not line:
+            raise CollectorEvidenceError("EVENT_LINE_SIZE_REJECTED", "task event line is empty")
+        if index > limits.max_events:
+            raise CollectorEvidenceError(
+                "EVENT_COUNT_REJECTED", "causal prefix event count exceeds its bound"
+            )
         if not line or len(line) > limits.max_event_line_bytes:
             raise CollectorEvidenceError(
                 "EVENT_LINE_SIZE_REJECTED", "task event line is empty or oversized"
@@ -829,6 +900,19 @@ def _read_task_events(
             )
         seen_ids.add(event_id)
         events.append(event)
+        if event_id == cutoff_event_id:
+            cutoff_found = True
+            break
+    if not cutoff_found:
+        if metadata.st_size >= limits.max_stream_bytes:
+            raise CollectorEvidenceError(
+                "TASK_STREAM_SIZE_REJECTED",
+                "causal prefix exceeds its byte bound",
+            )
+        raise CollectorEvidenceError(
+            "CURRENT_STEP_EVENT_MISSING",
+            "bound cutoff is absent from the bounded canonical event prefix",
+        )
     return tuple(events)
 
 

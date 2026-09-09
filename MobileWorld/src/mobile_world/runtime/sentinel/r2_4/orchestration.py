@@ -81,6 +81,10 @@ from mobile_world.runtime.sentinel.r2_4.evidence import (
     CollectorRubricOnlyBundleV1,
     rubric_evidence_snapshot_sha256,
 )
+from mobile_world.runtime.sentinel.r2_4.execution_ledger import (
+    MobileExecutionLedgerV1,
+    snapshot_execution_ledger,
+)
 
 R24_ORCHESTRATED_CALL_SCHEMA_VERSION = "mobileworld.runtime.sentinel-r2.4-orchestrated-call/v1"
 
@@ -627,7 +631,33 @@ class R24RuntimeCoordinatorV1:
         self._stimulus_sha256_by_call: dict[str, str] = {}
         self._tracking_packet_sha256_by_call: dict[str, str] = {}
         self._rubric_history_prune_plans: dict[str, R24RubricHistoryPrunePlanV1 | None] = {}
+        self._execution_ledgers: dict[str, MobileExecutionLedgerV1] = {}
+        self._rubric_state_changed: dict[str, bool] = {}
+        self._rubric_failure_codes: dict[str, str] = {}
         self._collector_bundle_calls = 0
+
+    def _history_input_without_rubric(
+        self,
+        *,
+        logical_call_id: str,
+        call_input_sha256: str,
+        gpt56_input: GPT56EvidenceInputV1,
+        failure_code: str,
+        record: R24CoordinatedCallRecordV1 | None = None,
+    ) -> GPT56EvidenceInputV1:
+        """Keep Collector history evidence usable when only the rubric axis failed."""
+
+        cached_input = _snapshot_gpt56_input(gpt56_input)
+        self._calls[logical_call_id] = _CachedCall(
+            call_input_sha256=call_input_sha256,
+            gpt56_input=cached_input,
+            record=record,
+            failure_code=None,
+        )
+        self._rubric_failure_codes[logical_call_id] = failure_code
+        self._rubric_state_changed.pop(logical_call_id, None)
+        self._rubric_history_prune_plans[logical_call_id] = None
+        return _snapshot_gpt56_input(cached_input)
 
     def stimulus_sha256_for_call(self, logical_call_id: str) -> str | None:
         """Return the Coordinator-owned Collector root even after rubric failure."""
@@ -915,6 +945,9 @@ class R24RuntimeCoordinatorV1:
                 gpt56_input = _snapshot_gpt56_input(bundle.gpt56_input)
                 stimulus = _snapshot_rubric_evidence(bundle.r23_snapshot)
                 self._validate_bundle_axis_binding(bundle, gpt56_input, stimulus)
+                self._execution_ledgers[context.logical_call_id] = snapshot_execution_ledger(
+                    bundle.execution_ledger
+                )
                 if self._bind_rubric_collector_projection is not None:
                     self._bind_rubric_collector_projection(
                         stimulus=_snapshot_rubric_evidence(stimulus),
@@ -958,17 +991,14 @@ class R24RuntimeCoordinatorV1:
             rubric_started_ns = monotonic_ns()
             try:
                 generation = _snapshot_session_result(session.start())
-            except Exception as exc:
+            except Exception:
                 failure_code = "RUBRIC_TASK_START_ERROR"
-                self._calls[context.logical_call_id] = _CachedCall(
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
                     call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
-                    record=None,
                     failure_code=failure_code,
+                    gpt56_input=gpt56_input,
                 )
-                raise R24OrchestrationError(
-                    failure_code, "rubric task-start escaped its typed boundary"
-                ) from exc
             if generation.status is not RubricSessionStatus.ADMITTED:
                 topology = self._topology_run(
                     stimulus_sha256=stimulus_sha256,
@@ -987,33 +1017,33 @@ class R24RuntimeCoordinatorV1:
                     topology_run=topology,
                 )
                 failure_code = self._fallback_code(generation)
-                self._calls[context.logical_call_id] = _CachedCall(
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
                     call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
                     record=record,
                     failure_code=failure_code,
+                    gpt56_input=gpt56_input,
                 )
-                raise R24OrchestrationError(failure_code, "rubric task-start failed closed")
 
             current_rubric = session.rubric
             current_state = session.state
             if current_rubric is None or current_state is None:
-                raise R24OrchestrationError(
-                    "UNTRUSTED_RUBRIC_RESULT", "admitted task-start omitted rubric state"
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
+                    call_input_sha256=call_input_sha256,
+                    gpt56_input=gpt56_input,
+                    failure_code="UNTRUSTED_RUBRIC_RESULT",
                 )
             if (
                 current_rubric.task_run_id != stimulus.task_run_id
                 or current_rubric.task != stimulus.task
             ):
                 failure_code = "RUBRIC_TASK_BINDING_MISMATCH"
-                self._calls[context.logical_call_id] = _CachedCall(
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
                     call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
-                    record=None,
                     failure_code=failure_code,
-                )
-                raise R24OrchestrationError(
-                    failure_code, "generated rubric binds another Collector task"
+                    gpt56_input=gpt56_input,
                 )
 
             packet_hash: str | None = None
@@ -1042,17 +1072,14 @@ class R24RuntimeCoordinatorV1:
                         ),
                     )
                 )
-            except Exception as exc:
+            except Exception:
                 failure_code = "RUBRIC_TRACK_ERROR"
-                self._calls[context.logical_call_id] = _CachedCall(
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
                     call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
-                    record=None,
                     failure_code=failure_code,
+                    gpt56_input=gpt56_input,
                 )
-                raise R24OrchestrationError(
-                    failure_code, "rubric tracking escaped its typed boundary"
-                ) from exc
 
             if result.status is not RubricSessionStatus.ADMITTED:
                 topology = self._topology_run(
@@ -1072,19 +1099,25 @@ class R24RuntimeCoordinatorV1:
                     topology_run=topology,
                 )
                 failure_code = self._fallback_code(result)
-                self._calls[context.logical_call_id] = _CachedCall(
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
                     call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
                     record=record,
                     failure_code=failure_code,
+                    gpt56_input=gpt56_input,
                 )
-                raise R24OrchestrationError(failure_code, "rubric tracking failed closed")
 
             if result.state is None:
-                raise R24OrchestrationError(
-                    "UNTRUSTED_RUBRIC_RESULT", "admitted tracking omitted its state"
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
+                    call_input_sha256=call_input_sha256,
+                    gpt56_input=gpt56_input,
+                    failure_code="UNTRUSTED_RUBRIC_RESULT",
                 )
             try:
+                self._rubric_state_changed[context.logical_call_id] = _rubric_progress_signature(
+                    current_state
+                ) != _rubric_progress_signature(result.state)
                 rubric_history_prune_plan = _rubric_history_prune_plan(
                     logical_call_id=context.logical_call_id,
                     prior_state=snapshot_tracking_state(current_state),
@@ -1092,17 +1125,14 @@ class R24RuntimeCoordinatorV1:
                     gpt56_input=gpt56_input,
                     history_ir=history_ir,
                 )
-            except Exception as exc:
+            except Exception:
                 failure_code = "RUBRIC_HISTORY_PRUNE_PLAN_ERROR"
-                self._calls[context.logical_call_id] = _CachedCall(
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
                     call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
-                    record=None,
                     failure_code=failure_code,
+                    gpt56_input=gpt56_input,
                 )
-                raise R24OrchestrationError(
-                    failure_code, "rubric history-prune plan construction failed"
-                ) from exc
             # There is no trusted record-level R2.2 SUPPORTED+KEEP resolver in
             # this checkpoint.  Bind only opaque record IDs, leave every path
             # association unknown, and require the R2.3 linker to emit RETAIN.
@@ -1125,17 +1155,14 @@ class R24RuntimeCoordinatorV1:
                         logical_call_id=context.logical_call_id,
                     )
                 )
-            except Exception as exc:
+            except Exception:
                 failure_code = "RUBRIC_RELEVANCE_ERROR"
-                self._calls[context.logical_call_id] = _CachedCall(
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
                     call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
-                    record=None,
                     failure_code=failure_code,
+                    gpt56_input=gpt56_input,
                 )
-                raise R24OrchestrationError(
-                    failure_code, "path-relevance linking escaped its typed boundary"
-                ) from exc
             topology = self._topology_run(
                 stimulus_sha256=stimulus_sha256,
                 result=relevance,
@@ -1154,13 +1181,13 @@ class R24RuntimeCoordinatorV1:
             )
             if relevance.status is not RubricSessionStatus.ADMITTED:
                 failure_code = "RUBRIC_RELEVANCE_FALLBACK"
-                self._calls[context.logical_call_id] = _CachedCall(
+                return self._history_input_without_rubric(
+                    logical_call_id=context.logical_call_id,
                     call_input_sha256=call_input_sha256,
-                    gpt56_input=None,
                     record=record,
                     failure_code=failure_code,
+                    gpt56_input=gpt56_input,
                 )
-                raise R24OrchestrationError(failure_code, "path-relevance linking failed closed")
 
             cached_input = _snapshot_gpt56_input(gpt56_input)
             self._calls[context.logical_call_id] = _CachedCall(
@@ -1169,6 +1196,7 @@ class R24RuntimeCoordinatorV1:
                 record=record,
                 failure_code=None,
             )
+            self._rubric_failure_codes.pop(context.logical_call_id, None)
             self._rubric_history_prune_plans[context.logical_call_id] = (
                 None
                 if rubric_history_prune_plan is None
@@ -1476,6 +1504,42 @@ class R24RuntimeCoordinatorV1:
             if cached is None or cached.record is None:
                 return None
             return _snapshot_call_record(cached.record)
+
+    def execution_ledger_for(self, logical_call_id: str) -> MobileExecutionLedgerV1 | None:
+        """Return the detached Collector-only ledger even if rubric later failed."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise TypeError("logical_call_id must be non-empty exact text")
+        with self._lock:
+            value = self._execution_ledgers.get(logical_call_id)
+            return None if value is None else snapshot_execution_ledger(value)
+
+    def history_evidence_input_for(self, logical_call_id: str) -> GPT56EvidenceInputV1 | None:
+        """Return the detached same-cutoff R2.2 input retained for this logical call."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise TypeError("logical_call_id must be non-empty exact text")
+        with self._lock:
+            cached = self._calls.get(logical_call_id)
+            if cached is None or cached.gpt56_input is None:
+                return None
+            return _snapshot_gpt56_input(cached.gpt56_input)
+
+    def rubric_state_changed_for(self, logical_call_id: str) -> bool | None:
+        """Return whether the admitted tracker state changed, without a task verdict."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise TypeError("logical_call_id must be non-empty exact text")
+        with self._lock:
+            return self._rubric_state_changed.get(logical_call_id)
+
+    def rubric_failure_code_for(self, logical_call_id: str) -> str | None:
+        """Return a bounded rubric-only failure that did not block history validity."""
+
+        if type(logical_call_id) is not str or not logical_call_id:
+            raise TypeError("logical_call_id must be non-empty exact text")
+        with self._lock:
+            return self._rubric_failure_codes.get(logical_call_id)
 
     def rubric_history_prune_plan_for(
         self, logical_call_id: str
