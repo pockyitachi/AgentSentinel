@@ -56,11 +56,11 @@ from mobile_world.runtime.sentinel.r2_4.capabilities import (
 )
 from mobile_world.runtime.sentinel.r2_4.evidence import CollectorEvidenceFactoryV1
 from mobile_world.runtime.sentinel.r2_4.lean_policy import LeanActiveRuntimePolicyV1
-from mobile_world.runtime.sentinel.r2_4.orchestration import R24RuntimeCoordinatorV1
-from mobile_world.runtime.sentinel.r2_4.rubric_live import (
-    DirectOpenAIRubricProviderPortV1,
-    LiveOpenAIRubricBackendV1,
+from mobile_world.runtime.sentinel.r2_4.lean_rubric import (
+    DirectOpenAIRubricProviderV1,
+    LeanOpenAIRubricBackendV1,
 )
+from mobile_world.runtime.sentinel.r2_4.orchestration import R24RuntimeCoordinatorV1
 from mobile_world.runtime.sentinel.seam import PromptSentinel, SentinelGlobalSwitch
 from mobile_world.runtime.sentinel.sidecar import ExternalSentinelReceiptSink
 
@@ -216,11 +216,11 @@ class LeanSentinelRunFactoryV1:
             live_call_authorized=True,
         )
         try:
-            rubric_port = DirectOpenAIRubricProviderPortV1(
+            rubric_provider = DirectOpenAIRubricProviderV1(
                 client=client,
                 timeout_seconds=self._transport_timeout_seconds,
             )
-            rubric_backend = LiveOpenAIRubricBackendV1(provider_port=rubric_port)
+            rubric_backend = LeanOpenAIRubricBackendV1(provider=rubric_provider)
 
             def session_factory(
                 task_run_id: str,
