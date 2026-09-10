@@ -92,7 +92,7 @@ FLAT_POLICY_OUTPUT_SCHEMA: dict[str, JsonValue] = {
         "decisions",
     ],
     "properties": {
-        "schema_version": {"const": FLAT_POLICY_OUTPUT_VERSION},
+        "schema_version": {"type": "string", "const": FLAT_POLICY_OUTPUT_VERSION},
         "logical_call_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "decisions": {
             "type": "array",
@@ -108,7 +108,10 @@ FLAT_POLICY_OUTPUT_SCHEMA: dict[str, JsonValue] = {
                 ],
                 "properties": {
                     "target_id": {"type": "string", "minLength": 1, "maxLength": 256},
-                    "operation": {"enum": ["KEEP", "DROP", "KEEP_UNCERTAIN"]},
+                    "operation": {
+                        "type": "string",
+                        "enum": ["KEEP", "DROP", "KEEP_UNCERTAIN"],
+                    },
                     "evidence_refs": {
                         "type": "array",
                         "maxItems": 32,
@@ -122,11 +125,14 @@ FLAT_POLICY_OUTPUT_SCHEMA: dict[str, JsonValue] = {
                                     "minLength": 1,
                                     "maxLength": 256,
                                 },
-                                "relation": {"enum": ["SUPPORTS", "REFUTES", "INVALIDATES"]},
+                                "relation": {
+                                    "type": "string",
+                                    "enum": ["SUPPORTS", "REFUTES", "INVALIDATES"],
+                                },
                             },
                         },
                     },
-                    "reason_code": {"enum": list(_REASON_CODES)},
+                    "reason_code": {"type": "string", "enum": list(_REASON_CODES)},
                 },
             },
         },

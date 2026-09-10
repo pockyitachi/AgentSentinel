@@ -39,6 +39,7 @@ from mobile_world.runtime.sentinel.flat_execution_state import (
 )
 from mobile_world.runtime.sentinel.flat_policy import (
     FLAT_POLICY_INPUT_VERSION,
+    FLAT_POLICY_OUTPUT_SCHEMA,
     FLAT_POLICY_OUTPUT_VERSION,
     FlatPolicyRequest,
 )
@@ -349,6 +350,38 @@ def _evaluate(runtime: Any, case: _Case, request: JsonValue) -> FlatSentinelResu
     for legacy_wrapper_field in ("base_result", "history_result", "bridge", "receipt"):
         assert not hasattr(result, legacy_wrapper_field)
     return result
+
+
+def test_flat_policy_structured_output_scalar_constraints_declare_types() -> None:
+    constrained_nodes: list[tuple[tuple[str | int, ...], dict[str, JsonValue]]] = []
+
+    def visit(value: JsonValue, path: tuple[str | int, ...] = ()) -> None:
+        if type(value) is dict:
+            if "const" in value or "enum" in value:
+                constrained_nodes.append((path, value))
+            for key, child in value.items():
+                visit(child, (*path, key))
+        elif type(value) is list:
+            for index, child in enumerate(value):
+                visit(child, (*path, index))
+
+    visit(FLAT_POLICY_OUTPUT_SCHEMA)
+
+    assert constrained_nodes
+    for path, node in constrained_nodes:
+        assert node.get("type") == "string", path
+
+    properties = cast(dict[str, JsonValue], FLAT_POLICY_OUTPUT_SCHEMA["properties"])
+    assert cast(dict[str, JsonValue], properties["schema_version"])["type"] == "string"
+    decisions = cast(dict[str, JsonValue], properties["decisions"])
+    decision_items = cast(dict[str, JsonValue], decisions["items"])
+    decision_properties = cast(dict[str, JsonValue], decision_items["properties"])
+    assert cast(dict[str, JsonValue], decision_properties["operation"])["type"] == "string"
+    assert cast(dict[str, JsonValue], decision_properties["reason_code"])["type"] == "string"
+    evidence_refs = cast(dict[str, JsonValue], decision_properties["evidence_refs"])
+    reference_items = cast(dict[str, JsonValue], evidence_refs["items"])
+    reference_properties = cast(dict[str, JsonValue], reference_items["properties"])
+    assert cast(dict[str, JsonValue], reference_properties["relation"])["type"] == "string"
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda item: item.name)
