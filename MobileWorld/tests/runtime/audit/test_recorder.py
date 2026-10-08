@@ -210,6 +210,7 @@ def test_task_recorder_tracks_incomplete_artifacts_and_collector_errors(
     task = recorder.open_task()
 
     task.mark_incomplete("request_image", "request_image")
+    assert task.capture_incomplete_from_seq == 1
     error = task.append_event(
         "collector_error",
         {
@@ -221,4 +222,5 @@ def test_task_recorder_tracks_incomplete_artifacts_and_collector_errors(
     assert task.capture_complete is False
     assert task.missing_artifacts == ("request_image", "model_request")
     assert task.collector_error_event_ids == (error["event_id"],)
+    assert task.capture_incomplete_from_seq == 1
     recorder.close()

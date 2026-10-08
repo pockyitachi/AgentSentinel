@@ -142,21 +142,24 @@ def _lifecycle_transition_snapshot() -> tuple[str | None, float | None]:
 
 
 def _ensure_controller_healthy(req_device: str) -> AndroidController:
-    if req_device not in CONTROLLERS:
+    controller = CONTROLLERS.get(req_device)
+    publish_after_validation = controller is None
+    if controller is None:
         logger.info(f"[INIT] Device {req_device} not initialized, initializing...")
-        ctr = AndroidController(device=req_device)
-        CONTROLLERS[req_device] = ctr
-    viewport_size = getattr(CONTROLLERS[req_device], "viewport_size", (None, None))
+        controller = AndroidController(device=req_device)
+    viewport_size = getattr(controller, "viewport_size", (None, None))
     if not (
         isinstance(viewport_size, tuple)
         and len(viewport_size) == 2
         and all(isinstance(value, int) and value > 0 for value in viewport_size)
     ):
         raise DeviceUnhealthyError(f"Device is not healthy: invalid viewport for {req_device}")
-    if not CONTROLLERS[req_device].check_health(try_times=3):
+    if not controller.check_health(try_times=3):
         logger.error(f"[INIT] Device {req_device} is not healthy")
         raise DeviceUnhealthyError(f"Device is not healthy: {req_device}")
-    return CONTROLLERS[req_device]
+    if publish_after_validation:
+        CONTROLLERS[req_device] = controller
+    return controller
 
 
 def ensure_controller(req_device: str) -> AndroidController:
@@ -427,6 +430,32 @@ def get_task_asset(asset_path: str):
     if not target.is_file():
         raise HTTPException(status_code=404, detail="asset not found")
     return FileResponse(str(target))
+
+
+@app.get("/ui_tree")
+def get_ui_tree(device: str = Query(...)):
+    """Optional bounded observation; never initialize or wait on a busy device."""
+    unavailable = {
+        "device": device,
+        "status": "unavailable",
+        "source": "uiautomator",
+        "xml": None,
+        "reason": "device_busy",
+    }
+    if not _lifecycle_lock.acquire(blocking=False):
+        return unavailable
+    owns_transition = False
+    try:
+        controller = CONTROLLERS.get(device)
+        if controller is None:
+            return {**unavailable, "reason": "not_initialized"}
+        owns_transition = _begin_lifecycle_transition("get_ui_tree")
+        return {"device": device, **controller.get_ui_tree()}
+    except Exception:
+        return {**unavailable, "reason": "capture_failed"}
+    finally:
+        _end_lifecycle_transition(owns_transition)
+        _lifecycle_lock.release()
 
 
 @app.get("/xml")

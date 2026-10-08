@@ -52,7 +52,7 @@ def test_enabled_collection_requires_an_explicit_raw_root() -> None:
         config.validated_external_log_root(Path("/tmp/repository"))
 
 
-def test_enabled_root_must_be_outside_and_must_not_contain_repository(
+def test_enabled_root_must_be_outside_and_must_not_contain_source_tree(
     tmp_path: Path,
 ) -> None:
     repository = tmp_path / "checkout"
@@ -63,7 +63,7 @@ def test_enabled_root_must_be_outside_and_must_not_contain_repository(
     assert config.validated_external_log_root(repository) == outside.resolve()
     assert not outside.exists()
 
-    with pytest.raises(ValueError, match="outside the Git repository"):
+    with pytest.raises(ValueError, match="outside the source tree"):
         AuditConfig(enabled=True, log_root=repository / "raw").validated_external_log_root(
             repository
         )

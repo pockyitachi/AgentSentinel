@@ -1,22 +1,32 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentsentinel.local/schemas/r2_4/run_authority_manifest.v1.schema.json",
-  "title": "R2.4/R2.5 Run Authority Manifest v1",
+  "$id": "https://agentsentinel.local/schemas/r2_4/run_authority_manifest.v2.schema.json",
+  "title": "R2.4/R2.5 Run Authority Manifest v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "actor_resources",
     "authorization",
+    "max_model_switch_wall_time_seconds",
+    "max_model_switches",
+    "max_post_run_integrity_wall_time_seconds",
+    "max_resource_cleanup_wall_time_seconds",
     "max_resource_preflight_wall_time_seconds",
     "max_sequence_actor_calls",
     "max_sequence_cost_usd_micros",
     "max_sequence_openai_calls",
     "max_sequence_wall_time_seconds",
+    "max_total_model_switch_wall_time_seconds",
     "openai_stages",
     "output_root",
     "pilot",
+    "pricing_sha256",
     "run_id",
+    "resource_cleanup_upper_bound_sha256",
+    "resource_topology",
+    "runtime_config_sha256",
     "safety",
+    "sentinel_config_sha256",
     "schema_version",
     "secret",
     "smoke_plans",
@@ -33,6 +43,22 @@
       "items": false
     },
     "authorization": {"$ref": "#/$defs/authorization"},
+    "max_model_switch_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600
+    },
+    "max_model_switches": {"type": "integer", "minimum": 0, "maximum": 61},
+    "max_post_run_integrity_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "max_resource_cleanup_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
     "max_resource_preflight_wall_time_seconds": {
       "type": "integer",
       "minimum": 1,
@@ -42,6 +68,11 @@
     "max_sequence_cost_usd_micros": {"type": "integer", "minimum": 1},
     "max_sequence_openai_calls": {"type": "integer", "minimum": 1},
     "max_sequence_wall_time_seconds": {"type": "integer", "minimum": 1},
+    "max_total_model_switch_wall_time_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 219600
+    },
     "openai_stages": {
       "type": "array",
       "prefixItems": [
@@ -52,12 +83,19 @@
     },
     "output_root": {"$ref": "#/$defs/absolutePath"},
     "pilot": {
-      "$ref": "https://agentsentinel.local/schemas/r2_5/frozen_pilot_manifest.v1.schema.json"
+      "$ref": "https://agentsentinel.local/schemas/r2_5/frozen_pilot_manifest.v2.schema.json"
     },
+    "pricing_sha256": {"$ref": "#/$defs/sha256"},
     "run_id": {"$ref": "#/$defs/runtimeId"},
+    "resource_cleanup_upper_bound_sha256": {"$ref": "#/$defs/sha256"},
+    "resource_topology": {
+      "enum": ["INDEPENDENT_GPU_CONCURRENT", "SINGLE_GPU_SEQUENTIAL_SHARED"]
+    },
+    "runtime_config_sha256": {"$ref": "#/$defs/sha256"},
     "safety": {"$ref": "#/$defs/safety"},
+    "sentinel_config_sha256": {"$ref": "#/$defs/sha256"},
     "schema_version": {
-      "const": "mobileworld.runtime.sentinel-r2.4-r2.5-run-authority/v1"
+      "const": "mobileworld.runtime.sentinel-r2.4-r2.5-run-authority/v2"
     },
     "secret": {"$ref": "#/$defs/secret"},
     "smoke_plans": {
@@ -71,6 +109,30 @@
     "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "topology_comparison_artifact_sha256": {"$ref": "#/$defs/sha256"}
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "resource_topology": {"const": "SINGLE_GPU_SEQUENTIAL_SHARED"}
+        },
+        "required": ["resource_topology"]
+      },
+      "then": {
+        "properties": {
+          "max_model_switches": {"minimum": 41, "maximum": 61},
+          "max_model_switch_wall_time_seconds": {"minimum": 1},
+          "max_total_model_switch_wall_time_seconds": {"minimum": 41}
+        }
+      },
+      "else": {
+        "properties": {
+          "max_model_switches": {"const": 0},
+          "max_model_switch_wall_time_seconds": {"const": 0},
+          "max_total_model_switch_wall_time_seconds": {"const": 0}
+        }
+      }
+    }
+  ],
   "$defs": {
     "absolutePath": {
       "type": "string",
@@ -170,7 +232,7 @@
         "external_network_on_call": {"const": true},
         "max_attempts": {"const": 1},
         "max_output_tokens": {"type": "integer"},
-        "model": {"const": "gpt-5.6-sol"},
+        "model": {"const": "gpt-5.6-luna"},
         "model_on_call": {"const": true},
         "openai_sdk_version": {"const": "1.106.1"},
         "role": {"type": "string"},

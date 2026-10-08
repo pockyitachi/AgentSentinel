@@ -1,5 +1,4 @@
 import json
-import time
 import traceback
 from typing import Any
 
@@ -187,9 +186,6 @@ def parsing_response_to_andoid_world_env_action(
 
 
 class Qwen3VLAgentMCP(MCPAgent):
-    sentinel_host_id = "mobileworld.qwen3vl.actor"
-    sentinel_history_codec_id = "mobileworld.g1.history-codec.qwen-flat-progress"
-
     def __init__(
         self,
         model_name: str,
@@ -207,11 +203,11 @@ class Qwen3VLAgentMCP(MCPAgent):
         self.runtime_conf = runtime_conf
         self.build_openai_client(self.llm_base_url, api_key)
 
-        self.thoughts = []
-        self.actions = []
-        self.conclusions = []
-        self.history_images = []
-        self.history_responses = []
+        self.thoughts: list[str] = []
+        self.actions: list[dict[str, Any]] = []
+        self.conclusions: list[str] = []
+        self.history_images: list[Any] = []
+        self.history_responses: list[str] = []
 
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
         """
@@ -234,6 +230,10 @@ class Qwen3VLAgentMCP(MCPAgent):
             )
         if "ask_user_response" in observation and observation["ask_user_response"] is not None:
             self.conclusions[-1] += f"; Ask user response: {observation['ask_user_response']}"
+        # Govern's notice is received execution feedback, unlike transient Inform.
+        nudge = observation.get("ledger_nudge")
+        if self.conclusions and type(nudge) is str and 0 < len(nudge) <= 2048:
+            self.conclusions[-1] += "; Execution observation: " + nudge
         steps = ""
         for idx, conclusion in enumerate(self.conclusions):
             steps += (
@@ -247,7 +247,7 @@ class Qwen3VLAgentMCP(MCPAgent):
         system_prompt = MOBILE_QWEN3VL_PROMPT_WITH_ASK_USER.render(
             tools="\n".join([json.dumps(tool, ensure_ascii=False) for tool in self.tools])
         )
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
         ]
 
@@ -269,132 +269,92 @@ class Qwen3VLAgentMCP(MCPAgent):
             }
         )
 
-        if self._production_safe_logging_active():
-            logger.debug("Production Qwen request assembled; raw messages suppressed")
-        else:
-            pretty_print_messages(messages)
+        # Only this request receives Inform; the original host retry loop reuses it.
+        inform = observation.get("ledger_inform")
+        if type(inform) is str and 0 < len(inform) <= 16384:
+            messages[-1]["content"].append({"type": "text", "text": inform})
 
-        with self._sentinel_logical_call_scope(attributes={"adapter": "qwen3vl"}) as sentinel_call:
-            audit_retry_group = self._begin_outer_model_audit_retry_group()
+        pretty_print_messages(messages)
 
-            try_times = 3
-            adapter_attempt_index = 0
-            origin_h, origin_w = screenshot.height, screenshot.width
-            parsed_response = None
-            parser_ns = 0
+        audit_retry_group = self._begin_outer_model_audit_retry_group()
 
-            while True:
-                adapter_attempt_index += 1
-                if audit_retry_group is None:
+        try_times = 3
+        adapter_attempt_index = 0
+        origin_h, origin_w = screenshot.height, screenshot.width
+        parsed_response = None
+
+        while True:
+            adapter_attempt_index += 1
+            if audit_retry_group is None:
+                prediction = self.openai_chat_completions_create(
+                    model=self.model_name,
+                    messages=messages,
+                    retry_times=3,
+                    **self.runtime_conf,
+                )
+            else:
+                with self._outer_model_audit_attempt_scope(
+                    audit_retry_group,
+                    adapter_attempt_index=adapter_attempt_index,
+                    # Provider failure exits this adapter; only a successful but
+                    # malformed response reaches the outer parse retry.
+                    adapter_retry_planned=False,
+                ):
                     prediction = self.openai_chat_completions_create(
                         model=self.model_name,
                         messages=messages,
                         retry_times=3,
                         **self.runtime_conf,
                     )
+
+            if prediction is None:
+                raise Exception("Error when fetching response from clients")
+
+            try:
+                parsed_response = parse_action_to_structure_output(
+                    prediction,
+                )
+
+                logger.info(f"Parsed response: \n{parsed_response}")
+                break
+            except Exception:
+                if try_times > 0:
+                    logger.error("Error when parsing response from clients")
+                    logger.error(traceback.format_exc())
+                    prediction = None
+                    try_times -= 1
                 else:
-                    with self._outer_model_audit_attempt_scope(
-                        audit_retry_group,
-                        adapter_attempt_index=adapter_attempt_index,
-                        # Provider failure exits this adapter; only a successful but
-                        # malformed response reaches the outer parse retry.
-                        adapter_retry_planned=False,
-                    ):
-                        prediction = self.openai_chat_completions_create(
-                            model=self.model_name,
-                            messages=messages,
-                            retry_times=3,
-                            **self.runtime_conf,
-                        )
-
-                if prediction is None:
-                    self._finalize_prompt_sentinel_actor_failure(
-                        sentinel_call,
-                        failure_phase="ACTOR_PROVIDER",
-                        failure_code="ACTOR_PROVIDER_FAILED",
-                    )
-                    raise Exception("Error when fetching response from clients")
-
-                parser_started_ns = time.monotonic_ns()
-                try:
-                    parsed_response = parse_action_to_structure_output(
-                        prediction,
-                    )
-
-                    if self._production_safe_logging_active():
-                        logger.info("Production Qwen response parsed; semantic text suppressed")
-                    else:
-                        logger.info(f"Parsed response: \n{parsed_response}")
-                    parser_ns += max(0, time.monotonic_ns() - parser_started_ns)
-                    break
-                except Exception:
-                    parser_ns += max(0, time.monotonic_ns() - parser_started_ns)
-                    if try_times > 0:
-                        logger.error("Error when parsing response from clients")
-                        if not self._production_safe_logging_active():
-                            logger.error(traceback.format_exc())
-                        prediction = None
-                        try_times -= 1
-                    else:
-                        self._finalize_prompt_sentinel_actor_failure(
-                            sentinel_call,
-                            failure_phase="ACTOR_PARSER",
-                            failure_code="ACTOR_PARSER_RETRIES_EXHAUSTED",
-                        )
-                        raise Exception("Failed to parse response after maximum retries")
+                    raise Exception("Failed to parse response after maximum retries")
 
         if parsed_response is None:
-            self._finalize_prompt_sentinel_actor_failure(
-                sentinel_call,
-                failure_phase="ACTOR_PARSER",
-                failure_code="ACTOR_PARSER_EMPTY",
-            )
             return "llm parse error after multiple retries", JSONAction(action_type=ENV_FAIL)
 
         self.history_responses.append(prediction)
         self.thoughts.append(parsed_response["thinking"])
         self.conclusions.append(parsed_response["conclusion"])
 
-        conversion_started_ns = time.monotonic_ns()
-        try:
-            if parsed_response["action_name"] == "mobile_use":
-                json_action_dict = parsing_response_to_andoid_world_env_action(
-                    parsed_response,
-                    origin_h,
-                    origin_w,
-                )
-                self.actions.append(json_action_dict)
-                action = JSONAction(**json_action_dict)
-            else:
-                self.actions.append(
-                    {
-                        "action_name": parsed_response["action_name"],
-                        "action_args": parsed_response["action_json"],
-                    }
-                )
-                action = JSONAction(
-                    action_type=MCP,
-                    action_json=parsed_response["action_json"],
-                    action_name=parsed_response["action_name"],
-                )
-        except Exception:
-            self._finalize_prompt_sentinel_actor_failure(
-                sentinel_call,
-                failure_phase="ACTOR_ACTION_PARSE",
-                failure_code="ACTOR_ACTION_CONVERSION_FAILED",
+        if parsed_response["action_name"] == "mobile_use":
+            json_action_dict = parsing_response_to_andoid_world_env_action(
+                parsed_response,
+                origin_h,
+                origin_w,
             )
-            raise
-        parser_ns += max(0, time.monotonic_ns() - conversion_started_ns)
-        self._finalize_prompt_sentinel_actor_output(
-            sentinel_call,
-            prediction=prediction,
-            action=action,
-            parser_id="mobileworld.qwen3vl.action-parser.v1",
-            parser_succeeded=True,
-            parser_attempt_count=adapter_attempt_index,
-            parser_ns=parser_ns,
-        )
-        return prediction, action
+
+            self.actions.append(json_action_dict)
+
+            return prediction, JSONAction(**json_action_dict)
+        else:
+            self.actions.append(
+                {
+                    "action_name": parsed_response["action_name"],
+                    "action_args": parsed_response["action_json"],
+                }
+            )
+            return prediction, JSONAction(
+                action_type=MCP,
+                action_json=parsed_response["action_json"],
+                action_name=parsed_response["action_name"],
+            )
 
     def reset(self):
         """Reset the agent for the next task."""

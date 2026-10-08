@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import random
 import threading
@@ -75,6 +76,76 @@ def _safe_collector_attr(target: Any, name: str, default: Any = None) -> Any:
         return getattr(target, name)
     except Exception:
         return default
+
+
+def _validate_gui_ledger_mode(
+    mode: str,
+    agent_type: str,
+    *,
+    enable_mcp: bool,
+    enable_user_interaction: bool = False,
+    gui_ledger_ui_tree: bool = False,
+) -> None:
+    if mode not in {"off", "inform", "full"}:
+        raise ValueError("GUI Ledger mode must be off, inform, or full")
+    if mode != "off" and (agent_type != "qwen3vl" or enable_mcp or enable_user_interaction):
+        raise ValueError("GUI Ledger currently supports only Qwen GUI-only tasks")
+    if type(gui_ledger_ui_tree) is not bool:
+        raise ValueError("GUI Ledger UI tree option must be a boolean")
+    if gui_ledger_ui_tree and mode == "off":
+        raise ValueError("--gui-ledger-ui-tree requires --gui-ledger inform or full")
+
+
+def _capture_gui_ledger_ui_tree(env: AndroidEnvClient) -> dict[str, Any]:
+    """Optional bounded observation, never an action or an actor-visible XML prompt.
+
+    The preceding screenshot and this tree are sequential samples, not an atomic
+    device snapshot. Unavailable trees must not fail an otherwise usable action.
+    """
+    try:
+        return env.get_ui_tree()
+    except Exception:
+        return {
+            "status": "unavailable",
+            "source": "uiautomator",
+            "xml": None,
+            "reason": "capture_error",
+        }
+
+
+def _gui_ledger_capture_ready(capture: Any) -> bool:
+    """A broken evidence chain disables Ledger for the rest of the attempt."""
+    try:
+        recorder = capture.task_recorder
+        return (
+            capture.enabled is True
+            and capture.capture_complete is True
+            and recorder.enabled is True
+            and recorder.capture_complete is True
+        )
+    except Exception:
+        return False
+
+
+def _write_gui_ledger_step(capture: Any, ledger: Any, mode: str, decision: Any) -> None:
+    """One optional derived record; never change Collector events or execution."""
+    try:
+        task_path = capture.task_recorder.path
+        record = {
+            "mode": mode,
+            "decision": decision.kind,
+            "reason": decision.reason,
+            **ledger.summary(),
+        }
+        directory = task_path.parents[2] / "gui_ledger" / task_path.parent.name
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = directory / f"{record['attempt_step']}.json"
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(record, stream, sort_keys=True)
+            stream.write("\n")
+    except Exception:
+        pass
 
 
 @contextmanager
@@ -176,6 +247,8 @@ def _execute_single_task(
     audit_capture: RunnerTaskCapture | None = None,
     audit_metadata: RunnerTaskMetadata | None = None,
     audit_runtime_status_callback: Callable[[str], None] | None = None,
+    gui_ledger_mode: str = "off",
+    gui_ledger_ui_tree: bool = False,
 ) -> tuple[int, float]:
     """Execute a single task and return the number of steps and score.
 
@@ -206,6 +279,8 @@ def _execute_single_task(
                 audit_capture=audit_capture,
                 audit_metadata=audit_metadata,
                 audit_runtime_status_callback=audit_runtime_status_callback,
+                gui_ledger_mode=gui_ledger_mode,
+                gui_ledger_ui_tree=gui_ledger_ui_tree,
             )
 
     logger.debug(f"max_step: {max_step}")
@@ -292,6 +367,8 @@ def _execute_single_task_with_audit(
     audit_capture: RunnerTaskCapture,
     audit_metadata: RunnerTaskMetadata,
     audit_runtime_status_callback: Callable[[str], None] | None,
+    gui_ledger_mode: str = "off",
+    gui_ledger_ui_tree: bool = False,
 ) -> tuple[int, float]:
     """Run the existing control flow with passive, enabled audit boundaries."""
 
@@ -437,6 +514,21 @@ def _execute_single_task_with_audit(
             active_phase = "agent_initialization"
             agent.initialize(task_goal)
 
+            ledger = None
+            pending_nudge = None
+            if gui_ledger_mode != "off" and _gui_ledger_capture_ready(audit_capture):
+                try:
+                    from mobile_world.runtime.gui_ledger import GovernDecision, GuiLedger
+
+                    ledger = GuiLedger(task_goal, ui_tree_enabled=gui_ledger_ui_tree)
+                except Exception:
+                    ledger = None
+            ui_tree = (
+                _capture_gui_ledger_ui_tree(env)
+                if ledger is not None and gui_ledger_ui_tree
+                else None
+            )
+
             while True:
                 step += 1
                 logger.debug(f"Screenshot captured in step {step}")
@@ -445,6 +537,11 @@ def _execute_single_task_with_audit(
                     "tool_call": obs.tool_call,
                     "ask_user_response": obs.ask_user_response,
                 }
+                # The Collector stores raw tree evidence. Only the bounded
+                # State Reporter projection reaches the actor, never the XML.
+                audit_observation = agent_observation
+                if ledger is not None and gui_ledger_ui_tree:
+                    audit_observation = {**agent_observation, "accessibility_tree": ui_tree}
                 source_bytes = (
                     _safe_collector_method(
                         execution_trace,
@@ -459,7 +556,7 @@ def _execute_single_task_with_audit(
                     audit_capture,
                     "start_step",
                     step_index=step,
-                    observation=agent_observation,
+                    observation=audit_observation,
                     source_screenshot_bytes=source_bytes,
                     missing=("step_started.observation",),
                 )
@@ -484,9 +581,27 @@ def _execute_single_task_with_audit(
 
                 step_binding = _safe_collector_call(bind_audit_context, step_context)
                 with _passive_collector_context(step_binding):
+                    predict_observation = agent_observation
+                    if ledger is not None:
+                        if step_reference is None or not _gui_ledger_capture_ready(audit_capture):
+                            ledger = None
+                            pending_nudge = None
+                        else:
+                            try:
+                                ledger.observe(step, obs.screenshot, ui_tree=ui_tree)
+                                inform = ledger.render_inform()
+                                predict_observation = dict(agent_observation)
+                                predict_observation["ledger_inform"] = inform
+                                if pending_nudge is not None:
+                                    predict_observation["ledger_nudge"] = pending_nudge
+                                pending_nudge = None
+                            except Exception:
+                                ledger = None
+                                pending_nudge = None
+                                predict_observation = agent_observation
                     active_phase = "agent_prediction"
                     try:
-                        prediction, action = agent.predict(agent_observation)
+                        prediction, action = agent.predict(predict_observation)
                     except Exception as error:
                         active_phase = "prediction_exception"
                         decision = (
@@ -583,6 +698,21 @@ def _execute_single_task_with_audit(
                         terminate = True
                         termination_source = "agent_terminal_action"
                     else:
+                        ledger_decision = None
+                        if ledger is not None:
+                            if decision is None or not _gui_ledger_capture_ready(audit_capture):
+                                ledger = None
+                                pending_nudge = None
+                            else:
+                                try:
+                                    ledger_decision = (
+                                        ledger.govern(step, action_log)
+                                        if gui_ledger_mode == "full"
+                                        else GovernDecision("ALLOW")
+                                    )
+                                except Exception:
+                                    ledger = None
+                                    pending_nudge = None
                         execution = (
                             _safe_collector_method(
                                 audit_capture,
@@ -600,6 +730,11 @@ def _execute_single_task_with_audit(
                                 "action_execution_started",
                                 "transition.execution_result",
                             )
+                        if ledger is not None and (
+                            execution is None or not _gui_ledger_capture_ready(audit_capture)
+                        ):
+                            ledger = None
+                            pending_nudge = None
                         if action.action_type in [ANSWER]:
                             logger.debug(f"answer triggered, execution action {action}")
                             terminate = True
@@ -630,8 +765,9 @@ def _execute_single_task_with_audit(
                                 if execution_trace is not None and execution is not None
                                 else None
                             )
+                            failed_transition = None
                             if execution is not None:
-                                _safe_collector_method(
+                                failed_transition = _safe_collector_method(
                                     audit_capture,
                                     "transition_failed",
                                     exception=error,
@@ -654,6 +790,25 @@ def _execute_single_task_with_audit(
                                     ),
                                     missing=("transition_failed",),
                                 )
+                            if (
+                                ledger is not None
+                                and ledger_decision is not None
+                                and failed_transition is not None
+                                and _gui_ledger_capture_ready(audit_capture)
+                            ):
+                                try:
+                                    ledger.record_transition(
+                                        step,
+                                        action_log,
+                                        outcome="raised",
+                                        screenshot=None,
+                                        decision=ledger_decision,
+                                    )
+                                    _write_gui_ledger_step(
+                                        audit_capture, ledger, gui_ledger_mode, ledger_decision
+                                    )
+                                except Exception:
+                                    pass
                             raise
                         evidence = (
                             _safe_collector_method(
@@ -665,6 +820,26 @@ def _execute_single_task_with_audit(
                             if execution_trace is not None and execution is not None
                             else None
                         )
+                        execution_duration_ns = (
+                            _safe_collector_attr(evidence, "duration_ns", 0)
+                            if evidence is not None
+                            else max(0, time.monotonic_ns() - fallback_started_ns)
+                        )
+                        post_ui_tree = (
+                            _capture_gui_ledger_ui_tree(env)
+                            if ledger is not None
+                            and gui_ledger_ui_tree
+                            and _gui_ledger_capture_ready(audit_capture)
+                            else None
+                        )
+                        post_audit_observation: Any = post_observation
+                        if post_ui_tree is not None:
+                            post_audit_observation = {
+                                "screenshot": post_observation.screenshot,
+                                "tool_call": post_observation.tool_call,
+                                "ask_user_response": post_observation.ask_user_response,
+                                "accessibility_tree": post_ui_tree,
+                            }
                         post_source_bytes = (
                             _safe_collector_method(
                                 execution_trace,
@@ -675,29 +850,49 @@ def _execute_single_task_with_audit(
                             if execution_trace is not None
                             else None
                         )
+                        completed_transition = None
                         if execution is not None:
-                            _safe_collector_method(
+                            completed_transition = _safe_collector_method(
                                 audit_capture,
                                 "transition_completed",
-                                post_observation=post_observation,
+                                post_observation=post_audit_observation,
                                 execution=execution,
                                 execution_result=(
                                     _safe_collector_attr(evidence, "execution_result")
                                     if evidence is not None
                                     else None
                                 ),
-                                duration_ns=(
-                                    _safe_collector_attr(evidence, "duration_ns", 0)
-                                    if evidence is not None
-                                    else max(
-                                        0,
-                                        time.monotonic_ns() - fallback_started_ns,
-                                    )
-                                ),
+                                duration_ns=execution_duration_ns,
                                 source_screenshot_bytes=post_source_bytes,
                                 missing=("transition_completed",),
                             )
+                        if ledger is not None:
+                            if (
+                                ledger_decision is None
+                                or completed_transition is None
+                                or not _gui_ledger_capture_ready(audit_capture)
+                            ):
+                                ledger = None
+                                pending_nudge = None
+                            else:
+                                try:
+                                    ledger.record_transition(
+                                        step,
+                                        action_log,
+                                        outcome="returned",
+                                        screenshot=post_observation.screenshot,
+                                        decision=ledger_decision,
+                                        ui_tree=post_ui_tree,
+                                    )
+                                    pending_nudge = ledger_decision.notice
+                                    _write_gui_ledger_step(
+                                        audit_capture, ledger, gui_ledger_mode, ledger_decision
+                                    )
+                                except Exception:
+                                    ledger = None
+                                    pending_nudge = None
                         obs = post_observation
+                        ui_tree = post_ui_tree
 
                     if terminate:
                         runtime_status = "completed"
@@ -775,6 +970,8 @@ def _process_task_on_env(
     audit_lifecycle: Any = None,
     audit_task_index: int = 1,
     audit_suite_family: str = "mobile_world",
+    gui_ledger_mode: str = "off",
+    gui_ledger_ui_tree: bool = False,
     **kwargs,
 ) -> dict:
     """Process a single task on a specific environment.
@@ -793,6 +990,9 @@ def _process_task_on_env(
     Returns:
         dict: Task result containing task_name, success, score, steps, duration_seconds
     """
+    _validate_gui_ledger_mode(
+        gui_ledger_mode, agent_type, enable_mcp=enable_mcp, gui_ledger_ui_tree=gui_ledger_ui_tree
+    )
     # Create thread-specific log file
     thread_id = threading.current_thread().ident
     thread_log_file = os.path.join(log_file_root, task_name, f"thread_{thread_id}.log")
@@ -810,7 +1010,6 @@ def _process_task_on_env(
         filter=thread_filter,
     )
     env, container_name = env_queue.get()
-
     try:
         with logger.contextualize(thread_id=thread_id, container_name=container_name):
             logger.info("Processing task '{}' on environment {}", task_name, env.base_url)
@@ -968,6 +1167,8 @@ def _process_task_on_env(
                                 else None
                             ),
                             audit_runtime_status_callback=remember_runtime_status,
+                            gui_ledger_mode=gui_ledger_mode,
+                            gui_ledger_ui_tree=gui_ledger_ui_tree,
                         )
                         attempt_result = (task_steps, task_score)
                     except Exception as error:
@@ -1072,6 +1273,8 @@ def run_agent_with_evaluation(
     shuffle_tasks: bool = False,
     auto_retry: int = 10,
     audit_lifecycle: Any = None,
+    gui_ledger_mode: str = "off",
+    gui_ledger_ui_tree: bool = False,
     **kwargs,
 ) -> list[dict]:
     """Run the agent and return the evaluation results.
@@ -1093,7 +1296,13 @@ def run_agent_with_evaluation(
     Returns:
         list[dict]: The evaluation results for each task, containing task_name, success, score, steps, duration_seconds, env_url
     """
-
+    _validate_gui_ledger_mode(
+        gui_ledger_mode,
+        agent_type,
+        enable_mcp=enable_mcp,
+        enable_user_interaction=enable_user_interaction,
+        gui_ledger_ui_tree=gui_ledger_ui_tree,
+    )
     container_names = None
     if aw_urls is None or len(aw_urls) == 0:
         logger.info("No backend URLs specified, auto-discovering from containers...")
@@ -1181,6 +1390,8 @@ def run_agent_with_evaluation(
                     audit_lifecycle=audit_lifecycle,
                     audit_task_index=audit_task_indices.get(task_name, 1),
                     audit_suite_family=suite_family,
+                    gui_ledger_mode=gui_ledger_mode,
+                    gui_ledger_ui_tree=gui_ledger_ui_tree,
                     **kwargs,
                 )
                 for task_name in pending_tasks

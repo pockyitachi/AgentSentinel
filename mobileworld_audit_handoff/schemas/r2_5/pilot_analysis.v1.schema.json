@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": [
     "cells",
+    "evidence_completeness",
     "host_arm_groups",
     "limitations",
     "manifest_sha256",
@@ -13,6 +14,8 @@
     "matched_overall",
     "matched_pairs",
     "overall",
+    "ordered_collector_integrity_root_sha256",
+    "post_run_integrity_artifact_sha256",
     "run_id",
     "schema_version",
     "source_manifest_sha256",
@@ -25,6 +28,12 @@
       "minItems": 80,
       "maxItems": 120,
       "items": {"$ref": "#/$defs/cell"}
+    },
+    "evidence_completeness": {
+      "enum": [
+        "LEGACY_CPU_ONLY_UNACCEPTABLE",
+        "PRODUCTION_V2_INTEGRITY_BOUND"
+      ]
     },
     "host_arm_groups": {
       "type": "array",
@@ -74,6 +83,18 @@
         {"properties": {"kind": {"const": "OVERALL"}}}
       ]
     },
+    "ordered_collector_integrity_root_sha256": {
+      "oneOf": [
+        {"$ref": "#/$defs/sha256"},
+        {"type": "null"}
+      ]
+    },
+    "post_run_integrity_artifact_sha256": {
+      "oneOf": [
+        {"$ref": "#/$defs/sha256"},
+        {"type": "null"}
+      ]
+    },
     "run_id": {"$ref": "#/$defs/runtimeId"},
     "schema_version": {
       "const": "mobileworld.runtime.sentinel-r2.5-pilot-analysis/v1"
@@ -92,6 +113,34 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "evidence_completeness": {"const": "LEGACY_CPU_ONLY_UNACCEPTABLE"}
+        }
+      },
+      "then": {
+        "properties": {
+          "ordered_collector_integrity_root_sha256": {"type": "null"},
+          "post_run_integrity_artifact_sha256": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "evidence_completeness": {"const": "PRODUCTION_V2_INTEGRITY_BOUND"}
+        }
+      },
+      "then": {
+        "properties": {
+          "ordered_collector_integrity_root_sha256": {"$ref": "#/$defs/sha256"},
+          "post_run_integrity_artifact_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    }
+  ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "runtimeId": {
@@ -122,6 +171,135 @@
         {"type": "integer", "minimum": 0},
         {"type": "null"}
       ]
+    },
+    "scoreSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximum_score_ppm",
+        "minimum_score_ppm",
+        "score_count",
+        "score_mean_ppm",
+        "score_sum_ppm"
+      ],
+      "properties": {
+        "maximum_score_ppm": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "minimum_score_ppm": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "score_count": {"type": "integer", "minimum": 1},
+        "score_mean_ppm": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "score_sum_ppm": {"type": "integer", "minimum": 0}
+      }
+    },
+    "scoreDeltaSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximum_score_delta_ppm",
+        "minimum_score_delta_ppm",
+        "pair_count",
+        "score_delta_mean_ppm",
+        "score_delta_sum_ppm"
+      ],
+      "properties": {
+        "maximum_score_delta_ppm": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "minimum_score_delta_ppm": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "pair_count": {"type": "integer", "minimum": 1},
+        "score_delta_mean_ppm": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "score_delta_sum_ppm": {"type": "integer"}
+      }
+    },
+    "operationalCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "measurement_status",
+        "measured_logical_call_denominator",
+        "metric",
+        "missing_logical_call_count",
+        "observed_count",
+        "population_logical_calls",
+        "reason_codes"
+      ],
+      "properties": {
+        "measurement_status": {"$ref": "#/$defs/measurementStatus"},
+        "measured_logical_call_denominator": {"type": "integer", "minimum": 0},
+        "metric": {
+          "enum": [
+            "PHYSICAL_ACTOR_ATTEMPT",
+            "ACTOR_RETRY",
+            "PROVIDER_FAILURE",
+            "PARSER_ATTEMPT",
+            "PARSER_FAILURE",
+            "ACTION_FAILURE"
+          ]
+        },
+        "missing_logical_call_count": {"type": "integer", "minimum": 0},
+        "observed_count": {"$ref": "#/$defs/nullableNonnegativeInteger"},
+        "population_logical_calls": {"type": "integer", "minimum": 0},
+        "reason_codes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/reason"}
+        }
+      }
+    },
+    "operationalCounts": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "prefixItems": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/operationalCount"},
+            {"properties": {"metric": {"const": "PHYSICAL_ACTOR_ATTEMPT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/operationalCount"},
+            {"properties": {"metric": {"const": "ACTOR_RETRY"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/operationalCount"},
+            {"properties": {"metric": {"const": "PROVIDER_FAILURE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/operationalCount"},
+            {"properties": {"metric": {"const": "PARSER_ATTEMPT"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/operationalCount"},
+            {"properties": {"metric": {"const": "PARSER_FAILURE"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/operationalCount"},
+            {"properties": {"metric": {"const": "ACTION_FAILURE"}}}
+          ]
+        }
+      ],
+      "items": false
     },
     "classification": {
       "type": "object",
@@ -315,9 +493,14 @@
         "cost_usd_micros",
         "executed_actions",
         "host",
+        "official_score_float_hex",
         "official_score_ppm",
         "official_success",
+        "official_success_metric_id",
+        "official_success_operator",
+        "official_success_threshold_float_hex",
         "openai_calls",
+        "operational_counts",
         "premature_stop",
         "repeated_action",
         "sentinel_openai_tokens",
@@ -340,9 +523,17 @@
         "cost_usd_micros": {"type": "integer", "minimum": 0},
         "executed_actions": {"type": "integer", "minimum": 0},
         "host": {"$ref": "#/$defs/host"},
+        "official_score_float_hex": {
+          "type": "string",
+          "pattern": "^0x[01]\\.[0-9a-f]+p[+-][0-9]+$"
+        },
         "official_score_ppm": {"type": "integer", "minimum": 0, "maximum": 1000000},
         "official_success": {"type": "boolean"},
+        "official_success_metric_id": {"const": "mobileworld.core.eval-score-gt/v1"},
+        "official_success_operator": {"const": "GT"},
+        "official_success_threshold_float_hex": {"const": "0x1.fae147ae147aep-1"},
         "openai_calls": {"type": "integer", "minimum": 0},
+        "operational_counts": {"$ref": "#/$defs/operationalCounts"},
         "premature_stop": {"$ref": "#/$defs/classification"},
         "repeated_action": {"$ref": "#/$defs/classification"},
         "sentinel_openai_tokens": {"$ref": "#/$defs/tokenSummary"},
@@ -369,8 +560,10 @@
         "group_id",
         "host",
         "kind",
+        "official_scores",
         "official_success",
         "openai_calls",
+        "operational_counts",
         "sentinel_openai_tokens",
         "steps",
         "task_id",
@@ -386,6 +579,7 @@
         "group_id": {"$ref": "#/$defs/runtimeId"},
         "host": {"oneOf": [{"$ref": "#/$defs/host"}, {"type": "null"}]},
         "kind": {"enum": ["OVERALL", "HOST_ARM", "TASK"]},
+        "official_scores": {"$ref": "#/$defs/scoreSummary"},
         "official_success": {
           "allOf": [
             {"$ref": "#/$defs/rate"},
@@ -398,6 +592,7 @@
           ]
         },
         "openai_calls": {"type": "integer", "minimum": 0},
+        "operational_counts": {"$ref": "#/$defs/operationalCounts"},
         "sentinel_openai_tokens": {"$ref": "#/$defs/tokenSummary"},
         "steps": {"$ref": "#/$defs/stepSummary"},
         "task_id": {
@@ -449,6 +644,7 @@
         "baseline_actor_provider_tokens",
         "baseline_cost_usd_micros",
         "baseline_openai_calls",
+        "baseline_score_ppm",
         "baseline_sequence_index",
         "baseline_steps",
         "baseline_success",
@@ -458,8 +654,10 @@
         "host",
         "joint_actor_provider_tokens",
         "joint_cost_usd_micros",
+        "joint_minus_baseline_score_ppm",
         "joint_minus_baseline_steps",
         "joint_openai_calls",
+        "joint_score_ppm",
         "joint_sequence_index",
         "joint_steps",
         "joint_success",
@@ -474,6 +672,7 @@
         "baseline_actor_provider_tokens": {"$ref": "#/$defs/tokenSummary"},
         "baseline_cost_usd_micros": {"type": "integer", "minimum": 0},
         "baseline_openai_calls": {"type": "integer", "minimum": 0},
+        "baseline_score_ppm": {"type": "integer", "minimum": 0, "maximum": 1000000},
         "baseline_sequence_index": {"type": "integer", "minimum": 0},
         "baseline_steps": {"type": "integer", "minimum": 1},
         "baseline_success": {"type": "boolean"},
@@ -483,8 +682,14 @@
         "host": {"$ref": "#/$defs/host"},
         "joint_actor_provider_tokens": {"$ref": "#/$defs/tokenSummary"},
         "joint_cost_usd_micros": {"type": "integer", "minimum": 0},
+        "joint_minus_baseline_score_ppm": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
         "joint_minus_baseline_steps": {"type": "integer"},
         "joint_openai_calls": {"type": "integer", "minimum": 0},
+        "joint_score_ppm": {"type": "integer", "minimum": 0, "maximum": 1000000},
         "joint_sequence_index": {"type": "integer", "minimum": 0},
         "joint_steps": {"type": "integer", "minimum": 1},
         "joint_success": {"type": "boolean"},
@@ -506,6 +711,7 @@
         "baseline_cost_usd_micros",
         "baseline_openai_calls",
         "baseline_sentinel_openai_tokens",
+        "baseline_scores",
         "baseline_success_count",
         "baseline_total_steps",
         "baseline_wall_time_ms",
@@ -518,10 +724,12 @@
         "joint_actor_provider_tokens",
         "joint_cost_usd_micros",
         "joint_improved_count",
+        "joint_minus_baseline_scores",
         "joint_minus_baseline_total_steps",
         "joint_openai_calls",
         "joint_regressed_count",
         "joint_sentinel_openai_tokens",
+        "joint_scores",
         "joint_success_count",
         "joint_total_steps",
         "joint_wall_time_ms",
@@ -534,6 +742,7 @@
         "baseline_cost_usd_micros": {"type": "integer", "minimum": 0},
         "baseline_openai_calls": {"type": "integer", "minimum": 0},
         "baseline_sentinel_openai_tokens": {"$ref": "#/$defs/tokenSummary"},
+        "baseline_scores": {"$ref": "#/$defs/scoreSummary"},
         "baseline_success_count": {"type": "integer", "minimum": 0},
         "baseline_total_steps": {"type": "integer", "minimum": 0},
         "baseline_wall_time_ms": {"type": "integer", "minimum": 0},
@@ -546,10 +755,12 @@
         "joint_actor_provider_tokens": {"$ref": "#/$defs/tokenSummary"},
         "joint_cost_usd_micros": {"type": "integer", "minimum": 0},
         "joint_improved_count": {"type": "integer", "minimum": 0},
+        "joint_minus_baseline_scores": {"$ref": "#/$defs/scoreDeltaSummary"},
         "joint_minus_baseline_total_steps": {"type": "integer"},
         "joint_openai_calls": {"type": "integer", "minimum": 0},
         "joint_regressed_count": {"type": "integer", "minimum": 0},
         "joint_sentinel_openai_tokens": {"$ref": "#/$defs/tokenSummary"},
+        "joint_scores": {"$ref": "#/$defs/scoreSummary"},
         "joint_success_count": {"type": "integer", "minimum": 0},
         "joint_total_steps": {"type": "integer", "minimum": 0},
         "joint_wall_time_ms": {"type": "integer", "minimum": 0},

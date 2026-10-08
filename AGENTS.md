@@ -3,6 +3,107 @@
 Last synchronized with the owner-facing repository state: **2026-09-05 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
+## 2026-10-04 owner reset: Qwen GUI Ledger
+
+The owner explicitly requested removal of the previous runtime Sentinel and a
+fresh, narrow GUI adaptation of Ledger, starting with Qwen. This supersedes
+the active-runtime architecture and launch flags described below. The old
+`runtime/sentinel`, its tests, and `sentinel_mvp` have been removed; do not
+recreate their policy/model/codec/wrapper stack as a dependency.
+
+The active implementation is `MobileWorld/src/mobile_world/runtime/gui_ledger.py`
+plus thin runner/Qwen hooks. `mw eval --gui-ledger off|inform|full` is default
+off and supports Qwen GUI-only tasks. Inform is regenerated per decision and
+not persisted in host history; Govern's Allow/Nudge both execute the original
+action, and a returned Nudge is received execution feedback in host history.
+No extra model calls, semantic truth/progress judge, history rewriting, action
+suppression, or Reuse are implemented. Pixel equality is only equality of
+sampled observations, never proof of unchanged environment or task failure.
+
+See `MobileWorld/docs/gui_ledger_design.md`. Preserve Collector and offline
+research/frozen evidence. The historical checkpoint records below remain
+provenance, not instructions to restore deleted runtime code. This task is
+CPU/offline code work only; live resources/evaluations need a separate request.
+
+## 2026-09-09 operational simplification
+
+The owner has retired the executable R2.4/R2.5 authority, promotion,
+preflight, production-driver, process-census, snapshot-hash, and pilot stack.
+Those mechanisms remain historical provenance only; they are not runtime
+prerequisites and must not be recreated as launch gates.
+
+The current executable route is ordinary audited MobileWorld evaluation:
+assemble the Qwen or MAI actor request, run the in-process Prompt Sentinel,
+then call the unchanged actor/provider/parser/action path.  Operational startup
+is intentionally limited to selecting the task list, checking usable GPU
+capacity, starting the actor model and MobileWorld environment, and invoking
+`mw eval --sentinel active`.  It does not require an authority manifest,
+promotion, source-commit binding, root-derived cleanup hash, or model-snapshot
+content rehash.
+
+This repository instruction does not itself start or authorize live resources.
+Provider, GPU, Docker, emulator, GUI, or task execution still requires the
+owner's explicit request for that run.  The current task is code-only; do not
+run it live.
+
+## 2026-09-09 non-negotiable runtime-simplicity directive
+
+This directive applies to **every repository task** and overrides later
+historical R2.x compatibility and proof-language for active runtime work.
+Existing violations are migration debt, not precedent.
+
+The active `mw eval` hot path must not add or preserve any of the following
+merely for compatibility with an older checkpoint:
+
+- vertical, generation-by-generation wrapper stacks;
+- composite result wrappers around older result types;
+- multiple semantic receipts, sinks, or transactions for one actor call;
+- repeated canonical hashing, recursive `deepcopy`, exact-concrete-type gates,
+  or module-seal proofs at each internal hop;
+- bridges that route a new feature through R2.2, R2.3, and R2.4 abstractions
+  solely because those contracts already exist;
+- authority, promotion, preflight, process-census, cleanup-proof, or snapshot-
+  proof concepts recreated under a new name.
+
+One logical actor call should have one immutable Original request, one flat
+final result, and at most one best-effort, secret-free derived call record.
+History-policy and execution-state outcomes may be independent fields in that
+flat result; they must not become separate wrapper/result/receipt hierarchies.
+Copy and hash once at an actual trust or persistence boundary, then pass typed
+immutable values internally. Logging or publication failure must not stop the
+actor or task; it may only make that call unavailable for later effect
+analysis. Prefer a clean internal version break and migrate callers rather
+than adding compatibility adapters.
+
+The lean runtime must retain only these behavioral boundaries:
+
+- immutable Original and exact fallback;
+- declared history-span and non-history invariants;
+- one Sentinel evaluation per logical actor call, reused across retries;
+- causal cutoff and future non-interference;
+- closed provider-output validation;
+- independent history-policy and local execution-state status;
+- bounded timeout with late-result isolation, recursion bypass, and minimal
+  secret-free logging.
+
+If a proposed feature cannot fit this shape, stop and report the mismatch
+instead of adding another wrapper, bridge, receipt, or proof layer.
+
+### Active disposition of R2.2, R2.3, and R2.4
+
+| Layer | Historical purpose | Active-runtime decision |
+| --- | --- | --- |
+| R2.2 | Ask a policy model whether model-visible history claims should be `KEEP`, `DROP`, or `KEEP_UNCERTAIN`, then admit exact-span edits. | **Keep the semantic core only:** one bounded history-policy call, closed output schema, evidence references, deterministic admission, exact-span validation, and Original fallback. Migrate that core into the flat lean runtime; legacy evidence/result/receipt/metrics hierarchies are not hot-path dependencies. |
+| R2.3 | Generate and track an AND/OR task rubric, milestones, path relevance, and frontier using an additional model-backed axis. | **Remove from the default hot path.** It is not required to detect or mitigate MHR, adds calls and a failure dependency, and remains an optional offline/research evaluator. Any future online experiment must be explicitly opt-in, non-blocking, and represented as one optional field rather than another result or receipt stack. |
+| R2.4 | Join Collector evidence, Qwen/MAI history codecs, R2.2 policy, R2.3 rubric, promotion, rendering, and live-runtime bookkeeping. | **Keep only reusable mechanisms:** thin registered history adapters, causal Collector cutoff, deterministic execution-state facts, exact renderer invariants, timeout isolation, and retry reuse. Replace vertical contracts, promotion bridges, orchestration wrappers, composite results, and multi-receipt publication with one lean call path. |
+
+Historical R2.2/R2.3/R2.4 files and tests may temporarily remain as provenance
+and regression material, but no new active-runtime code may depend on their
+wrapper topology. Migration order is: preserve behavior with focused tests,
+introduce the flat lean interface, switch ordinary `mw eval` to it, then remove
+unreachable legacy imports and modules. Do not create compatibility wrappers
+during that migration.
+
 This is the AgentSentinel monorepo. `MobileWorld/` is the active implementation
 tree. `mobileworld_audit_handoff/` contains the historical contracts, evidence
 provenance, and the detailed task instructions.
@@ -52,8 +153,8 @@ The intended production boundary is:
 host assembles the exact actor request
     -> PromptSentinel.before_model_call(...)
     -> History Codec extracts host-native model-visible history
-    -> evidence-grounded policy proposes validity operations
-    -> independent rubric component proposes task-path relevance
+    -> local deterministic execution-state facts describe prior execution
+    -> at most one evidence-grounded history policy proposes validity operations
     -> invariant validator and renderer construct a protocol-valid request
     -> the unchanged actor model chooses the GUI action
 ```
