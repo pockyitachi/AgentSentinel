@@ -13,7 +13,6 @@ from mobile_world.agents.utils.prompts import (
     MOBILE_QWEN3VL_PROMPT_WITH_ASK_USER,
     MOBILE_QWEN3VL_USER_TEMPLATE,
 )
-from mobile_world.runtime.sentinel.flat_codec import QWEN_SOURCE_BOUND_HISTORY_ENCODING
 from mobile_world.runtime.utils.helpers import pretty_print_messages
 from mobile_world.runtime.utils.models import ENV_FAIL, MCP, JSONAction
 
@@ -187,9 +186,6 @@ def parsing_response_to_andoid_world_env_action(
 
 
 class Qwen3VLAgentMCP(MCPAgent):
-    sentinel_host_id = "mobileworld.qwen3vl.actor"
-    sentinel_history_codec_id = "mobileworld.g1.history-codec.qwen-flat-progress"
-
     def __init__(
         self,
         model_name: str,
@@ -207,30 +203,20 @@ class Qwen3VLAgentMCP(MCPAgent):
         self.runtime_conf = runtime_conf
         self.build_openai_client(self.llm_base_url, api_key)
 
-        self.thoughts = []
-        self.actions = []
-        self.conclusions = []
-        self.history_images = []
-        self.history_responses = []
-        self._sentinel_history_claims: list[str] = []
-        self._sentinel_history_source_steps: list[str | None] = []
+        self.thoughts: list[str] = []
+        self.actions: list[dict[str, Any]] = []
+        self.conclusions: list[str] = []
+        self.history_images: list[Any] = []
+        self.history_responses: list[str] = []
 
     def predict(self, observation: dict[str, Any]) -> tuple[str, JSONAction]:
         """
         Predict the next action(s) based on the current observation.
         """
 
-        if not hasattr(self, "_sentinel_history_claims"):
-            self._sentinel_history_claims = list(self.conclusions)
-        if not hasattr(self, "_sentinel_history_source_steps"):
-            self._sentinel_history_source_steps = [None] * len(self.conclusions)
-        assert (
-            len(self.actions)
-            == len(self.thoughts)
-            == len(self.conclusions)
-            == len(self._sentinel_history_claims)
-            == len(self._sentinel_history_source_steps)
-        ), "The number of actions, thoughts, and conclusions should be the same."
+        assert len(self.actions) == len(self.thoughts) == len(self.conclusions), (
+            "The number of actions, thoughts, and conclusions should be the same."
+        )
 
         screenshot = observation["screenshot"]
         self.history_images.append(screenshot)
@@ -244,42 +230,36 @@ class Qwen3VLAgentMCP(MCPAgent):
             )
         if "ask_user_response" in observation and observation["ask_user_response"] is not None:
             self.conclusions[-1] += f"; Ask user response: {observation['ask_user_response']}"
+        # Govern's notice is received execution feedback, unlike transient Inform.
+        nudge = observation.get("ledger_nudge")
+        if self.conclusions and type(nudge) is str and 0 < len(nudge) <= 2048:
+            self.conclusions[-1] += "; Execution observation: " + nudge
         steps = ""
-        relative_claim_ranges: list[tuple[int, int]] = []
-        for idx, (conclusion, source_claim) in enumerate(
-            zip(self.conclusions, self._sentinel_history_claims, strict=True)
-        ):
-            prefix = "Step " + str(idx + 1) + ": "
-            rendered = str(conclusion.replace("\n", "").replace('"', ""))
-            claim = str(source_claim.replace("\n", "").replace('"', ""))
-            if not rendered.startswith(claim):
-                raise ValueError("Qwen history claim no longer matches its host rendering")
-            start = len(steps) + len(prefix)
-            relative_claim_ranges.append((start, start + len(claim)))
-            steps += prefix + rendered + "; "
+        for idx, conclusion in enumerate(self.conclusions):
+            steps += (
+                "Step "
+                + str(idx + 1)
+                + ": "
+                + str(conclusion.replace("\n", "").replace('"', ""))
+                + "; "
+            )
 
         system_prompt = MOBILE_QWEN3VL_PROMPT_WITH_ASK_USER.render(
             tools="\n".join([json.dumps(tool, ensure_ascii=False) for tool in self.tools])
         )
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
         ]
 
-        user_text = MOBILE_QWEN3VL_USER_TEMPLATE.format(
-            instruction=self.instruction,
-            steps=steps,
-        )
-        history_start = len(user_text) - len(steps) - 1
-        claim_ranges = tuple(
-            (history_start + start, history_start + end) for start, end in relative_claim_ranges
-        )
         messages.append(
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
-                        "text": user_text,
+                        "text": MOBILE_QWEN3VL_USER_TEMPLATE.format(
+                            instruction=self.instruction, steps=steps
+                        ),
                     },
                     {
                         "type": "image_url",
@@ -289,66 +269,62 @@ class Qwen3VLAgentMCP(MCPAgent):
             }
         )
 
+        # Only this request receives Inform; the original host retry loop reuses it.
+        inform = observation.get("ledger_inform")
+        if type(inform) is str and 0 < len(inform) <= 16384:
+            messages[-1]["content"].append({"type": "text", "text": inform})
+
         pretty_print_messages(messages)
 
-        with self._sentinel_logical_call_scope(
-            attributes={
-                "adapter": "qwen3vl",
-                "history_encoding": QWEN_SOURCE_BOUND_HISTORY_ENCODING,
-                "history_step_count": len(self.conclusions),
-                "history_claim_ranges": claim_ranges,
-                "history_source_step_event_ids": tuple(self._sentinel_history_source_steps),
-            }
-        ):
-            audit_retry_group = self._begin_outer_model_audit_retry_group()
+        audit_retry_group = self._begin_outer_model_audit_retry_group()
 
-            try_times = 3
-            adapter_attempt_index = 0
-            origin_h, origin_w = screenshot.height, screenshot.width
-            parsed_response = None
+        try_times = 3
+        adapter_attempt_index = 0
+        origin_h, origin_w = screenshot.height, screenshot.width
+        parsed_response = None
 
-            while True:
-                adapter_attempt_index += 1
-                if audit_retry_group is None:
+        while True:
+            adapter_attempt_index += 1
+            if audit_retry_group is None:
+                prediction = self.openai_chat_completions_create(
+                    model=self.model_name,
+                    messages=messages,
+                    retry_times=3,
+                    **self.runtime_conf,
+                )
+            else:
+                with self._outer_model_audit_attempt_scope(
+                    audit_retry_group,
+                    adapter_attempt_index=adapter_attempt_index,
+                    # Provider failure exits this adapter; only a successful but
+                    # malformed response reaches the outer parse retry.
+                    adapter_retry_planned=False,
+                ):
                     prediction = self.openai_chat_completions_create(
                         model=self.model_name,
                         messages=messages,
                         retry_times=3,
                         **self.runtime_conf,
                     )
+
+            if prediction is None:
+                raise Exception("Error when fetching response from clients")
+
+            try:
+                parsed_response = parse_action_to_structure_output(
+                    prediction,
+                )
+
+                logger.info(f"Parsed response: \n{parsed_response}")
+                break
+            except Exception:
+                if try_times > 0:
+                    logger.error("Error when parsing response from clients")
+                    logger.error(traceback.format_exc())
+                    prediction = None
+                    try_times -= 1
                 else:
-                    with self._outer_model_audit_attempt_scope(
-                        audit_retry_group,
-                        adapter_attempt_index=adapter_attempt_index,
-                        # Provider failure exits this adapter; only a successful but
-                        # malformed response reaches the outer parse retry.
-                        adapter_retry_planned=False,
-                    ):
-                        prediction = self.openai_chat_completions_create(
-                            model=self.model_name,
-                            messages=messages,
-                            retry_times=3,
-                            **self.runtime_conf,
-                        )
-
-                if prediction is None:
-                    raise Exception("Error when fetching response from clients")
-
-                try:
-                    parsed_response = parse_action_to_structure_output(
-                        prediction,
-                    )
-
-                    logger.info(f"Parsed response: \n{parsed_response}")
-                    break
-                except Exception:
-                    if try_times > 0:
-                        logger.error("Error when parsing response from clients")
-                        logger.error(traceback.format_exc())
-                        prediction = None
-                        try_times -= 1
-                    else:
-                        raise Exception("Failed to parse response after maximum retries")
+                    raise Exception("Failed to parse response after maximum retries")
 
         if parsed_response is None:
             return "llm parse error after multiple retries", JSONAction(action_type=ENV_FAIL)
@@ -356,8 +332,6 @@ class Qwen3VLAgentMCP(MCPAgent):
         self.history_responses.append(prediction)
         self.thoughts.append(parsed_response["thinking"])
         self.conclusions.append(parsed_response["conclusion"])
-        self._sentinel_history_claims.append(parsed_response["conclusion"])
-        self._sentinel_history_source_steps.append(self._sentinel_source_step_event_id())
 
         if parsed_response["action_name"] == "mobile_use":
             json_action_dict = parsing_response_to_andoid_world_env_action(
@@ -365,8 +339,10 @@ class Qwen3VLAgentMCP(MCPAgent):
                 origin_h,
                 origin_w,
             )
+
             self.actions.append(json_action_dict)
-            action = JSONAction(**json_action_dict)
+
+            return prediction, JSONAction(**json_action_dict)
         else:
             self.actions.append(
                 {
@@ -374,12 +350,11 @@ class Qwen3VLAgentMCP(MCPAgent):
                     "action_args": parsed_response["action_json"],
                 }
             )
-            action = JSONAction(
+            return prediction, JSONAction(
                 action_type=MCP,
                 action_json=parsed_response["action_json"],
                 action_name=parsed_response["action_name"],
             )
-        return prediction, action
 
     def reset(self):
         """Reset the agent for the next task."""
@@ -388,5 +363,3 @@ class Qwen3VLAgentMCP(MCPAgent):
         self.history_images = []
         self.history_responses = []
         self.conclusions = []
-        self._sentinel_history_claims = []
-        self._sentinel_history_source_steps = []

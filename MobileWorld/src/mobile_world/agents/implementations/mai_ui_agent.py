@@ -111,9 +111,6 @@ def parse_action_to_structure_output(text: str) -> dict[str, Any]:
 class MAIUINaivigationAgent(MCPAgent):
     """Mobile automation agent using vision-language models."""
 
-    sentinel_host_id = "mobileworld.mai-ui.actor"
-    sentinel_history_codec_id = "mobileworld.g1.history-codec.mai-raw-replay"
-
     def __init__(
         self,
         llm_base_url: str,
@@ -160,7 +157,6 @@ class MAIUINaivigationAgent(MCPAgent):
             tuple[Any, Any, Any]
         ] = []  # (image, tool_call, ask_user_response)
         self.history_responses: list[dict] = []
-        self._sentinel_history_source_steps: list[str | None] = []
 
     @property
     def system_prompt(self) -> str:
@@ -283,28 +279,18 @@ class MAIUINaivigationAgent(MCPAgent):
         logger.debug(f"Current history responses count: {len(self.history_responses)}")
 
         assert len(self.history_images) == len(self.history_responses) + 1
-        if not hasattr(self, "_sentinel_history_source_steps"):
-            self._sentinel_history_source_steps = [None] * len(self.history_responses)
-        assert len(self._sentinel_history_source_steps) == len(self.history_responses)
 
         messages = self._build_messages(obs_image, tool_call, ask_user_response)
         pretty_print_messages(messages, max_messages=10)
         logger.debug("*" * 100)
-        with self._sentinel_logical_call_scope(
-            attributes={
-                "adapter": "mai-ui",
-                "history_step_count": len(self.history_responses),
-                "history_source_step_event_ids": tuple(self._sentinel_history_source_steps),
-            }
-        ):
-            prediction = self.openai_chat_completions_create(
-                model=self.model_name,
-                messages=messages,
-                retry_times=3,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-            )
+        prediction = self.openai_chat_completions_create(
+            model=self.model_name,
+            messages=messages,
+            retry_times=3,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            top_p=self.top_p,
+        )
 
         if prediction is None:
             raise ValueError("Planner LLM failed")
@@ -325,7 +311,6 @@ class MAIUINaivigationAgent(MCPAgent):
             fallback_action = JSONAction(action_type=UNKNOWN, text=str(e))
             return "Parsing error", fallback_action
         self.history_responses.append({"role": "assistant", "content": prediction})
-        self._sentinel_history_source_steps.append(self._sentinel_source_step_event_id())
 
         json_action = self._convert_to_json_action(tool_name, action_json, obs_image)
 
@@ -411,5 +396,4 @@ class MAIUINaivigationAgent(MCPAgent):
         """Reset the agent for the next task."""
         self.history_images = []
         self.history_responses = []
-        self._sentinel_history_source_steps = []
         logger.debug("MAI UI agent reset completed")

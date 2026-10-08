@@ -173,6 +173,8 @@ class TaskRecorder:
         self._capture_complete = True
         self._missing_artifacts: list[str] = []
         self._collector_error_event_ids: list[str] = []
+        self._last_event_seq = 0
+        self._capture_incomplete_from_seq: int | None = None
 
     @property
     def path(self) -> Path:
@@ -213,11 +215,24 @@ class TaskRecorder:
         with self._lock:
             return tuple(self._collector_error_event_ids)
 
+    @property
+    def capture_incomplete_from_seq(self) -> int | None:
+        """Earliest task-stream sequence affected by in-memory incompleteness."""
+
+        with self._lock:
+            return self._capture_incomplete_from_seq
+
     def mark_incomplete(self, *missing_artifacts: str) -> None:
         """Record in-memory incompleteness even if the error stream is unavailable."""
 
         with self._lock:
             self._capture_complete = False
+            if self._capture_incomplete_from_seq is None:
+                # The failed capture belongs to the next event boundary.  A
+                # Sentinel read already cut off at ``_last_event_seq`` must
+                # not change retroactively when a later hook reports a
+                # failure.
+                self._capture_incomplete_from_seq = self._last_event_seq + 1
             for artifact in missing_artifacts:
                 if artifact and artifact not in self._missing_artifacts:
                     self._missing_artifacts.append(artifact)
@@ -239,6 +254,9 @@ class TaskRecorder:
                 payload,
                 caused_by_event_id=caused_by_event_id,
             )
+            event_seq = event.get("seq")
+            if isinstance(event_seq, int) and not isinstance(event_seq, bool):
+                self._last_event_seq = event_seq
             if event_type == "collector_error":
                 missing = payload.get("missing_artifacts")
                 if isinstance(missing, list):

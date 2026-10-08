@@ -1,5 +1,21 @@
 # AgentSentinel
 
+## Current implementation: Qwen GUI Ledger (2026-10-04)
+
+The owner has replaced the previous model-driven runtime Sentinel with a
+small deterministic GUI Ledger, initially for Qwen GUI-only tasks. It adds a
+transient Inform view and advisory Allow/Nudge execution feedback, with **no
+extra model calls**, no history rewriting, and no action suppression or Reuse.
+Use `mw eval --gui-ledger off|inform|full` (default `off`). See the
+[implementation design](MobileWorld/docs/gui_ledger_design.md) for inputs,
+outputs, rules, and deliberate differences from the Ledger paper.
+
+The old runtime Sentinel modules, CLI options, tests, and `sentinel_mvp` have
+been removed. Collector, offline research contracts, and frozen study evidence
+remain. The descriptions below record the earlier research program, not the
+current executable architecture. This code change is not a live evaluation or
+an effectiveness result.
+
 AgentSentinel studies runtime integrity for the task-local execution histories
 that GUI agents feed back into later model calls. A previous reasoning trace,
 action conclusion, progress summary, or folded memory can be false when
@@ -125,13 +141,12 @@ AgentSentinel/
 ├── motivation study/            # Epic 1 Markdown/PDF, exact report assets, and result projection
 ├── mobileworld_audit_handoff/   # authoritative contracts, decisions, status, and G1 protocol
 ├── seed_baseline_audit/         # historical preliminary Seed investigation
-├── sentinel_mvp/                # legacy single-host behavioral reference
 └── proposal-*.md                # long-term method proposal and presentation material
 ```
 
-The portable G1 contract is implemented under
-`MobileWorld/src/mobile_world/offline/causal_replay/`, independently of
-`sentinel_mvp`; that directory remains only a legacy reference. G1.3 adds a
+The portable G1 contract remains under
+`MobileWorld/src/mobile_world/offline/causal_replay/`. The retired
+`sentinel_mvp` implementation is available in Git history. G1.3 adds a
 separate offline capsule-materialization layer and does not modify the accepted
 G1.2 contract.
 

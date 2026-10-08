@@ -3,6 +3,28 @@
 Last synchronized with the owner-facing repository state: **2026-09-05 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
+## 2026-10-04 owner reset: Qwen GUI Ledger
+
+The owner explicitly requested removal of the previous runtime Sentinel and a
+fresh, narrow GUI adaptation of Ledger, starting with Qwen. This supersedes
+the active-runtime architecture and launch flags described below. The old
+`runtime/sentinel`, its tests, and `sentinel_mvp` have been removed; do not
+recreate their policy/model/codec/wrapper stack as a dependency.
+
+The active implementation is `MobileWorld/src/mobile_world/runtime/gui_ledger.py`
+plus thin runner/Qwen hooks. `mw eval --gui-ledger off|inform|full` is default
+off and supports Qwen GUI-only tasks. Inform is regenerated per decision and
+not persisted in host history; Govern's Allow/Nudge both execute the original
+action, and a returned Nudge is received execution feedback in host history.
+No extra model calls, semantic truth/progress judge, history rewriting, action
+suppression, or Reuse are implemented. Pixel equality is only equality of
+sampled observations, never proof of unchanged environment or task failure.
+
+See `MobileWorld/docs/gui_ledger_design.md`. Preserve Collector and offline
+research/frozen evidence. The historical checkpoint records below remain
+provenance, not instructions to restore deleted runtime code. This task is
+CPU/offline code work only; live resources/evaluations need a separate request.
+
 ## 2026-09-09 operational simplification
 
 The owner has retired the executable R2.4/R2.5 authority, promotion,

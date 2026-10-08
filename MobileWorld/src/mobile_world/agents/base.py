@@ -18,9 +18,6 @@ _AUDIT_VALUE_UNSET = object()
 class BaseAgent(ABC):
     """Abstract base class for all mobile automation agents."""
 
-    sentinel_host_id: str | None = None
-    sentinel_history_codec_id: str | None = None
-
     def __init__(
         self,
         *args: Any,
@@ -30,15 +27,6 @@ class BaseAgent(ABC):
         self._total_prompt_tokens: int = 0
         self._total_cached_tokens: int = 0
         self.instruction: str | None = None
-        self._prompt_sentinel = kwargs.get("prompt_sentinel")
-        self._sentinel_host_id = (
-            kwargs.get("sentinel_host_id")
-            or self.sentinel_host_id
-            or (f"{type(self).__module__}.{type(self).__qualname__}")
-        )
-        self._sentinel_history_codec_id = (
-            kwargs.get("sentinel_history_codec_id") or self.sentinel_history_codec_id
-        )
 
     def initialize(self, instruction: str) -> bool:
         """Initialize the agent with the given instruction."""
@@ -83,20 +71,6 @@ class BaseAgent(ABC):
 
         time.sleep(seconds)
 
-    def _sentinel_source_step_event_id(self) -> str | None:
-        """Return the Collector step that produced a retained history item."""
-
-        if self._prompt_sentinel is None:
-            return None
-        try:
-            from mobile_world.runtime.audit.context import get_audit_context
-
-            context = get_audit_context()
-            event_id = None if context is None else context.parent_event_id
-            return event_id if isinstance(event_id, str) and event_id else None
-        except Exception:
-            return None
-
     def _wrap_stream_with_usage_logging(self, stream: Any) -> Any:
         """Wrap a streaming response to log usage when stream completes."""
         final_usage = None
@@ -122,15 +96,7 @@ class BaseAgent(ABC):
             # Enable usage reporting in stream
             kwargs.setdefault("stream_options", {})
             kwargs["stream_options"]["include_usage"] = True
-            provider_model, provider_messages, provider_kwargs = (
-                self._apply_prompt_sentinel_before_model_call(
-                    model=model,
-                    messages=messages,
-                    kwargs=kwargs,
-                    stream=True,
-                    call_role=call_role,
-                )
-            )
+            provider_model, provider_messages, provider_kwargs = model, messages, kwargs
             audit_call = self._begin_actor_model_audit_call(call_role=call_role)
             audit_attempt = None
             sdk_arguments = {
@@ -174,7 +140,6 @@ class BaseAgent(ABC):
         provider_model = model
         provider_messages = messages
         provider_kwargs = kwargs
-        sentinel_request_initialized = False
         while retry_times > 0:
             try:
                 if "claude" in model:
@@ -195,17 +160,6 @@ class BaseAgent(ABC):
                 self._bounded_provider_retry_sleep(1.0)
                 continue
 
-            if not sentinel_request_initialized:
-                provider_model, provider_messages, provider_kwargs = (
-                    self._apply_prompt_sentinel_before_model_call(
-                        model=model,
-                        messages=messages,
-                        kwargs=kwargs,
-                        stream=False,
-                        call_role=call_role,
-                    )
-                )
-                sentinel_request_initialized = True
             if not audit_call_initialized:
                 audit_call = self._begin_actor_model_audit_call(call_role=call_role)
                 audit_call_initialized = True
@@ -280,114 +234,6 @@ class BaseAgent(ABC):
             self._record_model_audit_response(audit_attempt, response, final_content)
             return final_content
         return None
-
-    @contextmanager
-    def _sentinel_logical_call_scope(
-        self,
-        *,
-        call_role: str = "actor",
-        attributes: dict[str, Any] | None = None,
-    ) -> Any:
-        """Bind one short-lived Sentinel cache after host prompt assembly.
-
-        No Sentinel ID or import is created when the feature is not configured.
-        The scope is independent from Collector model-call/retry-group identity.
-        """
-
-        sentinel = self._prompt_sentinel
-        if sentinel is None:
-            yield None
-            return
-        try:
-            current = sentinel.current_logical_call()
-            if current is not None and current.matches(
-                sentinel,
-                host_id=self._sentinel_host_id,
-                history_codec_id=self._sentinel_history_codec_id,
-                call_role=call_role,
-            ):
-                call = current
-                manager = None
-            else:
-                trusted_attributes = {} if attributes is None else attributes
-                call = sentinel.logical_call(
-                    host_id=self._sentinel_host_id,
-                    history_codec_id=self._sentinel_history_codec_id,
-                    call_role=call_role,
-                    attributes=trusted_attributes,
-                )
-                manager = sentinel.bind_logical_call(call)
-        except Exception:
-            logger.warning("Prompt Sentinel scope setup failed open to Original")
-            yield None
-            return
-        if manager is None:
-            yield call
-        else:
-            with manager:
-                yield call
-
-    def _apply_prompt_sentinel_before_model_call(
-        self,
-        *,
-        model: str,
-        messages: list[dict],
-        kwargs: dict[str, Any],
-        stream: bool,
-        call_role: str,
-    ) -> tuple[str, list[dict], dict[str, Any]]:
-        """Select Original or one cached validated final request for the SDK."""
-
-        sentinel = self._prompt_sentinel
-        if sentinel is None:
-            return model, messages, kwargs
-        try:
-            logical_call = sentinel.current_logical_call()
-            request: dict[str, Any] = {"model": model, "messages": messages, **kwargs}
-            if stream:
-                request["stream"] = True
-            if logical_call is None or not logical_call.matches(
-                sentinel,
-                host_id=self._sentinel_host_id,
-                history_codec_id=self._sentinel_history_codec_id,
-                call_role=call_role,
-            ):
-                logical_call = sentinel.logical_call(
-                    host_id=self._sentinel_host_id,
-                    history_codec_id=self._sentinel_history_codec_id,
-                    call_role=call_role,
-                )
-            result = logical_call.before_model_call(request)
-            # OFF, SHADOW, recursion bypass, kill switch, and every fallback
-            # preserve the original provider argument objects and identities.
-            if not result.use_transformed_request:
-                return model, messages, kwargs
-            final = result.final_request
-            if not isinstance(final, dict):
-                return model, messages, kwargs
-            final_model = final.get("model")
-            final_messages = final.get("messages")
-            if not isinstance(final_model, str) or not isinstance(final_messages, list):
-                return model, messages, kwargs
-            final_kwargs = {
-                key: value for key, value in final.items() if key not in {"model", "messages"}
-            }
-            if stream:
-                if final_kwargs.pop("stream", None) is not True:
-                    return model, messages, kwargs
-            elif "stream" in final_kwargs:
-                return model, messages, kwargs
-            return (
-                final_model,
-                cast(list[dict], final_messages),
-                cast(dict[str, Any], final_kwargs),
-            )
-        except Exception:
-            # Sentinel must never turn its own setup/serialization fault into an
-            # actor-provider outage. Typed runtime failures are handled inside
-            # PromptSentinel; this is the final integration backstop.
-            logger.warning("Prompt Sentinel failed open to Original")
-            return model, messages, kwargs
 
     def _handle_openai_error(self, error: Exception, kwargs: dict[str, Any]) -> bool:
         """Preserve the original pre-invocation error logging behavior."""

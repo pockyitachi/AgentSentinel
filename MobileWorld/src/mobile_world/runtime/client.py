@@ -1,5 +1,6 @@
 import base64
 import copy
+import json
 import math
 import os
 import time
@@ -37,6 +38,21 @@ DEFAULT_MAX_STEP = 15
 # while the original request still owns the lifecycle.
 TASK_INITIALIZATION_TIMEOUT_SECONDS = 600
 _TASK_INITIALIZATION_ERROR_BODY_LOG_MAX_CHARS = 2_048
+_UI_TREE_MAX_XML_BYTES = 512 * 1024
+# JSON escaping can expand one XML byte into six response bytes.
+_UI_TREE_MAX_RESPONSE_BYTES = 6 * _UI_TREE_MAX_XML_BYTES + 1024
+_UI_TREE_SERVER_REASONS = frozenset(
+    {
+        "device_busy",
+        "not_initialized",
+        "capture_failed",
+        "capture_timeout",
+        "read_failed",
+        "empty_tree",
+        "tree_too_large",
+        "invalid_encoding",
+    }
+)
 
 
 class CleanupTaskTeardownStatusV1(StrEnum):
@@ -243,6 +259,87 @@ class AndroidEnvClient:
         image = self._base64_to_pil(image_base64)
 
         return image
+
+    def get_ui_tree(self) -> dict[str, str | None]:
+        """Opt-in UIA observation, independent of the existing screenshot path.
+
+        A missing/incomplete tree is not an action failure. No initialization,
+        retries, payload logging, or actor/model call is performed here.
+        """
+        unavailable = {
+            "status": "unavailable",
+            "source": "uiautomator",
+            "xml": None,
+            "reason": "transport_error",
+        }
+        if not self.is_initialized:
+            return {**unavailable, "reason": "not_initialized"}
+        response = None
+        try:
+            request_timeout = self._request_timeout(12.0)
+            budget = 12.0 if request_timeout is None else float(request_timeout)
+            deadline = time.monotonic() + budget
+            response = self._session.get(
+                f"{self.base_url}/ui_tree",
+                params={"device": self.device},
+                timeout=budget,
+                stream=True,
+                allow_redirects=False,
+                headers={"Accept-Encoding": "identity"},
+            )
+            if response.status_code == 404:
+                return {**unavailable, "reason": "unsupported_endpoint"}
+            if response.status_code != 200:
+                return {**unavailable, "reason": "http_error"}
+            if response.headers.get("Content-Encoding", "identity").lower() not in ("identity", ""):
+                return {**unavailable, "reason": "invalid_response"}
+            body = bytearray()
+            # read1 performs at most one underlying read and allows the overall
+            # deadline to be checked between reads (iter_content can aggregate
+            # many small socket reads before yielding a requested chunk).
+            while True:
+                if time.monotonic() >= deadline:
+                    return {**unavailable, "reason": "capture_timeout"}
+                chunk = response.raw.read1(16 * 1024, decode_content=False)
+                if not chunk:
+                    break
+                if len(body) + len(chunk) > _UI_TREE_MAX_RESPONSE_BYTES:
+                    return {**unavailable, "reason": "response_too_large"}
+                body.extend(chunk)
+            payload = json.loads(body)
+            if (
+                type(payload) is not dict
+                or set(payload) != {"device", "status", "source", "xml", "reason"}
+                or payload.get("device") != self.device
+                or payload.get("source") != "uiautomator"
+            ):
+                return {**unavailable, "reason": "invalid_response"}
+            if payload["status"] == "unavailable":
+                if payload["xml"] is not None or payload["reason"] not in _UI_TREE_SERVER_REASONS:
+                    return {**unavailable, "reason": "invalid_response"}
+                return {**unavailable, "reason": payload["reason"]}
+            xml = payload["xml"]
+            if (
+                payload["status"] != "ok"
+                or payload["reason"] is not None
+                or type(xml) is not str
+                or not xml
+                or len(xml.encode("utf-8")) > _UI_TREE_MAX_XML_BYTES
+            ):
+                return {**unavailable, "reason": "invalid_response"}
+            return {"status": "ok", "source": "uiautomator", "xml": xml, "reason": None}
+        except (TimeoutError, requests.Timeout):
+            return {**unavailable, "reason": "capture_timeout"}
+        except (ValueError, TypeError):
+            return {**unavailable, "reason": "invalid_response"}
+        except Exception:
+            return unavailable
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
 
     def get_observation(self, type="screenshot", wait_to_stabilize: bool = True) -> dict:
         """Gets the current observation of the environment."""

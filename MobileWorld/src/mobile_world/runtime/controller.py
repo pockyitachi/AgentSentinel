@@ -4,6 +4,7 @@ import os
 import shlex
 import subprocess
 import time
+import uuid
 from datetime import datetime
 
 from loguru import logger
@@ -31,6 +32,7 @@ SNAPSHOT_PNG_PROBE_TIMEOUT_SECONDS = 5.0
 DEVICE_QUERY_TIMEOUT_SECONDS = 5.0
 SCREENSHOT_COMMAND_TIMEOUT_SECONDS = 15.0
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+UI_TREE_MAX_XML_BYTES = 512 * 1024
 
 
 def _is_valid_png_bytes(data: bytes) -> bool:
@@ -190,6 +192,72 @@ class AndroidController:
             return local_path
 
         return result
+
+    def get_ui_tree(self) -> dict[str, str | None]:
+        """Best-effort, fresh UIA sample; never retry or use the legacy XML cache.
+
+        This optional observation takes at most 6 + 1 + 1 seconds of subprocess
+        waits. The device-side deadline is shorter than the host dump deadline.
+        Only the randomly named file created by this call is removed. All adb
+        arguments are passed without a host shell; remote arguments are fixed
+        tokens plus an internally generated path, never task/app text.
+        """
+        unavailable = {
+            "status": "unavailable",
+            "source": "uiautomator",
+            "xml": None,
+            "reason": "capture_failed",
+        }
+        remote_path = f"/data/local/tmp/mw_ui_tree_{uuid.uuid4().hex}.xml"
+        adb = ["adb", "-s", self.device]
+        try:
+            dumped = subprocess.run(
+                [*adb, "shell", "timeout", "-s", "KILL", "5", "uiautomator", "dump", remote_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=6.0,
+                check=False,
+            )
+            if dumped.returncode != 0:
+                return unavailable
+            # Android's bounded head avoids buffering arbitrarily large adb
+            # output locally. A full limit + 1 response is rejected, not cut.
+            read = subprocess.run(
+                [*adb, "exec-out", "head", "-c", str(UI_TREE_MAX_XML_BYTES + 1), remote_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=1.0,
+                check=False,
+            )
+            if read.returncode != 0:
+                return {**unavailable, "reason": "read_failed"}
+            if not read.stdout:
+                return {**unavailable, "reason": "empty_tree"}
+            if len(read.stdout) > UI_TREE_MAX_XML_BYTES:
+                return {**unavailable, "reason": "tree_too_large"}
+            try:
+                xml = read.stdout.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                return {**unavailable, "reason": "invalid_encoding"}
+            return {"status": "ok", "source": "uiautomator", "xml": xml, "reason": None}
+        except subprocess.TimeoutExpired:
+            return {**unavailable, "reason": "capture_timeout"}
+        except Exception:
+            return unavailable
+        finally:
+            try:
+                subprocess.run(
+                    [*adb, "shell", "rm", "-f", remote_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=1.0,
+                    check=False,
+                )
+            except Exception:
+                # Cleanup is best-effort if adb/device is unavailable. Never
+                # broaden the target or turn observation failure into action
+                # failure, and never log XML or subprocess exception content.
+                pass
 
     def get_ac_xml(self, prefix, save_dir):
         remote_path = f"{os.path.join(self.ac_xml_dir, 'ui.xml').replace(self.backslash, '/')}"

@@ -7,6 +7,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 from rich.console import Console
@@ -212,29 +213,6 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         dest="audit_log_root",
         help="Explicit raw audit data root; when enabled it must be outside the source tree",
     )
-    parser.add_argument(
-        "--sentinel-mode",
-        "--sentinel",
-        dest="sentinel_mode",
-        choices=("off", "shadow", "active"),
-        default="off",
-        help=(
-            "Enable the in-process history Sentinel for each task. SHADOW observes only; "
-            "ACTIVE may edit model-visible history (default: off)."
-        ),
-    )
-    parser.add_argument(
-        "--sentinel-api-key-env",
-        dest="sentinel_api_key_env",
-        default="OPENAI_API_KEY",
-        help="Environment variable containing the Sentinel provider key",
-    )
-    parser.add_argument(
-        "--sentinel-base-url",
-        dest="sentinel_base_url",
-        default="https://api.openai.com/v1",
-        help="OpenAI-compatible base URL used only by Sentinel",
-    )
     stream_chunk_group = parser.add_mutually_exclusive_group()
     stream_chunk_group.add_argument(
         "--audit-store-stream-chunks",
@@ -362,6 +340,28 @@ def configure_parser(subparsers: argparse._SubParsersAction) -> None:
 
     # Eval-specific arguments
     eval_parser.add_argument(
+        "--gui-ledger",
+        dest="gui_ledger_mode",
+        choices=("off", "inform", "full"),
+        default="off",
+        help=(
+            "Qwen GUI-only execution ledger with no extra model calls: inform adds "
+            "a temporary state view; full also adds non-blocking repetition nudges "
+            "to action results (default: off). Automatically enables raw audit."
+        ),
+    )
+    eval_parser.add_argument(
+        "--gui-ledger-ui-tree",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt in to bounded UI Automator tree samples for GUI Ledger state facts. "
+            "Requires --gui-ledger inform or full. Bounded UI labels and non-password "
+            "input values enter the actor prompt; raw XML is saved in the audit. "
+            "Ambiguous identities are not treated as confirmed (default: disabled)."
+        ),
+    )
+    eval_parser.add_argument(
         "--task",
         "--tasks",
         dest="task",
@@ -411,24 +411,30 @@ def _start_eval_audit(
     args: argparse.Namespace,
     *,
     effective_api_key: str | None,
-    sentinel_api_key: str | None = None,
 ):
     """Bootstrap only the explicitly enabled collector for this eval invocation."""
 
-    sentinel_enabled = getattr(args, "sentinel_mode", "off") != "off"
+    ledger_enabled = getattr(args, "gui_ledger_mode", "off") != "off"
     config = AuditConfig.from_cli_values(
-        enable_audit=bool(getattr(args, "enable_audit", False) or sentinel_enabled),
+        enable_audit=bool(getattr(args, "enable_audit", False) or ledger_enabled),
         audit_log_root=getattr(args, "audit_log_root", None),
         audit_store_stream_chunks=bool(getattr(args, "audit_store_stream_chunks", True)),
     )
     if not config.enabled:
         return bootstrap_audit_run(config)
 
-    known_secrets = [secret for secret in (effective_api_key, sentinel_api_key) if secret]
+    known_secrets = [effective_api_key] if effective_api_key else []
     seed_environment_key = os.getenv("DOUBAO_API_KEY")
     if seed_environment_key:
         known_secrets.append(seed_environment_key)
     resolved_cli_config = {**vars(args), **config.to_manifest_config()}
+    if ledger_enabled:
+        resolved_cli_config.update(
+            {
+                "gui_ledger_driver": "deterministic",
+                "gui_ledger_extra_model_calls": 0,
+            }
+        )
     resolved_agent_runtime_config = {
         "executor_llm_base_url": getattr(args, "executor_llm_base_url", None),
         "executor_model_name": getattr(args, "executor_model_name", None),
@@ -451,62 +457,64 @@ def _run_evaluation_once(
     *,
     args: argparse.Namespace,
     api_key: str | None,
-    **runner_kwargs: object,
+    **runner_kwargs: Any,
 ):
     """Run one physical eval invocation inside one independently finalized audit run."""
 
-    sentinel_mode = getattr(args, "sentinel_mode", "off")
-    sentinel_enabled = sentinel_mode != "off"
-    prompt_sentinel_runtime_factory = None
-    sentinel_api_key = None
-    if sentinel_enabled and getattr(args, "audit_log_root", None) is None:
+    gui_ledger_mode = getattr(args, "gui_ledger_mode", "off")
+    gui_ledger_ui_tree = getattr(args, "gui_ledger_ui_tree", False)
+    if gui_ledger_mode not in ("off", "inform", "full"):
+        raise ValueError("GUI Ledger mode must be off, inform, or full")
+    ledger_enabled = gui_ledger_mode != "off"
+    if type(gui_ledger_ui_tree) is not bool:
+        raise ValueError("GUI Ledger UI tree option must be a boolean")
+    if gui_ledger_ui_tree and not ledger_enabled:
+        raise ValueError("--gui-ledger-ui-tree requires --gui-ledger inform or full")
+    if ledger_enabled:
+        actor_type = runner_kwargs.get("agent_type", getattr(args, "agent_type", None))
+        if actor_type != "qwen3vl" or getattr(args, "agent_type", None) != "qwen3vl":
+            raise ValueError("GUI Ledger currently supports only --agent-type qwen3vl")
+        if any(
+            bool(getattr(args, option, False) or runner_kwargs.get(option, False))
+            for option in ("enable_mcp", "enable_user_interaction")
+        ):
+            raise ValueError("GUI Ledger supports GUI-only tasks; disable MCP and user interaction")
+    if ledger_enabled and getattr(args, "audit_log_root", None) is None:
         audit_root = (
             Path(tempfile.gettempdir())
             / "mobileworld-audit"
             / f"eval-{os.getpid()}-{time.time_ns()}"
         )
         args.audit_log_root = str(audit_root)
-        logger.info("Prompt Sentinel audit root: {}", audit_root)
-    if sentinel_enabled:
-        key_env = getattr(args, "sentinel_api_key_env", "OPENAI_API_KEY")
-        sentinel_api_key = os.getenv(key_env)
-        if not sentinel_api_key:
-            raise ValueError(f"Sentinel API key environment variable is empty: {key_env}")
+        logger.info("GUI Ledger audit root: {}", audit_root)
+    if ledger_enabled:
         audit_root = Path(args.audit_log_root).expanduser().resolve(strict=False)
         args.audit_log_root = str(audit_root)
-        from mobile_world.runtime.sentinel.flat_contracts import FlatSentinelMode
-        from mobile_world.runtime.sentinel.lean_runtime import FlatSentinelRunFactory
-
-        prompt_sentinel_runtime_factory = FlatSentinelRunFactory(
-            mode=FlatSentinelMode(sentinel_mode.upper()),
-            api_key=sentinel_api_key,
-            log_root=audit_root / "sentinel",
-            base_url=getattr(args, "sentinel_base_url", "https://api.openai.com/v1"),
-        )
 
     try:
         lifecycle = _start_eval_audit(
             args,
             effective_api_key=api_key,
-            sentinel_api_key=sentinel_api_key,
         )
     except Exception:
         logger.exception(
             "Audit bootstrap failed before a durable run could be created; "
-            "continuing this evaluation without audit artifacts or Sentinel edits"
+            "continuing this evaluation without audit artifacts or GUI Ledger"
         )
         lifecycle = DEGRADED_AUDIT_LIFECYCLE
     if getattr(lifecycle, "degraded", False):
         logger.error(
             "Audit storage could not initialize; continuing without audit artifacts. "
-            "Prompt Sentinel will fail open to the Original request."
+            "GUI Ledger is disabled for this evaluation."
         )
-        prompt_sentinel_runtime_factory = None
+        gui_ledger_mode = "off"
+        gui_ledger_ui_tree = False
     try:
         result = run_agent_with_evaluation(
             api_key=api_key,
             audit_lifecycle=lifecycle if lifecycle.enabled else None,
-            prompt_sentinel_runtime_factory=prompt_sentinel_runtime_factory,
+            gui_ledger_mode=gui_ledger_mode,
+            gui_ledger_ui_tree=gui_ledger_ui_tree,
             **runner_kwargs,
         )
     except BaseException:
@@ -604,7 +612,7 @@ async def execute(args: argparse.Namespace) -> None:
     # Check if running all tasks
     run_all_tasks = args.task and args.task.upper() == "ALL"
     if run_all_tasks:
-        final_tasks = []
+        final_tasks: list[str] = []
         logger.info("Running ALL tasks with statistics generation")
     else:
         final_tasks = args.task.split(",") if args.task else []
@@ -646,6 +654,7 @@ async def execute(args: argparse.Namespace) -> None:
         auto_retry=args.auto_retry,
     )
     if run_all_tasks and task_results:
+        assert start_time is not None
         total_duration = time.time() - start_time
 
         total_tasks = len(task_results)

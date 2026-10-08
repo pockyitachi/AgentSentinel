@@ -293,25 +293,31 @@ sudo uv run mw eval \
 > - `--enable_mcp`: Include MCP-augmented tasks in evaluation
 > - `--enable_user_interaction`: Include agent-user interaction tasks. Without this flag, only GUI-only tasks are evaluated.
 
-#### Run with Prompt Sentinel
+#### Run Qwen with GUI Ledger
 
-Qwen and MAI can use the in-process history Sentinel through the same ordinary
-evaluation command. Set `OPENAI_API_KEY` for the Sentinel's Luna calls and add:
+GUI Ledger maintains a deterministic execution-state ledger for Qwen GUI-only
+tasks. It uses the existing screenshots and executed actions, makes zero extra
+model calls, and generates a fresh temporary state view for each actor request.
+Add this option to the ordinary evaluation command:
 
 ```bash
---sentinel active
+--gui-ledger full
 ```
 
-Sentinel automatically enables the passive Collector and writes its audit and
-hash-only receipt data outside the repository. Use `--audit-log-root` to select
-that external directory. This path does not use an authority manifest,
-promotion, production preflight, source-commit gate, cleanup hash, or model
-snapshot rehash. `--sentinel shadow` evaluates without changing the actor
-request, and the default `--sentinel off` preserves the ordinary eval path.
+`--gui-ledger inform` enables only the temporary state view. `full` also checks
+proposed actions for repeated execution from unchanged observations and adds
+non-blocking nudges to returned observations. Actions still execute. There is
+no result reuse, semantic progress judge, history deletion, or correction.
 
-`scripts/run_qwen3vl.sh` is a one-command example once the actor model endpoint
-is ready; set `AGENT_TYPE=mai_ui_agent` and the matching model endpoint to use
-MAI.
+The default is `--gui-ledger off`. Enabled modes require `--agent-type qwen3vl`
+without `--enable-mcp` or `--enable-user-interaction`. They automatically enable
+the passive Collector; use `--audit-log-root` to select its external directory.
+If audit startup fails, evaluation continues with Ledger disabled. Identical
+pixels establish only an unchanged screenshot, not identical hidden app state.
+
+`scripts/run_qwen3vl.sh` defaults to Ledger off. Set `GUI_LEDGER_MODE=inform` or
+`GUI_LEDGER_MODE=full` to opt in. The retired `--sentinel*` options are removed.
+See [GUI Ledger Design](docs/gui_ledger_design.md) for the method and boundaries.
 
 ### 4. View Results
 
@@ -364,6 +370,7 @@ For detailed documentation, see the `docs/` directory:
 
 | Document                                   | Description                                         |
 |--------------------------------------------|-----------------------------------------------------|
+| [GUI Ledger Design](docs/gui_ledger_design.md) | Qwen deterministic ledger, temporary Inform, non-blocking Govern, and audit behavior |
 | [Development Guide](docs/development.md)   | Dev mode, debugging, container management workflows |
 | [Real Device Setup](docs/real-devices.md)  | Run frontier models on a physical Android phone     |
 | [Submit Your Results](docs/submit.md)      | Bundle trajectories and contribute to the leaderboard |

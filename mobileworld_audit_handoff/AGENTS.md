@@ -3,6 +3,21 @@
 Last synchronized with the owner-facing repository state: **2026-09-05 UTC**.
 Linear workflow state is owner-managed and is not changed by repository agents.
 
+## 2026-10-04 owner reset: Qwen GUI Ledger
+
+The owner requested removal of the old runtime Sentinel and a fresh Qwen-only
+GUI Ledger. The repository-root `AGENTS.md` reset section and
+`../MobileWorld/docs/gui_ledger_design.md` describe the current implementation.
+The launch option is now `mw eval --gui-ledger off|inform|full`, default off.
+It is deterministic, adds no model call, generates transient Inform, and
+provides non-blocking Allow/Nudge execution feedback. It neither rewrites old
+history nor skips actions (Reuse is not implemented).
+
+The previous runtime modules and tests were removed. Their contracts below
+remain historical provenance, not dependencies or requirements for restoring
+that stack. Collector and frozen offline research remain preserved. Current
+work is CPU/offline only; no live evaluation/resource permission is implied.
+
 ## 2026-09-09 owner override: lean MobileWorld runtime
 
 The owner has retired the executable authority/promotion/preflight,

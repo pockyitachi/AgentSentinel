@@ -24,6 +24,15 @@ venv/
 # Runtime collection data is immutable research data, not source code.
 mobileworld_audit_data/
 
+# Owner-selected local experiment material (not approved for Git publication).
+/MobileWorld/reports/gui_ledger_ui_full_20261006_05/
+/MobileWorld/docs/gui_ledger_calls_and_real_trace.md
+/motivation study/mhr_six_model_briefing_20261002.pdf
+/motivation study/mhr_six_model_briefing_20261002.tex
+
+# Superseded local patch; its implementation is already integrated in source.
+/MobileWorld/docs/patches/gui_ledger_ui_tree_20261006.patch
+
 # Rendered audit reports normally embed source screenshots and stay outside Git.
 MobileWorld/docs/misleading_history_audit_report_*.pdf
 motivation study/misleading_history_audit_report_*.pdf
